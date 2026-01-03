@@ -498,3 +498,50 @@ dependencies:
 - Log skipped directories at `trace!` level
 - Handle malformed pubspec.yaml gracefully (log warning, skip project)
 - **Don't descend into found projects** to avoid discovering nested examples twice
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/core/discovery.rs` (created) - Full discovery module implementation
+- `src/core/mod.rs` - Added `pub mod discovery` and re-exports
+- `Cargo.toml` - Added `tempfile = "3"` dev-dependency for tests
+
+**Notable Decisions/Tradeoffs**:
+- Used simple string matching for pubspec.yaml parsing as specified (no YAML crate)
+- `check_has_flutter_dependency()` uses `content.contains("sdk: flutter")` heuristic
+- `check_is_plugin()` uses line-by-line parsing to detect `plugin:` under `flutter:` section
+- Discovery returns immediately if base_path is a runnable project (fast path)
+- Plugin examples are discovered by checking EXAMPLE_DIRECTORIES within the plugin
+- Skipped projects are tracked in `DiscoveryResult.skipped` for debugging
+
+**Testing Performed**:
+- `cargo fmt` - Passed (no formatting issues)
+- `cargo check` - Passed (no warnings)
+- `cargo test` - All 60 tests passed (17 new discovery tests)
+
+**Test Coverage**:
+- `test_is_runnable_flutter_project` - Verifies app detection
+- `test_plugin_is_not_runnable` - Verifies plugins are skipped
+- `test_dart_package_is_not_runnable` - Verifies Dart packages are skipped
+- `test_flutter_package_without_platforms_not_runnable` - Verifies packages without platform dirs skipped
+- `test_discover_plugin_example` - Verifies plugin example discovery
+- `test_discover_skips_dart_packages` - Verifies Dart packages skipped in search
+- `test_discover_multiple_apps` - Verifies multiple apps returned sorted
+- `test_has_platform_directories` - Verifies platform dir detection
+- `test_get_project_type` - Verifies all project type classifications
+- `test_skips_hidden_directories` - Verifies hidden dirs skipped
+- `test_respects_max_depth` - Verifies depth limiting
+- `test_base_path_is_runnable_app` - Verifies fast path
+- `test_discover_plugin_at_base_path` - Verifies plugin at base path
+- `test_check_is_plugin` / `test_check_has_flutter_dependency` - Unit tests for parsing
+- `test_malformed_pubspec_handled_gracefully` - Verifies error handling
+- `test_missing_pubspec_returns_none` - Verifies missing file handling
+
+**Risks/Limitations**:
+- Simple string matching may have edge cases with unusual pubspec.yaml formatting
+- No symlink loop protection (symlinks are not followed by default with `fs::read_dir`)
+- Permission errors on directories are logged at trace level and skipped silently

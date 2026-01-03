@@ -3,8 +3,11 @@
 pub mod event;
 pub mod layout;
 pub mod render;
+pub mod selector;
 pub mod terminal;
 pub mod widgets;
+
+pub use selector::{select_project, SelectionResult};
 
 use std::path::Path;
 use tokio::sync::mpsc;

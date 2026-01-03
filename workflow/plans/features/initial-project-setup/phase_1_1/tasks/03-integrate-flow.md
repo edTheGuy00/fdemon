@@ -372,3 +372,56 @@ Hint: Run flutter-demon from a Flutter app directory,
       or pass the project path as an argument:
       flutter-demon /path/to/flutter/app
 ```
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/main.rs` - Complete rewrite with discovery flow integration
+- `src/common/error.rs` - Added 6 new discovery-related error variants
+
+**New Error Variants**:
+- `NoRunnableProjects { searched_path }` - No runnable projects found
+- `SelectionCancelled` - User cancelled project selection
+- `Discovery { message }` - Generic discovery error
+- `IsPlugin { path }` - Directory is a Flutter plugin
+- `IsDartPackage { path }` - Directory is a Dart package
+- `NoPlatformDirectories { path }` - Flutter package without platform dirs
+
+**main.rs Flow**:
+1. Check if base_path is directly a runnable Flutter project → run immediately
+2. If pubspec.yaml exists but not runnable, explain why (plugin/package/dart)
+3. Discover runnable Flutter projects in subdirectories
+4. Handle results:
+   - 0 projects: Show helpful error message, exit code 1
+   - 1 project: Auto-select, show confirmation, run TUI
+   - Multiple projects: Show interactive selector, run selected
+
+**User Experience**:
+- Clear emoji-prefixed messages (📦, ✅, ❌)
+- Explains why non-runnable projects are skipped
+- Shows skipped projects when no runnable projects found
+- Provides actionable hints for resolution
+- Correct exit codes (0 for success/cancel, 1 for errors)
+
+**Testing Performed**:
+- `cargo fmt` - Passed (no formatting issues)
+- `cargo check` - No warnings
+- `cargo test` - All 75 tests passed (7 new error tests)
+
+**New Tests**:
+- `test_discovery_error_constructors` - All new error constructors work
+- `test_no_runnable_projects_error` - Error message and is_fatal()
+- `test_selection_cancelled_error` - Not fatal, is recoverable
+- `test_discovery_error` - Generic discovery error
+- `test_is_plugin_error` - Plugin error message
+- `test_is_dart_package_error` - Dart package error message
+- `test_no_platform_directories_error` - No platform dirs error
+
+**Risks/Limitations**:
+- No `--verbose` flag yet (skipped projects only shown when no results)
+- No `--list` or `--discover` flag for explicit discovery mode
+- Logging with tracing not added (uses eprintln for now)

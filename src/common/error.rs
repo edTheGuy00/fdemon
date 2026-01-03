@@ -74,6 +74,27 @@ pub enum Error {
 
     #[error("Channel closed unexpectedly")]
     ChannelClosed,
+
+    // ─────────────────────────────────────────────────────────────
+    // Discovery Errors
+    // ─────────────────────────────────────────────────────────────
+    #[error("No runnable Flutter projects found in: {searched_path}")]
+    NoRunnableProjects { searched_path: PathBuf },
+
+    #[error("Project selection was cancelled by user")]
+    SelectionCancelled,
+
+    #[error("Discovery error: {message}")]
+    Discovery { message: String },
+
+    #[error("Directory is a Flutter plugin, not a runnable app: {path}")]
+    IsPlugin { path: PathBuf },
+
+    #[error("Directory is a Dart package, not a Flutter app: {path}")]
+    IsDartPackage { path: PathBuf },
+
+    #[error("Flutter package has no platform directories: {path}")]
+    NoPlatformDirectories { path: PathBuf },
 }
 
 // ─────────────────────────────────────────────────────────────────
@@ -117,11 +138,38 @@ impl Error {
         }
     }
 
+    pub fn no_runnable_projects(path: impl Into<PathBuf>) -> Self {
+        Self::NoRunnableProjects {
+            searched_path: path.into(),
+        }
+    }
+
+    pub fn discovery(message: impl Into<String>) -> Self {
+        Self::Discovery {
+            message: message.into(),
+        }
+    }
+
+    pub fn is_plugin(path: impl Into<PathBuf>) -> Self {
+        Self::IsPlugin { path: path.into() }
+    }
+
+    pub fn is_dart_package(path: impl Into<PathBuf>) -> Self {
+        Self::IsDartPackage { path: path.into() }
+    }
+
+    pub fn no_platform_directories(path: impl Into<PathBuf>) -> Self {
+        Self::NoPlatformDirectories { path: path.into() }
+    }
+
     /// Check if this is a recoverable error
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
-            Error::Daemon { .. } | Error::Protocol { .. } | Error::ChannelSend { .. }
+            Error::Daemon { .. }
+                | Error::Protocol { .. }
+                | Error::ChannelSend { .. }
+                | Error::SelectionCancelled // User chose to cancel
         )
     }
 
@@ -131,6 +179,7 @@ impl Error {
             self,
             Error::FlutterNotFound
                 | Error::NoProject { .. }
+                | Error::NoRunnableProjects { .. }
                 | Error::ProcessSpawn { .. }
                 | Error::TerminalInit(_)
         )
@@ -218,5 +267,55 @@ mod tests {
         let _ = Error::protocol("test");
         let _ = Error::config("test");
         let _ = Error::channel_send("test");
+    }
+
+    #[test]
+    fn test_discovery_error_constructors() {
+        let _ = Error::no_runnable_projects("/test/path");
+        let _ = Error::discovery("permission denied");
+        let _ = Error::is_plugin("/test/plugin");
+        let _ = Error::is_dart_package("/test/dart_pkg");
+        let _ = Error::no_platform_directories("/test/flutter_pkg");
+    }
+
+    #[test]
+    fn test_no_runnable_projects_error() {
+        let err = Error::no_runnable_projects("/test/path");
+        assert!(err.to_string().contains("/test/path"));
+        assert!(err.is_fatal());
+    }
+
+    #[test]
+    fn test_selection_cancelled_error() {
+        let err = Error::SelectionCancelled;
+        assert!(!err.is_fatal()); // Not fatal, just user choice
+        assert!(err.is_recoverable());
+    }
+
+    #[test]
+    fn test_discovery_error() {
+        let err = Error::discovery("permission denied");
+        assert!(err.to_string().contains("permission denied"));
+    }
+
+    #[test]
+    fn test_is_plugin_error() {
+        let err = Error::is_plugin("/test/plugin");
+        assert!(err.to_string().contains("/test/plugin"));
+        assert!(err.to_string().contains("plugin"));
+    }
+
+    #[test]
+    fn test_is_dart_package_error() {
+        let err = Error::is_dart_package("/test/dart_pkg");
+        assert!(err.to_string().contains("/test/dart_pkg"));
+        assert!(err.to_string().contains("Dart package"));
+    }
+
+    #[test]
+    fn test_no_platform_directories_error() {
+        let err = Error::no_platform_directories("/test/flutter_pkg");
+        assert!(err.to_string().contains("/test/flutter_pkg"));
+        assert!(err.to_string().contains("platform directories"));
     }
 }

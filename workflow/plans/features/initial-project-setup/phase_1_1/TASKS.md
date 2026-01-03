@@ -85,10 +85,10 @@ For **plugins**, we recursively check `example/` and `sample/` subdirectories fo
 
 | # | Task | Status | Depends On | Effort | Key Modules |
 |---|------|--------|------------|--------|-------------|
-| 1 | [01-discovery-module](tasks/01-discovery-module.md) | Not Started | - | 2-3 hrs | `core/discovery.rs` |
-| 2 | [02-project-selector](tasks/02-project-selector.md) | Not Started | 01 | 2-3 hrs | `tui/selector.rs` |
-| 3 | [03-integrate-flow](tasks/03-integrate-flow.md) | Not Started | 01, 02 | 1-2 hrs | `main.rs`, `common/error.rs` |
-| 4 | [04-testing-docs](tasks/04-testing-docs.md) | Not Started | 03 | 1 hr | tests, README |
+| 1 | [01-discovery-module](tasks/01-discovery-module.md) | ✅ Done | - | 2-3 hrs | `core/discovery.rs` |
+| 2 | [02-project-selector](tasks/02-project-selector.md) | ✅ Done | 01 | 2-3 hrs | `tui/selector.rs` |
+| 3 | [03-integrate-flow](tasks/03-integrate-flow.md) | ✅ Done | 01, 02 | 1-2 hrs | `main.rs`, `common/error.rs` |
+| 4 | [04-testing-docs](tasks/04-testing-docs.md) | ✅ Done | 03 | 1 hr | tests, README |
 
 **Total Estimated Effort**: 6-9 hours
 

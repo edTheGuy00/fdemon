@@ -212,3 +212,49 @@ fn is_cancel_key(key: KeyCode) -> bool;
 - Could be enhanced later with arrow key navigation
 - Terminal restoration is critical - use `Drop` guard pattern
 - Consider accessibility: high-contrast colors, clear prompts
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/tui/selector.rs` (created) - Interactive project selector implementation
+- `src/tui/mod.rs` - Added `pub mod selector` and re-exports
+
+**Notable Decisions/Tradeoffs**:
+- Used `RawModeGuard` RAII pattern for terminal restoration (Drop trait)
+- Uses `terminal::is_raw_mode_enabled().unwrap_or(false)` for safe raw mode checking
+- Color scheme: Cyan title, Yellow number brackets, DarkGrey paths
+- Maximum 9 projects displayed (single-digit selection limitation)
+- Paths displayed relative to `searched_from` for readability
+- Cancel keys: 'q', 'Q', Escape, Ctrl+C
+
+**Public API**:
+- `SelectionResult` enum: `Selected(PathBuf)` or `Cancelled`
+- `select_project(projects, searched_from)` - main entry point
+- `format_relative_path(project, base)` - helper for path display
+- `validate_selection(key, projects)` - validates number key input
+- `is_cancel_key(code, modifiers)` - checks for cancel keys
+
+**Testing Performed**:
+- `cargo fmt` - Passed (no formatting issues)
+- `cargo check` - No warnings
+- `cargo test` - All 68 tests passed (8 new selector tests)
+
+**Test Coverage**:
+- `test_format_relative_path` - Basic relative path formatting
+- `test_format_relative_path_nested` - Nested subdirectory formatting
+- `test_format_relative_path_same` - Same directory returns "."
+- `test_format_relative_path_outside` - Outside base returns absolute path
+- `test_validate_selection_valid` - Valid number key selection
+- `test_validate_selection_max_projects` - Respects MAX_DISPLAY_PROJECTS limit
+- `test_is_cancel_key` - All cancel key combinations
+- `test_selection_result_eq` - SelectionResult equality
+
+**Risks/Limitations**:
+- Interactive functionality difficult to test automatically
+- Limited to 9 projects max (single digit keys)
+- No arrow key navigation (could be added later)
+- Assumes stdout is a terminal (no TTY detection)
