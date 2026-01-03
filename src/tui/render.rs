@@ -9,7 +9,8 @@ use ratatui::Frame;
 /// This is a pure rendering function - it should not modify state
 /// except for widget state that tracks rendering info (scroll position).
 pub fn view(frame: &mut Frame, state: &mut AppState) {
-    let areas = layout::create(frame.area());
+    let area = frame.area();
+    let areas = layout::create(area);
 
     // Header
     frame.render_widget(widgets::Header::new(), areas.header);
@@ -18,6 +19,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let log_view = widgets::LogView::new(&state.logs);
     frame.render_stateful_widget(log_view, areas.logs, &mut state.log_view_state);
 
-    // Status bar
-    frame.render_widget(widgets::StatusBar::new(state), areas.status);
+    // Status bar (use compact version for narrow terminals)
+    if layout::use_compact_status(area) {
+        frame.render_widget(widgets::StatusBarCompact::new(state), areas.status);
+    } else {
+        frame.render_widget(widgets::StatusBar::new(state), areas.status);
+    }
 }

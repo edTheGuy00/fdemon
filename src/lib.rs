@@ -7,7 +7,9 @@ pub mod app;
 pub mod common;
 pub mod core;
 pub mod daemon;
+pub mod services;
 pub mod tui;
+pub mod watcher;
 
 // Re-export main entry points
 pub use app::{run, run_with_project};

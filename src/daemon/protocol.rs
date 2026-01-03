@@ -2,6 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::events::{
+    AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected,
+    DaemonLogMessage, DeviceInfo,
+};
+use crate::core::{LogLevel, LogSource};
+
 /// Strip the outer brackets from a daemon message
 ///
 /// The Flutter daemon wraps all messages in `[...]` for resilience.
@@ -70,6 +76,334 @@ impl RawMessage {
     }
 }
 
+/// Fully typed daemon message
+#[derive(Debug, Clone)]
+pub enum DaemonMessage {
+    // Connection
+    DaemonConnected(DaemonConnected),
+    DaemonLogMessage(DaemonLogMessage),
+
+    // App lifecycle
+    AppStart(AppStart),
+    AppStarted(AppStarted),
+    AppStop(AppStop),
+    AppLog(AppLog),
+    AppProgress(AppProgress),
+    AppDebugPort(AppDebugPort),
+
+    // Devices
+    DeviceAdded(DeviceInfo),
+    DeviceRemoved(DeviceInfo),
+
+    // Responses
+    Response {
+        id: serde_json::Value,
+        result: Option<serde_json::Value>,
+        error: Option<serde_json::Value>,
+    },
+
+    // Fallback for unknown events
+    UnknownEvent {
+        event: String,
+        params: serde_json::Value,
+    },
+}
+
+impl DaemonMessage {
+    /// Parse a JSON string into a typed DaemonMessage
+    pub fn parse(json: &str) -> Option<Self> {
+        let raw: RawMessage = serde_json::from_str(json).ok()?;
+        Some(Self::from_raw(raw))
+    }
+
+    /// Convert from RawMessage to typed message
+    pub fn from_raw(raw: RawMessage) -> Self {
+        match raw {
+            RawMessage::Response { id, result, error } => {
+                DaemonMessage::Response { id, result, error }
+            }
+            RawMessage::Event { event, params } => Self::parse_event(&event, params),
+        }
+    }
+
+    /// Parse an event by name
+    fn parse_event(event: &str, params: serde_json::Value) -> Self {
+        match event {
+            "daemon.connected" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::DaemonConnected)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "daemon.logMessage" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::DaemonLogMessage)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.start" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppStart)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.started" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppStarted)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.stop" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppStop)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.log" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppLog)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.progress" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppProgress)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "app.debugPort" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::AppDebugPort)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "device.added" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::DeviceAdded)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            "device.removed" => serde_json::from_value(params.clone())
+                .map(DaemonMessage::DeviceRemoved)
+                .unwrap_or_else(|_| Self::unknown(event, params)),
+            _ => Self::unknown(event, params),
+        }
+    }
+
+    fn unknown(event: &str, params: serde_json::Value) -> Self {
+        DaemonMessage::UnknownEvent {
+            event: event.to_string(),
+            params,
+        }
+    }
+
+    /// Get the app ID if this message relates to an app
+    pub fn app_id(&self) -> Option<&str> {
+        match self {
+            DaemonMessage::AppStart(e) => Some(&e.app_id),
+            DaemonMessage::AppStarted(e) => Some(&e.app_id),
+            DaemonMessage::AppStop(e) => Some(&e.app_id),
+            DaemonMessage::AppLog(e) => Some(&e.app_id),
+            DaemonMessage::AppProgress(e) => Some(&e.app_id),
+            DaemonMessage::AppDebugPort(e) => Some(&e.app_id),
+            _ => None,
+        }
+    }
+
+    /// Check if this is an error message
+    pub fn is_error(&self) -> bool {
+        match self {
+            DaemonMessage::AppLog(log) => log.error,
+            DaemonMessage::AppStop(stop) => stop.error.is_some(),
+            DaemonMessage::Response { error, .. } => error.is_some(),
+            _ => false,
+        }
+    }
+
+    /// Get a human-readable summary
+    pub fn summary(&self) -> String {
+        match self {
+            DaemonMessage::DaemonConnected(c) => {
+                format!("Daemon connected (v{})", c.version)
+            }
+            DaemonMessage::DaemonLogMessage(m) => {
+                format!("[{}] {}", m.level, m.message)
+            }
+            DaemonMessage::AppStart(s) => {
+                format!("App starting on {}", s.device_id)
+            }
+            DaemonMessage::AppStarted(_) => "App started".to_string(),
+            DaemonMessage::AppStop(s) => {
+                if let Some(err) = &s.error {
+                    format!("App stopped: {}", err)
+                } else {
+                    "App stopped".to_string()
+                }
+            }
+            DaemonMessage::AppLog(log) => log.log.clone(),
+            DaemonMessage::AppProgress(p) => p
+                .message
+                .clone()
+                .unwrap_or_else(|| "Progress...".to_string()),
+            DaemonMessage::AppDebugPort(d) => {
+                format!("DevTools at port {}", d.port)
+            }
+            DaemonMessage::DeviceAdded(d) => {
+                format!("Device added: {} ({})", d.name, d.platform)
+            }
+            DaemonMessage::DeviceRemoved(d) => {
+                format!("Device removed: {}", d.name)
+            }
+            DaemonMessage::Response { id, error, .. } => {
+                if error.is_some() {
+                    format!("Response #{}: error", id)
+                } else {
+                    format!("Response #{}: ok", id)
+                }
+            }
+            DaemonMessage::UnknownEvent { event, .. } => {
+                format!("Event: {}", event)
+            }
+        }
+    }
+
+    /// Extract a clean log message for display
+    pub fn to_log_entry(&self) -> Option<LogEntryInfo> {
+        match self {
+            DaemonMessage::AppLog(log) => {
+                let (level, message) = Self::parse_flutter_log(&log.log, log.error);
+                Some(LogEntryInfo {
+                    level,
+                    source: LogSource::Flutter,
+                    message,
+                    stack_trace: log.stack_trace.clone(),
+                })
+            }
+            DaemonMessage::DaemonLogMessage(msg) => {
+                let level = match msg.level.as_str() {
+                    "error" => LogLevel::Error,
+                    "warning" => LogLevel::Warning,
+                    "status" => LogLevel::Info,
+                    _ => LogLevel::Debug,
+                };
+                Some(LogEntryInfo {
+                    level,
+                    source: LogSource::Daemon,
+                    message: msg.message.clone(),
+                    stack_trace: msg.stack_trace.clone(),
+                })
+            }
+            DaemonMessage::AppProgress(progress) => {
+                // Only show progress messages that are meaningful
+                if progress.finished {
+                    progress.message.as_ref().map(|msg| LogEntryInfo {
+                        level: LogLevel::Info,
+                        source: LogSource::Flutter,
+                        message: msg.clone(),
+                        stack_trace: None,
+                    })
+                } else {
+                    // Skip in-progress messages to reduce noise
+                    None
+                }
+            }
+            DaemonMessage::AppStart(start) => Some(LogEntryInfo {
+                level: LogLevel::Info,
+                source: LogSource::App,
+                message: format!("App starting on {}", start.device_id),
+                stack_trace: None,
+            }),
+            DaemonMessage::AppStarted(_) => Some(LogEntryInfo {
+                level: LogLevel::Info,
+                source: LogSource::App,
+                message: "App started".to_string(),
+                stack_trace: None,
+            }),
+            DaemonMessage::AppStop(stop) => {
+                let message = if let Some(err) = &stop.error {
+                    format!("App stopped with error: {}", err)
+                } else {
+                    "App stopped".to_string()
+                };
+                Some(LogEntryInfo {
+                    level: if stop.error.is_some() {
+                        LogLevel::Error
+                    } else {
+                        LogLevel::Warning
+                    },
+                    source: LogSource::App,
+                    message,
+                    stack_trace: None,
+                })
+            }
+            DaemonMessage::AppDebugPort(debug) => Some(LogEntryInfo {
+                level: LogLevel::Info,
+                source: LogSource::App,
+                message: format!("DevTools available at port {}", debug.port),
+                stack_trace: None,
+            }),
+            DaemonMessage::DeviceAdded(device) => Some(LogEntryInfo {
+                level: LogLevel::Debug,
+                source: LogSource::App,
+                message: format!("Device connected: {} ({})", device.name, device.platform),
+                stack_trace: None,
+            }),
+            DaemonMessage::DeviceRemoved(device) => Some(LogEntryInfo {
+                level: LogLevel::Debug,
+                source: LogSource::App,
+                message: format!("Device disconnected: {}", device.name),
+                stack_trace: None,
+            }),
+            DaemonMessage::DaemonConnected(conn) => Some(LogEntryInfo {
+                level: LogLevel::Debug,
+                source: LogSource::Daemon,
+                message: format!("Daemon connected (v{}, pid {})", conn.version, conn.pid),
+                stack_trace: None,
+            }),
+            _ => None, // UnknownEvent, Response handled separately
+        }
+    }
+
+    /// Parse a flutter log message to extract level and clean message
+    pub fn parse_flutter_log(raw: &str, is_error: bool) -> (LogLevel, String) {
+        let message = raw.trim();
+
+        // Check for error indicators
+        if is_error {
+            return (LogLevel::Error, message.to_string());
+        }
+
+        // Check for common patterns - strip "flutter: " prefix
+        if let Some(content) = message.strip_prefix("flutter: ") {
+            let level = Self::detect_log_level(content);
+            return (level, content.to_string());
+        }
+
+        // Check for error patterns in content
+        if message.contains("Exception:") || message.contains("Error:") || message.starts_with("E/")
+        {
+            return (LogLevel::Error, message.to_string());
+        }
+
+        // Check for warning patterns
+        if message.contains("Warning:") || message.starts_with("W/") {
+            return (LogLevel::Warning, message.to_string());
+        }
+
+        // Default to info
+        (LogLevel::Info, message.to_string())
+    }
+
+    /// Detect log level from message content
+    pub fn detect_log_level(message: &str) -> LogLevel {
+        let lower = message.to_lowercase();
+
+        // Error indicators
+        if lower.contains("error")
+            || lower.contains("exception")
+            || lower.contains("failed")
+            || lower.contains("fatal")
+        {
+            return LogLevel::Error;
+        }
+
+        // Warning indicators
+        if lower.contains("warning") || lower.contains("warn") || lower.contains("deprecated") {
+            return LogLevel::Warning;
+        }
+
+        // Debug indicators
+        if lower.starts_with("debug:") || lower.starts_with("[debug]") || lower.contains("verbose")
+        {
+            return LogLevel::Debug;
+        }
+
+        LogLevel::Info
+    }
+}
+
+/// Intermediate log entry info from parsed daemon message
+#[derive(Debug, Clone)]
+pub struct LogEntryInfo {
+    pub level: LogLevel,
+    pub source: LogSource,
+    pub message: String,
+    pub stack_trace: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +458,408 @@ mod tests {
 
         let error_resp = RawMessage::parse(r#"{"id":2,"error":"failed"}"#).unwrap();
         assert_eq!(error_resp.summary(), "Response #2: error");
+    }
+
+    // DaemonMessage tests
+
+    #[test]
+    fn test_daemon_message_parse_daemon_connected() {
+        let json = r#"{"event":"daemon.connected","params":{"version":"0.6.1","pid":12345}}"#;
+        let msg = DaemonMessage::parse(json);
+        assert!(matches!(msg, Some(DaemonMessage::DaemonConnected(_))));
+        if let Some(DaemonMessage::DaemonConnected(c)) = msg {
+            assert_eq!(c.version, "0.6.1");
+            assert_eq!(c.pid, 12345);
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_log() {
+        let json = r#"{"event":"app.log","params":{"appId":"abc123","log":"flutter: Hello World","error":false}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::AppLog(_)));
+        if let DaemonMessage::AppLog(log) = msg {
+            assert_eq!(log.log, "flutter: Hello World");
+            assert!(!log.error);
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_log_error() {
+        let json = r#"{"event":"app.log","params":{"appId":"abc","log":"Error message","error":true,"stackTrace":"at main.dart:10"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(msg.is_error());
+        if let DaemonMessage::AppLog(log) = msg {
+            assert!(log.error);
+            assert_eq!(log.stack_trace, Some("at main.dart:10".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_progress() {
+        let json = r#"{"event":"app.progress","params":{"appId":"abc","id":"1","message":"Compiling...","finished":false}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        if let DaemonMessage::AppProgress(p) = msg {
+            assert_eq!(p.message, Some("Compiling...".to_string()));
+            assert!(!p.finished);
+        } else {
+            panic!("Expected AppProgress");
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_start() {
+        let json = r#"{"event":"app.start","params":{"appId":"abc123","deviceId":"iphone","directory":"/path/to/app","supportsRestart":true}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::AppStart(_)));
+        assert_eq!(msg.app_id(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_started() {
+        let json = r#"{"event":"app.started","params":{"appId":"abc123"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::AppStarted(_)));
+        assert_eq!(msg.app_id(), Some("abc123"));
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_stop() {
+        let json = r#"{"event":"app.stop","params":{"appId":"abc123"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::AppStop(_)));
+        assert!(!msg.is_error());
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_stop_with_error() {
+        let json = r#"{"event":"app.stop","params":{"appId":"abc123","error":"Crashed"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(msg.is_error());
+        if let DaemonMessage::AppStop(stop) = msg {
+            assert_eq!(stop.error, Some("Crashed".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_device_added() {
+        let json = r#"{"event":"device.added","params":{"id":"emulator-5554","name":"Pixel 4","platform":"android","emulator":true}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        if let DaemonMessage::DeviceAdded(d) = msg {
+            assert_eq!(d.name, "Pixel 4");
+            assert!(d.emulator);
+            assert_eq!(d.platform, "android");
+        } else {
+            panic!("Expected DeviceAdded");
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_device_removed() {
+        let json = r#"{"event":"device.removed","params":{"id":"emulator-5554","name":"Pixel 4","platform":"android"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::DeviceRemoved(_)));
+    }
+
+    #[test]
+    fn test_daemon_message_parse_app_debug_port() {
+        let json = r#"{"event":"app.debugPort","params":{"appId":"abc","port":8080,"wsUri":"ws://localhost:8080"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        if let DaemonMessage::AppDebugPort(d) = msg {
+            assert_eq!(d.port, 8080);
+            assert_eq!(d.ws_uri, "ws://localhost:8080");
+        } else {
+            panic!("Expected AppDebugPort");
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_parse_response_success() {
+        let json = r#"{"id":1,"result":{"code":0}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::Response { .. }));
+        assert!(!msg.is_error());
+    }
+
+    #[test]
+    fn test_daemon_message_parse_response_error() {
+        let json = r#"{"id":1,"error":"Something failed"}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(msg.is_error());
+    }
+
+    #[test]
+    fn test_daemon_message_unknown_event_fallback() {
+        let json = r#"{"event":"some.future.event","params":{"foo":"bar"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert!(matches!(msg, DaemonMessage::UnknownEvent { .. }));
+        if let DaemonMessage::UnknownEvent { event, .. } = msg {
+            assert_eq!(event, "some.future.event");
+        }
+    }
+
+    #[test]
+    fn test_daemon_message_malformed_event_fallback() {
+        // app.start missing required fields
+        let json = r#"{"event":"app.start","params":{"incomplete":true}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        // Should fall back to UnknownEvent, not panic
+        assert!(matches!(msg, DaemonMessage::UnknownEvent { .. }));
+    }
+
+    #[test]
+    fn test_daemon_message_summary() {
+        let log_json = r#"{"event":"app.log","params":{"appId":"a","log":"Hello","error":false}}"#;
+        let msg = DaemonMessage::parse(log_json).unwrap();
+        assert_eq!(msg.summary(), "Hello");
+
+        let connected_json =
+            r#"{"event":"daemon.connected","params":{"version":"1.0.0","pid":123}}"#;
+        let msg = DaemonMessage::parse(connected_json).unwrap();
+        assert!(msg.summary().contains("1.0.0"));
+
+        let started_json = r#"{"event":"app.started","params":{"appId":"a"}}"#;
+        let msg = DaemonMessage::parse(started_json).unwrap();
+        assert_eq!(msg.summary(), "App started");
+    }
+
+    #[test]
+    fn test_daemon_message_app_id_helper() {
+        // App events should return app_id
+        let json = r#"{"event":"app.log","params":{"appId":"test-app","log":"msg","error":false}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert_eq!(msg.app_id(), Some("test-app"));
+
+        // Non-app events should return None
+        let json = r#"{"event":"daemon.connected","params":{"version":"1.0","pid":1}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert_eq!(msg.app_id(), None);
+
+        // Device events should return None
+        let json = r#"{"event":"device.added","params":{"id":"d","name":"n","platform":"p"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        assert_eq!(msg.app_id(), None);
+    }
+
+    #[test]
+    fn test_daemon_message_invalid_json_returns_none() {
+        assert!(DaemonMessage::parse("not json").is_none());
+        assert!(DaemonMessage::parse("{incomplete").is_none());
+    }
+
+    #[test]
+    fn test_daemon_message_daemon_log_message() {
+        let json =
+            r#"{"event":"daemon.logMessage","params":{"level":"warning","message":"Low memory"}}"#;
+        let msg = DaemonMessage::parse(json).unwrap();
+        if let DaemonMessage::DaemonLogMessage(m) = msg {
+            assert_eq!(m.level, "warning");
+            assert_eq!(m.message, "Low memory");
+        } else {
+            panic!("Expected DaemonLogMessage");
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Enhanced Logging Tests (Task 07)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_flutter_log_basic() {
+        let (level, msg) = DaemonMessage::parse_flutter_log("flutter: Hello World", false);
+        assert_eq!(level, LogLevel::Info);
+        assert_eq!(msg, "Hello World");
+    }
+
+    #[test]
+    fn test_parse_flutter_log_error_flag() {
+        let (level, msg) = DaemonMessage::parse_flutter_log("Some error occurred", true);
+        assert_eq!(level, LogLevel::Error);
+        assert_eq!(msg, "Some error occurred");
+    }
+
+    #[test]
+    fn test_parse_flutter_log_exception_in_message() {
+        let (level, _) =
+            DaemonMessage::parse_flutter_log("flutter: Exception: Something went wrong", false);
+        assert_eq!(level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_parse_flutter_log_warning() {
+        let (level, _) =
+            DaemonMessage::parse_flutter_log("flutter: Warning: deprecated API used", false);
+        assert_eq!(level, LogLevel::Warning);
+    }
+
+    #[test]
+    fn test_detect_log_level_error_patterns() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Error occurred"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("An exception was thrown"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("Build failed"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("Fatal error"),
+            LogLevel::Error
+        );
+    }
+
+    #[test]
+    fn test_detect_log_level_warning_patterns() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Warning: check this"),
+            LogLevel::Warning
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("This is deprecated"),
+            LogLevel::Warning
+        );
+    }
+
+    #[test]
+    fn test_detect_log_level_debug_patterns() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("debug: value is 5"),
+            LogLevel::Debug
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("[debug] trace info"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_detect_log_level_default() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Normal message"),
+            LogLevel::Info
+        );
+    }
+
+    #[test]
+    fn test_app_log_to_log_entry() {
+        use crate::daemon::events::AppLog;
+
+        let app_log = AppLog {
+            app_id: "test".to_string(),
+            log: "flutter: Hello from app".to_string(),
+            error: false,
+            stack_trace: None,
+        };
+
+        let msg = DaemonMessage::AppLog(app_log);
+        let entry = msg.to_log_entry().unwrap();
+
+        assert_eq!(entry.level, LogLevel::Info);
+        assert_eq!(entry.message, "Hello from app");
+        assert!(matches!(entry.source, LogSource::Flutter));
+    }
+
+    #[test]
+    fn test_daemon_log_message_to_log_entry() {
+        use crate::daemon::events::DaemonLogMessage;
+
+        let daemon_msg = DaemonLogMessage {
+            level: "error".to_string(),
+            message: "Something went wrong".to_string(),
+            stack_trace: None,
+        };
+
+        let msg = DaemonMessage::DaemonLogMessage(daemon_msg);
+        let entry = msg.to_log_entry().unwrap();
+
+        assert_eq!(entry.level, LogLevel::Error);
+        assert_eq!(entry.message, "Something went wrong");
+    }
+
+    #[test]
+    fn test_app_progress_finished_only() {
+        use crate::daemon::events::AppProgress;
+
+        let progress_ongoing = AppProgress {
+            app_id: "test".to_string(),
+            id: "1".to_string(),
+            progress_id: None,
+            message: Some("Compiling...".to_string()),
+            finished: false,
+        };
+
+        let msg_ongoing = DaemonMessage::AppProgress(progress_ongoing);
+        assert!(msg_ongoing.to_log_entry().is_none()); // Skip ongoing
+
+        let progress_finished = AppProgress {
+            app_id: "test".to_string(),
+            id: "1".to_string(),
+            progress_id: None,
+            message: Some("Compilation complete".to_string()),
+            finished: true,
+        };
+
+        let msg_finished = DaemonMessage::AppProgress(progress_finished);
+        assert!(msg_finished.to_log_entry().is_some()); // Show finished
+    }
+
+    #[test]
+    fn test_app_stop_error_level() {
+        use crate::daemon::events::AppStop;
+
+        let stop_normal = AppStop {
+            app_id: "test".to_string(),
+            error: None,
+        };
+        let entry = DaemonMessage::AppStop(stop_normal).to_log_entry().unwrap();
+        assert_eq!(entry.level, LogLevel::Warning);
+
+        let stop_error = AppStop {
+            app_id: "test".to_string(),
+            error: Some("Crash!".to_string()),
+        };
+        let entry = DaemonMessage::AppStop(stop_error).to_log_entry().unwrap();
+        assert_eq!(entry.level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_app_log_strips_flutter_prefix() {
+        use crate::daemon::events::AppLog;
+
+        let app_log = AppLog {
+            app_id: "test".to_string(),
+            log: "flutter: Button pressed".to_string(),
+            error: false,
+            stack_trace: None,
+        };
+
+        let msg = DaemonMessage::AppLog(app_log);
+        let entry = msg.to_log_entry().unwrap();
+
+        // Should strip "flutter: " prefix
+        assert_eq!(entry.message, "Button pressed");
+    }
+
+    #[test]
+    fn test_app_log_with_stack_trace() {
+        use crate::daemon::events::AppLog;
+
+        let app_log = AppLog {
+            app_id: "test".to_string(),
+            log: "Exception: Null check failed".to_string(),
+            error: true,
+            stack_trace: Some("at main.dart:42\nat widget.dart:100".to_string()),
+        };
+
+        let msg = DaemonMessage::AppLog(app_log);
+        let entry = msg.to_log_entry().unwrap();
+
+        assert_eq!(entry.level, LogLevel::Error);
+        assert!(entry.stack_trace.is_some());
+        assert!(entry.stack_trace.as_ref().unwrap().contains("main.dart:42"));
     }
 }

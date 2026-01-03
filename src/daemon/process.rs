@@ -3,10 +3,13 @@
 use std::path::Path;
 use std::process::Stdio;
 
+use std::sync::Arc;
+
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
+use super::commands::{CommandSender, RequestTracker};
 use crate::common::prelude::*;
 use crate::core::DaemonEvent;
 
@@ -199,6 +202,16 @@ impl FlutterProcess {
     /// Get the process ID
     pub fn id(&self) -> Option<u32> {
         self.pid
+    }
+
+    /// Get the stdin sender for creating a CommandSender
+    pub fn stdin_sender(&self) -> mpsc::Sender<String> {
+        self.stdin_tx.clone()
+    }
+
+    /// Create a command sender for this process
+    pub fn command_sender(&self, tracker: Arc<RequestTracker>) -> CommandSender {
+        CommandSender::new(self.stdin_tx.clone(), tracker)
     }
 }
 

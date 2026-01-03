@@ -104,6 +104,8 @@ impl LogLevel {
 pub enum LogSource {
     /// Application/system messages
     App,
+    /// Flutter daemon infrastructure messages
+    Daemon,
     /// Flutter daemon stdout
     Flutter,
     /// Flutter daemon stderr
@@ -116,6 +118,7 @@ impl LogSource {
     pub fn prefix(&self) -> &'static str {
         match self {
             LogSource::App => "app",
+            LogSource::Daemon => "daemon",
             LogSource::Flutter => "flutter",
             LogSource::FlutterError => "flutter",
             LogSource::Watcher => "watch",

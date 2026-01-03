@@ -136,12 +136,38 @@ impl<'a> LogView<'a> {
             ),
             LogLevel::Info => (
                 Style::default().fg(Color::Green),
-                Style::default().fg(Color::Gray),
+                Style::default().fg(Color::White), // Brighter for better readability
             ),
             LogLevel::Debug => (
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(Color::DarkGray),
                 Style::default().fg(Color::DarkGray),
             ),
+        }
+    }
+
+    /// Get icon for log level
+    fn level_icon(level: LogLevel) -> &'static str {
+        match level {
+            LogLevel::Error => "✗",
+            LogLevel::Warning => "⚠",
+            LogLevel::Info => "•",
+            LogLevel::Debug => "·",
+        }
+    }
+
+    /// Format message with inline highlighting for special content
+    fn format_message(message: &str, base_style: Style) -> Span<'static> {
+        // Highlight reload success
+        if message.contains("Reloaded") || message.contains("reloaded") {
+            Span::styled(message.to_string(), base_style.fg(Color::Green))
+        } else if message.contains("Exception") || message.contains("Error") {
+            // Highlight exceptions
+            Span::styled(message.to_string(), base_style.fg(Color::LightRed))
+        } else if message.starts_with("    ") {
+            // Stack trace lines (indented)
+            Span::styled(message.to_string(), Style::default().fg(Color::DarkGray))
+        } else {
+            Span::styled(message.to_string(), base_style)
         }
     }
 
@@ -149,18 +175,19 @@ impl<'a> LogView<'a> {
     fn source_style(source: LogSource) -> Style {
         match source {
             LogSource::App => Style::default().fg(Color::Magenta),
+            LogSource::Daemon => Style::default().fg(Color::Yellow),
             LogSource::Flutter => Style::default().fg(Color::Blue),
             LogSource::FlutterError => Style::default().fg(Color::Red),
             LogSource::Watcher => Style::default().fg(Color::Cyan),
         }
     }
 
-    /// Format a single log entry as a styled Line
+    /// Format a single log entry as a styled Line with icons
     fn format_entry(&self, entry: &LogEntry) -> Line<'static> {
         let (level_style, msg_style) = Self::level_style(entry.level);
         let source_style = Self::source_style(entry.source);
 
-        let mut spans = Vec::with_capacity(6);
+        let mut spans = Vec::with_capacity(8);
 
         // Timestamp: "HH:MM:SS "
         if self.show_timestamps {
@@ -171,9 +198,9 @@ impl<'a> LogView<'a> {
             spans.push(Span::raw(" "));
         }
 
-        // Level indicator: "ERR " or "INF " etc.
+        // Level indicator with icon: "✗ " or "• " etc.
         spans.push(Span::styled(
-            format!("{} ", entry.level.prefix()),
+            format!("{} ", Self::level_icon(entry.level)),
             level_style,
         ));
 
@@ -185,8 +212,8 @@ impl<'a> LogView<'a> {
             ));
         }
 
-        // Message content (clone to avoid lifetime issues)
-        spans.push(Span::styled(entry.message.clone(), msg_style));
+        // Message content with inline highlighting
+        spans.push(Self::format_message(&entry.message, msg_style));
 
         Line::from(spans)
     }

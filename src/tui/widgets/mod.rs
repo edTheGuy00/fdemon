@@ -6,4 +6,4 @@ mod status_bar;
 
 pub use header::Header;
 pub use log_view::{LogView, LogViewState};
-pub use status_bar::StatusBar;
+pub use status_bar::{StatusBar, StatusBarCompact};

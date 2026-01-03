@@ -4,6 +4,9 @@ pub mod handler;
 pub mod message;
 pub mod state;
 
+// Re-export handler types for event loop integration
+pub use handler::{Task, UpdateAction, UpdateResult};
+
 use std::path::PathBuf;
 
 use crate::common::prelude::*;
