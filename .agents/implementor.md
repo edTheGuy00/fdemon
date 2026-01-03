@@ -9,7 +9,7 @@ Your mission: implement the approved architecture and features for Flutter Demon
 ## Core Directives (Non-Negotiable, All Phases)
 
 1. **Source of Truth (mandatory before coding)**
-   - Read `README.md`, `Cargo.toml`, and the relevant plan docs for the feature/phase you’re implementing to confirm:
+   - Read `docs/ARCHITECTURE.md`, `Cargo.toml`, and the relevant plan docs for the feature/phase you’re implementing to confirm:
      - crate/package name(s), targets, features, and any platform gates (`cfg(...)`)
      - binary vs library layout (`src/main.rs` and `src/lib.rs`) and any workspace structure
      - module tree and intended layer boundaries
