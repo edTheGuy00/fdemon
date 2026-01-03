@@ -441,6 +441,70 @@ src/
 
 ---
 
+### Phase 1.1: Flutter Project Discovery
+
+**Goal**: Automatically discover **runnable** Flutter projects when running from a parent directory, filtering out plugins/packages that cannot be run directly, and allow users to select from multiple discovered projects.
+
+**Duration**: 0.5-1 week
+
+**Status**: Added post-Phase 1 to address usability gap
+
+#### Problem Addressed
+
+When running `flutter-demon` from a directory that doesn't directly contain a Flutter project (but has Flutter projects in subdirectories), the app should intelligently search for and offer project selection instead of failing.
+
+Additionally, users working on **Flutter plugins** may have a `pubspec.yaml` at the root, but it's not a runnable target—the runnable example is typically in `example/` or `sample/` subdirectories.
+
+#### Project Type Classification
+
+| Type | Runnable? | Detection |
+|------|-----------|-----------|
+| **Flutter Application** | ✅ Yes | Has `flutter: sdk` dependency, has platform dirs, NO `flutter: plugin:` section |
+| **Flutter Plugin** | ❌ No | Has `flutter: plugin: platforms:` section in pubspec.yaml |
+| **Flutter Package** | ❌ No | Has `flutter: sdk` dependency but no platform directories |
+| **Dart Package** | ❌ No | No `flutter: sdk` dependency, pure Dart code |
+
+For **plugins**, we recursively check `example/` and `sample/` subdirectories for runnable targets.
+
+#### Steps
+
+1. **Discovery Module** (`core/discovery.rs`)
+   - Implement recursive search for `pubspec.yaml` files
+   - **Parse pubspec.yaml** to detect project type (app, plugin, package)
+   - **Check for platform directories** (android/, ios/, macos/, web/, linux/, windows/)
+   - **Filter out non-runnable projects** (plugins, packages, Dart-only)
+   - **For plugins**: Check `example/` and `sample/` subdirectories for runnable targets
+   - Configurable max depth (default: 3 levels)
+   - Skip hidden directories (`.git`, `.dart_tool`, etc.)
+   - Skip build/dependency directories (`build/`, `node_modules/`)
+   - Return sorted list of discovered **runnable** project paths
+
+2. **Project Selector** (`tui/selector.rs`)
+   - Simple numbered menu using crossterm (pre-TUI)
+   - Single-keypress selection (1-9)
+   - Cancel with 'q', Escape, or Ctrl+C
+   - Display paths relative to searched directory
+   - Plugin examples shown as `my_plugin/example`
+
+3. **Integration Flow** (`main.rs`)
+   - Priority 1: Check if PWD is a **runnable** Flutter project
+   - Priority 2: If plugin/package detected at PWD, explain and search for runnable targets
+   - Priority 3: Search subdirectories for runnable projects
+   - Auto-select if exactly one runnable project found
+   - Show selector if multiple runnable projects found
+   - Helpful error if no runnable projects found (with explanation of requirements)
+
+4. **Testing & Documentation**
+   - Unit tests for discovery including plugin/package detection
+   - Integration tests for monorepo scenarios with mixed project types
+   - Update README with discovery usage and project type table
+
+**Milestone Deliverable**: Running `flutter-demon` from any directory intelligently finds runnable Flutter projects, handles plugins by finding their examples, and skips non-runnable packages.
+
+**Task Details**: See [phase_1_1/TASKS.md](phase_1_1/TASKS.md)
+
+---
+
 ### Phase 2: Protocol Integration (Basic Control)
 
 **Goal**: Parse daemon protocol and implement hot reload/restart commands.
@@ -688,6 +752,22 @@ theme = "dark"
 [devtools]
 # Auto-open DevTools on app start
 auto_open = false
+
+[mcp]
+# Enable MCP server for AI agent control (future feature)
+enabled = true
+
+# Port for MCP server (Streamable HTTP transport)
+port = 3939
+
+# Bind address (localhost only for security)
+bind = "127.0.0.1"
+
+# Maximum concurrent MCP sessions
+max_sessions = 5
+
+# Session timeout in seconds (0 = no timeout)
+session_timeout = 3600
 ```
 
 ---
@@ -870,6 +950,39 @@ impl FlutterSdkInfo {
 
 The initial focus is on providing an excellent standalone TUI experience. Headless/daemon mode would require significant additional complexity (IPC protocol, client library, security considerations) and is deferred to a future version.
 
+### 6. MCP Server Integration (Future Groundwork)
+**Decision**: Plan now, implement after MVP, adopt patterns during MVP.
+
+Flutter Demon will expose an **MCP (Model Context Protocol) server** to allow AI agents to control Flutter development workflows. This is a priority future feature with its own detailed plan.
+
+**Full Plan**: See [../mcp-server/PLAN.md](../mcp-server/PLAN.md)
+
+**Key Architectural Decisions**:
+
+1. **Transport**: Use **Streamable HTTP** (not stdio) because the TUI owns terminal I/O. MCP server binds to `localhost:3939` alongside the TUI.
+
+2. **SDK**: Use `rmcp` crate (official Rust MCP SDK) with `axum` for HTTP server.
+
+3. **Service Layer Pattern**: Extract shared business logic into `services/` module during Phase 2-3. Both TUI and future MCP handlers will use these services.
+
+```rust
+// services/flutter_controller.rs
+pub trait FlutterController: Send + Sync {
+    async fn reload(&self) -> Result<ReloadResult>;
+    async fn restart(&self) -> Result<RestartResult>;
+    async fn stop(&self) -> Result<()>;
+    async fn get_state(&self) -> AppRunState;
+}
+```
+
+4. **Shared State**: Use `Arc<RwLock<T>>` for app state, log buffer, devices to enable concurrent access.
+
+5. **Event Broadcasting**: Use `tokio::sync::broadcast` channels so multiple consumers (TUI + future MCP) can subscribe to events.
+
+**MCP Capabilities Planned**:
+- **Tools**: `flutter.reload`, `flutter.restart`, `flutter.stop`, `flutter.start`, `flutter.pub_get`, `flutter.clean`, `flutter.open_devtools`
+- **Resources**: `flutter://logs`, `flutter://state`, `flutter://devices`, `flutter://project`, `flutter://widget-tree`
+
 ---
 
 ## UI Layout
@@ -912,6 +1025,32 @@ These features are explicitly deferred for future versions:
 5. **Multiple Sessions** - Tab-based UI for running multiple apps
 6. **Terminal Hyperlinks** - OSC 8 clickable links in log output
 7. **Plugin System** - Lua/WASM extensibility
+8. **MCP Server Integration** - Expose Flutter Demon as an MCP (Model Context Protocol) server for AI agent control
+
+### MCP Server Integration (Priority Feature)
+
+**Full Plan**: See [../mcp-server/PLAN.md](../mcp-server/PLAN.md)
+
+Flutter Demon will expose an **MCP server** (using Streamable HTTP transport on localhost) that enables AI agents like Claude, Cursor, and Zed AI to:
+
+- **Tools**: `flutter.reload`, `flutter.restart`, `flutter.stop`, `flutter.start`, `flutter.pub_get`, `flutter.clean`, `flutter.open_devtools`
+- **Resources**: `flutter://logs`, `flutter://state`, `flutter://devices`, `flutter://project`, `flutter://widget-tree`
+
+**Architectural Groundwork for MCP-Readiness**:
+
+To minimize future refactoring, the following patterns should be adopted during MVP development:
+
+1. **Service Layer Pattern** (Phase 2+): Create `services/` module with `FlutterController`, `StateService`, `LogService` traits. TUI handlers should use services, not direct daemon access.
+
+2. **Shared State with Arc<RwLock>**: App state, log buffer, and device list should be wrapped in `Arc<RwLock<T>>` for concurrent access by future MCP handlers.
+
+3. **Command/Query Separation**: Define `FlutterCommand` enum (Reload, Restart, Stop, Start) for mutations and queries for reads. Enables audit logging and rate limiting.
+
+4. **Event Broadcasting**: Use `tokio::sync::broadcast` for events so multiple subscribers (TUI + future MCP) can receive notifications.
+
+**Why Streamable HTTP**: The TUI owns stdin/stdout, so MCP cannot use stdio transport. Streamable HTTP binds to `localhost:3939` alongside the TUI.
+
+**Crate**: `rmcp` (official Rust MCP SDK) with `axum` for HTTP server.
 
 ---
 
