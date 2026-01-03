@@ -18,6 +18,16 @@ Flutter Demon is a Rust-based TUI application that wraps the `flutter run --mach
 
 The Flutter daemon operates using **JSON-RPC 2.0** over **stdin/stdout**. When running `flutter run --machine` or `flutter attach --machine`, a subset of daemon functionality is exposed for programmatic control.
 
+**Protocol Reference:** Flutter daemon v3.38.5 (protocol version 0.6.1)
+See: https://github.com/flutter/flutter/blob/main/packages/flutter_tools/doc/daemon.md
+
+**Protocol Changelog (relevant):**
+- v0.6.1: Added `coldBoot` option to `emulator.launch` command
+- v0.6.0: Added `debounce` option to `app.restart` command
+- v0.5.3: Added `emulatorId` field to device
+- v0.5.2: Added `platformType` and `category` fields to emulator
+- v0.5.1: Added `platformType`, `ephemeral`, and `category` fields to device
+
 #### Protocol Format
 - All messages wrapped in square brackets `[]`
 - Single-line JSON-RPC format
@@ -40,10 +50,23 @@ The Flutter daemon operates using **JSON-RPC 2.0** over **stdin/stdout**. When r
 - Events: `added`, `removed`
 
 **emulator domain:**
-- Commands: `getEmulators()`, `launch()`, `create()`
+- Commands: `getEmulators()`, `launch(emulatorId, coldBoot?)`, `create(name?)`
 
 **devtools domain:**
 - Commands: `serve()`
+
+#### Device Object Fields (v3.38.5)
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | String | Unique device identifier |
+| `name` | String | Human-readable device name |
+| `platform` | String | Platform identifier (e.g., "ios", "android") |
+| `category` | String? | "mobile", "web", "desktop", or null (v0.5.1+) |
+| `platformType` | String? | "android", "ios", "linux", "macos", "fuchsia", "windows", "web" (v0.5.1+) |
+| `ephemeral` | bool | True if device needs manual connection (v0.5.1+) |
+| `emulator` | bool | Whether this is an emulator/simulator |
+| `emulatorId` | String? | Matches ID from `emulator.getEmulators` (v0.5.3+) |
 
 #### Key Events for TUI Implementation
 
@@ -55,6 +78,7 @@ The Flutter daemon operates using **JSON-RPC 2.0** over **stdin/stdout**. When r
 | `app.progress` | Operation progress | Show loading indicators |
 | `app.debugPort` | VM service available | Store for DevTools |
 | `app.devTools` | DevTools URI available | Enable DevTools button |
+| `app.warning` | App-specific warning | Show warning notifications |
 | `device.added` | Device connected | Update device list |
 | `device.removed` | Device disconnected | Update device list |
 
