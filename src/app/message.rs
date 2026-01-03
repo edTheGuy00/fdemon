@@ -1,7 +1,8 @@
 //! Message types for the application (TEA pattern)
 
+use crate::app::session::SessionId;
 use crate::core::DaemonEvent;
-use crate::daemon::{Device, Emulator, EmulatorLaunchResult};
+use crate::daemon::{CommandSender, Device, Emulator, EmulatorLaunchResult};
 use crossterm::event::KeyEvent;
 
 /// All possible messages/actions in the application
@@ -10,14 +11,29 @@ pub enum Message {
     /// Keyboard event from terminal
     Key(KeyEvent),
 
-    /// Event from Flutter daemon
+    /// Event from Flutter daemon (legacy single-session mode)
     Daemon(DaemonEvent),
+
+    /// Event from Flutter daemon with session context (multi-session mode)
+    SessionDaemon {
+        session_id: SessionId,
+        event: DaemonEvent,
+    },
 
     /// Tick event for periodic updates
     Tick,
 
-    /// Request to quit the application
+    /// Request to quit (may show confirmation dialog if sessions running)
+    RequestQuit,
+
+    /// Force quit without confirmation (Ctrl+C, signal handler)
     Quit,
+
+    /// Confirm quit from confirmation dialog
+    ConfirmQuit,
+
+    /// Cancel quit from confirmation dialog
+    CancelQuit,
 
     // ─────────────────────────────────────────────────────────
     // Scroll Messages
@@ -114,13 +130,23 @@ pub enum Message {
     // ─────────────────────────────────────────────────────────
     /// Session started successfully
     SessionStarted {
+        session_id: SessionId,
         device_id: String,
         device_name: String,
         platform: String,
         pid: Option<u32>,
     },
     /// Session failed to spawn
-    SessionSpawnFailed { device_id: String, error: String },
+    SessionSpawnFailed {
+        session_id: SessionId,
+        device_id: String,
+        error: String,
+    },
+    /// Attach command sender to session (from background task)
+    SessionProcessAttached {
+        session_id: SessionId,
+        cmd_sender: CommandSender,
+    },
 
     // ─────────────────────────────────────────────────────────
     // Session Navigation (Task 10)

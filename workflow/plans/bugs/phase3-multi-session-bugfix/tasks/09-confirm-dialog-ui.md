@@ -332,15 +332,15 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
 ### Acceptance Criteria
 
-1. [ ] `ConfirmDialog` widget created in `widgets/confirm_dialog.rs`
-2. [ ] Widget exported from `widgets/mod.rs`
-3. [ ] `ConfirmDialogState` stores session count and messages
-4. [ ] Dialog renders centered on screen
-5. [ ] Dialog shows correct session count
-6. [ ] Dialog shows [y] Yes and [n] No options
-7. [ ] render.rs uses dialog state when `UiMode::ConfirmDialog`
-8. [ ] AppState creates dialog state in `request_quit()`
-9. [ ] AppState clears dialog state in `cancel_quit()`
+1. [x] `ConfirmDialog` widget created in `widgets/confirm_dialog.rs`
+2. [x] Widget exported from `widgets/mod.rs`
+3. [x] `ConfirmDialogState` stores session count and messages
+4. [x] Dialog renders centered on screen
+5. [x] Dialog shows correct session count
+6. [x] Dialog shows [y] Yes and [n] No options
+7. [x] render.rs uses dialog state when `UiMode::ConfirmDialog`
+8. [x] AppState creates dialog state in `request_quit()`
+9. [x] AppState clears dialog state in `cancel_quit()`
 
 ---
 
@@ -407,3 +407,37 @@ fn test_render_with_confirm_dialog() {
 - The dialog state could be extended for other confirmations (e.g., close all sessions)
 - Consider adding animation/highlighting for visual polish
 - Dialog should be keyboard-only - no mouse support needed for now
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date Completed:** 2026-01-04
+
+### Files Modified
+
+- `src/tui/widgets/confirm_dialog.rs` — Created new widget file with `ConfirmDialog` widget and `ConfirmDialogState` struct
+- `src/tui/widgets/mod.rs` — Added module declaration and re-export for `ConfirmDialog` and `ConfirmDialogState`
+- `src/app/state.rs` — Added `confirm_dialog_state: Option<ConfirmDialogState>` field to `AppState`; updated `request_quit()` to create dialog state with session count; updated `cancel_quit()` to clear dialog state
+- `src/tui/render.rs` — Updated `UiMode::ConfirmDialog` match arm to render the confirmation dialog
+
+### Implementation Notes
+
+- Created a centered modal dialog widget using ratatui's `Clear` widget to erase the background
+- Dialog shows the number of running sessions (properly pluralized) and a warning message
+- Button hints styled with green [y] and red [n] keys for clear visual feedback
+- Dialog is 50x9 characters fixed size, clamped to terminal area if smaller
+- Added 5 unit tests for the dialog widget covering state creation, rendering, and centering logic
+
+### Testing Performed
+
+```
+cargo check    — Passed
+cargo test     — All 433 tests passed
+```
+
+### Risks/Limitations
+
+- None identified. The dialog integrates cleanly with the existing quit confirmation flow from Task 08.

@@ -9,13 +9,17 @@ pub mod widgets;
 
 pub use selector::{select_project, SelectionResult};
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch, Mutex};
 
+use crate::app::session::SessionId;
+
+use crate::app::handler::Task;
 use crate::app::state::UiMode;
-use crate::app::{handler, message::Message, state::AppState, Task, UpdateAction};
+use crate::app::{handler, message::Message, state::AppState, UpdateAction};
 use crate::common::{prelude::*, signals};
 use crate::config;
 use crate::core::{AppPhase, DaemonEvent, LogSource};
@@ -56,8 +60,9 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Shared command sender - can be updated when sessions are spawned
     let cmd_sender: Arc<Mutex<Option<CommandSender>>> = Arc::new(Mutex::new(None));
 
-    // Shared session task handle - for cleanup
-    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    // Per-session task handles - for cleanup (HashMap allows multiple concurrent sessions)
+    let session_tasks: Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -197,7 +202,7 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
         daemon_rx,
         msg_tx,
         cmd_sender.clone(),
-        session_task.clone(),
+        session_tasks.clone(),
         shutdown_rx,
         project_path,
     );
@@ -224,26 +229,40 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
             info!("Flutter process shut down cleanly");
         }
     } else {
-        // SpawnSession mode: process is owned by background task
-        // Check if there's a session task to wait for
-        let task_handle = session_task.lock().await.take();
+        // SpawnSession mode: processes are owned by background tasks
+        // Collect all session tasks and wait for them
+        let tasks: Vec<(SessionId, tokio::task::JoinHandle<()>)> = {
+            let mut guard = session_tasks.lock().await;
+            guard.drain().collect()
+        };
 
-        if let Some(handle) = task_handle {
-            state.log_info(LogSource::App, "Shutting down Flutter session...");
+        if !tasks.is_empty() {
+            state.log_info(
+                LogSource::App,
+                format!("Shutting down {} Flutter session(s)...", tasks.len()),
+            );
 
             // Draw one more frame to show shutdown message
             let _ = term.draw(|frame| render::view(frame, &mut state));
 
-            // Signal the background task to shut down
-            info!("Sending shutdown signal to session task...");
+            // Signal all background tasks to shut down
+            info!(
+                "Sending shutdown signal to {} session task(s)...",
+                tasks.len()
+            );
             let _ = shutdown_tx.send(true);
 
-            // Wait for the background task to complete its shutdown
-            info!("Waiting for session task to complete shutdown...");
-            match tokio::time::timeout(std::time::Duration::from_secs(10), handle).await {
-                Ok(Ok(())) => info!("Session task completed cleanly"),
-                Ok(Err(e)) => warn!("Session task panicked: {}", e),
-                Err(_) => warn!("Timeout waiting for session task, process may be orphaned"),
+            // Wait for all tasks with timeout
+            for (session_id, handle) in tasks {
+                info!("Waiting for session {} to complete shutdown...", session_id);
+                match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+                    Ok(Ok(())) => info!("Session {} completed cleanly", session_id),
+                    Ok(Err(e)) => warn!("Session {} task panicked: {}", session_id, e),
+                    Err(_) => warn!(
+                        "Timeout waiting for session {}, may be orphaned",
+                        session_id
+                    ),
+                }
             }
         }
     }
@@ -348,7 +367,8 @@ pub async fn run() -> Result<()> {
     let (msg_tx, msg_rx) = mpsc::channel::<Message>(1);
     let (_daemon_tx, daemon_rx) = mpsc::channel::<DaemonEvent>(1);
     let cmd_sender: Arc<Mutex<Option<CommandSender>>> = Arc::new(Mutex::new(None));
-    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
+    let session_tasks: Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(HashMap::new()));
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let dummy_path = Path::new(".");
@@ -359,7 +379,7 @@ pub async fn run() -> Result<()> {
         daemon_rx,
         msg_tx,
         cmd_sender,
-        session_task,
+        session_tasks,
         shutdown_rx,
         dummy_path,
     );
@@ -374,7 +394,7 @@ fn run_loop(
     mut daemon_rx: mpsc::Receiver<DaemonEvent>,
     msg_tx: mpsc::Sender<Message>,
     cmd_sender: Arc<Mutex<Option<CommandSender>>>,
-    session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    session_tasks: Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
 ) -> Result<()> {
@@ -386,7 +406,7 @@ fn run_loop(
                 msg,
                 &msg_tx,
                 &cmd_sender,
-                &session_task,
+                &session_tasks,
                 &shutdown_rx,
                 project_path,
             );
@@ -420,7 +440,7 @@ fn run_loop(
                 Message::Daemon(event),
                 &msg_tx,
                 &cmd_sender,
-                &session_task,
+                &session_tasks,
                 &shutdown_rx,
                 project_path,
             );
@@ -436,7 +456,7 @@ fn run_loop(
                 message,
                 &msg_tx,
                 &cmd_sender,
-                &session_task,
+                &session_tasks,
                 &shutdown_rx,
                 project_path,
             );
@@ -452,11 +472,11 @@ fn process_message(
     message: Message,
     msg_tx: &mpsc::Sender<Message>,
     cmd_sender: &Arc<Mutex<Option<CommandSender>>>,
-    session_task: &Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    session_tasks: &Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: &watch::Receiver<bool>,
     project_path: &Path,
 ) {
-    // Route responses from Message::Daemon events (from SpawnSession-spawned processes)
+    // Route responses from Message::Daemon events (legacy single-session mode)
     if let Message::Daemon(DaemonEvent::Stdout(ref line)) = message {
         if let Some(json) = protocol::strip_brackets(line) {
             if let Some(DaemonMessage::Response { id, result, error }) = DaemonMessage::parse(json)
@@ -476,17 +496,63 @@ fn process_message(
         }
     }
 
+    // Route responses from Message::SessionDaemon events (multi-session mode)
+    if let Message::SessionDaemon {
+        session_id,
+        event: DaemonEvent::Stdout(ref line),
+    } = message
+    {
+        if let Some(json) = protocol::strip_brackets(line) {
+            if let Some(DaemonMessage::Response { id, result, error }) = DaemonMessage::parse(json)
+            {
+                // Use session-specific cmd_sender for response routing
+                if let Some(handle) = state.session_manager.get(session_id) {
+                    if let Some(ref sender) = handle.cmd_sender {
+                        if let Some(id_num) = id.as_u64() {
+                            let tracker = sender.tracker().clone();
+                            tokio::spawn(async move {
+                                tracker.handle_response(id_num, result, error).await;
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let mut msg = Some(message);
     while let Some(m) = msg {
         let result = handler::update(state, m);
 
         // Handle any action
         if let Some(action) = result.action {
+            // For SpawnTask actions, try to get session-specific cmd_sender
+            let session_cmd_sender = match &action {
+                UpdateAction::SpawnTask(task) => {
+                    let session_id = match task {
+                        Task::Reload { session_id, .. } => *session_id,
+                        Task::Restart { session_id, .. } => *session_id,
+                        Task::Stop { session_id, .. } => *session_id,
+                    };
+                    // Look up session-specific cmd_sender (session_id 0 means legacy mode)
+                    if session_id > 0 {
+                        state
+                            .session_manager
+                            .get(session_id)
+                            .and_then(|h| h.cmd_sender.clone())
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            };
+
             handle_action(
                 action,
                 msg_tx.clone(),
                 cmd_sender.clone(),
-                session_task.clone(),
+                session_cmd_sender,
+                session_tasks.clone(),
                 shutdown_rx.clone(),
                 project_path,
             );
@@ -502,19 +568,27 @@ fn handle_action(
     action: UpdateAction,
     msg_tx: mpsc::Sender<Message>,
     cmd_sender: Arc<Mutex<Option<CommandSender>>>,
-    session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    session_cmd_sender: Option<CommandSender>,
+    session_tasks: Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
             // Spawn async task for command execution
-            let cmd_sender_clone = cmd_sender.clone();
-            tokio::spawn(async move {
-                // Get the command sender from the mutex
-                let sender = cmd_sender_clone.lock().await.clone();
-                execute_task(task, msg_tx, sender).await;
-            });
+            // Prefer session-specific cmd_sender, fall back to global
+            if let Some(sender) = session_cmd_sender {
+                tokio::spawn(async move {
+                    execute_task(task, msg_tx, Some(sender)).await;
+                });
+            } else {
+                // Fall back to global cmd_sender (legacy mode)
+                let cmd_sender_clone = cmd_sender.clone();
+                tokio::spawn(async move {
+                    let sender = cmd_sender_clone.lock().await.clone();
+                    execute_task(task, msg_tx, sender).await;
+                });
+            }
         }
 
         UpdateAction::DiscoverDevices => {
@@ -522,12 +596,16 @@ fn handle_action(
             spawn_device_discovery(msg_tx);
         }
 
-        UpdateAction::SpawnSession { device, config } => {
+        UpdateAction::SpawnSession {
+            session_id,
+            device,
+            config,
+        } => {
             // Spawn Flutter process for the selected device
             let project_path = project_path.to_path_buf();
             let msg_tx_clone = msg_tx.clone();
             let cmd_sender_clone = cmd_sender.clone();
-            let session_task_clone = session_task.clone();
+            let session_tasks_clone = session_tasks.clone();
             let mut shutdown_rx_clone = shutdown_rx.clone();
             let device_id = device.id.clone();
             let device_name = device.name.clone();
@@ -535,8 +613,8 @@ fn handle_action(
 
             let handle = tokio::spawn(async move {
                 info!(
-                    "Spawning Flutter session on device: {} ({})",
-                    device_name, device_id
+                    "Spawning Flutter session {} on device: {} ({})",
+                    session_id, device_name, device_id
                 );
 
                 // Create event channel for this session
@@ -552,16 +630,31 @@ fn handle_action(
 
                 match spawn_result {
                     Ok(mut process) => {
-                        info!("Flutter process started (PID: {:?})", process.id());
+                        info!(
+                            "Flutter process started for session {} (PID: {:?})",
+                            session_id,
+                            process.id()
+                        );
 
-                        // Create command sender and update shared state
+                        // Create command sender for this session
                         let request_tracker = Arc::new(RequestTracker::default());
-                        let sender = process.command_sender(request_tracker);
-                        *cmd_sender_clone.lock().await = Some(sender);
+                        let session_sender = process.command_sender(request_tracker);
+
+                        // Send SessionProcessAttached to store cmd_sender in SessionHandle
+                        let _ = msg_tx_clone
+                            .send(Message::SessionProcessAttached {
+                                session_id,
+                                cmd_sender: session_sender.clone(),
+                            })
+                            .await;
+
+                        // Also update legacy global cmd_sender for backward compatibility
+                        *cmd_sender_clone.lock().await = Some(session_sender.clone());
 
                         // Send session started message
                         let _ = msg_tx_clone
                             .send(Message::SessionStarted {
+                                session_id,
                                 device_id: device_id.clone(),
                                 device_name: device_name.clone(),
                                 platform: device_platform.clone(),
@@ -590,7 +683,15 @@ fn handle_action(
                                                 }
                                             }
 
-                                            if msg_tx_clone.send(Message::Daemon(event)).await.is_err() {
+                                            // Send event with session context for multi-session routing
+                                            if msg_tx_clone
+                                                .send(Message::SessionDaemon {
+                                                    session_id,
+                                                    event,
+                                                })
+                                                .await
+                                                .is_err()
+                                            {
                                                 // Main loop closed, need to shutdown
                                                 break;
                                             }
@@ -603,30 +704,41 @@ fn handle_action(
                                 }
                                 _ = shutdown_rx_clone.changed() => {
                                     // Shutdown signal received
-                                    info!("Shutdown signal received, stopping session...");
+                                    info!(
+                                        "Shutdown signal received, stopping session {}...",
+                                        session_id
+                                    );
                                     break;
                                 }
                             }
                         }
 
-                        // Graceful shutdown when loop ends
-                        info!("Session ending, initiating shutdown...");
-                        let sender_guard = cmd_sender_clone.lock().await;
+                        // Graceful shutdown when loop ends - use session's own sender
+                        info!("Session {} ending, initiating shutdown...", session_id);
                         if let Err(e) = process
-                            .shutdown(app_id.as_deref(), sender_guard.as_ref())
+                            .shutdown(app_id.as_deref(), Some(&session_sender))
                             .await
                         {
-                            warn!("Shutdown error (process may already be gone): {}", e);
+                            warn!(
+                                "Shutdown error for session {} (process may already be gone): {}",
+                                session_id, e
+                            );
                         }
-                        drop(sender_guard);
 
-                        // Clear the command sender
-                        *cmd_sender_clone.lock().await = None;
+                        // Clear the global command sender if it was ours
+                        // (only matters for legacy single-session compatibility)
+                        let mut guard = cmd_sender_clone.lock().await;
+                        *guard = None;
+                        drop(guard);
                     }
                     Err(e) => {
-                        error!("Failed to spawn Flutter process: {}", e);
+                        error!(
+                            "Failed to spawn Flutter process for session {}: {}",
+                            session_id, e
+                        );
                         let _ = msg_tx_clone
                             .send(Message::SessionSpawnFailed {
+                                session_id,
                                 device_id,
                                 error: e.to_string(),
                             })
@@ -634,13 +746,19 @@ fn handle_action(
                     }
                 }
 
-                // Clear the session task handle when done
-                *session_task_clone.lock().await = None;
+                // Remove this session's task from the tracking map
+                session_tasks_clone.lock().await.remove(&session_id);
+                info!("Session {} task removed from tracking", session_id);
             });
 
-            // Store the handle so we can await it during cleanup
-            if let Ok(mut guard) = session_task.try_lock() {
-                *guard = Some(handle);
+            // Store the handle with session_id as key (allows multiple concurrent sessions)
+            if let Ok(mut guard) = session_tasks.try_lock() {
+                guard.insert(session_id, handle);
+                info!(
+                    "Session {} task added to tracking (total: {})",
+                    session_id,
+                    guard.len()
+                );
             }
         }
 
@@ -683,8 +801,12 @@ async fn execute_task(
     };
 
     match task {
-        Task::Reload { app_id } => {
+        Task::Reload { session_id, app_id } => {
             let start = std::time::Instant::now();
+            info!(
+                "Executing reload for session {} (app_id: {})",
+                session_id, app_id
+            );
             match sender.send(DaemonCommand::Reload { app_id }).await {
                 Ok(response) => {
                     if response.success {
@@ -709,29 +831,39 @@ async fn execute_task(
                 }
             }
         }
-        Task::Restart { app_id } => match sender.send(DaemonCommand::Restart { app_id }).await {
-            Ok(response) => {
-                if response.success {
-                    let _ = msg_tx.send(Message::RestartCompleted).await;
-                } else {
+        Task::Restart { session_id, app_id } => {
+            info!(
+                "Executing restart for session {} (app_id: {})",
+                session_id, app_id
+            );
+            match sender.send(DaemonCommand::Restart { app_id }).await {
+                Ok(response) => {
+                    if response.success {
+                        let _ = msg_tx.send(Message::RestartCompleted).await;
+                    } else {
+                        let _ = msg_tx
+                            .send(Message::RestartFailed {
+                                reason: response
+                                    .error
+                                    .unwrap_or_else(|| "Unknown error".to_string()),
+                            })
+                            .await;
+                    }
+                }
+                Err(e) => {
                     let _ = msg_tx
                         .send(Message::RestartFailed {
-                            reason: response
-                                .error
-                                .unwrap_or_else(|| "Unknown error".to_string()),
+                            reason: e.to_string(),
                         })
                         .await;
                 }
             }
-            Err(e) => {
-                let _ = msg_tx
-                    .send(Message::RestartFailed {
-                        reason: e.to_string(),
-                    })
-                    .await;
-            }
-        },
-        Task::Stop { app_id } => {
+        }
+        Task::Stop { session_id, app_id } => {
+            info!(
+                "Executing stop for session {} (app_id: {})",
+                session_id, app_id
+            );
             if let Err(e) = sender.send(DaemonCommand::Stop { app_id }).await {
                 error!("Failed to stop app: {}", e);
             }

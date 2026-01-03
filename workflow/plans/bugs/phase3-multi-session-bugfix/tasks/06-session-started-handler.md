@@ -406,3 +406,58 @@ fn test_session_duration_calculation() {
 - Session logs will show in the UI because render.rs already uses `session_manager.selected_mut()`
 - Failed sessions are immediately removed to avoid ghost entries in tabs
 - Consider adding a "Starting..." indicator in session tabs for `Initializing` phase
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/app/handler.rs` - Updated `SessionStarted` and `SessionSpawnFailed` handlers to update session-specific state, added 6 unit tests
+
+**Key Decisions:**
+1. Session struct already had `started_at` and `session_duration()` / `session_duration_display()` methods - no changes needed
+2. Both session-specific and global state are updated for backward compatibility
+3. `SessionSpawnFailed` logs error to session before removing it from manager
+
+**Changes Made:**
+- `SessionStarted` handler now:
+  - Sets `session.phase = Running`
+  - Sets `session.started_at = now()`
+  - Logs PID to session-specific logs
+  - Also updates legacy global state for compatibility
+- `SessionSpawnFailed` handler now:
+  - Sets `session.phase = Stopped`
+  - Logs error to session-specific logs
+  - Removes session from manager
+  - Shows device selector for retry
+
+**Testing Performed:**
+- `cargo check` - compilation successful
+- `cargo test` - all 416 tests pass (6 new tests added for task 06)
+- `cargo fmt` - code formatted
+- `cargo clippy` - no new warnings
+
+**Acceptance Criteria Met:**
+- [x] `SessionStarted` message includes `session_id` (already present)
+- [x] Handler updates session-specific `phase` and `started_at`
+- [x] Handler logs to session-specific logs
+- [x] `SessionSpawnFailed` includes `session_id` (already present)
+- [x] Failed sessions are removed from manager
+- [x] Legacy global state still updated for backward compatibility
+- [x] Session duration can be calculated per-session (pre-existing functionality)
+
+**Session State Flow (After This Task):**
+```
+DeviceSelected → create_session() → phase=Initializing
+    ↓
+SpawnSession action
+    ↓
+tokio::spawn() starts Flutter
+    ├── Success → SessionStarted → session.phase=Running, session.started_at=now()
+    │                                ↓
+    │                          Later: app.start event → session.app_id="..."
+    │
+    └── Failure → SessionSpawnFailed → session.phase=Stopped → remove from manager
+```

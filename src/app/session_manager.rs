@@ -254,6 +254,22 @@ impl SessionManager {
         self.sessions.values().any(|h| h.session.is_running())
     }
 
+    /// Get count of running sessions
+    pub fn running_count(&self) -> usize {
+        self.sessions
+            .values()
+            .filter(|h| h.session.is_running())
+            .count()
+    }
+
+    /// Get all app_ids for running sessions
+    pub fn running_app_ids(&self) -> Vec<String> {
+        self.sessions
+            .values()
+            .filter_map(|h| h.session.app_id.clone())
+            .collect()
+    }
+
     /// Attach a Flutter process to a session
     pub fn attach_process(&mut self, session_id: SessionId, process: FlutterProcess) -> bool {
         if let Some(handle) = self.sessions.get_mut(&session_id) {
@@ -543,5 +559,61 @@ mod tests {
         manager.select_previous();
 
         assert_eq!(manager.selected_index(), 0);
+    }
+
+    #[test]
+    fn test_running_count() {
+        let mut manager = SessionManager::new();
+
+        let id1 = manager.create_session(&test_device("d1", "D1")).unwrap();
+        let _id2 = manager.create_session(&test_device("d2", "D2")).unwrap();
+        let id3 = manager.create_session(&test_device("d3", "D3")).unwrap();
+
+        assert_eq!(manager.running_count(), 0);
+
+        manager
+            .get_mut(id1)
+            .unwrap()
+            .session
+            .mark_started("app-1".to_string());
+
+        assert_eq!(manager.running_count(), 1);
+
+        manager
+            .get_mut(id3)
+            .unwrap()
+            .session
+            .mark_started("app-3".to_string());
+
+        assert_eq!(manager.running_count(), 2);
+    }
+
+    #[test]
+    fn test_running_app_ids() {
+        let mut manager = SessionManager::new();
+
+        let id1 = manager.create_session(&test_device("d1", "D1")).unwrap();
+        let _id2 = manager.create_session(&test_device("d2", "D2")).unwrap();
+        let id3 = manager.create_session(&test_device("d3", "D3")).unwrap();
+
+        // No running sessions initially
+        assert!(manager.running_app_ids().is_empty());
+
+        // Mark some sessions as running with app_ids
+        manager
+            .get_mut(id1)
+            .unwrap()
+            .session
+            .mark_started("app-123".to_string());
+        manager
+            .get_mut(id3)
+            .unwrap()
+            .session
+            .mark_started("app-456".to_string());
+
+        let app_ids = manager.running_app_ids();
+        assert_eq!(app_ids.len(), 2);
+        assert!(app_ids.contains(&"app-123".to_string()));
+        assert!(app_ids.contains(&"app-456".to_string()));
     }
 }

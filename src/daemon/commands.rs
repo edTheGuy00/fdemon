@@ -260,6 +260,15 @@ pub struct CommandSender {
     tracker: Arc<RequestTracker>,
 }
 
+impl std::fmt::Debug for CommandSender {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandSender")
+            .field("stdin_tx", &"<channel>")
+            .field("tracker", &"<tracker>")
+            .finish()
+    }
+}
+
 impl CommandSender {
     pub fn new(stdin_tx: mpsc::Sender<String>, tracker: Arc<RequestTracker>) -> Self {
         Self { stdin_tx, tracker }

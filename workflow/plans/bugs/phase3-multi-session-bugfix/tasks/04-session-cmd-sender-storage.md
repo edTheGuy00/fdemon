@@ -286,3 +286,76 @@ fn test_reload_uses_session_sender() {
 - Use message passing to update SessionHandle from background task
 - Keep legacy `cmd_sender` for backward compatibility during migration
 - Task 05 (Event Routing) will also need session_id to route events properly
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/app/message.rs`:
+  - Added `use crate::app::session::SessionId;` import
+  - Added `use crate::daemon::CommandSender;` import
+  - Added `session_id` field to `SessionStarted` message
+  - Added `session_id` field to `SessionSpawnFailed` message
+  - Added new `SessionProcessAttached { session_id, cmd_sender }` message variant
+
+- `src/app/handler.rs`:
+  - Updated `Task` enum to include `session_id` in all variants (Reload, Restart, Stop)
+  - Updated `HotReload` handler to prefer session cmd_sender, fall back to legacy
+  - Updated `HotRestart` handler to prefer session cmd_sender, fall back to legacy
+  - Updated `StopApp` handler to prefer session cmd_sender, fall back to legacy
+  - Updated `AutoReloadTriggered` handler to prefer session cmd_sender
+  - Updated `SessionStarted` handler to use `session_id` in log
+  - Updated `SessionSpawnFailed` handler to use `session_id` and remove failed session
+  - Added `SessionProcessAttached` handler to attach cmd_sender to session
+  - Updated `CloseCurrentSession` to include session_id in Stop task
+  - Added 7 new unit tests for Task 04 functionality
+
+- `src/tui/mod.rs`:
+  - Added `use crate::app::handler::Task;` import
+  - Updated `process_message` to look up session-specific cmd_sender before calling `handle_action`
+  - Updated `handle_action` signature to accept `session_cmd_sender: Option<CommandSender>`
+  - Updated `SpawnTask` handling to prefer session-specific cmd_sender
+  - Updated `SpawnSession` handler to send `SessionProcessAttached` message
+  - Updated `SessionStarted` and `SessionSpawnFailed` messages to include `session_id`
+  - Updated `execute_task` to handle new Task enum with session_id fields
+  - Added logging with session_id for reload/restart/stop operations
+
+- `src/daemon/commands.rs`:
+  - Added manual `Debug` implementation for `CommandSender`
+
+**Notable Decisions/Tradeoffs:**
+- Used message passing (`SessionProcessAttached`) to attach cmd_sender from background task to SessionHandle
+- Kept legacy global cmd_sender for backward compatibility (session_id 0 means legacy mode)
+- Session-specific cmd_sender takes priority; falls back to global if not available
+- Added session_id to all Task variants for proper cmd_sender lookup
+
+**Testing Performed:**
+- `cargo check` - Passed
+- `cargo test` - All 402 tests passed (7 new tests)
+- `cargo fmt` - Code formatted
+- `cargo clippy` - Only pre-existing warning about `run_loop` having too many arguments
+
+**New Tests Added:**
+1. `test_reload_uses_session_when_no_cmd_sender` - verifies fallback to legacy mode
+2. `test_reload_no_app_running_shows_error` - verifies error when no app
+3. `test_restart_no_app_running_shows_error` - verifies error when no app
+4. `test_stop_no_app_running_shows_error` - verifies error when no app
+5. `test_session_spawn_failed_removes_session` - verifies cleanup on failure
+6. `test_session_started_logs_with_session_id` - verifies logging includes session_id
+7. `test_task_enum_includes_session_id` - verifies Task structure
+
+**Risks/Limitations:**
+- Cannot unit test with real CommandSender (requires actual channels)
+- Legacy mode (session_id 0) still uses global cmd_sender
+- Full multi-session command routing depends on Task 05 (event routing)
+
+**Acceptance Criteria Status:**
+1. [x] `SessionHandle.cmd_sender` is populated when process starts
+2. [x] `SessionProcessAttached` message updates the session
+3. [x] Hot reload uses the selected session's cmd_sender (when available)
+4. [x] Hot restart uses the selected session's cmd_sender (when available)
+5. [x] Each session can be reloaded independently (infrastructure ready)
+6. [x] Legacy single-session mode still works (fallback to global cmd_sender)

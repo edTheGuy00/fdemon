@@ -1,6 +1,7 @@
 //! Update function - handles state transitions (TEA pattern)
 
 use super::message::Message;
+use super::session::SessionId;
 use super::state::{AppState, UiMode};
 use crate::config::LaunchConfig;
 use crate::core::{AppPhase, DaemonEvent, LogEntry, LogLevel, LogSource};
@@ -27,7 +28,11 @@ pub enum UpdateAction {
 
     /// Spawn a new session for a device
     SpawnSession {
+        /// The session ID in SessionManager (already created)
+        session_id: SessionId,
+        /// The device to run on
         device: Device,
+        /// Optional launch configuration
         config: Option<Box<LaunchConfig>>,
     },
 }
@@ -35,12 +40,21 @@ pub enum UpdateAction {
 /// Background tasks to spawn
 #[derive(Debug, Clone)]
 pub enum Task {
-    /// Hot reload
-    Reload { app_id: String },
-    /// Hot restart
-    Restart { app_id: String },
-    /// Stop the app
-    Stop { app_id: String },
+    /// Hot reload (with session context for cmd_sender lookup)
+    Reload {
+        session_id: SessionId,
+        app_id: String,
+    },
+    /// Hot restart (with session context for cmd_sender lookup)
+    Restart {
+        session_id: SessionId,
+        app_id: String,
+    },
+    /// Stop the app (with session context for cmd_sender lookup)
+    Stop {
+        session_id: SessionId,
+        app_id: String,
+    },
 }
 
 /// Result of processing a message
@@ -76,8 +90,23 @@ impl UpdateResult {
 /// Returns optional follow-up message and/or action
 pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
     match message {
+        Message::RequestQuit => {
+            state.request_quit();
+            UpdateResult::none()
+        }
+
         Message::Quit => {
             state.phase = AppPhase::Quitting;
+            UpdateResult::none()
+        }
+
+        Message::ConfirmQuit => {
+            state.confirm_quit();
+            UpdateResult::none()
+        }
+
+        Message::CancelQuit => {
+            state.cancel_quit();
             UpdateResult::none()
         }
 
@@ -91,6 +120,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::Daemon(event) => {
             handle_daemon_event(state, event);
+            UpdateResult::none()
+        }
+
+        Message::SessionDaemon { session_id, event } => {
+            handle_session_daemon_event(state, session_id, event);
             UpdateResult::none()
         }
 
@@ -131,11 +165,33 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::HotReload => {
             if state.is_busy() {
-                UpdateResult::none()
-            } else if let Some(app_id) = state.current_app_id.clone() {
+                return UpdateResult::none();
+            }
+
+            // Try to get session info from selected session
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(app_id) = handle.session.app_id.clone() {
+                    if handle.cmd_sender.is_some() {
+                        let session_id = handle.session.id;
+                        state.start_reload();
+                        state.log_info(LogSource::App, "Reloading...");
+                        return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
+                            session_id,
+                            app_id,
+                        }));
+                    }
+                }
+            }
+
+            // Fall back to legacy global app_id
+            if let Some(app_id) = state.current_app_id.clone() {
+                // Use session_id 0 for legacy mode (will use global cmd_sender)
                 state.start_reload();
-                state.log_info(LogSource::App, "Reloading...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Reload { app_id }))
+                state.log_info(LogSource::App, "Reloading (legacy mode)...");
+                UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
+                    session_id: 0,
+                    app_id,
+                }))
             } else {
                 state.log_error(LogSource::App, "No app running to reload");
                 UpdateResult::none()
@@ -144,11 +200,32 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::HotRestart => {
             if state.is_busy() {
-                UpdateResult::none()
-            } else if let Some(app_id) = state.current_app_id.clone() {
+                return UpdateResult::none();
+            }
+
+            // Try to get session info from selected session
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(app_id) = handle.session.app_id.clone() {
+                    if handle.cmd_sender.is_some() {
+                        let session_id = handle.session.id;
+                        state.start_reload();
+                        state.log_info(LogSource::App, "Restarting...");
+                        return UpdateResult::action(UpdateAction::SpawnTask(Task::Restart {
+                            session_id,
+                            app_id,
+                        }));
+                    }
+                }
+            }
+
+            // Fall back to legacy global app_id
+            if let Some(app_id) = state.current_app_id.clone() {
                 state.start_reload();
-                state.log_info(LogSource::App, "Restarting...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Restart { app_id }))
+                state.log_info(LogSource::App, "Restarting (legacy mode)...");
+                UpdateResult::action(UpdateAction::SpawnTask(Task::Restart {
+                    session_id: 0,
+                    app_id,
+                }))
             } else {
                 state.log_error(LogSource::App, "No app running to restart");
                 UpdateResult::none()
@@ -157,10 +234,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::StopApp => {
             if state.is_busy() {
-                UpdateResult::none()
-            } else if let Some(app_id) = state.current_app_id.clone() {
-                state.log_info(LogSource::App, "Stopping app...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Stop { app_id }))
+                return UpdateResult::none();
+            }
+
+            // Try to get session info from selected session
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(app_id) = handle.session.app_id.clone() {
+                    if handle.cmd_sender.is_some() {
+                        let session_id = handle.session.id;
+                        state.log_info(LogSource::App, "Stopping app...");
+                        return UpdateResult::action(UpdateAction::SpawnTask(Task::Stop {
+                            session_id,
+                            app_id,
+                        }));
+                    }
+                }
+            }
+
+            // Fall back to legacy global app_id
+            if let Some(app_id) = state.current_app_id.clone() {
+                state.log_info(LogSource::App, "Stopping app (legacy mode)...");
+                UpdateResult::action(UpdateAction::SpawnTask(Task::Stop {
+                    session_id: 0,
+                    app_id,
+                }))
             } else {
                 state.log_error(LogSource::App, "No app running to stop");
                 UpdateResult::none()
@@ -212,10 +309,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::AutoReloadTriggered => {
             // Only auto-reload if app is running and not already reloading
             if !state.is_busy() {
+                // Try to get session info from selected session first
+                if let Some(handle) = state.session_manager.selected() {
+                    if let Some(app_id) = handle.session.app_id.clone() {
+                        if handle.cmd_sender.is_some() {
+                            let session_id = handle.session.id;
+                            state
+                                .log_info(LogSource::Watcher, "File change detected, reloading...");
+                            state.start_reload();
+                            return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
+                                session_id,
+                                app_id,
+                            }));
+                        }
+                    }
+                }
+
+                // Fall back to legacy global app_id
                 if let Some(app_id) = state.current_app_id.clone() {
                     state.log_info(LogSource::Watcher, "File change detected, reloading...");
                     state.start_reload();
-                    UpdateResult::action(UpdateAction::SpawnTask(Task::Reload { app_id }))
+                    UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
+                        session_id: 0,
+                        app_id,
+                    }))
                 } else {
                     // App not running, just log it
                     tracing::debug!("Auto-reload skipped: no app running");
@@ -271,20 +388,51 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::DeviceSelected { device } => {
-            state.log_info(
-                LogSource::App,
-                format!("Device selected: {} ({})", device.name, device.id),
-            );
+            // Check if device already has a running session
+            if state
+                .session_manager
+                .find_by_device_id(&device.id)
+                .is_some()
+            {
+                state.log_error(
+                    LogSource::App,
+                    format!("Device '{}' already has an active session", device.name),
+                );
+                // Stay in device selector to pick another device
+                return UpdateResult::none();
+            }
 
-            // Hide selector and switch to normal mode
-            state.device_selector.hide();
-            state.ui_mode = UiMode::Normal;
+            // Create session in manager FIRST
+            match state.session_manager.create_session(&device) {
+                Ok(session_id) => {
+                    state.log_info(
+                        LogSource::App,
+                        format!(
+                            "Session created for {} (id: {}, device: {})",
+                            device.name, session_id, device.id
+                        ),
+                    );
 
-            // Return action to spawn session
-            UpdateResult::action(UpdateAction::SpawnSession {
-                device,
-                config: None,
-            })
+                    // Auto-switch to the newly created session
+                    state.session_manager.select_by_id(session_id);
+
+                    // Hide selector and switch to normal mode
+                    state.device_selector.hide();
+                    state.ui_mode = UiMode::Normal;
+
+                    // Return action to spawn session WITH the session_id
+                    UpdateResult::action(UpdateAction::SpawnSession {
+                        session_id,
+                        device,
+                        config: None,
+                    })
+                }
+                Err(e) => {
+                    // Max sessions reached or other error
+                    state.log_error(LogSource::App, format!("Failed to create session: {}", e));
+                    UpdateResult::none()
+                }
+            }
         }
 
         Message::LaunchAndroidEmulator => {
@@ -413,21 +561,39 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Session Messages
         // ─────────────────────────────────────────────────────────
         Message::SessionStarted {
+            session_id,
             device_id: _,
             device_name,
             platform,
             pid,
         } => {
-            // Update legacy single-session state for now
+            // Update session-specific state
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.phase = AppPhase::Running;
+                handle.session.started_at = Some(chrono::Local::now());
+
+                // Log to session-specific logs
+                handle.session.log_info(
+                    LogSource::App,
+                    format!(
+                        "Flutter process started (PID: {})",
+                        pid.map_or("unknown".to_string(), |p| p.to_string())
+                    ),
+                );
+            }
+
+            // Also update legacy global state for backward compatibility
             state.device_name = Some(device_name.clone());
-            state.platform = Some(platform);
+            state.platform = Some(platform.clone());
             state.phase = AppPhase::Running;
             state.session_start = Some(chrono::Local::now());
 
+            // Log to global logs as well
             state.log_info(
                 LogSource::App,
                 format!(
-                    "Flutter session started on {} (PID: {})",
+                    "Flutter session {} started on {} (PID: {})",
+                    session_id,
                     device_name,
                     pid.map_or("unknown".to_string(), |p| p.to_string())
                 ),
@@ -436,15 +602,50 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::SessionSpawnFailed {
+            session_id,
             device_id: _,
             error,
         } => {
+            // Update session-specific state before removal
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.phase = AppPhase::Stopped;
+                handle.session.log_error(
+                    LogSource::App,
+                    format!("Failed to start session: {}", error),
+                );
+            }
+
+            // Log to global logs
             state.log_error(
                 LogSource::App,
-                format!("Failed to start session: {}", error),
+                format!("Failed to start session {}: {}", session_id, error),
             );
+
+            // Remove the failed session from manager
+            state.session_manager.remove_session(session_id);
+
             // Show device selector again so user can retry
             state.ui_mode = UiMode::DeviceSelector;
+            UpdateResult::none()
+        }
+
+        Message::SessionProcessAttached {
+            session_id,
+            cmd_sender,
+        } => {
+            // Attach the command sender to the session
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.cmd_sender = Some(cmd_sender);
+                state.log_info(
+                    LogSource::App,
+                    format!("Command sender attached to session {}", session_id),
+                );
+            } else {
+                state.log_error(
+                    LogSource::App,
+                    format!("Cannot attach cmd_sender: session {} not found", session_id),
+                );
+            }
             UpdateResult::none()
         }
 
@@ -468,32 +669,51 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::CloseCurrentSession => {
-            if let Some(session_id) = state.session_manager.selected_id() {
-                // Check if session has a running app
-                let app_id = state
-                    .session_manager
-                    .get(session_id)
-                    .and_then(|h| h.session.app_id.clone());
+            // If there's only one session (or none), treat 'x' as quit request
+            if state.session_manager.len() <= 1 {
+                state.request_quit();
+                return UpdateResult::none();
+            }
 
-                if let Some(app_id) = app_id {
-                    // Stop the app first, then remove session
-                    state.log_info(LogSource::App, "Stopping app before closing session...");
-                    state.session_manager.remove_session(session_id);
+            if let Some(current_session_id) = state.session_manager.selected_id() {
+                // Check if session has a running app and cmd_sender
+                let session_info = state.session_manager.get(current_session_id).and_then(|h| {
+                    h.session
+                        .app_id
+                        .clone()
+                        .map(|app_id| (app_id, h.cmd_sender.clone()))
+                });
 
-                    // If no sessions left, show device selector
-                    if state.session_manager.is_empty() {
-                        state.ui_mode = UiMode::DeviceSelector;
-                        state.device_selector.show_loading();
-                        return UpdateResult::action(UpdateAction::DiscoverDevices);
+                if let Some((app_id, cmd_sender_opt)) = session_info {
+                    state.log_info(
+                        LogSource::App,
+                        format!(
+                            "Closing session {} (app: {})...",
+                            current_session_id, app_id
+                        ),
+                    );
+
+                    // Send stop command if we have a cmd_sender
+                    if let Some(cmd_sender) = cmd_sender_opt {
+                        // Spawn async task to stop the app
+                        let app_id_clone = app_id.clone();
+                        tokio::spawn(async move {
+                            let _ = cmd_sender
+                                .send(crate::daemon::DaemonCommand::Stop {
+                                    app_id: app_id_clone,
+                                })
+                                .await;
+                        });
                     }
 
-                    return UpdateResult::action(UpdateAction::SpawnTask(Task::Stop { app_id }));
+                    // Remove the session from the manager
+                    state.session_manager.remove_session(current_session_id);
+                } else {
+                    // No running app, just remove the session
+                    state.session_manager.remove_session(current_session_id);
                 }
 
-                // No running app, just remove the session
-                state.session_manager.remove_session(session_id);
-
-                // If no sessions left, show device selector
+                // If no sessions left after removal, show device selector
                 if state.session_manager.is_empty() {
                     state.ui_mode = UiMode::DeviceSelector;
                     state.device_selector.show_loading();
@@ -619,6 +839,185 @@ fn handle_daemon_event(state: &mut AppState, event: DaemonEvent) {
     }
 }
 
+/// Handle daemon events for a specific session (multi-session mode)
+fn handle_session_daemon_event(state: &mut AppState, session_id: SessionId, event: DaemonEvent) {
+    // Check if session still exists (may have been closed)
+    if state.session_manager.get(session_id).is_none() {
+        tracing::debug!(
+            "Discarding event for closed session {}: {:?}",
+            session_id,
+            match &event {
+                DaemonEvent::Stdout(_) => "Stdout",
+                DaemonEvent::Stderr(_) => "Stderr",
+                DaemonEvent::Exited { .. } => "Exited",
+                DaemonEvent::SpawnFailed { .. } => "SpawnFailed",
+                DaemonEvent::Message(_) => "Message",
+            }
+        );
+        return;
+    }
+
+    match event {
+        DaemonEvent::Stdout(line) => {
+            handle_session_stdout(state, session_id, &line);
+        }
+        DaemonEvent::Stderr(line) => {
+            if !line.trim().is_empty() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.session.add_log(LogEntry::new(
+                        LogLevel::Error,
+                        LogSource::FlutterError,
+                        line,
+                    ));
+                }
+            }
+        }
+        DaemonEvent::Exited { code } => {
+            handle_session_exited(state, session_id, code);
+        }
+        DaemonEvent::SpawnFailed { reason } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(LogEntry::error(
+                    LogSource::App,
+                    format!("Failed to start Flutter: {}", reason),
+                ));
+            }
+        }
+        DaemonEvent::Message(msg) => {
+            // Legacy path - convert typed message
+            if let Some(entry_info) = msg.to_log_entry() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.session.add_log(LogEntry::new(
+                        entry_info.level,
+                        entry_info.source,
+                        entry_info.message,
+                    ));
+                }
+            }
+            // Update session state based on message type
+            handle_session_message_state(state, session_id, &msg);
+        }
+    }
+}
+
+/// Handle stdout events for a specific session
+fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: &str) {
+    // Try to parse as JSON daemon message
+    if let Some(json) = protocol::strip_brackets(line) {
+        if let Some(msg) = DaemonMessage::parse(json) {
+            // Handle responses separately (they don't create log entries)
+            if matches!(msg, DaemonMessage::Response { .. }) {
+                tracing::debug!("Session {} response: {}", session_id, msg.summary());
+                return;
+            }
+
+            // Convert to log entry if applicable
+            if let Some(entry_info) = msg.to_log_entry() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.session.add_log(LogEntry::new(
+                        entry_info.level,
+                        entry_info.source,
+                        entry_info.message,
+                    ));
+
+                    // Add stack trace as separate entries if present
+                    if let Some(trace) = entry_info.stack_trace {
+                        for trace_line in trace.lines().take(10) {
+                            handle.session.add_log(LogEntry::new(
+                                LogLevel::Debug,
+                                LogSource::FlutterError,
+                                format!("    {}", trace_line),
+                            ));
+                        }
+                    }
+                }
+            } else {
+                // Unknown event type, log at debug level
+                tracing::debug!(
+                    "Session {} unhandled daemon message: {}",
+                    session_id,
+                    msg.summary()
+                );
+            }
+
+            // Update session state based on message type
+            handle_session_message_state(state, session_id, &msg);
+        } else {
+            // Unparseable JSON
+            tracing::debug!("Session {} unparseable daemon JSON: {}", session_id, json);
+        }
+    } else if !line.trim().is_empty() {
+        // Non-JSON output (build progress, etc.)
+        let (level, message) = detect_raw_line_level(line);
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle
+                .session
+                .add_log(LogEntry::new(level, LogSource::Flutter, message));
+        }
+    }
+}
+
+/// Handle session exit events
+fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: Option<i32>) {
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        let (level, message) = match code {
+            Some(0) => (
+                LogLevel::Info,
+                "Flutter process exited normally".to_string(),
+            ),
+            Some(c) => (
+                LogLevel::Warning,
+                format!("Flutter process exited with code {}", c),
+            ),
+            None => (LogLevel::Warning, "Flutter process exited".to_string()),
+        };
+
+        handle
+            .session
+            .add_log(LogEntry::new(level, LogSource::App, message));
+        handle.session.phase = AppPhase::Stopped;
+
+        // Don't auto-quit - let user decide what to do with the session
+        // The session tab remains visible showing the exit log
+    }
+}
+
+/// Update session state based on daemon message type
+fn handle_session_message_state(state: &mut AppState, session_id: SessionId, msg: &DaemonMessage) {
+    // Handle app.start event - capture app_id in session
+    if let DaemonMessage::AppStart(app_start) = msg {
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.mark_started(app_start.app_id.clone());
+            tracing::info!(
+                "Session {} app started: app_id={}",
+                session_id,
+                app_start.app_id
+            );
+        }
+        // Also update global state for legacy compatibility
+        state.current_app_id = Some(app_start.app_id.clone());
+    }
+
+    // Handle app.stop event
+    if let DaemonMessage::AppStop(app_stop) = msg {
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            if handle.session.app_id.as_ref() == Some(&app_stop.app_id) {
+                handle.session.app_id = None;
+                handle.session.phase = AppPhase::Initializing;
+                tracing::info!(
+                    "Session {} app stopped: app_id={}",
+                    session_id,
+                    app_stop.app_id
+                );
+            }
+        }
+        // Also update global state for legacy compatibility
+        if state.current_app_id.as_ref() == Some(&app_stop.app_id) {
+            state.current_app_id = None;
+        }
+    }
+}
+
 /// Detect log level from raw (non-JSON) output line
 fn detect_raw_line_level(line: &str) -> (LogLevel, String) {
     let trimmed = line.trim();
@@ -728,11 +1127,17 @@ fn handle_key_device_selector(state: &AppState, key: KeyEvent) -> Option<Message
 
 /// Handle key events in confirm dialog mode
 fn handle_key_confirm_dialog(key: KeyEvent) -> Option<Message> {
-    match key.code {
+    match (key.code, key.modifiers) {
         // Confirm quit
-        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(Message::Quit),
+        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) | (KeyCode::Enter, _) => {
+            Some(Message::ConfirmQuit)
+        }
         // Cancel
-        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Message::HideDeviceSelector), // This will cancel
+        (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) | (KeyCode::Esc, _) => {
+            Some(Message::CancelQuit)
+        }
+        // Force quit with Ctrl+C even in dialog
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
         _ => None,
     }
 }
@@ -761,9 +1166,11 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
     let is_busy = state.is_busy();
 
     match (key.code, key.modifiers) {
-        // Quit - always allowed
-        (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Message::Quit),
-        (KeyCode::Esc, _) => Some(Message::Quit),
+        // Request quit (may show confirmation dialog if sessions running)
+        (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Message::RequestQuit),
+        (KeyCode::Esc, _) => Some(Message::RequestQuit),
+
+        // Force quit (bypass confirmation) - Ctrl+C for emergency exit
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
 
         // ─────────────────────────────────────────────────────────
@@ -864,23 +1271,23 @@ mod tests {
     }
 
     #[test]
-    fn test_q_key_produces_quit_message() {
+    fn test_q_key_produces_request_quit_message() {
         let state = AppState::new();
         let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
 
         let result = handle_key(&state, key);
 
-        assert!(matches!(result, Some(Message::Quit)));
+        assert!(matches!(result, Some(Message::RequestQuit)));
     }
 
     #[test]
-    fn test_escape_key_produces_quit_message() {
+    fn test_escape_key_produces_request_quit_message() {
         let state = AppState::new();
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
 
         let result = handle_key(&state, key);
 
-        assert!(matches!(result, Some(Message::Quit)));
+        assert!(matches!(result, Some(Message::RequestQuit)));
     }
 
     #[test]
@@ -1601,9 +2008,10 @@ mod tests {
     }
 
     #[test]
-    fn test_close_session_empty_shows_device_selector() {
+    fn test_close_single_session_triggers_quit_confirmation() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::Normal;
+        state.settings.behavior.confirm_quit = true;
 
         let device = Device {
             id: "d1".to_string(),
@@ -1616,17 +2024,1158 @@ mod tests {
             emulator_id: None,
         };
 
-        state.session_manager.create_session(&device).unwrap();
+        let id = state.session_manager.create_session(&device).unwrap();
+        // Mark session as running so quit confirmation is triggered
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app-1".to_string());
 
-        let result = update(&mut state, Message::CloseCurrentSession);
+        let _result = update(&mut state, Message::CloseCurrentSession);
+
+        // Session should NOT be removed (quit confirmation shown instead)
+        assert!(!state.session_manager.is_empty());
+
+        // Should show confirmation dialog when closing last running session
+        assert_eq!(state.ui_mode, UiMode::ConfirmDialog);
+    }
+
+    #[test]
+    fn test_close_session_shows_device_selector_when_multiple() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Create two sessions
+        let device1 = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let device2 = Device {
+            id: "d2".to_string(),
+            name: "Device 2".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        state.session_manager.create_session(&device1).unwrap();
+        state.session_manager.create_session(&device2).unwrap();
+        assert_eq!(state.session_manager.len(), 2);
+
+        let _result = update(&mut state, Message::CloseCurrentSession);
+
+        // One session should be removed
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Should remain in normal mode (not device selector)
+        assert_eq!(state.ui_mode, UiMode::Normal);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 02: DeviceSelected Creates Session Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_device_selected_creates_session() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DeviceSelector;
+
+        let device = Device {
+            id: "device-1".to_string(),
+            name: "Test Device".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let result = update(
+            &mut state,
+            Message::DeviceSelected {
+                device: device.clone(),
+            },
+        );
+
+        // Session should be created
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Should return SpawnSession action with valid session_id
+        match result.action {
+            Some(UpdateAction::SpawnSession { session_id, .. }) => {
+                assert!(session_id > 0, "session_id should be a valid non-zero ID");
+                // Session should exist in manager
+                assert!(state.session_manager.get(session_id).is_some());
+            }
+            _ => panic!("Expected SpawnSession action"),
+        }
+
+        // UI mode should be Normal
+        assert_eq!(state.ui_mode, UiMode::Normal);
+    }
+
+    #[test]
+    fn test_device_selected_prevents_duplicate() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DeviceSelector;
+
+        let device = Device {
+            id: "device-1".to_string(),
+            name: "Test Device".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        // First selection succeeds
+        let _ = update(
+            &mut state,
+            Message::DeviceSelected {
+                device: device.clone(),
+            },
+        );
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Show device selector again
+        state.ui_mode = UiMode::DeviceSelector;
+
+        // Second selection of same device should fail
+        let result = update(&mut state, Message::DeviceSelected { device });
+
+        // Should NOT create another session
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Should return no action
+        assert!(result.action.is_none());
+
+        // Should have logged an error about duplicate
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("already has an active session")));
+    }
+
+    #[test]
+    fn test_device_selected_max_sessions_enforced() {
+        use crate::app::session_manager::MAX_SESSIONS;
+
+        let mut state = AppState::new();
+
+        // Create MAX_SESSIONS (9) sessions
+        for i in 0..MAX_SESSIONS {
+            let device = Device {
+                id: format!("device-{}", i),
+                name: format!("Device {}", i),
+                platform: "ios".to_string(),
+                emulator: false,
+                category: None,
+                platform_type: None,
+                ephemeral: false,
+                emulator_id: None,
+            };
+            state.ui_mode = UiMode::DeviceSelector;
+            let _ = update(&mut state, Message::DeviceSelected { device });
+        }
+
+        assert_eq!(state.session_manager.len(), MAX_SESSIONS);
+
+        // 10th should fail
+        let device = Device {
+            id: "device-extra".to_string(),
+            name: "Device Extra".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        state.ui_mode = UiMode::DeviceSelector;
+        let result = update(&mut state, Message::DeviceSelected { device });
+
+        // Should NOT create another session
+        assert_eq!(state.session_manager.len(), MAX_SESSIONS);
+        assert!(result.action.is_none());
+
+        // Should have logged an error about max sessions
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("Failed to create session")));
+    }
+
+    #[test]
+    fn test_device_selected_session_id_in_spawn_action() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DeviceSelector;
+
+        let device = Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let result = update(
+            &mut state,
+            Message::DeviceSelected {
+                device: device.clone(),
+            },
+        );
+
+        // Verify the session_id in the action matches the created session
+        match result.action {
+            Some(UpdateAction::SpawnSession {
+                session_id,
+                device: action_device,
+                config,
+            }) => {
+                // Session ID should match what's in the manager
+                let session = state.session_manager.get(session_id).unwrap();
+                assert_eq!(session.session.device_id, device.id);
+                assert_eq!(session.session.device_name, device.name);
+
+                // Device should be passed through
+                assert_eq!(action_device.id, device.id);
+
+                // No config for basic selection
+                assert!(config.is_none());
+            }
+            _ => panic!("Expected SpawnSession action"),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 04: Session CommandSender Storage Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_reload_uses_session_when_no_cmd_sender() {
+        let mut state = AppState::new();
+
+        // Create session and mark as running
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .mark_started("app-123".to_string());
+
+        // Without cmd_sender, should fall back to legacy
+        state.current_app_id = Some("legacy-app".to_string());
+
+        let result = update(&mut state, Message::HotReload);
+
+        // Should use legacy app_id since session has no cmd_sender
+        match result.action {
+            Some(UpdateAction::SpawnTask(Task::Reload {
+                session_id: task_session_id,
+                app_id,
+            })) => {
+                // Legacy mode uses session_id 0
+                assert_eq!(task_session_id, 0);
+                assert_eq!(app_id, "legacy-app");
+            }
+            _ => panic!("Expected SpawnTask action"),
+        }
+    }
+
+    #[test]
+    fn test_reload_no_app_running_shows_error() {
+        let mut state = AppState::new();
+
+        // No session, no legacy app_id
+        let result = update(&mut state, Message::HotReload);
+
+        assert!(result.action.is_none());
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("No app running")));
+    }
+
+    #[test]
+    fn test_restart_no_app_running_shows_error() {
+        let mut state = AppState::new();
+
+        let result = update(&mut state, Message::HotRestart);
+
+        assert!(result.action.is_none());
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("No app running")));
+    }
+
+    #[test]
+    fn test_stop_no_app_running_shows_error() {
+        let mut state = AppState::new();
+
+        let result = update(&mut state, Message::StopApp);
+
+        assert!(result.action.is_none());
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("No app running")));
+    }
+
+    #[test]
+    fn test_session_spawn_failed_removes_session() {
+        let mut state = AppState::new();
+
+        // Create session
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Simulate spawn failure
+        let _ = update(
+            &mut state,
+            Message::SessionSpawnFailed {
+                session_id,
+                device_id: "d1".to_string(),
+                error: "Test error".to_string(),
+            },
+        );
 
         // Session should be removed
-        assert!(state.session_manager.is_empty());
+        assert_eq!(state.session_manager.len(), 0);
 
-        // Should show device selector when last session is closed
+        // Should show device selector
+        assert_eq!(state.ui_mode, UiMode::DeviceSelector);
+    }
+
+    #[test]
+    fn test_session_started_logs_with_session_id() {
+        let mut state = AppState::new();
+
+        let _ = update(
+            &mut state,
+            Message::SessionStarted {
+                session_id: 42,
+                device_id: "d1".to_string(),
+                device_name: "Test Device".to_string(),
+                platform: "ios".to_string(),
+                pid: Some(12345),
+            },
+        );
+
+        // Should have logged with session_id
+        assert!(state.logs.iter().any(|log| log.message.contains("42")));
+    }
+
+    #[test]
+    fn test_task_enum_includes_session_id() {
+        // Verify Task enum structure includes session_id
+        let reload = Task::Reload {
+            session_id: 1,
+            app_id: "app".to_string(),
+        };
+        let restart = Task::Restart {
+            session_id: 2,
+            app_id: "app".to_string(),
+        };
+        let stop = Task::Stop {
+            session_id: 3,
+            app_id: "app".to_string(),
+        };
+
+        // Verify Debug formatting includes session_id
+        let reload_debug = format!("{:?}", reload);
+        let restart_debug = format!("{:?}", restart);
+        let stop_debug = format!("{:?}", stop);
+
+        assert!(reload_debug.contains("session_id: 1"));
+        assert!(restart_debug.contains("session_id: 2"));
+        assert!(stop_debug.contains("session_id: 3"));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 05: Session Daemon Event Routing Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_session_daemon_event_routes_to_correct_session() {
+        let mut state = AppState::new();
+
+        // Create two sessions
+        let device1 = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let device2 = Device {
+            id: "d2".to_string(),
+            name: "Device 2".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let id1 = state.session_manager.create_session(&device1).unwrap();
+        let id2 = state.session_manager.create_session(&device2).unwrap();
+
+        // Send stdout event to session 1
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id: id1,
+                event: DaemonEvent::Stdout("Test log for session 1".to_string()),
+            },
+        );
+
+        // Send stdout event to session 2
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id: id2,
+                event: DaemonEvent::Stdout("Test log for session 2".to_string()),
+            },
+        );
+
+        // Check logs are in correct sessions
+        let logs1 = &state.session_manager.get(id1).unwrap().session.logs;
+        let logs2 = &state.session_manager.get(id2).unwrap().session.logs;
+
+        assert!(logs1.iter().any(|l| l.message.contains("session 1")));
+        assert!(!logs1.iter().any(|l| l.message.contains("session 2")));
+
+        assert!(logs2.iter().any(|l| l.message.contains("session 2")));
+        assert!(!logs2.iter().any(|l| l.message.contains("session 1")));
+    }
+
+    #[test]
+    fn test_session_daemon_stderr_routes_correctly() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Send stderr event
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::Stderr("Error message here".to_string()),
+            },
+        );
+
+        // Check log was added with Error level
+        let logs = &state.session_manager.get(session_id).unwrap().session.logs;
+        assert!(logs.iter().any(|l| l.message.contains("Error message")));
+        assert!(logs.iter().any(|l| l.is_error()));
+    }
+
+    #[test]
+    fn test_session_app_start_updates_session_state() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Simulate app.start event via JSON
+        let app_start_json = r#"[{"event":"app.start","params":{"appId":"app-123","deviceId":"d1","directory":"/app","supportsRestart":true}}]"#;
+
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::Stdout(app_start_json.to_string()),
+            },
+        );
+
+        // Check session was marked as started
+        let session = &state.session_manager.get(session_id).unwrap().session;
+        assert_eq!(session.app_id, Some("app-123".to_string()));
+        assert_eq!(session.phase, AppPhase::Running);
+
+        // Also check global state for legacy compatibility
+        assert_eq!(state.current_app_id, Some("app-123".to_string()));
+    }
+
+    #[test]
+    fn test_session_exited_updates_session_phase() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Mark session as running first
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .mark_started("app-1".to_string());
+
+        assert_eq!(
+            state.session_manager.get(session_id).unwrap().session.phase,
+            AppPhase::Running
+        );
+
+        // Simulate process exit
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::Exited { code: Some(0) },
+            },
+        );
+
+        // Session should now be stopped (not quitting like legacy mode)
+        assert_eq!(
+            state.session_manager.get(session_id).unwrap().session.phase,
+            AppPhase::Stopped
+        );
+
+        // App should NOT auto-quit - session remains for user to inspect
+        assert!(!state.should_quit());
+    }
+
+    #[test]
+    fn test_event_for_closed_session_is_discarded() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Remove the session
+        state.session_manager.remove_session(session_id);
+
+        // Send event to removed session - should not panic
+        let result = update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::Stdout("test".to_string()),
+            },
+        );
+
+        // Should complete without error and no action
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_session_exited_with_error_code() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Simulate process exit with error code
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::Exited { code: Some(1) },
+            },
+        );
+
+        // Check log contains exit code
+        let logs = &state.session_manager.get(session_id).unwrap().session.logs;
+        assert!(logs
+            .iter()
+            .any(|l| l.message.contains("exited with code 1")));
+    }
+
+    #[test]
+    fn test_legacy_daemon_event_still_works() {
+        let mut state = AppState::new();
+        state.phase = AppPhase::Running;
+
+        // Use legacy Message::Daemon (not SessionDaemon)
+        update(
+            &mut state,
+            Message::Daemon(DaemonEvent::Stdout("Legacy log message".to_string())),
+        );
+
+        // Should go to global logs, not session logs
+        assert!(state
+            .logs
+            .iter()
+            .any(|l| l.message.contains("Legacy log message")));
+    }
+
+    #[test]
+    fn test_session_daemon_spawn_failed() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Simulate spawn failed event
+        update(
+            &mut state,
+            Message::SessionDaemon {
+                session_id,
+                event: DaemonEvent::SpawnFailed {
+                    reason: "Flutter not found".to_string(),
+                },
+            },
+        );
+
+        // Check error was logged to session
+        let logs = &state.session_manager.get(session_id).unwrap().session.logs;
+        assert!(logs.iter().any(|l| l.message.contains("Flutter not found")));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 06: SessionStarted Handler Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_session_started_updates_session_state() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Initially Initializing
+        assert_eq!(
+            state.session_manager.get(session_id).unwrap().session.phase,
+            AppPhase::Initializing
+        );
+
+        // Simulate SessionStarted
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id,
+                device_id: "d1".into(),
+                device_name: "iPhone 15".into(),
+                platform: "ios".into(),
+                pid: Some(12345),
+            },
+        );
+
+        let session = &state.session_manager.get(session_id).unwrap().session;
+
+        // Phase should be Running
+        assert_eq!(session.phase, AppPhase::Running);
+
+        // started_at should be set
+        assert!(session.started_at.is_some());
+
+        // Should have a log entry with PID
+        assert!(!session.logs.is_empty());
+        assert!(session.logs.iter().any(|l| l.message.contains("12345")));
+    }
+
+    #[test]
+    fn test_session_spawn_failed_logs_and_removes() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Simulate spawn failure via SessionSpawnFailed message
+        update(
+            &mut state,
+            Message::SessionSpawnFailed {
+                session_id,
+                device_id: "d1".into(),
+                error: "Connection refused".into(),
+            },
+        );
+
+        // Session should be removed
+        assert_eq!(state.session_manager.len(), 0);
+
+        // Should show device selector
         assert_eq!(state.ui_mode, UiMode::DeviceSelector);
 
-        // Should trigger device discovery
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        // Global logs should have error
+        assert!(state
+            .logs
+            .iter()
+            .any(|l| l.message.contains("Connection refused")));
+    }
+
+    #[test]
+    fn test_multiple_sessions_have_independent_start_state() {
+        let mut state = AppState::new();
+
+        let d1 = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let d2 = Device {
+            id: "d2".to_string(),
+            name: "Pixel 8".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let id1 = state.session_manager.create_session(&d1).unwrap();
+        let id2 = state.session_manager.create_session(&d2).unwrap();
+
+        // Start session 1 only
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id: id1,
+                device_id: "d1".into(),
+                device_name: "iPhone 15".into(),
+                platform: "ios".into(),
+                pid: Some(1000),
+            },
+        );
+
+        // Session 1 should be Running, Session 2 still Initializing
+        assert_eq!(
+            state.session_manager.get(id1).unwrap().session.phase,
+            AppPhase::Running
+        );
+        assert_eq!(
+            state.session_manager.get(id2).unwrap().session.phase,
+            AppPhase::Initializing
+        );
+
+        // Session 1 should have started_at set, Session 2 should not
+        assert!(state
+            .session_manager
+            .get(id1)
+            .unwrap()
+            .session
+            .started_at
+            .is_some());
+        assert!(state
+            .session_manager
+            .get(id2)
+            .unwrap()
+            .session
+            .started_at
+            .is_none());
+
+        // Start session 2
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id: id2,
+                device_id: "d2".into(),
+                device_name: "Pixel 8".into(),
+                platform: "android".into(),
+                pid: Some(2000),
+            },
+        );
+
+        // Both should now be Running
+        assert_eq!(
+            state.session_manager.get(id1).unwrap().session.phase,
+            AppPhase::Running
+        );
+        assert_eq!(
+            state.session_manager.get(id2).unwrap().session.phase,
+            AppPhase::Running
+        );
+
+        // Each should have their own logs with their PID
+        let logs1 = &state.session_manager.get(id1).unwrap().session.logs;
+        let logs2 = &state.session_manager.get(id2).unwrap().session.logs;
+
+        assert!(logs1.iter().any(|l| l.message.contains("1000")));
+        assert!(!logs1.iter().any(|l| l.message.contains("2000")));
+
+        assert!(logs2.iter().any(|l| l.message.contains("2000")));
+        assert!(!logs2.iter().any(|l| l.message.contains("1000")));
+    }
+
+    #[test]
+    fn test_session_duration_calculation() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Before start, no duration
+        assert!(state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .session_duration()
+            .is_none());
+
+        // Start session
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id,
+                device_id: "d1".into(),
+                device_name: "iPhone 15".into(),
+                platform: "ios".into(),
+                pid: Some(12345),
+            },
+        );
+
+        let session = &state.session_manager.get(session_id).unwrap().session;
+
+        // Duration should be calculable
+        assert!(session.session_duration().is_some());
+        assert!(session.session_duration_display().is_some());
+
+        // Duration should be very small (just started)
+        let duration = session.session_duration().unwrap();
+        assert!(duration.num_seconds() < 2);
+
+        // Display format should be HH:MM:SS
+        let display = session.session_duration_display().unwrap();
+        assert!(display.contains(':'));
+        assert_eq!(display.len(), 8); // "00:00:00" format
+    }
+
+    #[test]
+    fn test_session_started_updates_legacy_global_state() {
+        let mut state = AppState::new();
+        assert!(state.device_name.is_none());
+        assert!(state.platform.is_none());
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id,
+                device_id: "d1".into(),
+                device_name: "iPhone 15".into(),
+                platform: "ios".into(),
+                pid: Some(12345),
+            },
+        );
+
+        // Legacy global state should be updated for backward compatibility
+        assert_eq!(state.device_name, Some("iPhone 15".to_string()));
+        assert_eq!(state.platform, Some("ios".to_string()));
+        assert_eq!(state.phase, AppPhase::Running);
+        assert!(state.session_start.is_some());
+    }
+
+    #[test]
+    fn test_session_started_with_unknown_session() {
+        let mut state = AppState::new();
+
+        // Try to start a session that doesn't exist
+        update(
+            &mut state,
+            Message::SessionStarted {
+                session_id: 999, // Non-existent
+                device_id: "d1".into(),
+                device_name: "iPhone 15".into(),
+                platform: "ios".into(),
+                pid: Some(12345),
+            },
+        );
+
+        // Should still update global state (for legacy compatibility)
+        assert_eq!(state.device_name, Some("iPhone 15".to_string()));
+        assert_eq!(state.phase, AppPhase::Running);
+
+        // But no session should exist
+        assert!(state.session_manager.get(999).is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 08: Quit Flow Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_request_quit_no_sessions_quits_immediately() {
+        let mut state = AppState::new();
+        state.settings.behavior.confirm_quit = true;
+
+        // No sessions
+        assert!(state.session_manager.is_empty());
+
+        update(&mut state, Message::RequestQuit);
+
+        // Should quit immediately
+        assert_eq!(state.phase, AppPhase::Quitting);
+    }
+
+    #[test]
+    fn test_request_quit_with_running_sessions_shows_dialog() {
+        let mut state = AppState::new();
+        state.settings.behavior.confirm_quit = true;
+
+        // Create a running session
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app-1".into());
+
+        update(&mut state, Message::RequestQuit);
+
+        // Should show dialog, not quit
+        assert_ne!(state.phase, AppPhase::Quitting);
+        assert_eq!(state.ui_mode, UiMode::ConfirmDialog);
+    }
+
+    #[test]
+    fn test_request_quit_confirm_quit_disabled_quits_immediately() {
+        let mut state = AppState::new();
+        state.settings.behavior.confirm_quit = false;
+
+        // Create a running session
+        let device = Device {
+            id: "d1".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app-1".into());
+
+        update(&mut state, Message::RequestQuit);
+
+        // Should quit immediately despite running session
+        assert_eq!(state.phase, AppPhase::Quitting);
+    }
+
+    #[test]
+    fn test_confirm_quit_sets_quitting_phase() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        update(&mut state, Message::ConfirmQuit);
+
+        assert_eq!(state.phase, AppPhase::Quitting);
+    }
+
+    #[test]
+    fn test_cancel_quit_returns_to_normal() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        update(&mut state, Message::CancelQuit);
+
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert_ne!(state.phase, AppPhase::Quitting);
+    }
+
+    #[test]
+    fn test_y_key_in_confirm_dialog_confirms() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+        let result = handle_key(&state, key);
+
+        assert!(matches!(result, Some(Message::ConfirmQuit)));
+    }
+
+    #[test]
+    fn test_n_key_in_confirm_dialog_cancels() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        let result = handle_key(&state, key);
+
+        assert!(matches!(result, Some(Message::CancelQuit)));
+    }
+
+    #[test]
+    fn test_esc_in_confirm_dialog_cancels() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        let result = handle_key(&state, key);
+
+        assert!(matches!(result, Some(Message::CancelQuit)));
+    }
+
+    #[test]
+    fn test_ctrl_c_in_confirm_dialog_force_quits() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::ConfirmDialog;
+
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        let result = handle_key(&state, key);
+
+        // Ctrl+C should still force quit even in dialog
+        assert!(matches!(result, Some(Message::Quit)));
     }
 }

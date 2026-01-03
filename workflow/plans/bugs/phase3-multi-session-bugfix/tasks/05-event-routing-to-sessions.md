@@ -404,3 +404,43 @@ fn test_process_exit_updates_session_phase() {
 - The render function already uses `session_manager.selected_mut()` for log display
 - Auto-scroll should work per-session via `session.log_view_state`
 - Consider adding session_id to reload completion messages for proper routing
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/app/message.rs` - Added `Message::SessionDaemon { session_id, event }` variant
+- `src/app/handler.rs` - Added session-aware event handlers:
+  - `handle_session_daemon_event()` - main router for session events
+  - `handle_session_stdout()` - processes stdout with session context
+  - `handle_session_exited()` - updates session phase on exit
+  - `handle_session_message_state()` - updates session state from app.start/app.stop
+  - Added 9 unit tests for session event routing
+- `src/tui/mod.rs` - Updated SpawnSession to send `Message::SessionDaemon` instead of `Message::Daemon`, added response routing for session-specific cmd_senders
+
+**Key Decisions:**
+1. Session exit events set session phase to `AppPhase::Stopped` instead of triggering app-wide quit - allows user to inspect logs and decide what to do
+2. Both session-specific and global state are updated for app.start/app.stop events for legacy compatibility
+3. Events for closed sessions are silently discarded with debug logging
+
+**Testing Performed:**
+- `cargo check` - compilation successful
+- `cargo test` - all 410 tests pass (9 new tests added for task 05)
+- `cargo fmt` - code formatted
+- `cargo clippy` - no new warnings (pre-existing warning about too_many_arguments in run_loop)
+
+**Acceptance Criteria Met:**
+- [x] `Message::SessionDaemon` variant added with session_id
+- [x] SpawnSession forwards events with session context
+- [x] Events route to correct session's logs
+- [x] Session 1's logs don't appear in Session 2's log view
+- [x] App start events update session-specific app_id
+- [x] Process exit updates session-specific phase
+- [x] Legacy `Message::Daemon` still works for single-session mode
+
+**Risks/Limitations:**
+- Reload/restart completion messages still use global state; may need session_id in future tasks
+- Response routing now checks both global and session-specific cmd_senders

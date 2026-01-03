@@ -224,3 +224,48 @@ async fn test_cleanup_waits_for_all_tasks() {
 - The shutdown signal broadcast will cause all tasks to exit their loops
 - This task focuses on task tracking; command sender routing is Task 04
 - Consider using `tokio::task::JoinSet` as an alternative, but HashMap gives us session_id lookup capability
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/tui/mod.rs`:
+  - Added imports: `use std::collections::HashMap;` and `use crate::app::session::SessionId;` (lines 12, 18)
+  - Changed `session_task: Arc<Mutex<Option<JoinHandle>>>` to `session_tasks: Arc<Mutex<HashMap<SessionId, JoinHandle>>>` (lines 62-64)
+  - Updated `run_loop` signature to use `session_tasks` (line 393)
+  - Updated `process_message` signature to use `session_tasks` (line 471)
+  - Updated `handle_action` signature to use `session_tasks` (line 521)
+  - Updated `SpawnSession` handler to:
+    - Use `session_id` in log messages (lines 557-559, 575-578, etc.)
+    - Insert task with `session_id` key (lines 675-682)
+    - Self-remove from HashMap on task completion (lines 670-672)
+  - Updated cleanup code to iterate and wait for ALL tasks (lines 231-263)
+  - Updated `run()` test/demo function to use new type (lines 366-368)
+
+**Notable Decisions/Tradeoffs:**
+- Used `HashMap<SessionId, JoinHandle>` instead of `JoinSet` to maintain lookup by session_id
+- Each task removes itself from the map on completion (whether success, failure, or shutdown)
+- Cleanup uses 5-second timeout per task (vs 10 seconds for single task before)
+- Added session_id to log messages for better debugging
+
+**Testing Performed:**
+- `cargo check` - Passed (no compilation errors)
+- `cargo test` - All 395 tests passed
+- `cargo fmt` - Code formatted
+- `cargo clippy` - Only pre-existing warning about `run_loop` having too many arguments
+
+**Risks/Limitations:**
+- Command sender is still single (shared) - Task 04 will create per-session senders
+- Session IDs must be unique (guaranteed by SessionManager)
+- If a task panics before removing itself, the entry remains in map (but JoinHandle can still be awaited)
+
+**Acceptance Criteria Status:**
+1. [x] `session_tasks` is a `HashMap<SessionId, JoinHandle>`
+2. [x] Starting second session doesn't overwrite first task
+3. [x] Each spawned task is tracked by its session_id
+4. [x] Tasks remove themselves from map on completion
+5. [x] Cleanup iterates and waits for ALL tasks
+6. [x] No compilation errors with new signatures

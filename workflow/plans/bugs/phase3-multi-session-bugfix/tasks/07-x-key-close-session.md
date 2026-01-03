@@ -252,3 +252,37 @@ fn test_close_one_of_multiple_sessions() {
 - The handler already exists and works; this task just adds the key binding
 - Consider adding a brief "Session closed" log message
 - The stop command is sent but we don't wait for confirmation before removing the session
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/tui/widgets/header.rs` - Added `[x]` to keybinding hints in header (changed from `[r] [R] [d] [q]` to `[r] [R] [x] [d] [q]`)
+
+**Key Findings:**
+The 'x' and Ctrl+W key bindings already existed in `handle_key_normal` from earlier implementation:
+- `src/app/handler.rs:1159` - 'x' key maps to `CloseCurrentSession`
+- `src/app/handler.rs:1161` - Ctrl+W maps to `CloseCurrentSession`
+
+The `CloseCurrentSession` handler already correctly:
+- Sends stop command for running apps before closing
+- Removes session from SessionManager
+- Shows device selector when no sessions remain
+- Mode-specific key handling ensures 'x' doesn't work in device selector
+
+**Testing Performed:**
+- `cargo check` - compilation successful
+- `cargo test` - all tests pass
+- `cargo fmt` - code formatted
+
+**Acceptance Criteria Met:**
+- [x] 'x' key in normal mode triggers `Message::CloseCurrentSession` (pre-existing)
+- [x] Ctrl+W in normal mode triggers `Message::CloseCurrentSession` (pre-existing)
+- [x] Closing session with running app sends stop command first (pre-existing)
+- [x] Closing last session shows device selector (pre-existing)
+- [x] Closing one of multiple sessions switches to another (pre-existing)
+- [x] 'x' key doesn't work in device selector mode (separate key handler)
+- [x] Header shows '[x]' in keybinding hints (added)

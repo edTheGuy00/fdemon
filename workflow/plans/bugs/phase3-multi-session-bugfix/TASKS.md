@@ -62,16 +62,16 @@ Phase 3: UI Polish (Bugs 1 & 4) - Independent
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 01 | [spawn-session-with-id](tasks/01-spawn-session-with-id.md) | Not Started | - | `handler.rs`, `mod.rs` |
-| 02 | [create-session-on-device-select](tasks/02-create-session-on-device-select.md) | Not Started | 01 | `handler.rs` |
-| 03 | [per-session-task-tracking](tasks/03-per-session-task-tracking.md) | Not Started | 02 | `mod.rs` |
-| 04 | [session-cmd-sender-storage](tasks/04-session-cmd-sender-storage.md) | Not Started | 02, 03 | `mod.rs`, `session.rs` |
-| 05 | [event-routing-to-sessions](tasks/05-event-routing-to-sessions.md) | Not Started | 04 | `handler.rs`, `mod.rs` |
-| 06 | [session-started-handler](tasks/06-session-started-handler.md) | Not Started | 05 | `handler.rs` |
-| 07 | [x-key-close-session](tasks/07-x-key-close-session.md) | Not Started | - | `handler.rs` |
-| 08 | [q-key-request-quit](tasks/08-q-key-request-quit.md) | Not Started | - | `handler.rs` |
-| 09 | [confirm-dialog-ui](tasks/09-confirm-dialog-ui.md) | Not Started | 08 | `render.rs`, `widgets/` |
-| 10 | [multi-session-shutdown](tasks/10-multi-session-shutdown.md) | Not Started | Phase 1, 09 | `mod.rs`, `handler.rs` |
+| 01 | [spawn-session-with-id](tasks/01-spawn-session-with-id.md) | ✅ Done | - | `handler.rs`, `mod.rs` |
+| 02 | [create-session-on-device-select](tasks/02-create-session-on-device-select.md) | ✅ Done | 01 | `handler.rs` |
+| 03 | [per-session-task-tracking](tasks/03-per-session-task-tracking.md) | ✅ Done | 02 | `mod.rs` |
+| 04 | [session-cmd-sender-storage](tasks/04-session-cmd-sender-storage.md) | ✅ Done | 02, 03 | `mod.rs`, `session.rs` |
+| 05 | [event-routing-to-sessions](tasks/05-event-routing-to-sessions.md) | ✅ Done | 04 | `handler.rs`, `mod.rs` |
+| 06 | [session-started-handler](tasks/06-session-started-handler.md) | ✅ Done | 05 | `handler.rs` |
+| 07 | [x-key-close-session](tasks/07-x-key-close-session.md) | ✅ Done | - | `handler.rs` |
+| 08 | [q-key-request-quit](tasks/08-q-key-request-quit.md) | ✅ Done | - | `handler.rs` |
+| 09 | [confirm-dialog-ui](tasks/09-confirm-dialog-ui.md) | ✅ Done | 08 | `render.rs`, `widgets/` |
+| 10 | [multi-session-shutdown](tasks/10-multi-session-shutdown.md) | ✅ Done | Phase 1, 09 | `mod.rs`, `handler.rs` |
 | 11 | [linegauge-progress](tasks/11-linegauge-progress.md) | Not Started | - | `widgets/device_selector.rs` |
 | 12 | [refactor-tui-mod](tasks/12-refactor-tui-mod.md) | Not Started | - | `tui/mod.rs` → multiple files |
 

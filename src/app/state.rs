@@ -7,7 +7,7 @@ use chrono::{DateTime, Local};
 
 use crate::config::Settings;
 use crate::core::{AppPhase, LogEntry, LogSource};
-use crate::tui::widgets::{DeviceSelectorState, LogViewState};
+use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState, LogViewState};
 
 use super::session_manager::SessionManager;
 
@@ -48,6 +48,9 @@ pub struct AppState {
 
     /// Application settings from config file
     pub settings: Settings,
+
+    /// Confirmation dialog state
+    pub confirm_dialog_state: Option<ConfirmDialogState>,
 
     /// Project path
     pub project_path: PathBuf,
@@ -124,6 +127,7 @@ impl AppState {
             session_manager: SessionManager::new(),
             device_selector: DeviceSelectorState::new(),
             settings,
+            confirm_dialog_state: None,
             project_path,
             project_name,
             // Legacy fields
@@ -166,6 +170,9 @@ impl AppState {
     /// Request application quit
     pub fn request_quit(&mut self) {
         if self.has_running_sessions() && self.settings.behavior.confirm_quit {
+            // Create dialog state with session count
+            let session_count = self.session_manager.running_sessions().len();
+            self.confirm_dialog_state = Some(ConfirmDialogState::quit_confirmation(session_count));
             self.ui_mode = UiMode::ConfirmDialog;
         } else {
             self.phase = AppPhase::Quitting;
@@ -184,6 +191,7 @@ impl AppState {
 
     /// Cancel quit (from confirmation dialog)
     pub fn cancel_quit(&mut self) {
+        self.confirm_dialog_state = None;
         self.ui_mode = UiMode::Normal;
     }
 

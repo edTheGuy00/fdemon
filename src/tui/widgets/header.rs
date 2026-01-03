@@ -96,6 +96,10 @@ impl Widget for MainHeader<'_> {
             Span::styled("]", dim),
             Span::raw(" "),
             Span::styled("[", dim),
+            Span::styled("x", key),
+            Span::styled("]", dim),
+            Span::raw(" "),
+            Span::styled("[", dim),
             Span::styled("d", key),
             Span::styled("]", dim),
             Span::raw(" "),
@@ -104,7 +108,7 @@ impl Widget for MainHeader<'_> {
             Span::styled("]", dim),
         ];
 
-        let keybindings_width: u16 = 19; // "[r] [R] [d] [q]"
+        let keybindings_width: u16 = 23; // "[r] [R] [x] [d] [q]"
 
         // Build left content
         let left_content = Line::from(vec![

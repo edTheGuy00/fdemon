@@ -258,3 +258,46 @@ fn test_max_sessions_enforced() {
 - The session will start in `Initializing` phase
 - Logs will still go to global state until Task 05 (event routing)
 - Session tabs should start appearing in the UI if multiple devices are selected
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/app/handler.rs`:
+  - Updated `Message::DeviceSelected` handler (lines 278-317) to:
+    - Check for duplicate device sessions via `find_by_device_id()`
+    - Create session in `SessionManager` before spawning
+    - Pass real `session_id` to `SpawnSession` action
+    - Handle errors from session creation (max sessions reached)
+  - Added 4 new unit tests for Task 02:
+    - `test_device_selected_creates_session`
+    - `test_device_selected_prevents_duplicate`
+    - `test_device_selected_max_sessions_enforced`
+    - `test_device_selected_session_id_in_spawn_action`
+
+**Notable Decisions/Tradeoffs:**
+- Duplicate device check uses `find_by_device_id()` - a device can only have one active session
+- Error handling logs to global state and keeps device selector open for retry
+- Session is created in `Initializing` phase - will transition to `Running` when process starts (Task 06)
+
+**Testing Performed:**
+- `cargo check` - Passed (no compilation errors)
+- `cargo test` - All 395 tests passed (4 new tests)
+- `cargo fmt` - Code formatted
+- `cargo clippy` - Only pre-existing warning (unrelated)
+
+**Risks/Limitations:**
+- Session is created but process not yet attached (Task 04)
+- Logs still go to global state (Task 05 will route to sessions)
+- Session tabs appear but are in `Initializing` phase until Task 06 updates state
+
+**Acceptance Criteria Status:**
+1. [x] `DeviceSelected` handler creates session before spawning
+2. [x] Duplicate device selection is prevented with error message
+3. [x] Session appears in `session_manager` immediately after selection
+4. [x] `SpawnSession` action includes valid `session_id`
+5. [x] Max sessions (9) limit is enforced
+6. [x] Session tabs appear in UI when multiple sessions exist (via existing tab rendering)

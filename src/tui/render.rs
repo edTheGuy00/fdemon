@@ -48,8 +48,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             frame.render_widget(selector, area);
         }
         UiMode::ConfirmDialog => {
-            // TODO: Render confirmation dialog
-            // For now, the normal view is shown
+            // Render confirmation dialog
+            if let Some(ref dialog_state) = state.confirm_dialog_state {
+                let dialog = widgets::ConfirmDialog::new(dialog_state);
+                frame.render_widget(dialog, area);
+            }
         }
         UiMode::EmulatorSelector => {
             // TODO: Render emulator selector (Task 08)

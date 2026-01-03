@@ -373,3 +373,48 @@ fn test_n_key_in_dialog_cancels() {
 - Default for `confirm_quit` should be `true` to prevent accidental quits
 - The confirmation dialog UI rendering is handled in Task 09
 - Signal handler (SIGINT/SIGTERM) should continue to send `Message::Quit` for proper cleanup
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/app/message.rs` - Added `RequestQuit`, `ConfirmQuit`, `CancelQuit` message variants
+- `src/app/handler.rs`:
+  - Updated 'q' and Esc key handlers to produce `RequestQuit` instead of `Quit`
+  - Added handlers for `RequestQuit`, `ConfirmQuit`, `CancelQuit`
+  - Updated `handle_key_confirm_dialog` to use new messages
+  - Updated 2 existing tests and added 9 new tests
+
+**Key Changes:**
+- `'q'` key → `Message::RequestQuit` (was `Message::Quit`)
+- `Esc` key → `Message::RequestQuit` (was `Message::Quit`)
+- `Ctrl+C` → `Message::Quit` (unchanged, force quit)
+- `'y'`/`'Y'`/Enter in dialog → `Message::ConfirmQuit`
+- `'n'`/`'N'`/Esc in dialog → `Message::CancelQuit`
+- `Ctrl+C` in dialog → `Message::Quit` (force quit)
+
+**State Methods Used:**
+- `state.request_quit()` - shows dialog if sessions running + confirm_quit enabled
+- `state.confirm_quit()` - sets phase to Quitting
+- `state.cancel_quit()` - returns to Normal mode
+
+**Testing Performed:**
+- `cargo check` - compilation successful
+- `cargo test` - all 425 tests pass (9 new tests added)
+- `cargo fmt` - code formatted
+
+**Acceptance Criteria Met:**
+- [x] 'q' key triggers `Message::RequestQuit`
+- [x] Esc key triggers `Message::RequestQuit`
+- [x] Ctrl+C triggers immediate `Message::Quit` (force quit)
+- [x] With running sessions and `confirm_quit=true`, dialog is shown
+- [x] Without running sessions, app quits immediately
+- [x] With `confirm_quit=false`, app quits immediately
+- [x] 'y' in dialog triggers `Message::ConfirmQuit`
+- [x] 'n' in dialog triggers `Message::CancelQuit`
+- [x] Cancel returns to normal mode
+
+**Note:** The confirmation dialog UI rendering (Task 09) is separate and must be completed for the dialog to be visible to users.
