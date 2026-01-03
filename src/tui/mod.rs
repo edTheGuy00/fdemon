@@ -57,8 +57,7 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     let cmd_sender: Arc<Mutex<Option<CommandSender>>> = Arc::new(Mutex::new(None));
 
     // Shared session task handle - for cleanup
-    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
-        Arc::new(Mutex::new(None));
+    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
 
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -349,13 +348,20 @@ pub async fn run() -> Result<()> {
     let (msg_tx, msg_rx) = mpsc::channel::<Message>(1);
     let (_daemon_tx, daemon_rx) = mpsc::channel::<DaemonEvent>(1);
     let cmd_sender: Arc<Mutex<Option<CommandSender>>> = Arc::new(Mutex::new(None));
-    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
-        Arc::new(Mutex::new(None));
+    let session_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> = Arc::new(Mutex::new(None));
     let (_shutdown_tx, shutdown_rx) = watch::channel(false);
 
     let dummy_path = Path::new(".");
     let result = run_loop(
-        &mut term, &mut state, msg_rx, daemon_rx, msg_tx, cmd_sender, session_task, shutdown_rx, dummy_path,
+        &mut term,
+        &mut state,
+        msg_rx,
+        daemon_rx,
+        msg_tx,
+        cmd_sender,
+        session_task,
+        shutdown_rx,
+        dummy_path,
     );
     ratatui::restore();
     result
@@ -375,7 +381,15 @@ fn run_loop(
     while !state.should_quit() {
         // Process external messages (from signal handler, etc.)
         while let Ok(msg) = msg_rx.try_recv() {
-            process_message(state, msg, &msg_tx, &cmd_sender, &session_task, &shutdown_rx, project_path);
+            process_message(
+                state,
+                msg,
+                &msg_tx,
+                &cmd_sender,
+                &session_task,
+                &shutdown_rx,
+                project_path,
+            );
         }
 
         // Process daemon events (non-blocking)
@@ -417,7 +431,15 @@ fn run_loop(
 
         // Handle terminal events
         if let Some(message) = event::poll()? {
-            process_message(state, message, &msg_tx, &cmd_sender, &session_task, &shutdown_rx, project_path);
+            process_message(
+                state,
+                message,
+                &msg_tx,
+                &cmd_sender,
+                &session_task,
+                &shutdown_rx,
+                project_path,
+            );
         }
     }
 

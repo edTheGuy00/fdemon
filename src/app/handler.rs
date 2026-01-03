@@ -447,6 +447,75 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             state.ui_mode = UiMode::DeviceSelector;
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Session Navigation (Task 10)
+        // ─────────────────────────────────────────────────────────
+        Message::SelectSessionByIndex(index) => {
+            // Silently ignore if index is out of range
+            state.session_manager.select_by_index(index);
+            UpdateResult::none()
+        }
+
+        Message::NextSession => {
+            state.session_manager.select_next();
+            UpdateResult::none()
+        }
+
+        Message::PreviousSession => {
+            state.session_manager.select_previous();
+            UpdateResult::none()
+        }
+
+        Message::CloseCurrentSession => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                // Check if session has a running app
+                let app_id = state
+                    .session_manager
+                    .get(session_id)
+                    .and_then(|h| h.session.app_id.clone());
+
+                if let Some(app_id) = app_id {
+                    // Stop the app first, then remove session
+                    state.log_info(LogSource::App, "Stopping app before closing session...");
+                    state.session_manager.remove_session(session_id);
+
+                    // If no sessions left, show device selector
+                    if state.session_manager.is_empty() {
+                        state.ui_mode = UiMode::DeviceSelector;
+                        state.device_selector.show_loading();
+                        return UpdateResult::action(UpdateAction::DiscoverDevices);
+                    }
+
+                    return UpdateResult::action(UpdateAction::SpawnTask(Task::Stop { app_id }));
+                }
+
+                // No running app, just remove the session
+                state.session_manager.remove_session(session_id);
+
+                // If no sessions left, show device selector
+                if state.session_manager.is_empty() {
+                    state.ui_mode = UiMode::DeviceSelector;
+                    state.device_selector.show_loading();
+                    return UpdateResult::action(UpdateAction::DiscoverDevices);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Log Control (Task 10)
+        // ─────────────────────────────────────────────────────────
+        Message::ClearLogs => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.clear_logs();
+            } else {
+                // Fallback to global logs
+                state.logs.clear();
+                state.log_view_state.offset = 0;
+            }
+            UpdateResult::none()
+        }
     }
 }
 
@@ -691,32 +760,74 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
     // Check if we're busy (reloading)
     let is_busy = state.is_busy();
 
-    match key.code {
+    match (key.code, key.modifiers) {
         // Quit - always allowed
-        KeyCode::Char('q') | KeyCode::Esc => Some(Message::Quit),
-        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+        (KeyCode::Char('q'), KeyModifiers::NONE) => Some(Message::Quit),
+        (KeyCode::Esc, _) => Some(Message::Quit),
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
 
+        // ─────────────────────────────────────────────────────────
+        // Session Navigation (Task 10)
+        // ─────────────────────────────────────────────────────────
+        // Number keys 1-9 select session by index
+        (KeyCode::Char('1'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(0)),
+        (KeyCode::Char('2'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(1)),
+        (KeyCode::Char('3'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(2)),
+        (KeyCode::Char('4'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(3)),
+        (KeyCode::Char('5'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(4)),
+        (KeyCode::Char('6'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(5)),
+        (KeyCode::Char('7'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(6)),
+        (KeyCode::Char('8'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(7)),
+        (KeyCode::Char('9'), KeyModifiers::NONE) => Some(Message::SelectSessionByIndex(8)),
+
+        // Tab navigation
+        (KeyCode::Tab, KeyModifiers::NONE) => Some(Message::NextSession),
+        (KeyCode::BackTab, _) => Some(Message::PreviousSession),
+        (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => Some(Message::PreviousSession),
+
+        // Close current session
+        (KeyCode::Char('x'), KeyModifiers::NONE) => Some(Message::CloseCurrentSession),
+        (KeyCode::Char('w'), m) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Message::CloseCurrentSession)
+        }
+
+        // Clear logs
+        (KeyCode::Char('c'), KeyModifiers::NONE) => Some(Message::ClearLogs),
+
+        // ─────────────────────────────────────────────────────────
+        // App Control
+        // ─────────────────────────────────────────────────────────
         // Hot reload (lowercase 'r') - only when not busy
-        KeyCode::Char('r') if !is_busy => Some(Message::HotReload),
+        (KeyCode::Char('r'), KeyModifiers::NONE) if !is_busy => Some(Message::HotReload),
 
         // Hot restart (uppercase 'R') - only when not busy
-        KeyCode::Char('R') if !is_busy => Some(Message::HotRestart),
+        (KeyCode::Char('R'), KeyModifiers::NONE) if !is_busy => Some(Message::HotRestart),
+        (KeyCode::Char('R'), m) if m.contains(KeyModifiers::SHIFT) && !is_busy => {
+            Some(Message::HotRestart)
+        }
 
         // Stop app (lowercase 's') - only when not busy
-        KeyCode::Char('s') if !is_busy => Some(Message::StopApp),
+        (KeyCode::Char('s'), KeyModifiers::NONE) if !is_busy => Some(Message::StopApp),
 
         // New session (lowercase 'n') - show device selector
-        KeyCode::Char('n') => Some(Message::ShowDeviceSelector),
+        (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Message::ShowDeviceSelector),
+        // Also allow 'd' for device selector (as shown in header)
+        (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Message::ShowDeviceSelector),
 
+        // ─────────────────────────────────────────────────────────
         // Scrolling - always allowed
-        KeyCode::Char('j') | KeyCode::Down => Some(Message::ScrollDown),
-        KeyCode::Char('k') | KeyCode::Up => Some(Message::ScrollUp),
-        KeyCode::Char('g') => Some(Message::ScrollToTop),
-        KeyCode::Char('G') => Some(Message::ScrollToBottom),
-        KeyCode::PageUp => Some(Message::PageUp),
-        KeyCode::PageDown => Some(Message::PageDown),
-        KeyCode::Home => Some(Message::ScrollToTop),
-        KeyCode::End => Some(Message::ScrollToBottom),
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Message::ScrollDown),
+        (KeyCode::Down, _) => Some(Message::ScrollDown),
+        (KeyCode::Char('k'), KeyModifiers::NONE) => Some(Message::ScrollUp),
+        (KeyCode::Up, _) => Some(Message::ScrollUp),
+        (KeyCode::Char('g'), KeyModifiers::NONE) => Some(Message::ScrollToTop),
+        (KeyCode::Char('G'), KeyModifiers::NONE) => Some(Message::ScrollToBottom),
+        (KeyCode::Char('G'), m) if m.contains(KeyModifiers::SHIFT) => Some(Message::ScrollToBottom),
+        (KeyCode::PageUp, _) => Some(Message::PageUp),
+        (KeyCode::PageDown, _) => Some(Message::PageDown),
+        (KeyCode::Home, _) => Some(Message::ScrollToTop),
+        (KeyCode::End, _) => Some(Message::ScrollToBottom),
 
         _ => None,
     }
@@ -1275,5 +1386,247 @@ mod tests {
     fn test_detect_raw_line_level_trims_whitespace() {
         let (_, msg) = detect_raw_line_level("  Some message with spaces  ");
         assert_eq!(msg, "Some message with spaces");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 10: Keyboard Shortcuts Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_number_keys_select_session() {
+        let state = AppState::new();
+
+        let key1 = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
+        let key5 = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+        let key9 = KeyEvent::new(KeyCode::Char('9'), KeyModifiers::NONE);
+
+        assert!(matches!(
+            handle_key(&state, key1),
+            Some(Message::SelectSessionByIndex(0))
+        ));
+        assert!(matches!(
+            handle_key(&state, key5),
+            Some(Message::SelectSessionByIndex(4))
+        ));
+        assert!(matches!(
+            handle_key(&state, key9),
+            Some(Message::SelectSessionByIndex(8))
+        ));
+    }
+
+    #[test]
+    fn test_tab_cycles_sessions() {
+        let state = AppState::new();
+
+        let tab = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+        let shift_tab = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+
+        assert!(matches!(
+            handle_key(&state, tab),
+            Some(Message::NextSession)
+        ));
+        assert!(matches!(
+            handle_key(&state, shift_tab),
+            Some(Message::PreviousSession)
+        ));
+    }
+
+    #[test]
+    fn test_x_closes_session() {
+        let state = AppState::new();
+
+        let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+        assert!(matches!(
+            handle_key(&state, key),
+            Some(Message::CloseCurrentSession)
+        ));
+    }
+
+    #[test]
+    fn test_ctrl_w_closes_session() {
+        let state = AppState::new();
+
+        let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert!(matches!(
+            handle_key(&state, key),
+            Some(Message::CloseCurrentSession)
+        ));
+    }
+
+    #[test]
+    fn test_c_clears_logs() {
+        let state = AppState::new();
+
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+        assert!(matches!(handle_key(&state, key), Some(Message::ClearLogs)));
+    }
+
+    #[test]
+    fn test_d_shows_device_selector() {
+        let state = AppState::new();
+
+        let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
+        assert!(matches!(
+            handle_key(&state, key),
+            Some(Message::ShowDeviceSelector)
+        ));
+    }
+
+    #[test]
+    fn test_n_shows_device_selector() {
+        let state = AppState::new();
+
+        let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+        assert!(matches!(
+            handle_key(&state, key),
+            Some(Message::ShowDeviceSelector)
+        ));
+    }
+
+    #[test]
+    fn test_select_session_by_index_message() {
+        let mut state = AppState::new();
+
+        // Create some sessions
+        let device1 = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let device2 = Device {
+            id: "d2".to_string(),
+            name: "Device 2".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        state.session_manager.create_session(&device1).unwrap();
+        state.session_manager.create_session(&device2).unwrap();
+
+        assert_eq!(state.session_manager.selected_index(), 0);
+
+        update(&mut state, Message::SelectSessionByIndex(1));
+        assert_eq!(state.session_manager.selected_index(), 1);
+
+        // Invalid index should be ignored
+        update(&mut state, Message::SelectSessionByIndex(5));
+        assert_eq!(state.session_manager.selected_index(), 1);
+    }
+
+    #[test]
+    fn test_next_previous_session_messages() {
+        let mut state = AppState::new();
+
+        let device1 = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let device2 = Device {
+            id: "d2".to_string(),
+            name: "Device 2".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        state.session_manager.create_session(&device1).unwrap();
+        state.session_manager.create_session(&device2).unwrap();
+
+        assert_eq!(state.session_manager.selected_index(), 0);
+
+        update(&mut state, Message::NextSession);
+        assert_eq!(state.session_manager.selected_index(), 1);
+
+        update(&mut state, Message::NextSession);
+        assert_eq!(state.session_manager.selected_index(), 0); // Wraps
+
+        update(&mut state, Message::PreviousSession);
+        assert_eq!(state.session_manager.selected_index(), 1); // Wraps back
+    }
+
+    #[test]
+    fn test_clear_logs_message() {
+        let mut state = AppState::new();
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        let id = state.session_manager.create_session(&device).unwrap();
+
+        // Add some logs
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .log_info(LogSource::App, "Test log 1");
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .log_info(LogSource::App, "Test log 2");
+
+        assert_eq!(state.session_manager.get(id).unwrap().session.logs.len(), 2);
+
+        update(&mut state, Message::ClearLogs);
+
+        assert_eq!(state.session_manager.get(id).unwrap().session.logs.len(), 0);
+    }
+
+    #[test]
+    fn test_close_session_empty_shows_device_selector() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        let device = Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+
+        state.session_manager.create_session(&device).unwrap();
+
+        let result = update(&mut state, Message::CloseCurrentSession);
+
+        // Session should be removed
+        assert!(state.session_manager.is_empty());
+
+        // Should show device selector when last session is closed
+        assert_eq!(state.ui_mode, UiMode::DeviceSelector);
+
+        // Should trigger device discovery
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
     }
 }

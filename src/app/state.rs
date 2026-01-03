@@ -52,6 +52,9 @@ pub struct AppState {
     /// Project path
     pub project_path: PathBuf,
 
+    /// Project name from pubspec.yaml (cached at startup)
+    pub project_name: Option<String>,
+
     // ─────────────────────────────────────────────────────────
     // Legacy single-session fields (maintained for backward compatibility)
     // ─────────────────────────────────────────────────────────
@@ -112,6 +115,9 @@ impl AppState {
 
     /// Create a new AppState with project path and settings
     pub fn with_settings(project_path: PathBuf, settings: Settings) -> Self {
+        // Parse project name from pubspec.yaml
+        let project_name = crate::core::get_project_name(&project_path);
+
         Self {
             // New Phase 3 fields
             ui_mode: UiMode::Normal,
@@ -119,6 +125,7 @@ impl AppState {
             device_selector: DeviceSelectorState::new(),
             settings,
             project_path,
+            project_name,
             // Legacy fields
             phase: AppPhase::Initializing,
             logs: Vec::new(),

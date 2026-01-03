@@ -700,3 +700,64 @@ mod handler_tests {
 | `src/tui/event.rs` | Major update with context-aware key handling |
 | `src/app/message.rs` | Add new message variants for navigation and control |
 | `src/app/handler.rs` | Add handlers for all new messages |
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/app/message.rs`: Added 5 new message variants for session navigation and log control
+- `src/app/handler.rs`: Added handlers for all new messages + comprehensive key handling with tests
+
+**New Message Variants Added**:
+- `SelectSessionByIndex(usize)` - Number keys 1-9 select session by index
+- `NextSession` - Tab key cycles to next session
+- `PreviousSession` - Shift+Tab/BackTab cycles to previous session
+- `CloseCurrentSession` - x or Ctrl+W closes current session
+- `ClearLogs` - c key clears logs for current session
+
+**Key Bindings Implemented**:
+| Key | Action | Notes |
+|-----|--------|-------|
+| `1-9` | Select session by index | 0-indexed internally |
+| `Tab` | Next session | Wraps around |
+| `Shift+Tab` / `BackTab` | Previous session | Wraps around |
+| `x` | Close current session | Stops app if running |
+| `Ctrl+W` | Close current session | Alternative binding |
+| `c` | Clear logs | Clears selected session's logs |
+| `d` | Show device selector | Added as alternative to `n` |
+| `g` | Scroll to top | Vim-style |
+| `G` | Scroll to bottom | Vim-style |
+
+**Testing Performed**:
+- `cargo check`: ✅ Passed
+- `cargo test`: ✅ 394 passed, 0 failed, 3 ignored
+- `cargo clippy`: ✅ No new warnings (1 pre-existing warning about too many args)
+- `cargo fmt`: ✅ Applied
+
+**Acceptance Criteria Status**:
+1. [x] Number keys 1-9 switch to corresponding session
+2. [x] Tab cycles forward through sessions
+3. [x] Shift+Tab cycles backward through sessions
+4. [x] `c` clears logs for current session
+5. [x] `x` closes current session (stops app if running)
+6. [x] `Ctrl+W` closes current session (alternative binding)
+7. [x] `g` scrolls to top (vim-style)
+8. [x] `G` scrolls to bottom (vim-style)
+9. [x] All shortcuts work correctly in Normal mode
+10. [x] Closing last session returns to device selector
+11. [x] Unit tests verify key-to-message mapping
+12. [x] Unit tests verify message handler behavior
+
+**Notable Decisions/Tradeoffs**:
+- Used pattern matching on `(KeyCode, KeyModifiers)` tuple for cleaner key handling
+- `d` added as alias for `n` (show device selector) to match header keybinding hints
+- Closing session with running app stops the app but doesn't wait for confirmation
+- ClearLogs falls back to global logs if no session is selected
+
+**Risks/Limitations**:
+- Help overlay (`?`) not implemented in this task - planned for future enhancement
+- No visual feedback when switching sessions (just log view changes)
+- StopAndCloseSession action not implemented - simplified to stop then remove

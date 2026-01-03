@@ -1,4 +1,6 @@
 //! Session tabs widget for multi-instance display
+//!
+//! Provides tab navigation for multiple running Flutter sessions.
 
 use ratatui::{
     buffer::Buffer,
@@ -11,7 +13,7 @@ use ratatui::{
 use crate::app::session_manager::SessionManager;
 use crate::core::AppPhase;
 
-/// Widget displaying session tabs in the header
+/// Widget displaying session tabs in a standalone subheader row
 pub struct SessionTabs<'a> {
     session_manager: &'a SessionManager,
 }
@@ -29,7 +31,7 @@ impl<'a> SessionTabs<'a> {
                 let session = &handle.session;
 
                 // Status icon with color
-                let (icon, icon_color) = match session.phase {
+                let (icon, _icon_color) = match session.phase {
                     AppPhase::Running => ("●", Color::Green),
                     AppPhase::Reloading => ("↻", Color::Yellow),
                     AppPhase::Initializing => ("○", Color::DarkGray),
@@ -40,11 +42,7 @@ impl<'a> SessionTabs<'a> {
                 // Truncate device name if too long
                 let name = truncate_name(&session.device_name, 12);
 
-                Line::from(vec![
-                    Span::styled(format!(" {} ", icon), Style::default().fg(icon_color)),
-                    Span::raw(name),
-                    Span::raw(" "),
-                ])
+                Line::from(format!(" {} {} ", icon, name))
             })
             .collect()
     }
@@ -52,59 +50,32 @@ impl<'a> SessionTabs<'a> {
 
 impl Widget for SessionTabs<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Layout: App title | Tabs | Keybindings
-        let chunks = Layout::horizontal([
-            Constraint::Length(18), // "Flutter Demon 😈  │"
-            Constraint::Min(20),    // Tabs
-            Constraint::Length(20), // Keybindings
-        ])
-        .split(area);
+        if self.session_manager.is_empty() {
+            return;
+        }
 
-        // App title
-        let title = Line::from(vec![
-            Span::styled(
-                "Flutter Demon 😈",
+        let titles = self.tab_titles();
+        let selected = self.session_manager.selected_index();
+
+        let tabs = Tabs::new(titles)
+            .select(selected)
+            .highlight_style(
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
-            ),
-            Span::raw("  │"),
-        ]);
-        buf.set_line(chunks[0].x + 1, chunks[0].y, &title, chunks[0].width);
+            )
+            .divider("│");
 
-        // Session tabs
-        if !self.session_manager.is_empty() {
-            let titles = self.tab_titles();
-            let selected = self.session_manager.selected_index();
+        // Render with left padding
+        let padded_area = Rect {
+            x: area.x + 1,
+            y: area.y,
+            width: area.width.saturating_sub(2),
+            height: area.height,
+        };
 
-            let tabs = Tabs::new(titles)
-                .select(selected)
-                .highlight_style(
-                    Style::default()
-                        .fg(Color::Black)
-                        .bg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                )
-                .divider("│");
-
-            tabs.render(chunks[1], buf);
-        }
-
-        // Keybindings hint
-        let hints = Line::from(vec![
-            Span::styled("[r]", Style::default().fg(Color::Yellow)),
-            Span::raw(" "),
-            Span::styled("[R]", Style::default().fg(Color::Yellow)),
-            Span::raw(" "),
-            Span::styled("[q]", Style::default().fg(Color::Yellow)),
-        ]);
-
-        // Right-align the hints
-        let hints_width = 11; // "[r] [R] [q]"
-        if chunks[2].width >= hints_width {
-            let x = chunks[2].x + chunks[2].width - hints_width - 1;
-            buf.set_line(x, chunks[2].y, &hints, hints_width);
-        }
+        tabs.render(padded_area, buf);
     }
 }
 
@@ -120,7 +91,7 @@ fn truncate_name(name: &str, max_len: usize) -> String {
     }
 }
 
-/// Header widget that conditionally shows tabs
+/// Header widget that conditionally shows tabs (legacy, for backward compatibility)
 pub struct HeaderWithTabs<'a> {
     session_manager: Option<&'a SessionManager>,
 }
@@ -156,8 +127,8 @@ impl Widget for HeaderWithTabs<'_> {
 
         match self.session_manager {
             Some(manager) if manager.len() > 1 => {
-                // Multiple sessions - show tabs
-                SessionTabs::new(manager).render(content_area, buf);
+                // Multiple sessions - show tabs in header
+                render_tabs_header(manager, content_area, buf);
             }
             Some(manager) if manager.len() == 1 => {
                 // Single session - show device name in header but no tabs
@@ -171,6 +142,50 @@ impl Widget for HeaderWithTabs<'_> {
     }
 }
 
+fn render_tabs_header(manager: &SessionManager, area: Rect, buf: &mut Buffer) {
+    // Layout: App title | Tabs | Keybindings
+    let chunks = Layout::horizontal([
+        Constraint::Length(18), // "Flutter Demon   │"
+        Constraint::Min(20),    // Tabs
+        Constraint::Length(20), // Keybindings
+    ])
+    .split(area);
+
+    // App title
+    let title = Line::from(vec![
+        Span::styled(
+            " Flutter Demon",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw("  │"),
+    ]);
+    buf.set_line(chunks[0].x, chunks[0].y, &title, chunks[0].width);
+
+    // Session tabs
+    if !manager.is_empty() {
+        let tabs = SessionTabs::new(manager);
+        tabs.render(chunks[1], buf);
+    }
+
+    // Keybindings hint
+    let hints = Line::from(vec![
+        Span::styled("[r]", Style::default().fg(Color::Yellow)),
+        Span::raw(" "),
+        Span::styled("[R]", Style::default().fg(Color::Yellow)),
+        Span::raw(" "),
+        Span::styled("[q]", Style::default().fg(Color::Yellow)),
+    ]);
+
+    // Right-align the hints
+    let hints_width = 11; // "[r] [R] [q]"
+    if chunks[2].width >= hints_width {
+        let x = chunks[2].x + chunks[2].width - hints_width - 1;
+        buf.set_line(x, chunks[2].y, &hints, hints_width);
+    }
+}
+
 fn render_simple_header(area: Rect, buf: &mut Buffer) {
     let title = Style::default()
         .fg(Color::Cyan)
@@ -179,7 +194,7 @@ fn render_simple_header(area: Rect, buf: &mut Buffer) {
     let key = Style::default().fg(Color::Yellow);
 
     let content = Line::from(vec![
-        Span::styled(" Flutter Demon 😈", title),
+        Span::styled(" Flutter Demon", title),
         Span::raw("   "),
         Span::styled("[", dim),
         Span::styled("r", key),
@@ -214,7 +229,7 @@ fn render_single_session_header(manager: &SessionManager, area: Rect, buf: &mut 
         let key = Style::default().fg(Color::Yellow);
 
         let content = Line::from(vec![
-            Span::styled(" Flutter Demon 😈", title),
+            Span::styled(" Flutter Demon", title),
             Span::raw("  "),
             Span::styled(icon, Style::default().fg(icon_color)),
             Span::raw(" "),
@@ -341,7 +356,7 @@ mod tests {
     #[test]
     fn test_header_with_tabs_no_sessions() {
         let manager = SessionManager::new();
-        let header = HeaderWithTabs::with_sessions(&manager);
+        let _header = HeaderWithTabs::with_sessions(&manager);
         // Should render simple header (no tabs)
         assert!(manager.is_empty());
     }
@@ -451,5 +466,35 @@ mod tests {
         assert!(content.contains("iPhone 15"));
         // Should show running indicator
         assert!(content.contains('●'));
+    }
+
+    #[test]
+    fn test_standalone_session_tabs() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut manager = SessionManager::new();
+        manager
+            .create_session(&test_device("d1", "iPhone 15"))
+            .unwrap();
+        manager
+            .create_session(&test_device("d2", "Pixel 8"))
+            .unwrap();
+
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let tabs = SessionTabs::new(&manager);
+                f.render_widget(tabs, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
+
+        // Should show both device names
+        assert!(content.contains("iPhone 15"));
+        assert!(content.contains("Pixel 8"));
     }
 }

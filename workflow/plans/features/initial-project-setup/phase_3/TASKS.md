@@ -275,8 +275,8 @@ When configurations conflict, use this priority (highest to lowest):
 | 6 | [06-delayed-start](tasks/06-delayed-start.md) | ✅ Done | 04, 05 | 4-5 hrs | `tui/mod.rs`, `app/mod.rs`, `app/handler.rs`, `app/state.rs` |
 | 7 | [07-tabs-widget](tasks/07-tabs-widget.md) | ✅ Done | 06 | 3-4 hrs | `tui/widgets/tabs.rs`, `tui/render.rs` |
 | 8 | [08-emulator-management](tasks/08-emulator-management.md) | ✅ Done | 06 | 2-3 hrs | `daemon/emulators.rs` |
-| 9 | [09-refined-layout](tasks/09-refined-layout.md) | Not Started | 07 | 3-4 hrs | `tui/layout.rs`, `tui/render.rs` |
-| 10 | [10-keyboard-shortcuts](tasks/10-keyboard-shortcuts.md) | Not Started | 09 | 2-3 hrs | `tui/event.rs`, `app/handler.rs` |
+| 9 | [09-refined-layout](tasks/09-refined-layout.md) | ✅ Done | 07 | 3-4 hrs | `tui/layout.rs`, `tui/render.rs` |
+| 10 | [10-keyboard-shortcuts](tasks/10-keyboard-shortcuts.md) | ✅ Done | 09 | 2-3 hrs | `tui/event.rs`, `app/handler.rs` |
 
 **Total Estimated Effort**: 32-41 hours
 

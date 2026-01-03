@@ -14,6 +14,9 @@ use ratatui::{
 
 use crate::daemon::Device;
 
+/// Spinner frames for loading animation (Braille pattern)
+const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+
 /// State for the device selector UI
 #[derive(Debug, Clone, Default)]
 pub struct DeviceSelectorState {
@@ -37,6 +40,9 @@ pub struct DeviceSelectorState {
 
     /// Number of emulator options (added after devices)
     emulator_option_count: usize,
+
+    /// Frame counter for loading animation
+    pub animation_frame: u64,
 }
 
 impl DeviceSelectorState {
@@ -50,7 +56,19 @@ impl DeviceSelectorState {
             error: None,
             show_emulator_options: true,
             emulator_option_count: 2, // Android + iOS
+            animation_frame: 0,
         }
+    }
+
+    /// Advance animation frame (call on each tick)
+    pub fn tick(&mut self) {
+        self.animation_frame = self.animation_frame.wrapping_add(1);
+    }
+
+    /// Get the current spinner character
+    pub fn spinner_char(&self) -> &'static str {
+        let idx = (self.animation_frame / 3) as usize % SPINNER_FRAMES.len();
+        SPINNER_FRAMES[idx]
     }
 
     /// Show the selector with loading state
@@ -280,10 +298,19 @@ impl Widget for DeviceSelector<'_> {
 
         // Render content based on state
         if self.state.loading {
-            // Loading state
-            let loading = Paragraph::new("Discovering devices...")
-                .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::Yellow));
+            // Loading state with animated spinner
+            let spinner = self.state.spinner_char();
+            let loading_text = vec![
+                Line::from(""),
+                Line::from(vec![
+                    Span::styled(spinner, Style::default().fg(Color::Cyan)),
+                    Span::styled(
+                        " Discovering devices...",
+                        Style::default().fg(Color::Yellow),
+                    ),
+                ]),
+            ];
+            let loading = Paragraph::new(loading_text).alignment(Alignment::Center);
             loading.render(chunks[0], buf);
         } else if let Some(ref error) = self.state.error {
             // Error state
@@ -643,5 +670,75 @@ mod tests {
 
         assert!(content.contains("Error"));
         assert!(content.contains("Network timeout"));
+    }
+
+    #[test]
+    fn test_animation_tick() {
+        let mut state = DeviceSelectorState::new();
+        assert_eq!(state.animation_frame, 0);
+
+        state.tick();
+        assert_eq!(state.animation_frame, 1);
+
+        state.tick();
+        assert_eq!(state.animation_frame, 2);
+    }
+
+    #[test]
+    fn test_animation_frame_wrapping() {
+        let mut state = DeviceSelectorState::new();
+        state.animation_frame = u64::MAX;
+
+        state.tick();
+        assert_eq!(state.animation_frame, 0);
+    }
+
+    #[test]
+    fn test_spinner_char_cycles() {
+        let mut state = DeviceSelectorState::new();
+
+        // Each spinner frame is shown for 3 ticks
+        let first = state.spinner_char();
+
+        // After 3 ticks, should show next frame
+        state.tick();
+        state.tick();
+        state.tick();
+        let second = state.spinner_char();
+        assert_ne!(first, second);
+
+        // To cycle back to first frame, we need 21 more ticks
+        // (total 24 ticks -> frame index 24/3 = 8, and 8 % 8 = 0)
+        for _ in 0..21 {
+            state.tick();
+        }
+        // Should cycle back to first frame
+        assert_eq!(state.spinner_char(), first);
+    }
+
+    #[test]
+    fn test_device_selector_render_loading_with_spinner() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut state = DeviceSelectorState::new();
+        state.show_loading();
+        state.tick(); // Advance animation
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|frame| {
+                let selector = DeviceSelector::new(&state);
+                frame.render_widget(selector, frame.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Discovering devices"));
+        // Should contain one of the spinner frames
+        assert!(SPINNER_FRAMES.iter().any(|&f| content.contains(f)));
     }
 }

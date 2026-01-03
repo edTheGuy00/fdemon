@@ -121,4 +121,22 @@ pub enum Message {
     },
     /// Session failed to spawn
     SessionSpawnFailed { device_id: String, error: String },
+
+    // ─────────────────────────────────────────────────────────
+    // Session Navigation (Task 10)
+    // ─────────────────────────────────────────────────────────
+    /// Select session by index (0-based, for keys 1-9)
+    SelectSessionByIndex(usize),
+    /// Switch to next session (Tab)
+    NextSession,
+    /// Switch to previous session (Shift+Tab)
+    PreviousSession,
+    /// Close the current session (x / Ctrl+W)
+    CloseCurrentSession,
+
+    // ─────────────────────────────────────────────────────────
+    // Log Control (Task 10)
+    // ─────────────────────────────────────────────────────────
+    /// Clear logs for current session
+    ClearLogs,
 }

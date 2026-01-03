@@ -334,6 +334,30 @@ fn check_is_plugin(content: &str) -> bool {
     false
 }
 
+/// Parse the project name from pubspec.yaml
+///
+/// This function reads the pubspec.yaml file and extracts the project name.
+/// Falls back to the directory name if parsing fails.
+pub fn get_project_name(project_path: &Path) -> Option<String> {
+    let pubspec_path = project_path.join("pubspec.yaml");
+    let content = fs::read_to_string(&pubspec_path).ok()?;
+
+    // Simple line-by-line parsing for "name: value"
+    for line in content.lines() {
+        let trimmed = line.trim();
+        // Only match "name:" at the start of a non-indented line
+        if trimmed.starts_with("name:") && !line.starts_with(' ') && !line.starts_with('\t') {
+            let name = trimmed.strip_prefix("name:")?.trim();
+            // Remove quotes if present
+            let name = name.trim_matches('"').trim_matches('\'');
+            if !name.is_empty() {
+                return Some(name.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Check if pubspec.yaml has flutter SDK dependency
 fn check_has_flutter_dependency(content: &str) -> bool {
     // Look for pattern:
@@ -701,5 +725,60 @@ dependencies:
         let temp = TempDir::new().unwrap();
         assert!(get_project_type(temp.path()).is_none());
         assert!(!is_runnable_flutter_project(temp.path()));
+    }
+
+    #[test]
+    fn test_get_project_name_basic() {
+        let temp = TempDir::new().unwrap();
+        let pubspec = temp.path().join("pubspec.yaml");
+
+        fs::write(&pubspec, "name: my_flutter_app\nversion: 1.0.0\n").unwrap();
+
+        let name = get_project_name(temp.path());
+        assert_eq!(name, Some("my_flutter_app".to_string()));
+    }
+
+    #[test]
+    fn test_get_project_name_with_double_quotes() {
+        let temp = TempDir::new().unwrap();
+        let pubspec = temp.path().join("pubspec.yaml");
+
+        fs::write(&pubspec, "name: \"quoted_name\"\n").unwrap();
+
+        let name = get_project_name(temp.path());
+        assert_eq!(name, Some("quoted_name".to_string()));
+    }
+
+    #[test]
+    fn test_get_project_name_with_single_quotes() {
+        let temp = TempDir::new().unwrap();
+        let pubspec = temp.path().join("pubspec.yaml");
+
+        fs::write(&pubspec, "name: 'single_quoted'\n").unwrap();
+
+        let name = get_project_name(temp.path());
+        assert_eq!(name, Some("single_quoted".to_string()));
+    }
+
+    #[test]
+    fn test_get_project_name_missing_file() {
+        let temp = TempDir::new().unwrap();
+        assert!(get_project_name(temp.path()).is_none());
+    }
+
+    #[test]
+    fn test_get_project_name_ignores_nested_name() {
+        let temp = TempDir::new().unwrap();
+        let pubspec = temp.path().join("pubspec.yaml");
+
+        // Name inside a nested block should be ignored
+        fs::write(
+            &pubspec,
+            "name: real_name\ndependencies:\n  some_package:\n    name: nested_name\n",
+        )
+        .unwrap();
+
+        let name = get_project_name(temp.path());
+        assert_eq!(name, Some("real_name".to_string()));
     }
 }

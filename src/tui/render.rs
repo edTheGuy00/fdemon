@@ -10,17 +10,30 @@ use ratatui::Frame;
 /// except for widget state that tracks rendering info (scroll position).
 pub fn view(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
-    let areas = layout::create(area);
+    let session_count = state.session_manager.len();
+    let areas = layout::create_with_sessions(area, session_count);
 
-    // Header with optional session tabs
-    let header = widgets::HeaderWithTabs::with_sessions(&state.session_manager);
+    // Main header with project name
+    let header = widgets::MainHeader::new(state.project_name.as_deref());
     frame.render_widget(header, areas.header);
 
-    // Log view (stateful for scroll tracking)
-    let log_view = widgets::LogView::new(&state.logs);
-    frame.render_stateful_widget(log_view, areas.logs, &mut state.log_view_state);
+    // Tab subheader (only if multiple sessions)
+    if let Some(tabs_area) = areas.tabs {
+        let tabs = widgets::SessionTabs::new(&state.session_manager);
+        frame.render_widget(tabs, tabs_area);
+    }
 
-    // Status bar (use compact version for narrow terminals)
+    // Log view - use selected session's logs or global logs as fallback
+    if let Some(handle) = state.session_manager.selected_mut() {
+        let log_view = widgets::LogView::new(&handle.session.logs);
+        frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
+    } else {
+        // Fallback to global logs when no session active
+        let log_view = widgets::LogView::new(&state.logs);
+        frame.render_stateful_widget(log_view, areas.logs, &mut state.log_view_state);
+    }
+
+    // Status bar - use session data if available, otherwise use global state
     if layout::use_compact_status(area) {
         frame.render_widget(widgets::StatusBarCompact::new(state), areas.status);
     } else {

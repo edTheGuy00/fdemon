@@ -7,7 +7,7 @@ mod status_bar;
 mod tabs;
 
 pub use device_selector::{DeviceSelector, DeviceSelectorState};
-pub use header::Header;
+pub use header::{Header, MainHeader};
 pub use log_view::{LogView, LogViewState};
 pub use status_bar::{StatusBar, StatusBarCompact};
 pub use tabs::{HeaderWithTabs, SessionTabs};
