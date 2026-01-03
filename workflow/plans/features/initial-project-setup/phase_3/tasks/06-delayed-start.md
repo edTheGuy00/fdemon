@@ -698,3 +698,77 @@ mod tests {
 | `src/tui/render.rs` | Update `view()` to handle different `UiMode`s |
 | `src/app/handler.rs` | Add handlers for device selection messages |
 | `src/app/message.rs` | Add `UpdateAction::SpawnSession` and `UpdateAction::DiscoverDevices` |
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Date Completed**: 2026-01-03
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/state.rs` | Added `UiMode` enum with all modes (Normal, DeviceSelector, EmulatorSelector, ConfirmDialog, Loading). Added new fields to `AppState`: `ui_mode`, `session_manager`, `device_selector`, `settings`, `project_path`. Added helper methods: `with_settings()`, `show_device_selector()`, `hide_device_selector()`, `request_quit()`, `force_quit()`, `confirm_quit()`, `cancel_quit()`. |
+| `src/app/session.rs` | Added manual `Debug` implementation for `SessionHandle` (since it contains non-Debug types). |
+| `src/app/session_manager.rs` | Added `#[derive(Debug)]` to `SessionManager`. |
+| `src/app/handler.rs` | Added `UpdateAction::DiscoverDevices` and `UpdateAction::SpawnSession` variants. Updated all device selection message handlers with proper state transitions. Refactored `handle_key()` to dispatch based on `UiMode` with new handler functions: `handle_key_device_selector()`, `handle_key_confirm_dialog()`, `handle_key_emulator_selector()`, `handle_key_loading()`, `handle_key_normal()`. |
+| `src/daemon/process.rs` | Added `spawn_with_device()` and `spawn_with_config()` methods for launching Flutter with specific device and/or launch configuration. |
+| `src/tui/mod.rs` | Major refactor of `run_with_project()` for delayed start. Loads settings from config on startup. Supports both auto_start and manual start modes. Added `spawn_device_discovery()` helper. Updated `run_loop()` and `process_message()` signatures to accept project_path. Updated `handle_action()` to handle new action variants. |
+| `src/tui/render.rs` | Updated `view()` to render device selector modal overlay based on `UiMode`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Backward Compatibility**: Kept legacy single-session fields in `AppState` alongside new multi-session fields to maintain backward compatibility during the transition period.
+
+2. **Session State**: Used `SessionManager` alongside legacy fields. The legacy fields (`logs`, `device_name`, `platform`, etc.) are still used by the current single-session flow. Full migration to SessionManager will complete in task 07.
+
+3. **SpawnSession Action**: Currently logs the device selection but doesn't fully implement multi-session spawning. Full implementation deferred to later tasks (07, etc.) as per the dependency chain.
+
+4. **Large Enum Variant**: Boxed `Option<LaunchConfig>` in `UpdateAction::SpawnSession` to address clippy warning about large enum variant size difference.
+
+5. **Debug Implementation**: Added manual `Debug` impl for `SessionHandle` since it contains `FlutterProcess` and `CommandSender` which don't implement `Debug`.
+
+### Testing Performed
+
+```bash
+$ cargo check
+✅ Compiles without errors
+
+$ cargo test
+✅ 334 tests passed (1 ignored)
+
+$ cargo clippy
+✅ No warnings
+
+$ cargo fmt
+✅ Code formatted
+```
+
+### Risks/Limitations
+
+1. **Single Session Legacy**: The current implementation still uses the legacy single-session fields for the running app. Full multi-session support requires completing task 07 (tabs-widget).
+
+2. **Event Routing**: Each session will need its own daemon event channel. Current implementation uses a single channel - full multiplexing deferred to task 07.
+
+3. **Auto-start Flow**: Auto-start with multiple configs only starts the first config currently. Full multi-session auto-start requires task 07.
+
+### Acceptance Criteria Status
+
+- [x] `UiMode` enum added to `state.rs` with all modes
+- [x] `AppState` refactored to include `SessionManager` and new fields
+- [x] `FlutterProcess::spawn_with_device()` accepts device_id parameter
+- [x] `FlutterProcess::spawn_with_config()` uses `LaunchConfig` to build args
+- [x] On startup with `auto_start = false`, device selector is shown
+- [x] On startup with `auto_start = true` and auto_start configs, sessions start automatically
+- [x] Device discovery runs asynchronously with loading indicator
+- [x] Device discovery errors are displayed in the selector UI
+- [x] Selecting a device creates logs and transitions UI mode
+- [x] Pressing Esc in device selector (with no sessions) does nothing
+- [x] Main UI renders correctly when there are no sessions
+- [x] Quit confirmation logic added (shows dialog when sessions running and confirm_quit = true)
+- [x] All new code has unit tests
+- [x] `cargo test` passes
+- [x] `cargo clippy` has no warnings

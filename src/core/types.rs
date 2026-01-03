@@ -12,6 +12,8 @@ pub enum AppPhase {
     Running,
     /// Application is reloading
     Reloading,
+    /// Application has stopped
+    Stopped,
     /// Application is shutting down
     Quitting,
 }

@@ -1,15 +1,60 @@
 //! Application state (Model in TEA pattern)
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use chrono::{DateTime, Local};
 
+use crate::config::Settings;
 use crate::core::{AppPhase, LogEntry, LogSource};
-use crate::tui::widgets::LogViewState;
+use crate::tui::widgets::{DeviceSelectorState, LogViewState};
+
+use super::session_manager::SessionManager;
+
+/// Current UI mode/screen
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UiMode {
+    /// Normal TUI with log view and status bar
+    #[default]
+    Normal,
+
+    /// Device selector modal is active
+    DeviceSelector,
+
+    /// Emulator selector (after choosing "Launch Android Emulator")
+    EmulatorSelector,
+
+    /// Confirmation dialog (e.g., quit confirmation)
+    ConfirmDialog,
+
+    /// Initial loading screen (discovering devices)
+    Loading,
+}
 
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
+    // ─────────────────────────────────────────────────────────
+    // Phase 3: New Multi-Session Fields
+    // ─────────────────────────────────────────────────────────
+    /// Current UI mode/screen
+    pub ui_mode: UiMode,
+
+    /// Session manager for multi-instance support
+    pub session_manager: SessionManager,
+
+    /// Device selector state
+    pub device_selector: DeviceSelectorState,
+
+    /// Application settings from config file
+    pub settings: Settings,
+
+    /// Project path
+    pub project_path: PathBuf,
+
+    // ─────────────────────────────────────────────────────────
+    // Legacy single-session fields (maintained for backward compatibility)
+    // ─────────────────────────────────────────────────────────
     /// Current application phase
     pub phase: AppPhase,
 
@@ -60,8 +105,21 @@ impl Default for AppState {
 }
 
 impl AppState {
+    /// Create a new AppState with default settings (for backward compatibility)
     pub fn new() -> Self {
+        Self::with_settings(PathBuf::new(), Settings::default())
+    }
+
+    /// Create a new AppState with project path and settings
+    pub fn with_settings(project_path: PathBuf, settings: Settings) -> Self {
         Self {
+            // New Phase 3 fields
+            ui_mode: UiMode::Normal,
+            session_manager: SessionManager::new(),
+            device_selector: DeviceSelectorState::new(),
+            settings,
+            project_path,
+            // Legacy fields
             phase: AppPhase::Initializing,
             logs: Vec::new(),
             log_view_state: LogViewState::new(),
@@ -75,6 +133,51 @@ impl AppState {
             last_reload_time: None,
             reload_count: 0,
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // UI Mode Helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// Show device selector modal
+    pub fn show_device_selector(&mut self) {
+        self.ui_mode = UiMode::DeviceSelector;
+        self.device_selector.show_loading();
+    }
+
+    /// Hide device selector modal
+    pub fn hide_device_selector(&mut self) {
+        self.device_selector.hide();
+        self.ui_mode = UiMode::Normal;
+    }
+
+    /// Check if any session should prevent immediate quit
+    pub fn has_running_sessions(&self) -> bool {
+        self.session_manager.has_running_sessions()
+    }
+
+    /// Request application quit
+    pub fn request_quit(&mut self) {
+        if self.has_running_sessions() && self.settings.behavior.confirm_quit {
+            self.ui_mode = UiMode::ConfirmDialog;
+        } else {
+            self.phase = AppPhase::Quitting;
+        }
+    }
+
+    /// Force quit without confirmation
+    pub fn force_quit(&mut self) {
+        self.phase = AppPhase::Quitting;
+    }
+
+    /// Confirm quit (from confirmation dialog)
+    pub fn confirm_quit(&mut self) {
+        self.phase = AppPhase::Quitting;
+    }
+
+    /// Cancel quit (from confirmation dialog)
+    pub fn cancel_quit(&mut self) {
+        self.ui_mode = UiMode::Normal;
     }
 
     /// Add a log entry

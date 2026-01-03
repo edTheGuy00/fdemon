@@ -1,6 +1,7 @@
 //! Message types for the application (TEA pattern)
 
 use crate::core::DaemonEvent;
+use crate::daemon::{Device, Emulator, EmulatorLaunchResult};
 use crossterm::event::KeyEvent;
 
 /// All possible messages/actions in the application
@@ -69,4 +70,55 @@ pub enum Message {
     AutoReloadTriggered,
     /// Watcher error occurred
     WatcherError { message: String },
+
+    // ─────────────────────────────────────────────────────────
+    // Device Selector Messages
+    // ─────────────────────────────────────────────────────────
+    /// Show the device selector modal
+    ShowDeviceSelector,
+    /// Hide the device selector modal
+    HideDeviceSelector,
+    /// Navigate device selector up
+    DeviceSelectorUp,
+    /// Navigate device selector down
+    DeviceSelectorDown,
+    /// Device selected from selector
+    DeviceSelected { device: Device },
+    /// Launch Android emulator requested
+    LaunchAndroidEmulator,
+    /// Launch iOS simulator requested
+    LaunchIOSSimulator,
+    /// Device discovery completed
+    DevicesDiscovered { devices: Vec<Device> },
+    /// Device discovery failed
+    DeviceDiscoveryFailed { error: String },
+    /// Refresh device list
+    RefreshDevices,
+
+    // ─────────────────────────────────────────────────────────
+    // Emulator Messages
+    // ─────────────────────────────────────────────────────────
+    /// Discover available emulators
+    DiscoverEmulators,
+    /// Emulators discovered
+    EmulatorsDiscovered { emulators: Vec<Emulator> },
+    /// Emulator discovery failed
+    EmulatorDiscoveryFailed { error: String },
+    /// Launch a specific emulator by ID
+    LaunchEmulator { emulator_id: String },
+    /// Emulator launch completed
+    EmulatorLaunched { result: EmulatorLaunchResult },
+
+    // ─────────────────────────────────────────────────────────
+    // Session Messages
+    // ─────────────────────────────────────────────────────────
+    /// Session started successfully
+    SessionStarted {
+        device_id: String,
+        device_name: String,
+        platform: String,
+        pid: Option<u32>,
+    },
+    /// Session failed to spawn
+    SessionSpawnFailed { device_id: String, error: String },
 }

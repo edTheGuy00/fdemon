@@ -11,6 +11,7 @@ use tokio::sync::mpsc;
 
 use super::commands::{CommandSender, DaemonCommand, RequestTracker};
 use crate::common::prelude::*;
+use crate::config::LaunchConfig;
 use crate::core::DaemonEvent;
 
 /// Manages a Flutter child process
@@ -46,6 +47,136 @@ impl FlutterProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true) // Critical: cleanup on drop
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::FlutterNotFound
+                } else {
+                    Error::ProcessSpawn {
+                        reason: e.to_string(),
+                    }
+                }
+            })?;
+
+        let pid = child.id();
+        info!("Flutter process started with PID: {:?}", pid);
+
+        // Take ownership of stdin and create command channel
+        let stdin = child.stdin.take().expect("stdin was configured");
+        let (stdin_tx, stdin_rx) = mpsc::channel::<String>(32);
+        tokio::spawn(Self::stdin_writer(stdin, stdin_rx));
+
+        // Spawn stdout reader task
+        let stdout = child.stdout.take().expect("stdout was configured");
+        let stdout_tx = event_tx.clone();
+        tokio::spawn(Self::stdout_reader(stdout, stdout_tx));
+
+        // Spawn stderr reader task
+        let stderr = child.stderr.take().expect("stderr was configured");
+        let stderr_tx = event_tx.clone();
+        tokio::spawn(Self::stderr_reader(stderr, stderr_tx));
+
+        Ok(Self {
+            child,
+            stdin_tx,
+            pid,
+        })
+    }
+
+    /// Spawn a new Flutter process with a specific device
+    ///
+    /// Similar to `spawn()` but adds `-d <device_id>` argument.
+    pub async fn spawn_with_device(
+        project_path: &Path,
+        device_id: &str,
+        event_tx: mpsc::Sender<DaemonEvent>,
+    ) -> Result<Self> {
+        // Validate project path
+        let pubspec = project_path.join("pubspec.yaml");
+        if !pubspec.exists() {
+            return Err(Error::NoProject {
+                path: project_path.to_path_buf(),
+            });
+        }
+
+        info!(
+            "Spawning Flutter process in: {} on device: {}",
+            project_path.display(),
+            device_id
+        );
+
+        // Spawn the Flutter process with device argument
+        let mut child = Command::new("flutter")
+            .args(["run", "--machine", "-d", device_id])
+            .current_dir(project_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Error::FlutterNotFound
+                } else {
+                    Error::ProcessSpawn {
+                        reason: e.to_string(),
+                    }
+                }
+            })?;
+
+        let pid = child.id();
+        info!("Flutter process started with PID: {:?}", pid);
+
+        // Take ownership of stdin and create command channel
+        let stdin = child.stdin.take().expect("stdin was configured");
+        let (stdin_tx, stdin_rx) = mpsc::channel::<String>(32);
+        tokio::spawn(Self::stdin_writer(stdin, stdin_rx));
+
+        // Spawn stdout reader task
+        let stdout = child.stdout.take().expect("stdout was configured");
+        let stdout_tx = event_tx.clone();
+        tokio::spawn(Self::stdout_reader(stdout, stdout_tx));
+
+        // Spawn stderr reader task
+        let stderr = child.stderr.take().expect("stderr was configured");
+        let stderr_tx = event_tx.clone();
+        tokio::spawn(Self::stderr_reader(stderr, stderr_tx));
+
+        Ok(Self {
+            child,
+            stdin_tx,
+            pid,
+        })
+    }
+
+    /// Spawn a Flutter process with full launch configuration
+    ///
+    /// Uses the `LaunchConfig` to build all necessary flutter run arguments.
+    pub async fn spawn_with_config(
+        project_path: &Path,
+        device_id: &str,
+        config: &LaunchConfig,
+        event_tx: mpsc::Sender<DaemonEvent>,
+    ) -> Result<Self> {
+        // Validate project path
+        let pubspec = project_path.join("pubspec.yaml");
+        if !pubspec.exists() {
+            return Err(Error::NoProject {
+                path: project_path.to_path_buf(),
+            });
+        }
+
+        let args = config.build_flutter_args(device_id);
+        info!("Spawning Flutter: flutter {}", args.join(" "));
+
+        // Spawn the Flutter process with full arguments
+        let mut child = Command::new("flutter")
+            .args(&args)
+            .current_dir(project_path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
             .spawn()
             .map_err(|e| {
                 if e.kind() == std::io::ErrorKind::NotFound {

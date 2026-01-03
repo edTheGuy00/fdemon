@@ -46,6 +46,7 @@ impl<'a> StatusBar<'a> {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
+            AppPhase::Stopped => Span::styled("○ Stopped", Style::default().fg(Color::DarkGray)),
             AppPhase::Quitting => Span::styled("○ Stopping", Style::default().fg(Color::DarkGray)),
         }
     }

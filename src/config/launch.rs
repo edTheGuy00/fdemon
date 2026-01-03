@@ -1,0 +1,437 @@
+//! Launch configuration parser for .fdemon/launch.toml
+
+use super::types::{ConfigSource, LaunchConfig, LaunchFile, ResolvedLaunchConfig};
+use crate::common::prelude::*;
+use std::path::Path;
+
+const LAUNCH_FILENAME: &str = "launch.toml";
+const FDEMON_DIR: &str = ".fdemon";
+
+/// Load launch configurations from .fdemon/launch.toml
+pub fn load_launch_configs(project_path: &Path) -> Vec<ResolvedLaunchConfig> {
+    let launch_path = project_path.join(FDEMON_DIR).join(LAUNCH_FILENAME);
+
+    if !launch_path.exists() {
+        debug!("No launch file at {:?}", launch_path);
+        return Vec::new();
+    }
+
+    match std::fs::read_to_string(&launch_path) {
+        Ok(content) => match toml::from_str::<LaunchFile>(&content) {
+            Ok(launch_file) => {
+                debug!(
+                    "Loaded {} configurations from {:?}",
+                    launch_file.configurations.len(),
+                    launch_path
+                );
+                launch_file
+                    .configurations
+                    .into_iter()
+                    .map(|config| ResolvedLaunchConfig {
+                        config,
+                        source: ConfigSource::FDemon,
+                    })
+                    .collect()
+            }
+            Err(e) => {
+                warn!("Failed to parse {:?}: {}", launch_path, e);
+                Vec::new()
+            }
+        },
+        Err(e) => {
+            warn!("Failed to read {:?}: {}", launch_path, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Get all auto-start configurations
+pub fn get_auto_start_configs(configs: &[ResolvedLaunchConfig]) -> Vec<&ResolvedLaunchConfig> {
+    configs.iter().filter(|c| c.config.auto_start).collect()
+}
+
+/// Find a configuration by name (case-insensitive)
+pub fn find_config_by_name<'a>(
+    configs: &'a [ResolvedLaunchConfig],
+    name: &str,
+) -> Option<&'a ResolvedLaunchConfig> {
+    let name_lower = name.to_lowercase();
+    configs
+        .iter()
+        .find(|c| c.config.name.to_lowercase() == name_lower)
+}
+
+/// Create default launch.toml file
+pub fn init_launch_file(project_path: &Path) -> Result<()> {
+    let fdemon_dir = project_path.join(FDEMON_DIR);
+
+    if !fdemon_dir.exists() {
+        std::fs::create_dir_all(&fdemon_dir)
+            .map_err(|e| Error::config(format!("Failed to create .fdemon dir: {}", e)))?;
+    }
+
+    let launch_path = fdemon_dir.join(LAUNCH_FILENAME);
+    if !launch_path.exists() {
+        let default_content = r#"# Flutter Demon Launch Configurations
+# See: https://github.com/example/flutter-demon#launch-configurations
+
+[[configurations]]
+name = "Debug"
+device = "auto"         # "auto", device ID, or platform (e.g., "ios", "android")
+mode = "debug"          # debug | profile | release
+# flavor = "development"
+# entry_point = "lib/main.dart"
+# auto_start = false
+
+# [configurations.dart_defines]
+# API_URL = "https://dev.example.com"
+# DEBUG_MODE = "true"
+
+# [[configurations]]
+# name = "Release iOS"
+# device = "ios"
+# mode = "release"
+# flavor = "production"
+# extra_args = ["--obfuscate", "--split-debug-info=build/symbols"]
+"#;
+        std::fs::write(&launch_path, default_content)
+            .map_err(|e| Error::config(format!("Failed to write launch.toml: {}", e)))?;
+    }
+
+    Ok(())
+}
+
+impl LaunchConfig {
+    /// Build flutter run arguments from this configuration
+    pub fn build_flutter_args(&self, device_id: &str) -> Vec<String> {
+        let mut args = vec![
+            "run".to_string(),
+            "--machine".to_string(),
+            "-d".to_string(),
+            device_id.to_string(),
+            self.mode.as_arg().to_string(),
+        ];
+
+        // Add entry point if specified
+        if let Some(ref entry) = self.entry_point {
+            args.push("-t".to_string());
+            args.push(entry.to_string_lossy().to_string());
+        }
+
+        // Add flavor if specified
+        if let Some(ref flavor) = self.flavor {
+            args.push("--flavor".to_string());
+            args.push(flavor.clone());
+        }
+
+        // Add dart defines
+        for (key, value) in &self.dart_defines {
+            args.push("--dart-define".to_string());
+            args.push(format!("{}={}", key, value));
+        }
+
+        // Add extra args
+        args.extend(self.extra_args.clone());
+
+        args
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::types::FlutterMode;
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn test_load_launch_configs_empty() {
+        let temp = tempdir().unwrap();
+        let configs = load_launch_configs(temp.path());
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_load_launch_configs() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        let content = r#"
+[[configurations]]
+name = "Development"
+device = "iphone"
+mode = "debug"
+auto_start = true
+
+[configurations.dart_defines]
+API_URL = "https://dev.api.com"
+
+[[configurations]]
+name = "Production"
+device = "ios"
+mode = "release"
+flavor = "production"
+"#;
+        std::fs::write(fdemon_dir.join("launch.toml"), content).unwrap();
+
+        let configs = load_launch_configs(temp.path());
+
+        assert_eq!(configs.len(), 2);
+        assert_eq!(configs[0].config.name, "Development");
+        assert_eq!(configs[0].config.device, "iphone");
+        assert!(configs[0].config.auto_start);
+        assert_eq!(configs[0].source, ConfigSource::FDemon);
+
+        assert_eq!(configs[1].config.name, "Production");
+        assert_eq!(configs[1].config.mode, FlutterMode::Release);
+        assert_eq!(configs[1].config.flavor, Some("production".to_string()));
+    }
+
+    #[test]
+    fn test_load_launch_configs_invalid_toml() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        std::fs::write(fdemon_dir.join("launch.toml"), "not valid {{{{").unwrap();
+
+        let configs = load_launch_configs(temp.path());
+        assert!(configs.is_empty());
+    }
+
+    #[test]
+    fn test_get_auto_start_configs() {
+        let configs = vec![
+            ResolvedLaunchConfig {
+                config: LaunchConfig {
+                    name: "A".to_string(),
+                    auto_start: true,
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+            },
+            ResolvedLaunchConfig {
+                config: LaunchConfig {
+                    name: "B".to_string(),
+                    auto_start: false,
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+            },
+        ];
+
+        let auto = get_auto_start_configs(&configs);
+        assert_eq!(auto.len(), 1);
+        assert_eq!(auto[0].config.name, "A");
+    }
+
+    #[test]
+    fn test_find_config_by_name() {
+        let configs = vec![
+            ResolvedLaunchConfig {
+                config: LaunchConfig {
+                    name: "Development".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+            },
+            ResolvedLaunchConfig {
+                config: LaunchConfig {
+                    name: "Production".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+            },
+        ];
+
+        // Exact match
+        let found = find_config_by_name(&configs, "Development");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().config.name, "Development");
+
+        // Case insensitive
+        let found = find_config_by_name(&configs, "development");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().config.name, "Development");
+
+        // Not found
+        let found = find_config_by_name(&configs, "Staging");
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_build_flutter_args_basic() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            device: "auto".to_string(),
+            mode: FlutterMode::Debug,
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("iphone-123");
+
+        assert_eq!(args[0], "run");
+        assert_eq!(args[1], "--machine");
+        assert_eq!(args[2], "-d");
+        assert_eq!(args[3], "iphone-123");
+        assert_eq!(args[4], "--debug");
+    }
+
+    #[test]
+    fn test_build_flutter_args_with_flavor() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            flavor: Some("development".to_string()),
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--flavor".to_string()));
+        assert!(args.contains(&"development".to_string()));
+    }
+
+    #[test]
+    fn test_build_flutter_args_with_entry_point() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            entry_point: Some("lib/main_dev.dart".into()),
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"-t".to_string()));
+        assert!(args.contains(&"lib/main_dev.dart".to_string()));
+    }
+
+    #[test]
+    fn test_build_flutter_args_with_dart_defines() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            dart_defines: [("API_URL".to_string(), "https://test.com".to_string())]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--dart-define".to_string()));
+        assert!(args.contains(&"API_URL=https://test.com".to_string()));
+    }
+
+    #[test]
+    fn test_build_flutter_args_with_extra_args() {
+        let config = LaunchConfig {
+            name: "Test".to_string(),
+            extra_args: vec![
+                "--verbose".to_string(),
+                "--no-sound-null-safety".to_string(),
+            ],
+            ..Default::default()
+        };
+
+        let args = config.build_flutter_args("device-id");
+
+        assert!(args.contains(&"--verbose".to_string()));
+        assert!(args.contains(&"--no-sound-null-safety".to_string()));
+    }
+
+    #[test]
+    fn test_build_flutter_args_full() {
+        let config = LaunchConfig {
+            name: "Full Config".to_string(),
+            device: "iphone".to_string(),
+            mode: FlutterMode::Release,
+            flavor: Some("production".to_string()),
+            entry_point: Some("lib/main_prod.dart".into()),
+            dart_defines: [
+                ("API_URL".to_string(), "https://prod.com".to_string()),
+                ("DEBUG".to_string(), "false".to_string()),
+            ]
+            .into_iter()
+            .collect(),
+            extra_args: vec!["--obfuscate".to_string()],
+            auto_start: false,
+        };
+
+        let args = config.build_flutter_args("iphone-15");
+
+        assert!(args.contains(&"run".to_string()));
+        assert!(args.contains(&"--machine".to_string()));
+        assert!(args.contains(&"-d".to_string()));
+        assert!(args.contains(&"iphone-15".to_string()));
+        assert!(args.contains(&"--release".to_string()));
+        assert!(args.contains(&"-t".to_string()));
+        assert!(args.contains(&"lib/main_prod.dart".to_string()));
+        assert!(args.contains(&"--flavor".to_string()));
+        assert!(args.contains(&"production".to_string()));
+        assert!(args.contains(&"--dart-define".to_string()));
+        assert!(args.contains(&"--obfuscate".to_string()));
+    }
+
+    #[test]
+    fn test_init_launch_file() {
+        let temp = tempdir().unwrap();
+
+        init_launch_file(temp.path()).unwrap();
+
+        assert!(temp.path().join(".fdemon").exists());
+        assert!(temp.path().join(".fdemon/launch.toml").exists());
+
+        // Content should be valid TOML
+        let content = std::fs::read_to_string(temp.path().join(".fdemon/launch.toml")).unwrap();
+        let launch_file: LaunchFile = toml::from_str(&content).expect("Default should be valid");
+        assert_eq!(launch_file.configurations.len(), 1);
+        assert_eq!(launch_file.configurations[0].name, "Debug");
+    }
+
+    #[test]
+    fn test_init_launch_file_idempotent() {
+        let temp = tempdir().unwrap();
+
+        // First init
+        init_launch_file(temp.path()).unwrap();
+
+        // Modify the file
+        let launch_path = temp.path().join(".fdemon/launch.toml");
+        let custom_content = r#"
+[[configurations]]
+name = "Custom"
+device = "android"
+mode = "profile"
+"#;
+        std::fs::write(&launch_path, custom_content).unwrap();
+
+        // Second init should not overwrite
+        init_launch_file(temp.path()).unwrap();
+
+        let content = std::fs::read_to_string(&launch_path).unwrap();
+        assert!(content.contains("Custom"));
+    }
+
+    #[test]
+    fn test_dart_defines_parsing() {
+        let toml = r#"
+[[configurations]]
+name = "Test"
+device = "auto"
+
+[configurations.dart_defines]
+API_URL = "https://example.com"
+DEBUG = "true"
+EMPTY = ""
+"#;
+        let launch_file: LaunchFile = toml::from_str(toml).unwrap();
+        let config = &launch_file.configurations[0];
+
+        assert_eq!(config.dart_defines.len(), 3);
+        assert_eq!(
+            config.dart_defines.get("API_URL"),
+            Some(&"https://example.com".to_string())
+        );
+        assert_eq!(config.dart_defines.get("DEBUG"), Some(&"true".to_string()));
+        assert_eq!(config.dart_defines.get("EMPTY"), Some(&"".to_string()));
+    }
+}

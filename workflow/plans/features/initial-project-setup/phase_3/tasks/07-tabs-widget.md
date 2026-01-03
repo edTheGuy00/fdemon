@@ -420,3 +420,69 @@ fn test_tabs_widget_rendering() {
 | `src/tui/widgets/tabs.rs` | Create with `SessionTabs` and `HeaderWithTabs` widgets |
 | `src/tui/widgets/mod.rs` | Add `pub mod tabs;` and re-export widgets |
 | `src/tui/render.rs` | Use `HeaderWithTabs` instead of `Header` when appropriate |
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+### Files Modified
+- `src/tui/widgets/tabs.rs` — Created with `SessionTabs` and `HeaderWithTabs` widgets
+- `src/tui/widgets/mod.rs` — Added `pub mod tabs;` and re-exports for `HeaderWithTabs`, `SessionTabs`
+- `src/tui/render.rs` — Updated to use `HeaderWithTabs::with_sessions()` instead of `Header::new()`
+
+### Implementation Details
+
+1. **SessionTabs widget**: Displays session tabs using Ratatui's `Tabs` component with:
+   - Status icons: `●` (green) for Running, `○` (gray) for Initializing/Stopped, `↻` (yellow) for Reloading, `✗` (red) for Quitting
+   - Device name truncation with ellipsis for names > 12 characters
+   - Proper Unicode-aware truncation
+   - Highlighted selected tab with inverted colors (black on cyan)
+   - Dividers between tabs
+
+2. **HeaderWithTabs widget**: Conditionally renders based on session count:
+   - 0 sessions: Simple header with app title and keybinding hints
+   - 1 session: Shows device name + status icon inline (no tabs)
+   - 2+ sessions: Full tabs widget with selectable tabs
+
+3. **truncate_name helper**: Unicode-aware string truncation with ellipsis
+
+### Testing Performed
+- `cargo check` — ✅ Passed
+- `cargo test` — ✅ All 347 tests pass (12 new tests for tabs module)
+- `cargo clippy` — ✅ No warnings
+
+### Unit Tests Added
+- `test_truncate_name_short` — verifies short names are returned as-is
+- `test_truncate_name_long` — verifies long names are truncated with ellipsis
+- `test_truncate_name_edge_cases` — boundary conditions for truncation
+- `test_truncate_name_unicode` — Unicode character handling
+- `test_session_tabs_creation` — tab titles generation
+- `test_tab_title_includes_status_icon` — status icons match session phase
+- `test_header_with_tabs_no_sessions` — simple header for empty state
+- `test_header_with_tabs_single_session` — single session display
+- `test_header_with_tabs_multiple_sessions` — tabs display for multiple sessions
+- `test_header_simple` — constructor test
+- `test_tabs_widget_rendering` — visual rendering test with TestBackend
+- `test_single_session_rendering` — single session header rendering
+
+### Acceptance Criteria
+
+1. [x] `src/tui/widgets/tabs.rs` created with `SessionTabs` widget
+2. [x] `HeaderWithTabs` widget handles 0, 1, and multiple sessions correctly
+3. [x] Tab titles include status icon with appropriate color
+4. [x] Currently selected tab is highlighted
+5. [x] Device names are truncated if too long
+6. [x] Tab dividers are rendered between sessions
+7. [x] Keybinding hints are displayed on the right side of header
+8. [x] Single session mode shows device name without tab UI
+9. [x] No session mode shows simple header
+10. [x] Status icons: `●` green (running), `○` gray (stopped), `↻` yellow (reloading), `✗` red (error)
+11. [x] All new code has unit tests
+12. [x] `cargo test` passes
+13. [x] `cargo clippy` has no warnings
+
+### Risks/Limitations
+- Tab overflow (more tabs than fit) not yet implemented — may need scroll indicators in future
+- Keyboard shortcuts for tab switching (1-9, Tab/Shift+Tab) handled by event handler in Task 10

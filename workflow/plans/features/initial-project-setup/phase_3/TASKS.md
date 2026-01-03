@@ -267,14 +267,14 @@ When configurations conflict, use this priority (highest to lowest):
 
 | # | Task | Status | Depends On | Effort | Key Modules |
 |---|------|--------|------------|--------|-------------|
-| 1 | [01-config-module](tasks/01-config-module.md) | Not Started | - | 4-5 hrs | `config/mod.rs`, `config/types.rs`, `config/settings.rs` |
-| 2 | [02-vscode-import](tasks/02-vscode-import.md) | Not Started | 01 | 2-3 hrs | `config/vscode.rs` |
-| 3 | [03-device-discovery](tasks/03-device-discovery.md) | Not Started | 01 | 3-4 hrs | `daemon/devices.rs` |
-| 4 | [04-session-manager](tasks/04-session-manager.md) | Not Started | 01 | 5-6 hrs | `app/session.rs`, `app/session_manager.rs` |
-| 5 | [05-device-selector-ui](tasks/05-device-selector-ui.md) | Not Started | 03 | 3-4 hrs | `tui/widgets/device_selector.rs` |
-| 6 | [06-delayed-start](tasks/06-delayed-start.md) | Not Started | 04, 05 | 4-5 hrs | `tui/mod.rs`, `app/mod.rs` |
-| 7 | [07-tabs-widget](tasks/07-tabs-widget.md) | Not Started | 06 | 3-4 hrs | `tui/widgets/tabs.rs`, `tui/render.rs` |
-| 8 | [08-emulator-management](tasks/08-emulator-management.md) | Not Started | 06 | 2-3 hrs | `daemon/emulators.rs` |
+| 1 | [01-config-module](tasks/01-config-module.md) | ✅ Done | - | 4-5 hrs | `config/mod.rs`, `config/types.rs`, `config/settings.rs` |
+| 2 | [02-vscode-import](tasks/02-vscode-import.md) | ✅ Done | 01 | 2-3 hrs | `config/vscode.rs` |
+| 3 | [03-device-discovery](tasks/03-device-discovery.md) | ✅ Done | 01 | 3-4 hrs | `daemon/devices.rs` |
+| 4 | [04-session-manager](tasks/04-session-manager.md) | ✅ Done | 01 | 5-6 hrs | `app/session.rs`, `app/session_manager.rs` |
+| 5 | [05-device-selector-ui](tasks/05-device-selector-ui.md) | ✅ Done | 03 | 3-4 hrs | `tui/widgets/device_selector.rs` |
+| 6 | [06-delayed-start](tasks/06-delayed-start.md) | ✅ Done | 04, 05 | 4-5 hrs | `tui/mod.rs`, `app/mod.rs`, `app/handler.rs`, `app/state.rs` |
+| 7 | [07-tabs-widget](tasks/07-tabs-widget.md) | ✅ Done | 06 | 3-4 hrs | `tui/widgets/tabs.rs`, `tui/render.rs` |
+| 8 | [08-emulator-management](tasks/08-emulator-management.md) | ✅ Done | 06 | 2-3 hrs | `daemon/emulators.rs` |
 | 9 | [09-refined-layout](tasks/09-refined-layout.md) | Not Started | 07 | 3-4 hrs | `tui/layout.rs`, `tui/render.rs` |
 | 10 | [10-keyboard-shortcuts](tasks/10-keyboard-shortcuts.md) | Not Started | 09 | 2-3 hrs | `tui/event.rs`, `app/handler.rs` |
 

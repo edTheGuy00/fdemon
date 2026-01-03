@@ -2,10 +2,16 @@
 
 pub mod handler;
 pub mod message;
+pub mod session;
+pub mod session_manager;
 pub mod state;
 
 // Re-export handler types for event loop integration
 pub use handler::{Task, UpdateAction, UpdateResult};
+
+// Re-export session types
+pub use session::{Session, SessionHandle, SessionId};
+pub use session_manager::{SessionManager, MAX_SESSIONS};
 
 use std::path::PathBuf;
 

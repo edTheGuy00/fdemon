@@ -1,9 +1,10 @@
 //! Update function - handles state transitions (TEA pattern)
 
 use super::message::Message;
-use super::state::AppState;
+use super::state::{AppState, UiMode};
+use crate::config::LaunchConfig;
 use crate::core::{AppPhase, DaemonEvent, LogEntry, LogLevel, LogSource};
-use crate::daemon::{protocol, DaemonMessage};
+use crate::daemon::{protocol, DaemonMessage, Device};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// Actions that the event loop should perform after update
@@ -11,6 +12,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub enum UpdateAction {
     /// Spawn a background task
     SpawnTask(Task),
+
+    /// Discover available devices
+    DiscoverDevices,
+
+    /// Discover available emulators
+    DiscoverEmulators,
+
+    /// Launch an emulator by ID
+    LaunchEmulator { emulator_id: String },
+
+    /// Launch iOS Simulator (macOS shortcut)
+    LaunchIOSSimulator,
+
+    /// Spawn a new session for a device
+    SpawnSession {
+        device: Device,
+        config: Option<Box<LaunchConfig>>,
+    },
 }
 
 /// Background tasks to spawn
@@ -218,6 +237,216 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             state.log_error(LogSource::Watcher, format!("Watcher error: {}", message));
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Device Selector Messages
+        // ─────────────────────────────────────────────────────────
+        Message::ShowDeviceSelector => {
+            state.ui_mode = UiMode::DeviceSelector;
+            state.device_selector.show_loading();
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        Message::HideDeviceSelector => {
+            // Only hide if there are running sessions, otherwise stay on selector
+            if state.session_manager.has_running_sessions() {
+                state.device_selector.hide();
+                state.ui_mode = UiMode::Normal;
+            }
+            UpdateResult::none()
+        }
+
+        Message::DeviceSelectorUp => {
+            if state.ui_mode == UiMode::DeviceSelector {
+                state.device_selector.select_previous();
+            }
+            UpdateResult::none()
+        }
+
+        Message::DeviceSelectorDown => {
+            if state.ui_mode == UiMode::DeviceSelector {
+                state.device_selector.select_next();
+            }
+            UpdateResult::none()
+        }
+
+        Message::DeviceSelected { device } => {
+            state.log_info(
+                LogSource::App,
+                format!("Device selected: {} ({})", device.name, device.id),
+            );
+
+            // Hide selector and switch to normal mode
+            state.device_selector.hide();
+            state.ui_mode = UiMode::Normal;
+
+            // Return action to spawn session
+            UpdateResult::action(UpdateAction::SpawnSession {
+                device,
+                config: None,
+            })
+        }
+
+        Message::LaunchAndroidEmulator => {
+            state.log_info(LogSource::App, "Discovering Android emulators...");
+            state.ui_mode = UiMode::EmulatorSelector;
+            UpdateResult::action(UpdateAction::DiscoverEmulators)
+        }
+
+        Message::LaunchIOSSimulator => {
+            state.log_info(LogSource::App, "Launching iOS Simulator...");
+            UpdateResult::action(UpdateAction::LaunchIOSSimulator)
+        }
+
+        Message::DevicesDiscovered { devices } => {
+            let device_count = devices.len();
+            state.device_selector.set_devices(devices);
+
+            // If we were in Loading mode, transition to DeviceSelector
+            if state.ui_mode == UiMode::Loading {
+                state.ui_mode = UiMode::DeviceSelector;
+            }
+
+            if device_count > 0 {
+                state.log_info(
+                    LogSource::App,
+                    format!("Discovered {} device(s)", device_count),
+                );
+            } else {
+                state.log_info(LogSource::App, "No devices found");
+            }
+
+            UpdateResult::none()
+        }
+
+        Message::DeviceDiscoveryFailed { error } => {
+            state.device_selector.set_error(error.clone());
+
+            // If we were in Loading mode, transition to DeviceSelector to show error
+            if state.ui_mode == UiMode::Loading {
+                state.ui_mode = UiMode::DeviceSelector;
+            }
+
+            state.log_error(
+                LogSource::App,
+                format!("Device discovery failed: {}", error),
+            );
+            UpdateResult::none()
+        }
+
+        Message::RefreshDevices => {
+            state.device_selector.show_loading();
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Emulator Messages
+        // ─────────────────────────────────────────────────────────
+        Message::DiscoverEmulators => {
+            state.log_info(LogSource::App, "Discovering emulators...");
+            UpdateResult::action(UpdateAction::DiscoverEmulators)
+        }
+
+        Message::EmulatorsDiscovered { emulators } => {
+            let count = emulators.len();
+            if count > 0 {
+                state.log_info(LogSource::App, format!("Found {} emulator(s)", count));
+                // TODO: Task 09 - Show emulator selector UI with the emulators
+            } else {
+                state.log_info(LogSource::App, "No emulators available");
+            }
+            // For now, go back to device selector - emulator selector UI is Task 09
+            state.ui_mode = UiMode::DeviceSelector;
+            UpdateResult::none()
+        }
+
+        Message::EmulatorDiscoveryFailed { error } => {
+            state.log_error(
+                LogSource::App,
+                format!("Emulator discovery failed: {}", error),
+            );
+            // Go back to device selector on failure
+            state.ui_mode = UiMode::DeviceSelector;
+            UpdateResult::none()
+        }
+
+        Message::LaunchEmulator { emulator_id } => {
+            state.log_info(
+                LogSource::App,
+                format!("Launching emulator: {}", emulator_id),
+            );
+            UpdateResult::action(UpdateAction::LaunchEmulator { emulator_id })
+        }
+
+        Message::EmulatorLaunched { result } => {
+            if result.success {
+                state.log_info(
+                    LogSource::App,
+                    format!(
+                        "Emulator '{}' launched successfully ({:?})",
+                        result.emulator_id, result.elapsed
+                    ),
+                );
+                // After launching, refresh devices to pick up the new emulator
+                // Go back to device selector to see the new device
+                state.ui_mode = UiMode::DeviceSelector;
+                state.device_selector.show_loading();
+                UpdateResult::action(UpdateAction::DiscoverDevices)
+            } else {
+                let error_msg = result
+                    .message
+                    .unwrap_or_else(|| "Unknown error".to_string());
+                state.log_error(
+                    LogSource::App,
+                    format!(
+                        "Failed to launch emulator '{}': {}",
+                        result.emulator_id, error_msg
+                    ),
+                );
+                // Go back to device selector on failure
+                state.ui_mode = UiMode::DeviceSelector;
+                UpdateResult::none()
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Session Messages
+        // ─────────────────────────────────────────────────────────
+        Message::SessionStarted {
+            device_id: _,
+            device_name,
+            platform,
+            pid,
+        } => {
+            // Update legacy single-session state for now
+            state.device_name = Some(device_name.clone());
+            state.platform = Some(platform);
+            state.phase = AppPhase::Running;
+            state.session_start = Some(chrono::Local::now());
+
+            state.log_info(
+                LogSource::App,
+                format!(
+                    "Flutter session started on {} (PID: {})",
+                    device_name,
+                    pid.map_or("unknown".to_string(), |p| p.to_string())
+                ),
+            );
+            UpdateResult::none()
+        }
+
+        Message::SessionSpawnFailed {
+            device_id: _,
+            error,
+        } => {
+            state.log_error(
+                LogSource::App,
+                format!("Failed to start session: {}", error),
+            );
+            // Show device selector again so user can retry
+            state.ui_mode = UiMode::DeviceSelector;
+            UpdateResult::none()
+        }
     }
 }
 
@@ -380,8 +609,85 @@ fn handle_daemon_message_state(state: &mut AppState, msg: &DaemonMessage) {
     }
 }
 
-/// Convert key events to messages
+/// Convert key events to messages based on current UI mode
 fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
+    match state.ui_mode {
+        UiMode::DeviceSelector => handle_key_device_selector(state, key),
+        UiMode::ConfirmDialog => handle_key_confirm_dialog(key),
+        UiMode::EmulatorSelector => handle_key_emulator_selector(key),
+        UiMode::Loading => handle_key_loading(key),
+        UiMode::Normal => handle_key_normal(state, key),
+    }
+}
+
+/// Handle key events in device selector mode
+fn handle_key_device_selector(state: &AppState, key: KeyEvent) -> Option<Message> {
+    match key.code {
+        // Navigation
+        KeyCode::Up | KeyCode::Char('k') => Some(Message::DeviceSelectorUp),
+        KeyCode::Down | KeyCode::Char('j') => Some(Message::DeviceSelectorDown),
+
+        // Selection
+        KeyCode::Enter => {
+            if state.device_selector.is_device_selected() {
+                if let Some(device) = state.device_selector.selected_device() {
+                    return Some(Message::DeviceSelected {
+                        device: device.clone(),
+                    });
+                }
+            } else if state.device_selector.is_android_emulator_selected() {
+                return Some(Message::LaunchAndroidEmulator);
+            } else if state.device_selector.is_ios_simulator_selected() {
+                return Some(Message::LaunchIOSSimulator);
+            }
+            None
+        }
+
+        // Refresh
+        KeyCode::Char('r') => Some(Message::RefreshDevices),
+
+        // Cancel/close - only if there are running sessions
+        KeyCode::Esc => Some(Message::HideDeviceSelector),
+
+        // Quit with Ctrl+C
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+        KeyCode::Char('q') => Some(Message::Quit),
+
+        _ => None,
+    }
+}
+
+/// Handle key events in confirm dialog mode
+fn handle_key_confirm_dialog(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        // Confirm quit
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => Some(Message::Quit),
+        // Cancel
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => Some(Message::HideDeviceSelector), // This will cancel
+        _ => None,
+    }
+}
+
+/// Handle key events in emulator selector mode (placeholder)
+fn handle_key_emulator_selector(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Esc => Some(Message::ShowDeviceSelector), // Go back to device selector
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+        _ => None,
+    }
+}
+
+/// Handle key events in loading mode
+fn handle_key_loading(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Char('q') | KeyCode::Esc => Some(Message::Quit),
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+        _ => None,
+    }
+}
+
+/// Handle key events in normal mode
+fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
     // Check if we're busy (reloading)
     let is_busy = state.is_busy();
 
@@ -398,6 +704,9 @@ fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
 
         // Stop app (lowercase 's') - only when not busy
         KeyCode::Char('s') if !is_busy => Some(Message::StopApp),
+
+        // New session (lowercase 'n') - show device selector
+        KeyCode::Char('n') => Some(Message::ShowDeviceSelector),
 
         // Scrolling - always allowed
         KeyCode::Char('j') | KeyCode::Down => Some(Message::ScrollDown),
