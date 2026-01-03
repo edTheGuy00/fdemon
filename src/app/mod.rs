@@ -1,0 +1,68 @@
+//! Application layer - state management and orchestration
+
+pub mod handler;
+pub mod message;
+pub mod state;
+
+use std::path::PathBuf;
+
+use crate::common::prelude::*;
+use crate::tui;
+
+/// Main application entry point
+///
+/// Parses command-line arguments and runs the TUI with the specified
+/// Flutter project (or current directory if not specified).
+pub async fn run() -> Result<()> {
+    // Initialize error handling
+    color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
+
+    // Initialize logging (to file, since TUI owns stdout)
+    crate::common::logging::init()?;
+
+    info!("═══════════════════════════════════════════════════════");
+    info!("Flutter Demon starting");
+    info!("═══════════════════════════════════════════════════════");
+
+    // Get project path from args or current directory
+    let project_path = std::env::args()
+        .nth(1)
+        .map(PathBuf::from)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    info!("Project path: {}", project_path.display());
+
+    // Run the TUI with Flutter project
+    let result = tui::run_with_project(&project_path).await;
+
+    if let Err(ref e) = result {
+        error!("Application error: {:?}", e);
+    }
+
+    info!("Flutter Demon exiting");
+    result
+}
+
+/// Main application entry point with a specific project path
+pub async fn run_with_project(project_path: &std::path::Path) -> Result<()> {
+    // Initialize error handling
+    color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
+
+    // Initialize logging
+    crate::common::logging::init()?;
+
+    info!("═══════════════════════════════════════════════════════");
+    info!("Flutter Demon starting");
+    info!("Project: {}", project_path.display());
+    info!("═══════════════════════════════════════════════════════");
+
+    // Run the TUI application with Flutter
+    let result = tui::run_with_project(project_path).await;
+
+    if let Err(ref e) = result {
+        error!("Application error: {:?}", e);
+    }
+
+    info!("Flutter Demon exiting");
+    result
+}
