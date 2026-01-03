@@ -296,7 +296,8 @@ fn handle_daemon_event(state: &mut AppState, event: DaemonEvent) {
                 None => (LogLevel::Warning, "Flutter process exited".to_string()),
             };
             state.add_log(LogEntry::new(level, LogSource::App, message));
-            state.phase = AppPhase::Initializing;
+            state.add_log(LogEntry::info(LogSource::App, "Exiting Flutter Demon..."));
+            state.phase = AppPhase::Quitting;
         }
 
         DaemonEvent::SpawnFailed { reason } => {
@@ -483,6 +484,38 @@ mod tests {
         );
 
         assert!(state.logs.len() > initial_logs);
+    }
+
+    #[test]
+    fn test_daemon_exited_sets_quitting_phase() {
+        let mut state = AppState::new();
+        state.phase = AppPhase::Running;
+
+        update(
+            &mut state,
+            Message::Daemon(DaemonEvent::Exited { code: Some(0) }),
+        );
+
+        assert_eq!(state.phase, AppPhase::Quitting);
+        assert!(state.should_quit());
+    }
+
+    #[test]
+    fn test_daemon_exited_with_error_code_sets_quitting() {
+        let mut state = AppState::new();
+        state.phase = AppPhase::Running;
+
+        update(
+            &mut state,
+            Message::Daemon(DaemonEvent::Exited { code: Some(1) }),
+        );
+
+        assert_eq!(state.phase, AppPhase::Quitting);
+        // Verify warning log for non-zero exit code
+        assert!(state
+            .logs
+            .iter()
+            .any(|log| log.message.contains("exited with code 1")));
     }
 
     #[test]

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use crate::app::{handler, message::Message, state::AppState, Task, UpdateAction};
 use crate::common::{prelude::*, signals};
 use crate::core::{AppPhase, DaemonEvent, LogSource};
-use crate::daemon::{CommandSender, DaemonCommand, FlutterProcess, RequestTracker};
+use crate::daemon::{protocol, CommandSender, DaemonCommand, DaemonMessage, FlutterProcess, RequestTracker};
 use crate::watcher::{FileWatcher, WatcherConfig};
 
 /// Run the TUI application with a Flutter project
@@ -80,7 +80,7 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     }
 
     // Run the main loop
-    let result = run_loop(&mut term, &mut state, msg_rx, daemon_rx, msg_tx, cmd_sender);
+    let result = run_loop(&mut term, &mut state, msg_rx, daemon_rx, msg_tx, cmd_sender.clone());
 
     // Stop file watcher
     file_watcher.stop();
@@ -92,7 +92,10 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
         // Draw one more frame to show shutdown message
         let _ = term.draw(|frame| render::view(frame, &mut state));
 
-        if let Err(e) = p.shutdown().await {
+        if let Err(e) = p
+            .shutdown(state.current_app_id.as_deref(), cmd_sender.as_ref())
+            .await
+        {
             error!("Error during Flutter shutdown: {}", e);
         } else {
             info!("Flutter process shut down cleanly");
@@ -135,6 +138,24 @@ fn run_loop(
 
         // Process daemon events (non-blocking)
         while let Ok(event) = daemon_rx.try_recv() {
+            // Route JSON-RPC responses to RequestTracker before processing
+            if let DaemonEvent::Stdout(ref line) = event {
+                if let Some(json) = protocol::strip_brackets(line) {
+                    if let Some(DaemonMessage::Response { id, result, error }) =
+                        DaemonMessage::parse(json)
+                    {
+                        if let Some(ref sender) = cmd_sender {
+                            if let Some(id_num) = id.as_u64() {
+                                let tracker = sender.tracker().clone();
+                                tokio::spawn(async move {
+                                    tracker.handle_response(id_num, result, error).await;
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            // Still pass to handler for logging/other processing
             process_message(state, Message::Daemon(event), &msg_tx, &cmd_sender);
         }
 

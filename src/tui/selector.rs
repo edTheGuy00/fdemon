@@ -1,17 +1,17 @@
 //! Interactive project selector for choosing between multiple Flutter projects
 //!
-//! This module provides a simple terminal-based selector that runs BEFORE
+//! This module provides a Ratatui-based selector that runs BEFORE
 //! the main TUI initializes, allowing users to pick which project to run.
 
-use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
-    style::{Color, Print, ResetColor, SetForegroundColor, Stylize},
-    terminal::{self, ClearType},
-    ExecutableCommand, QueueableCommand,
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use ratatui::{
+    layout::{Alignment, Constraint, Flex, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    Frame,
 };
 
 use crate::common::prelude::*;
@@ -28,26 +28,42 @@ pub enum SelectionResult {
     Cancelled,
 }
 
-/// RAII guard for raw terminal mode
-/// Ensures terminal is restored even on panic
-struct RawModeGuard {
-    was_raw: bool,
+/// State for the selector UI
+struct SelectorState {
+    /// Index of currently selected project
+    selected: usize,
+    /// List widget state
+    list_state: ListState,
 }
 
-impl RawModeGuard {
-    fn new() -> Result<Self> {
-        let was_raw = terminal::is_raw_mode_enabled().unwrap_or(false);
-        if !was_raw {
-            terminal::enable_raw_mode().map_err(|e| Error::terminal(e.to_string()))?;
+impl SelectorState {
+    fn new() -> Self {
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self {
+            selected: 0,
+            list_state,
         }
-        Ok(Self { was_raw })
     }
-}
 
-impl Drop for RawModeGuard {
-    fn drop(&mut self) {
-        if !self.was_raw {
-            let _ = terminal::disable_raw_mode();
+    fn select_next(&mut self, max: usize) {
+        if self.selected < max.saturating_sub(1) {
+            self.selected += 1;
+            self.list_state.select(Some(self.selected));
+        }
+    }
+
+    fn select_previous(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+            self.list_state.select(Some(self.selected));
+        }
+    }
+
+    fn select_index(&mut self, index: usize, max: usize) {
+        if index < max {
+            self.selected = index;
+            self.list_state.select(Some(self.selected));
         }
     }
 }
@@ -66,14 +82,20 @@ impl Drop for RawModeGuard {
 pub fn select_project(projects: &[PathBuf], searched_from: &Path) -> Result<SelectionResult> {
     assert!(!projects.is_empty(), "projects list must not be empty");
 
-    // Enter raw mode with RAII guard
-    let _guard = RawModeGuard::new()?;
+    // Initialize Ratatui terminal
+    let mut terminal = ratatui::init();
+    let mut state = SelectorState::new();
 
-    // Display the menu
-    display_menu(projects, searched_from)?;
+    let display_count = projects.len().min(MAX_DISPLAY_PROJECTS);
 
-    // Wait for valid input
-    loop {
+    // Main event loop
+    let result = loop {
+        // Render the selector
+        terminal
+            .draw(|frame| render_selector(frame, projects, searched_from, &mut state))
+            .map_err(|e| Error::terminal(e.to_string()))?;
+
+        // Handle input
         if event::poll(std::time::Duration::from_millis(100))
             .map_err(|e| Error::terminal(e.to_string()))?
         {
@@ -86,98 +108,158 @@ pub fn select_project(projects: &[PathBuf], searched_from: &Path) -> Result<Sele
             {
                 // Check for cancellation
                 if is_cancel_key(code, modifiers) {
-                    clear_and_reset()?;
-                    return Ok(SelectionResult::Cancelled);
+                    break SelectionResult::Cancelled;
                 }
 
-                // Check for valid number selection
-                if let KeyCode::Char(c) = code {
-                    if let Some(index) = validate_selection(c, projects) {
-                        clear_and_reset()?;
-                        return Ok(SelectionResult::Selected(projects[index].clone()));
+                match code {
+                    // Arrow key navigation
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        state.select_previous();
                     }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        state.select_next(display_count);
+                    }
+                    // Enter to confirm selection
+                    KeyCode::Enter => {
+                        break SelectionResult::Selected(projects[state.selected].clone());
+                    }
+                    // Number key selection
+                    KeyCode::Char(c) => {
+                        if let Some(index) = validate_selection(c, projects) {
+                            state.select_index(index, display_count);
+                            break SelectionResult::Selected(projects[index].clone());
+                        }
+                    }
+                    _ => {}
                 }
-                // Invalid key - ignore and continue waiting
             }
         }
-    }
+    };
+
+    // Restore terminal
+    ratatui::restore();
+
+    Ok(result)
 }
 
-/// Display the project selection menu
-fn display_menu(projects: &[PathBuf], searched_from: &Path) -> Result<()> {
-    let mut stdout = io::stdout();
+/// Render the selector UI
+fn render_selector(
+    frame: &mut Frame,
+    projects: &[PathBuf],
+    searched_from: &Path,
+    state: &mut SelectorState,
+) {
+    let area = frame.area();
 
-    // Clear screen and move to top
-    stdout
-        .execute(terminal::Clear(ClearType::All))
-        .map_err(|e| Error::terminal(e.to_string()))?;
-    stdout
-        .execute(cursor::MoveTo(0, 0))
-        .map_err(|e| Error::terminal(e.to_string()))?;
+    // Calculate modal dimensions
+    let modal_width = (area.width * 70 / 100).clamp(40, 60);
+    let display_count = projects.len().min(MAX_DISPLAY_PROJECTS);
+    let content_height = display_count as u16 + 10; // projects + header/footer/padding
+    let modal_height = content_height.min(area.height.saturating_sub(4));
 
-    // Title
-    stdout.queue(Print("\n  "))?;
-    stdout.queue(SetForegroundColor(Color::Cyan))?;
-    stdout.queue(Print("Flutter Demon".bold()))?;
-    stdout.queue(ResetColor)?;
-    stdout.queue(Print("\n\n"))?;
+    // Center the modal
+    let modal_area = center_rect(modal_width, modal_height, area);
 
-    // Context
-    stdout.queue(Print("  Multiple Flutter projects found in:\n"))?;
-    stdout.queue(Print("  "))?;
-    stdout.queue(SetForegroundColor(Color::DarkGrey))?;
-    stdout.queue(Print(searched_from.display()))?;
-    stdout.queue(ResetColor)?;
-    stdout.queue(Print("\n\n"))?;
+    // Clear the area behind the modal
+    frame.render_widget(Clear, modal_area);
 
-    // Instruction
-    stdout.queue(Print("  Select a project:\n\n"))?;
+    // Outer block with title
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(" Flutter Demon ")
+        .title_style(Style::default().fg(Color::Cyan).bold());
+
+    let inner_area = outer_block.inner(modal_area);
+    frame.render_widget(outer_block, modal_area);
+
+    // Split inner area into sections
+    let chunks = Layout::vertical([
+        Constraint::Length(3), // Header text
+        Constraint::Min(3),    // Project list
+        Constraint::Length(2), // Footer/help
+    ])
+    .split(inner_area);
+
+    // Header - context info
+    let header_text = vec![
+        Line::from("Multiple Flutter projects found in:"),
+        Line::from(Span::styled(
+            truncate_path(searched_from, (modal_width - 4) as usize),
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
+    let header = Paragraph::new(header_text).alignment(Alignment::Center);
+    frame.render_widget(header, chunks[0]);
 
     // Project list
-    let display_count = projects.len().min(MAX_DISPLAY_PROJECTS);
-    for (i, project) in projects.iter().take(display_count).enumerate() {
-        let relative_path = format_relative_path(project, searched_from);
+    let items: Vec<ListItem> = projects
+        .iter()
+        .take(display_count)
+        .enumerate()
+        .map(|(i, p)| {
+            let relative_path = format_relative_path(p, searched_from);
+            let content = Line::from(vec![
+                Span::styled(
+                    format!("[{}] ", i + 1),
+                    Style::default().fg(Color::Yellow).bold(),
+                ),
+                Span::raw(relative_path),
+            ]);
+            ListItem::new(content)
+        })
+        .collect();
 
-        stdout.queue(Print("    "))?;
-        stdout.queue(SetForegroundColor(Color::Yellow))?;
-        stdout.queue(Print(format!("[{}]", i + 1).bold()))?;
-        stdout.queue(ResetColor)?;
-        stdout.queue(Print(format!(" {}\n", relative_path)))?;
-    }
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Select a project ")
+                .title_style(Style::default().fg(Color::White)),
+        )
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("> ");
 
-    // Show truncation message if needed
-    if projects.len() > MAX_DISPLAY_PROJECTS {
-        stdout.queue(Print("\n"))?;
-        stdout.queue(SetForegroundColor(Color::DarkGrey))?;
-        stdout.queue(Print(format!(
-            "    ... and {} more (showing first {})\n",
-            projects.len() - MAX_DISPLAY_PROJECTS,
-            MAX_DISPLAY_PROJECTS
-        )))?;
-        stdout.queue(ResetColor)?;
-    }
+    frame.render_stateful_widget(list, chunks[1], &mut state.list_state);
 
-    // Prompt
-    stdout.queue(Print("\n  "))?;
-    stdout.queue(Print(
-        format!("Enter number (1-{}) or 'q' to quit: ", display_count).bold(),
-    ))?;
-
-    stdout.flush().map_err(|e| Error::terminal(e.to_string()))?;
-
-    Ok(())
+    // Footer - help text
+    let footer_text = Line::from(vec![
+        Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+        Span::raw(" Navigate  "),
+        Span::styled("Enter", Style::default().fg(Color::Yellow)),
+        Span::raw(" Select  "),
+        Span::styled("1-9", Style::default().fg(Color::Yellow)),
+        Span::raw(" Quick select  "),
+        Span::styled("q", Style::default().fg(Color::Yellow)),
+        Span::raw(" Quit"),
+    ]);
+    let footer = Paragraph::new(footer_text).alignment(Alignment::Center);
+    frame.render_widget(footer, chunks[2]);
 }
 
-/// Clear screen and reset cursor position
-fn clear_and_reset() -> Result<()> {
-    let mut stdout = io::stdout();
-    stdout
-        .execute(terminal::Clear(ClearType::All))
-        .map_err(|e| Error::terminal(e.to_string()))?;
-    stdout
-        .execute(cursor::MoveTo(0, 0))
-        .map_err(|e| Error::terminal(e.to_string()))?;
-    Ok(())
+/// Center a rectangle within another rectangle
+fn center_rect(width: u16, height: u16, area: Rect) -> Rect {
+    let vertical = Layout::vertical([Constraint::Length(height)]).flex(Flex::Center);
+    let horizontal = Layout::horizontal([Constraint::Length(width)]).flex(Flex::Center);
+
+    let [area] = vertical.areas(area);
+    let [area] = horizontal.areas(area);
+    area
+}
+
+/// Truncate a path to fit within a given width
+fn truncate_path(path: &Path, max_width: usize) -> String {
+    let s = path.display().to_string();
+    if s.len() <= max_width {
+        s
+    } else {
+        format!("...{}", &s[s.len() - max_width + 3..])
+    }
 }
 
 /// Format a project path relative to the base path
@@ -310,5 +392,47 @@ mod tests {
             SelectionResult::Selected(PathBuf::from("/a")),
             SelectionResult::Cancelled
         );
+    }
+
+    #[test]
+    fn test_truncate_path_short() {
+        let path = Path::new("/short/path");
+        assert_eq!(truncate_path(path, 50), "/short/path");
+    }
+
+    #[test]
+    fn test_truncate_path_long() {
+        let path = Path::new("/very/long/path/that/exceeds/max/width");
+        let truncated = truncate_path(path, 20);
+        assert!(truncated.starts_with("..."));
+        assert!(truncated.len() <= 20);
+    }
+
+    #[test]
+    fn test_selector_state_navigation() {
+        let mut state = SelectorState::new();
+        assert_eq!(state.selected, 0);
+
+        state.select_next(5);
+        assert_eq!(state.selected, 1);
+
+        state.select_next(5);
+        assert_eq!(state.selected, 2);
+
+        state.select_previous();
+        assert_eq!(state.selected, 1);
+
+        state.select_previous();
+        assert_eq!(state.selected, 0);
+
+        // Can't go below 0
+        state.select_previous();
+        assert_eq!(state.selected, 0);
+
+        // Can't go beyond max
+        state.select_index(4, 5);
+        assert_eq!(state.selected, 4);
+        state.select_next(5);
+        assert_eq!(state.selected, 4);
     }
 }

@@ -9,7 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
-use super::commands::{CommandSender, RequestTracker};
+use super::commands::{CommandSender, DaemonCommand, RequestTracker};
 use crate::common::prelude::*;
 use crate::core::DaemonEvent;
 
@@ -155,20 +155,42 @@ impl FlutterProcess {
 
     /// Gracefully shutdown the Flutter process
     ///
-    /// 1. Send daemon.shutdown command
-    /// 2. Wait with timeout
-    /// 3. Force kill if needed
-    pub async fn shutdown(&mut self) -> Result<()> {
+    /// 1. Send app.stop command (if app_id and cmd_sender provided)
+    /// 2. Send daemon.shutdown command
+    /// 3. Wait with timeout
+    /// 4. Force kill if needed
+    pub async fn shutdown(
+        &mut self,
+        app_id: Option<&str>,
+        cmd_sender: Option<&CommandSender>,
+    ) -> Result<()> {
         use std::time::Duration;
         use tokio::time::timeout;
 
         info!("Initiating Flutter process shutdown");
 
-        // Try graceful shutdown first
+        // Step 1: Stop the app if we have an app_id and command sender
+        if let (Some(id), Some(sender)) = (app_id, cmd_sender) {
+            info!("Stopping Flutter app: {}", id);
+            match sender
+                .send_with_timeout(
+                    DaemonCommand::Stop {
+                        app_id: id.to_string(),
+                    },
+                    Duration::from_secs(5),
+                )
+                .await
+            {
+                Ok(_) => info!("App stop command acknowledged"),
+                Err(e) => warn!("App stop command failed (continuing): {}", e),
+            }
+        }
+
+        // Step 2: Send daemon.shutdown command
         let shutdown_cmd = r#"{"method":"daemon.shutdown","id":9999}"#;
         let _ = self.send_json(shutdown_cmd).await;
 
-        // Wait up to 5 seconds for graceful exit
+        // Step 3: Wait up to 5 seconds for graceful exit
         match timeout(Duration::from_secs(5), self.child.wait()).await {
             Ok(Ok(status)) => {
                 info!("Flutter process exited gracefully: {:?}", status);
