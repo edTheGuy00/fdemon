@@ -43,8 +43,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Render modal overlays based on UI mode
     match state.ui_mode {
         UiMode::DeviceSelector | UiMode::Loading => {
-            // Render device selector modal
-            let selector = widgets::DeviceSelector::new(&state.device_selector);
+            // Render device selector modal with session awareness
+            let has_sessions = state.session_manager.has_running_sessions();
+            let selector =
+                widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
             frame.render_widget(selector, area);
         }
         UiMode::ConfirmDialog => {
@@ -55,9 +57,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             }
         }
         UiMode::EmulatorSelector => {
-            // TODO: Render emulator selector (Task 08)
-            // For now, show device selector
-            let selector = widgets::DeviceSelector::new(&state.device_selector);
+            // Render emulator selector with session awareness
+            let has_sessions = state.session_manager.has_running_sessions();
+            let selector =
+                widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
             frame.render_widget(selector, area);
         }
         UiMode::Normal => {

@@ -9,7 +9,7 @@ use ratatui::{
     style::{Color, Modifier, Style},
     symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget},
+    widgets::{Block, Borders, Clear, LineGauge, List, ListItem, Paragraph, Widget},
 };
 
 use crate::daemon::Device;
@@ -20,8 +20,12 @@ const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "�
 /// State for the device selector UI
 #[derive(Debug, Clone, Default)]
 pub struct DeviceSelectorState {
-    /// Available devices
+    /// Available devices (current view)
     pub devices: Vec<Device>,
+
+    /// Cached devices from last successful discovery
+    /// Used for instant display on subsequent opens
+    cached_devices: Option<Vec<Device>>,
 
     /// Currently highlighted index
     pub selected_index: usize,
@@ -29,8 +33,11 @@ pub struct DeviceSelectorState {
     /// Whether the selector is visible
     pub visible: bool,
 
-    /// Loading state (while discovering devices)
+    /// Loading state (while discovering devices, no cache)
     pub loading: bool,
+
+    /// Whether we're refreshing in background (has cache, show header LineGauge)
+    pub refreshing: bool,
 
     /// Error message if device discovery failed
     pub error: Option<String>,
@@ -50,9 +57,11 @@ impl DeviceSelectorState {
     pub fn new() -> Self {
         Self {
             devices: Vec::new(),
+            cached_devices: None,
             selected_index: 0,
             visible: false,
             loading: false,
+            refreshing: false,
             error: None,
             show_emulator_options: true,
             emulator_option_count: 2, // Android + iOS
@@ -71,19 +80,65 @@ impl DeviceSelectorState {
         SPINNER_FRAMES[idx]
     }
 
-    /// Show the selector with loading state
+    /// Calculate indeterminate progress ratio (0.0 to 1.0)
+    /// Creates a bouncing effect from left to right and back
+    pub fn indeterminate_ratio(&self) -> f64 {
+        // Complete cycle every 60 frames (about 1 second at 60fps)
+        let cycle_length = 60;
+        let position = self.animation_frame % cycle_length;
+
+        // First half: 0.0 -> 1.0, Second half: 1.0 -> 0.0
+        let half = cycle_length / 2;
+        if position < half {
+            position as f64 / half as f64
+        } else {
+            (cycle_length - position) as f64 / half as f64
+        }
+    }
+
+    /// Show the selector with loading state (startup, no cache)
     pub fn show_loading(&mut self) {
         self.visible = true;
         self.loading = true;
+        self.refreshing = false;
         self.error = None;
         self.devices.clear();
         self.selected_index = 0;
     }
 
-    /// Update with discovered devices
+    /// Show with cached devices, refresh in background
+    pub fn show_refreshing(&mut self) {
+        self.visible = true;
+
+        // Use cached devices if available
+        if let Some(ref cached) = self.cached_devices {
+            self.devices = cached.clone();
+            self.loading = false;
+            self.refreshing = true;
+        } else {
+            // No cache, fall back to loading
+            self.loading = true;
+            self.refreshing = false;
+        }
+        self.error = None;
+    }
+
+    /// Check if we have cached devices
+    pub fn has_cache(&self) -> bool {
+        self.cached_devices.is_some()
+    }
+
+    /// Clear cache (e.g., after error or explicit refresh request)
+    pub fn clear_cache(&mut self) {
+        self.cached_devices = None;
+    }
+
+    /// Update with discovered devices (updates cache)
     pub fn set_devices(&mut self, devices: Vec<Device>) {
-        self.devices = devices;
+        self.devices = devices.clone();
+        self.cached_devices = Some(devices);
         self.loading = false;
+        self.refreshing = false;
         self.error = None;
         self.selected_index = 0;
     }
@@ -91,6 +146,7 @@ impl DeviceSelectorState {
     /// Set error state
     pub fn set_error(&mut self, error: String) {
         self.loading = false;
+        self.refreshing = false;
         self.error = Some(error);
     }
 
@@ -166,11 +222,25 @@ impl DeviceSelectorState {
 /// Device selector modal widget
 pub struct DeviceSelector<'a> {
     state: &'a DeviceSelectorState,
+    /// Whether there are running sessions (affects Esc behavior)
+    has_running_sessions: bool,
 }
 
 impl<'a> DeviceSelector<'a> {
+    /// Create a new device selector widget
     pub fn new(state: &'a DeviceSelectorState) -> Self {
-        Self { state }
+        Self {
+            state,
+            has_running_sessions: false, // Default for backward compatibility
+        }
+    }
+
+    /// Create with session awareness for conditional Esc display
+    pub fn with_session_state(state: &'a DeviceSelectorState, has_running_sessions: bool) -> Self {
+        Self {
+            state,
+            has_running_sessions,
+        }
     }
 
     /// Calculate the modal area centered in the parent
@@ -289,29 +359,83 @@ impl Widget for DeviceSelector<'_> {
         let inner = block.inner(modal_area);
         block.render(modal_area, buf);
 
-        // Layout: content area + footer
-        let chunks = Layout::vertical([
-            Constraint::Min(3),    // Content
-            Constraint::Length(2), // Footer
-        ])
-        .split(inner);
+        // Determine layout based on state
+        let (content_area, footer_area) = if self.state.refreshing {
+            // Refreshing: header gauge + content + footer
+            let chunks = Layout::vertical([
+                Constraint::Length(1), // Refresh indicator
+                Constraint::Min(3),    // Content (cached devices)
+                Constraint::Length(2), // Footer
+            ])
+            .split(inner);
+
+            // Render refresh indicator in header (yellow LineGauge)
+            let ratio = self.state.indeterminate_ratio();
+            let gauge_area = Rect {
+                x: chunks[0].x.saturating_add(2),
+                y: chunks[0].y,
+                width: chunks[0].width.saturating_sub(4),
+                height: 1,
+            };
+
+            let gauge = LineGauge::default()
+                .ratio(ratio)
+                .filled_style(Style::default().fg(Color::Yellow)) // Yellow for refresh
+                .unfilled_style(Style::default().fg(Color::Black))
+                .filled_symbol(symbols::line::NORMAL.horizontal) // Thinner for header
+                .unfilled_symbol(symbols::line::NORMAL.horizontal);
+
+            gauge.render(gauge_area, buf);
+
+            (chunks[1], chunks[2])
+        } else {
+            // Normal or loading: content + footer
+            let chunks = Layout::vertical([
+                Constraint::Min(3),    // Content
+                Constraint::Length(2), // Footer
+            ])
+            .split(inner);
+
+            (chunks[0], chunks[1])
+        };
 
         // Render content based on state
         if self.state.loading {
-            // Loading state with animated spinner
-            let spinner = self.state.spinner_char();
-            let loading_text = vec![
-                Line::from(""),
-                Line::from(vec![
-                    Span::styled(spinner, Style::default().fg(Color::Cyan)),
-                    Span::styled(
-                        " Discovering devices...",
-                        Style::default().fg(Color::Yellow),
-                    ),
-                ]),
-            ];
-            let loading = Paragraph::new(loading_text).alignment(Alignment::Center);
-            loading.render(chunks[0], buf);
+            // Loading state with animated LineGauge (centered)
+            let loading_chunks = Layout::vertical([
+                Constraint::Length(2), // Spacer
+                Constraint::Length(1), // Text
+                Constraint::Length(1), // Spacer
+                Constraint::Length(1), // Gauge
+                Constraint::Min(0),    // Rest
+            ])
+            .split(content_area);
+
+            // "Discovering devices..." text
+            let loading_text = Paragraph::new("Discovering devices...")
+                .alignment(Alignment::Center)
+                .style(Style::default().fg(Color::Yellow));
+            loading_text.render(loading_chunks[1], buf);
+
+            // Animated LineGauge
+            let ratio = self.state.indeterminate_ratio();
+
+            // Create padded area for the gauge
+            let gauge_area = Rect {
+                x: loading_chunks[3].x.saturating_add(4),
+                y: loading_chunks[3].y,
+                width: loading_chunks[3].width.saturating_sub(8),
+                height: 1,
+            };
+
+            let gauge = LineGauge::default()
+                .ratio(ratio)
+                .filled_style(Style::default().fg(Color::Cyan))
+                .unfilled_style(Style::default().fg(Color::Black))
+                .filled_symbol(symbols::line::THICK.horizontal)
+                .unfilled_symbol(symbols::line::THICK.horizontal);
+
+            gauge.render(gauge_area, buf);
         } else if let Some(ref error) = self.state.error {
             // Error state
             let error_text = Paragraph::new(vec![
@@ -325,7 +449,7 @@ impl Widget for DeviceSelector<'_> {
                 Line::from("Press 'r' to retry or Esc to cancel"),
             ])
             .alignment(Alignment::Center);
-            error_text.render(chunks[0], buf);
+            error_text.render(content_area, buf);
         } else if self.state.is_empty() {
             // No devices and no emulator options
             let no_devices = Paragraph::new(vec![
@@ -336,19 +460,26 @@ impl Widget for DeviceSelector<'_> {
             ])
             .alignment(Alignment::Center)
             .style(Style::default().fg(Color::Yellow));
-            no_devices.render(chunks[0], buf);
+            no_devices.render(content_area, buf);
         } else {
-            // Device list
+            // Device list (either refreshing with cache or ready)
             let items = self.device_items();
             let list = List::new(items);
-            list.render(chunks[0], buf);
+            list.render(content_area, buf);
         }
 
-        // Footer with keybindings
-        let footer = Paragraph::new("↑↓ Navigate  Enter Select  Esc Cancel  r Refresh")
+        // Build footer text conditionally - only show Esc when sessions are running
+        let footer_text = if self.has_running_sessions {
+            "↑↓ Navigate  Enter Select  Esc Cancel  r Refresh"
+        } else {
+            "↑↓ Navigate  Enter Select  r Refresh"
+        };
+
+        // Footer with keybindings - use Gray for visibility on DarkGray background
+        let footer = Paragraph::new(footer_text)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::DarkGray));
-        footer.render(chunks[1], buf);
+            .style(Style::default().fg(Color::Gray));
+        footer.render(footer_area, buf);
     }
 }
 
@@ -717,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn test_device_selector_render_loading_with_spinner() {
+    fn test_device_selector_render_loading_with_linegauge() {
         use ratatui::{backend::TestBackend, Terminal};
 
         let mut state = DeviceSelectorState::new();
@@ -738,7 +869,256 @@ mod tests {
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
         assert!(content.contains("Discovering devices"));
-        // Should contain one of the spinner frames
-        assert!(SPINNER_FRAMES.iter().any(|&f| content.contains(f)));
+        // Should contain gauge characters (thick horizontal lines)
+        assert!(content.contains('━') || content.contains('─'));
+    }
+
+    #[test]
+    fn test_indeterminate_ratio_bounds() {
+        let mut state = DeviceSelectorState::new();
+
+        // Test many frames
+        for _ in 0..200 {
+            state.tick();
+            let ratio = state.indeterminate_ratio();
+
+            // Ratio should always be 0.0 to 1.0
+            assert!(ratio >= 0.0);
+            assert!(ratio <= 1.0);
+        }
+    }
+
+    #[test]
+    fn test_indeterminate_ratio_oscillates() {
+        let mut state = DeviceSelectorState::new();
+
+        let mut ratios = Vec::new();
+        for _ in 0..60 {
+            state.tick();
+            ratios.push(state.indeterminate_ratio());
+        }
+
+        // Should have both increasing and decreasing sections
+        let has_increase = ratios.windows(2).any(|w| w[1] > w[0]);
+        let has_decrease = ratios.windows(2).any(|w| w[1] < w[0]);
+
+        assert!(has_increase);
+        assert!(has_decrease);
+    }
+
+    #[test]
+    fn test_device_selector_with_session_state() {
+        let state = DeviceSelectorState::new();
+
+        // Without sessions
+        let selector = DeviceSelector::with_session_state(&state, false);
+        assert!(!selector.has_running_sessions);
+
+        // With sessions
+        let selector = DeviceSelector::with_session_state(&state, true);
+        assert!(selector.has_running_sessions);
+    }
+
+    #[test]
+    fn test_footer_shows_esc_only_with_sessions() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut state = DeviceSelectorState::new();
+        state.set_devices(vec![]); // Not loading, show footer
+
+        // Without sessions - no Esc
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = DeviceSelector::with_session_state(&state, false);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(!content.contains("Esc Cancel"));
+        assert!(content.contains("Navigate"));
+
+        // With sessions - shows Esc
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = DeviceSelector::with_session_state(&state, true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let content: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+        assert!(content.contains("Esc Cancel"));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 11a: Device Cache Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_initial_has_no_cache() {
+        let state = DeviceSelectorState::new();
+        assert!(!state.has_cache());
+    }
+
+    #[test]
+    fn test_show_loading_no_cache() {
+        let mut state = DeviceSelectorState::new();
+        assert!(!state.has_cache());
+
+        state.show_loading();
+
+        assert!(state.loading);
+        assert!(!state.refreshing);
+        assert!(state.devices.is_empty());
+    }
+
+    #[test]
+    fn test_show_refreshing_with_cache() {
+        let mut state = DeviceSelectorState::new();
+
+        // First discovery
+        let devices = vec![test_device("iphone", "iPhone 15", false)];
+        state.set_devices(devices.clone());
+
+        assert!(state.has_cache());
+        assert!(!state.loading);
+        assert!(!state.refreshing);
+
+        // Subsequent show
+        state.hide();
+        state.show_refreshing();
+
+        assert!(!state.loading);
+        assert!(state.refreshing);
+        assert_eq!(state.devices.len(), 1);
+    }
+
+    #[test]
+    fn test_show_refreshing_falls_back_to_loading() {
+        let mut state = DeviceSelectorState::new();
+        assert!(!state.has_cache());
+
+        // No cache, should fall back to loading
+        state.show_refreshing();
+
+        assert!(state.loading);
+        assert!(!state.refreshing);
+    }
+
+    #[test]
+    fn test_set_devices_updates_cache() {
+        let mut state = DeviceSelectorState::new();
+
+        let devices = vec![
+            test_device("device1", "Device 1", false),
+            test_device("device2", "Device 2", true),
+        ];
+        state.set_devices(devices);
+
+        assert!(state.has_cache());
+        assert_eq!(state.devices.len(), 2);
+
+        // Hide and show again
+        state.hide();
+        state.show_refreshing();
+
+        // Should have cached devices
+        assert_eq!(state.devices.len(), 2);
+    }
+
+    #[test]
+    fn test_refresh_updates_device_list() {
+        let mut state = DeviceSelectorState::new();
+
+        // Initial devices
+        state.set_devices(vec![test_device("device1", "Device 1", false)]);
+        state.hide();
+        state.show_refreshing();
+
+        assert!(state.refreshing);
+        assert_eq!(state.devices.len(), 1);
+
+        // Discovery completes with new devices
+        state.set_devices(vec![
+            test_device("device1", "Device 1", false),
+            test_device("device2", "Device 2 (new)", true),
+        ]);
+
+        assert!(!state.refreshing);
+        assert_eq!(state.devices.len(), 2);
+    }
+
+    #[test]
+    fn test_clear_cache() {
+        let mut state = DeviceSelectorState::new();
+        state.set_devices(vec![test_device("device1", "Device 1", false)]);
+
+        assert!(state.has_cache());
+
+        state.clear_cache();
+
+        assert!(!state.has_cache());
+    }
+
+    #[test]
+    fn test_set_error_clears_refreshing() {
+        let mut state = DeviceSelectorState::new();
+        state.set_devices(vec![test_device("d1", "D1", false)]);
+        state.hide();
+        state.show_refreshing();
+
+        assert!(state.refreshing);
+
+        state.set_error("Discovery failed".to_string());
+
+        assert!(!state.refreshing);
+        assert!(!state.loading);
+        assert!(state.error.is_some());
+    }
+
+    #[test]
+    fn test_render_refreshing_shows_header_gauge_and_devices() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut state = DeviceSelectorState::new();
+        state.set_devices(vec![test_device("iphone", "iPhone 15", false)]);
+        state.hide();
+        state.show_refreshing();
+        state.tick(); // Advance animation
+
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = DeviceSelector::new(&state);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Should show device name
+        assert!(content.contains("iPhone 15"));
+
+        // Should have gauge characters (from header indicator)
+        assert!(content.contains('━') || content.contains('─') || content.contains('─'));
     }
 }

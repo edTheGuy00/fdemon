@@ -1,6 +1,6 @@
 ## Task: LineGauge Progress Indicator for Device Selector
 
-**Objective**: Replace the text spinner in the device selector loading state with an animated `LineGauge` widget, providing a more polished visual indication of device discovery progress.
+**Objective**: Replace the text spinner in the device selector loading state with an animated `LineGauge` widget, fix footer visibility, and conditionally display the Esc keybinding based on whether sessions are running.
 
 **Depends on**: None (standalone UI improvement)
 
@@ -8,46 +8,40 @@
 
 ### Scope
 
-- `src/tui/widgets/device_selector.rs`: Replace spinner with LineGauge
+- `src/tui/widgets/device_selector.rs`: Replace spinner with LineGauge, fix footer, add conditional Esc
 
 ---
 
-### Current State
+### Current Issues
 
+#### Issue 1: Text Spinner Instead of LineGauge
 ```rust
-// In src/tui/widgets/device_selector.rs
-
 const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+```
+**Problem:** The spinner is a simple text animation. Task 09-refined-layout.md specifies using an animated LineGauge for a more polished look.
 
-impl DeviceSelectorState {
-    pub fn tick(&mut self) {
-        self.animation_frame = self.animation_frame.wrapping_add(1);
+#### Issue 2: Footer Not Visible
+```rust
+// Footer with keybindings
+let footer = Paragraph::new("↑↓ Navigate  Enter Select  Esc Cancel  r Refresh")
+    .alignment(Alignment::Center)
+    .style(Style::default().fg(Color::DarkGray));  // <-- DarkGray on DarkGray background!
+footer.render(chunks[1], buf);
+```
+**Problem:** The footer text uses `Color::DarkGray` but the modal background is also `Color::DarkGray`, making the footer invisible.
+
+#### Issue 3: Esc Shows When It Does Nothing
+```rust
+// In handler.rs - Esc only works when sessions exist
+Message::HideDeviceSelector => {
+    if state.session_manager.has_running_sessions() {
+        state.device_selector.hide();
+        state.ui_mode = UiMode::Normal;
     }
-
-    pub fn spinner_char(&self) -> &'static str {
-        SPINNER_FRAMES[self.animation_frame as usize % SPINNER_FRAMES.len()]
-    }
-}
-
-// In Widget impl - render loading state
-if self.state.loading {
-    let spinner = self.state.spinner_char();
-    let loading_text = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled(spinner, Style::default().fg(Color::Cyan)),
-            Span::styled(
-                " Discovering devices...",
-                Style::default().fg(Color::Yellow),
-            ),
-        ]),
-    ];
-    let loading = Paragraph::new(loading_text).alignment(Alignment::Center);
-    loading.render(chunks[0], buf);
+    UpdateResult::none()
 }
 ```
-
-**Problem:** The spinner is a simple text animation. Task 09-refined-layout.md specifies using an animated LineGauge for a more polished look.
+**Problem:** The footer always shows "Esc Cancel" even on startup when there are no sessions and Esc does nothing. This is confusing UX.
 
 ---
 
@@ -84,26 +78,76 @@ impl DeviceSelectorState {
             (cycle_length - position) as f64 / half as f64
         }
     }
-    
-    /// Calculate progress for a "moving window" effect
-    /// Shows a small filled section that moves across the gauge
-    pub fn sliding_window_ratio(&self) -> (f64, f64) {
-        // Window width as fraction of total
-        let window_width = 0.2;
-        
-        // Position cycles 0.0 -> 1.0 -> 0.0
-        let base = self.indeterminate_ratio();
-        
-        // Start and end of the filled section
-        let start = base * (1.0 - window_width);
-        let end = start + window_width;
-        
-        (start, end)
+}
+```
+
+#### 3. Update DeviceSelector Widget to Accept Session State
+
+```rust
+/// Device selector modal widget
+pub struct DeviceSelector<'a> {
+    state: &'a DeviceSelectorState,
+    /// Whether there are running sessions (affects Esc behavior)
+    has_running_sessions: bool,
+}
+
+impl<'a> DeviceSelector<'a> {
+    /// Create a new device selector widget
+    pub fn new(state: &'a DeviceSelectorState) -> Self {
+        Self { 
+            state,
+            has_running_sessions: false,  // Default for backward compatibility
+        }
+    }
+
+    /// Create with session awareness for conditional Esc display
+    pub fn with_session_state(state: &'a DeviceSelectorState, has_running_sessions: bool) -> Self {
+        Self {
+            state,
+            has_running_sessions,
+        }
     }
 }
 ```
 
-#### 3. Update Loading State Rendering
+#### 4. Update render.rs to Pass Session State
+
+```rust
+// In src/tui/render.rs
+UiMode::DeviceSelector | UiMode::Loading => {
+    let has_sessions = state.session_manager.has_running_sessions();
+    let selector = widgets::DeviceSelector::with_session_state(
+        &state.device_selector,
+        has_sessions,
+    );
+    frame.render_widget(selector, area);
+}
+```
+
+#### 5. Fix Footer Visibility and Conditional Esc
+
+```rust
+impl Widget for DeviceSelector<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // ... existing modal setup ...
+
+        // Build footer text conditionally
+        let footer_text = if self.has_running_sessions {
+            "↑↓ Navigate  Enter Select  Esc Cancel  r Refresh"
+        } else {
+            "↑↓ Navigate  Enter Select  r Refresh"
+        };
+
+        // Footer with keybindings - use visible color!
+        let footer = Paragraph::new(footer_text)
+            .alignment(Alignment::Center)
+            .style(Style::default().fg(Color::Gray));  // Gray on DarkGray = visible!
+        footer.render(chunks[1], buf);
+    }
+}
+```
+
+#### 6. Update Loading State with LineGauge
 
 ```rust
 impl Widget for DeviceSelector<'_> {
@@ -112,116 +156,43 @@ impl Widget for DeviceSelector<'_> {
 
         if self.state.loading {
             // Loading state with animated LineGauge
-            let chunks = Layout::vertical([
+            let loading_chunks = Layout::vertical([
                 Constraint::Length(2), // Spacer
                 Constraint::Length(1), // Text
                 Constraint::Length(1), // Spacer  
                 Constraint::Length(1), // Gauge
                 Constraint::Min(0),    // Rest
             ])
-            .split(inner);
+            .split(chunks[0]);
 
             // "Discovering devices..." text
             let loading_text = Paragraph::new("Discovering devices...")
                 .alignment(Alignment::Center)
                 .style(Style::default().fg(Color::Yellow));
-            loading_text.render(chunks[1], buf);
+            loading_text.render(loading_chunks[1], buf);
 
             // Animated LineGauge
             let ratio = self.state.indeterminate_ratio();
             
             // Create padded area for the gauge
             let gauge_area = Rect {
-                x: chunks[3].x + 4,
-                y: chunks[3].y,
-                width: chunks[3].width.saturating_sub(8),
+                x: loading_chunks[3].x + 4,
+                y: loading_chunks[3].y,
+                width: loading_chunks[3].width.saturating_sub(8),
                 height: 1,
             };
 
             let gauge = LineGauge::default()
                 .ratio(ratio)
                 .filled_style(Style::default().fg(Color::Cyan))
-                .unfilled_style(Style::default().fg(Color::DarkGray))
+                .unfilled_style(Style::default().fg(Color::Black))
                 .line_set(symbols::line::THICK);
 
             gauge.render(gauge_area, buf);
         }
         
-        // ... rest of rendering ...
+        // ... rest of rendering (error, empty, device list) ...
     }
-}
-```
-
-#### 4. Alternative: Custom Sliding Window LineGauge
-
-For a more sophisticated "scanning" effect:
-
-```rust
-fn render_sliding_gauge(state: &DeviceSelectorState, area: Rect, buf: &mut Buffer) {
-    // Create a custom sliding window effect
-    let width = area.width as usize;
-    let window_width = (width as f64 * 0.3) as usize; // 30% window
-    
-    // Calculate window position
-    let cycle_length = 80;
-    let frame = state.animation_frame as usize % cycle_length;
-    let position = if frame < cycle_length / 2 {
-        // Moving right
-        (frame as f64 / (cycle_length / 2) as f64 * (width - window_width) as f64) as usize
-    } else {
-        // Moving left
-        let reverse_frame = cycle_length - frame;
-        (reverse_frame as f64 / (cycle_length / 2) as f64 * (width - window_width) as f64) as usize
-    };
-    
-    // Build the gauge string manually
-    let mut gauge_str = String::with_capacity(width);
-    for i in 0..width {
-        if i >= position && i < position + window_width {
-            gauge_str.push('━'); // Filled
-        } else {
-            gauge_str.push('─'); // Unfilled
-        }
-    }
-    
-    let line = Line::from(vec![
-        Span::styled(
-            &gauge_str[..position.min(width)],
-            Style::default().fg(Color::DarkGray),
-        ),
-        Span::styled(
-            &gauge_str[position..position.saturating_add(window_width).min(width)],
-            Style::default().fg(Color::Cyan),
-        ),
-        Span::styled(
-            &gauge_str[position.saturating_add(window_width).min(width)..],
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]);
-    
-    buf.set_line(area.x, area.y, &line, area.width);
-}
-```
-
-#### 5. Update Tick Handling
-
-Ensure `tick()` is called regularly for smooth animation:
-
-```rust
-// In the main event loop (tui/event.rs or similar)
-// The tick should happen at ~60fps for smooth animation
-
-// In tui/mod.rs - run_loop
-while !state.should_quit() {
-    // ... existing message/event handling ...
-    
-    // Tick animation state
-    if state.ui_mode == UiMode::DeviceSelector || state.ui_mode == UiMode::Loading {
-        state.device_selector.tick();
-    }
-    
-    // Render
-    terminal.draw(|frame| render::view(frame, state))?;
 }
 ```
 
@@ -229,6 +200,7 @@ while !state.should_quit() {
 
 ### Visual Design
 
+#### Loading State (Startup - No Sessions)
 ```
 ┌─────────────────────────────────────────────┐
 │           Select Target Device              │
@@ -240,18 +212,35 @@ while !state.should_quit() {
 │                                             │
 │                                             │
 ├─────────────────────────────────────────────┤
-│   ↑↓ Navigate  Enter Select  Esc Cancel    │
+│      ↑↓ Navigate  Enter Select  r Refresh  │
 └─────────────────────────────────────────────┘
+Note: No "Esc Cancel" shown - there's nothing to cancel to
+```
+
+#### Loading State (Has Running Sessions)
+```
+┌─────────────────────────────────────────────┐
+│           Select Target Device              │
+├─────────────────────────────────────────────┤
+│                                             │
+│          Discovering devices...             │
+│                                             │
+│      ────────━━━━━━━━━━━────────           │
+│                                             │
+│                                             │
+├─────────────────────────────────────────────┤
+│  ↑↓ Navigate  Enter Select  Esc Cancel  r  │
+└─────────────────────────────────────────────┘
+Note: "Esc Cancel" shown - user can return to normal mode
+```
 
 Animation: The cyan "━━━━" section slides left-right-left
-```
 
 ### Animation Timing
 
 | Parameter | Value | Notes |
 |-----------|-------|-------|
-| Cycle length | 60-80 frames | ~1-1.3 seconds per full cycle |
-| Window width | 20-30% | Visible sliding section |
+| Cycle length | 60 frames | ~1 second per full cycle |
 | Tick rate | ~60fps | Match terminal refresh rate |
 
 ---
@@ -260,11 +249,14 @@ Animation: The cyan "━━━━" section slides left-right-left
 
 1. [ ] LineGauge widget used instead of text spinner
 2. [ ] Animation shows smooth left-to-right-to-left motion
-3. [ ] Cyan filled section on dark gray unfilled background
+3. [ ] Cyan filled section on dark/black unfilled background
 4. [ ] "Discovering devices..." text displayed above gauge
 5. [ ] Animation frame advances with each tick
 6. [ ] Gauge properly centered in modal
-7. [ ] No performance issues from animation
+7. [ ] **Footer text is visible** (not DarkGray on DarkGray)
+8. [ ] **"Esc Cancel" only shown when sessions are running**
+9. [ ] DeviceSelector widget accepts session state parameter
+10. [ ] render.rs updated to pass session state
 
 ---
 
@@ -305,6 +297,19 @@ fn test_indeterminate_ratio_oscillates() {
 }
 
 #[test]
+fn test_device_selector_with_session_state() {
+    let state = DeviceSelectorState::new();
+    
+    // Without sessions
+    let selector = DeviceSelector::with_session_state(&state, false);
+    assert!(!selector.has_running_sessions);
+    
+    // With sessions
+    let selector = DeviceSelector::with_session_state(&state, true);
+    assert!(selector.has_running_sessions);
+}
+
+#[test]
 fn test_loading_with_linegauge_renders() {
     use ratatui::{backend::TestBackend, Terminal};
     
@@ -332,36 +337,34 @@ fn test_loading_with_linegauge_renders() {
 }
 
 #[test]
-fn test_gauge_area_calculation() {
-    let inner = Rect::new(5, 5, 60, 10);
+fn test_footer_shows_esc_only_with_sessions() {
+    use ratatui::{backend::TestBackend, Terminal};
     
-    // Gauge should be horizontally padded
-    let gauge_area = Rect {
-        x: inner.x + 4,
-        y: inner.y + 3,
-        width: inner.width.saturating_sub(8),
-        height: 1,
-    };
-    
-    assert_eq!(gauge_area.x, 9);
-    assert_eq!(gauge_area.width, 52);
-}
-
-#[test]
-fn test_animation_smooth_at_boundaries() {
     let mut state = DeviceSelectorState::new();
+    state.set_devices(vec![]); // Not loading, show footer
     
-    // Test frame wraparound
-    state.animation_frame = u8::MAX - 1;
-    state.tick();
-    assert_eq!(state.animation_frame, u8::MAX);
+    // Without sessions - no Esc
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| {
+        let selector = DeviceSelector::with_session_state(&state, false);
+        f.render_widget(selector, f.area());
+    }).unwrap();
     
-    state.tick();
-    assert_eq!(state.animation_frame, 0); // Wrapped
+    let content: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(!content.contains("Esc Cancel"));
+    assert!(content.contains("Navigate"));
     
-    // Ratio should still be valid
-    let ratio = state.indeterminate_ratio();
-    assert!(ratio >= 0.0 && ratio <= 1.0);
+    // With sessions - shows Esc
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|f| {
+        let selector = DeviceSelector::with_session_state(&state, true);
+        f.render_widget(selector, f.area());
+    }).unwrap();
+    
+    let content: String = terminal.backend().buffer().content.iter().map(|c| c.symbol()).collect();
+    assert!(content.contains("Esc Cancel"));
 }
 ```
 
@@ -369,16 +372,66 @@ fn test_animation_smooth_at_boundaries() {
 
 ### Implementation Notes
 
-1. **LineGauge vs Custom**: LineGauge is simpler but less flexible. For a sliding window effect, custom rendering may be needed.
+1. **Footer Color**: Changed from `Color::DarkGray` to `Color::Gray` for visibility against DarkGray background.
 
-2. **Line Sets**: Use `symbols::line::THICK` for bold lines or `symbols::line::NORMAL` for thinner appearance.
+2. **Session State**: The DeviceSelector now needs to know about session state. Using a builder pattern (`with_session_state`) maintains backward compatibility.
 
-3. **Performance**: Animation runs during loading only - no impact on normal operation.
+3. **LineGauge vs Custom**: LineGauge is simpler but less flexible. The bouncing animation is a common UX pattern for indeterminate progress.
 
-4. **Fallback**: If terminal doesn't support unicode, LineGauge degrades gracefully.
+4. **Line Sets**: Use `symbols::line::THICK` for bold lines.
 
 5. **Color Choices**:
    - Cyan: Active/filled (matches header color scheme)
-   - DarkGray: Unfilled (subtle background)
+   - Black: Unfilled (subtle background, visible contrast)
+   - Gray: Footer text (visible on DarkGray)
 
-6. **Tick Frequency**: The tick happens in the main event loop. If using event polling with timeout, the animation rate depends on the poll timeout.
+6. **Esc UX**: The handler already correctly ignores Esc when no sessions exist. This task just improves the footer to not mislead users.
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+### Files Modified
+
+- `src/tui/widgets/device_selector.rs` - Added LineGauge import, `indeterminate_ratio()` method, `has_running_sessions` field, `with_session_state()` constructor, updated loading render to use LineGauge, fixed footer color to Gray, added conditional Esc display, added 5 new tests
+- `src/tui/render.rs` - Updated to pass session state via `with_session_state()` for DeviceSelector and EmulatorSelector modes
+- `src/app/handler.rs` - Updated `Message::Tick` handler to call `device_selector.tick()` when visible and loading, added 3 new tests
+- `src/tui/event.rs` - Changed poll timeout to generate `Message::Tick` instead of `None` for animation updates
+
+### Notable Decisions/Tradeoffs
+
+1. **LineGauge symbols**: Used `filled_symbol()` and `unfilled_symbol()` instead of deprecated `line_set()` method
+2. **Bouncing animation**: 60-frame cycle (1 second at 60fps) creates smooth oscillation between 0.0 and 1.0 ratio
+3. **Color choices**: Cyan filled / Black unfilled for gauge; Gray footer text on DarkGray background for visibility
+4. **Backward compatibility**: `DeviceSelector::new()` preserved with default `has_running_sessions: false`
+
+### Testing Performed
+
+```
+cargo check - PASS (no warnings)
+cargo test --lib device_selector - PASS (30 tests)
+cargo test --lib - PASS (440 tests)
+cargo clippy - PASS (only pre-existing warning in tui/mod.rs:390)
+cargo fmt - PASS
+```
+
+### New Tests Added
+
+In `device_selector.rs`:
+- `test_indeterminate_ratio_bounds` - Verifies ratio stays in 0.0-1.0 range
+- `test_indeterminate_ratio_oscillates` - Verifies bouncing behavior
+- `test_device_selector_with_session_state` - Verifies constructor sets field correctly
+- `test_device_selector_render_loading_with_linegauge` - Verifies gauge characters render
+- `test_footer_shows_esc_only_with_sessions` - Verifies conditional Esc display
+
+In `handler.rs`:
+- `test_tick_advances_device_selector_animation` - Verifies tick advances animation when loading
+- `test_tick_does_not_advance_when_not_loading` - Verifies tick is no-op when not loading
+- `test_tick_does_not_advance_when_hidden` - Verifies tick is no-op when hidden
+
+### Risks/Limitations
+
+- Animation speed tied to tick rate; if tick rate changes, gauge animation speed changes
+- LineGauge requires 1 row height minimum; gauge won't render if layout is too constrained

@@ -16,6 +16,7 @@ pub fn poll() -> Result<Option<Message>> {
             _ => Ok(None),
         }
     } else {
-        Ok(None)
+        // Generate tick on timeout for animations
+        Ok(Some(Message::Tick))
     }
 }

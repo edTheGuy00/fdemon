@@ -158,7 +158,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        Message::Tick => UpdateResult::none(),
+        Message::Tick => {
+            // Advance device selector animation when visible and loading or refreshing
+            if state.device_selector.visible
+                && (state.device_selector.loading || state.device_selector.refreshing)
+            {
+                state.device_selector.tick();
+            }
+            UpdateResult::none()
+        }
 
         // ─────────────────────────────────────────────────────────
         // Control Messages
@@ -360,7 +368,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::ShowDeviceSelector => {
             state.ui_mode = UiMode::DeviceSelector;
-            state.device_selector.show_loading();
+
+            // Use cache if available for instant display, otherwise show loading
+            if state.device_selector.has_cache() {
+                state.device_selector.show_refreshing();
+            } else {
+                state.device_selector.show_loading();
+            }
+
+            // Always trigger discovery to get fresh data
             UpdateResult::action(UpdateAction::DiscoverDevices)
         }
 
@@ -3177,5 +3193,126 @@ mod tests {
 
         // Ctrl+C should still force quit even in dialog
         assert!(matches!(result, Some(Message::Quit)));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 11: Device Selector Animation Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_tick_advances_device_selector_animation() {
+        let mut state = AppState::new();
+        state.device_selector.show_loading();
+
+        // Initial frame
+        let initial_frame = state.device_selector.animation_frame;
+
+        // Tick should advance the animation
+        update(&mut state, Message::Tick);
+        assert_eq!(state.device_selector.animation_frame, initial_frame + 1);
+
+        // Multiple ticks should continue advancing
+        update(&mut state, Message::Tick);
+        update(&mut state, Message::Tick);
+        assert_eq!(state.device_selector.animation_frame, initial_frame + 3);
+    }
+
+    #[test]
+    fn test_tick_does_not_advance_when_not_loading() {
+        let mut state = AppState::new();
+
+        // Device selector visible but not loading
+        state.device_selector.show();
+        let initial_frame = state.device_selector.animation_frame;
+
+        update(&mut state, Message::Tick);
+
+        // Frame should NOT advance when not loading
+        assert_eq!(state.device_selector.animation_frame, initial_frame);
+    }
+
+    #[test]
+    fn test_tick_does_not_advance_when_hidden() {
+        let mut state = AppState::new();
+
+        // Device selector hidden
+        state.device_selector.hide();
+        state.device_selector.loading = true; // Loading but hidden
+        let initial_frame = state.device_selector.animation_frame;
+
+        update(&mut state, Message::Tick);
+
+        // Frame should NOT advance when hidden
+        assert_eq!(state.device_selector.animation_frame, initial_frame);
+    }
+
+    #[test]
+    fn test_tick_advances_when_refreshing() {
+        let mut state = AppState::new();
+
+        // Set up cache first
+        state.device_selector.set_devices(vec![Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }]);
+
+        // Show refreshing mode
+        state.device_selector.show_refreshing();
+
+        assert!(state.device_selector.refreshing);
+        assert!(!state.device_selector.loading);
+
+        let initial_frame = state.device_selector.animation_frame;
+
+        update(&mut state, Message::Tick);
+
+        // Frame SHOULD advance when refreshing
+        assert_eq!(state.device_selector.animation_frame, initial_frame + 1);
+    }
+
+    #[test]
+    fn test_show_device_selector_uses_cache() {
+        let mut state = AppState::new();
+
+        // First show - no cache
+        assert!(!state.device_selector.has_cache());
+
+        let result = update(&mut state, Message::ShowDeviceSelector);
+
+        // Should be in loading mode
+        assert!(state.device_selector.loading);
+        assert!(!state.device_selector.refreshing);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+
+        // Simulate discovery completing
+        let devices = vec![Device {
+            id: "d1".to_string(),
+            name: "Device 1".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }];
+        state.device_selector.set_devices(devices);
+
+        // Hide and show again
+        state.device_selector.hide();
+        state.ui_mode = UiMode::Normal;
+
+        let result = update(&mut state, Message::ShowDeviceSelector);
+
+        // Should be in refreshing mode (using cache)
+        assert!(!state.device_selector.loading);
+        assert!(state.device_selector.refreshing);
+        assert_eq!(state.device_selector.devices.len(), 1);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
     }
 }

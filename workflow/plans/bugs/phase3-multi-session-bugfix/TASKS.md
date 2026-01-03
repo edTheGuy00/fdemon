@@ -8,7 +8,12 @@ This bugfix addresses 4 issues identified after Phase 3 completion:
 3. Quit doesn't terminate all running sessions properly
 4. `tui/mod.rs` is too large and needs refactoring
 
-Total: **12 tasks** across 3 phases
+Additional fixes added:
+5. Device selector footer not visible (color issue)
+6. Esc keybinding shown when it does nothing (no sessions running)
+7. Device discovery is slow, needs caching for instant display on subsequent opens
+
+Total: **13 tasks** across 3 phases
 
 ---
 
@@ -49,9 +54,12 @@ Phase 2: Quit & Close Session Behavior (Bug 3)
                 └── depends on Phase 1 completion
 
 
-Phase 3: UI Polish (Bugs 1 & 4) - Independent
-─────────────────────────────────────────────
-11-linegauge-progress (standalone)
+Phase 3: UI Polish (Bugs 1, 4, 5, 6, 7) - Independent
+─────────────────────────────────────────────────────
+11-linegauge-progress (standalone - also fixes footer & Esc display)
+           │
+           ▼
+11a-device-cache (depends on 11 for LineGauge)
 
 12-refactor-tui-mod (standalone)
 ```
@@ -72,7 +80,8 @@ Phase 3: UI Polish (Bugs 1 & 4) - Independent
 | 08 | [q-key-request-quit](tasks/08-q-key-request-quit.md) | ✅ Done | - | `handler.rs` |
 | 09 | [confirm-dialog-ui](tasks/09-confirm-dialog-ui.md) | ✅ Done | 08 | `render.rs`, `widgets/` |
 | 10 | [multi-session-shutdown](tasks/10-multi-session-shutdown.md) | ✅ Done | Phase 1, 09 | `mod.rs`, `handler.rs` |
-| 11 | [linegauge-progress](tasks/11-linegauge-progress.md) | Not Started | - | `widgets/device_selector.rs` |
+| 11 | [linegauge-progress](tasks/11-linegauge-progress.md) | ✅ Done | - | `widgets/device_selector.rs`, `render.rs` |
+| 11a | [device-cache](tasks/11a-device-cache.md) | ✅ Done | 11 | `widgets/device_selector.rs`, `handler.rs` |
 | 12 | [refactor-tui-mod](tasks/12-refactor-tui-mod.md) | Not Started | - | `tui/mod.rs` → multiple files |
 
 ---
@@ -103,7 +112,8 @@ Phase 3: UI Polish (Bugs 1 & 4) - Independent
 
 | Task | Summary |
 |------|---------|
-| 11 | Replace text spinner with animated `LineGauge` widget using indeterminate bouncing animation |
+| 11 | Replace text spinner with animated `LineGauge` widget, fix footer visibility (DarkGray on DarkGray), conditionally show Esc keybinding only when sessions are running |
+| 11a | Cache discovered devices for instant display on subsequent device selector opens; show header LineGauge refresh indicator while updating cached list |
 | 12 | Split `tui/mod.rs` into `runner.rs`, `actions.rs`, `spawn.rs` modules |
 
 ---
@@ -129,7 +139,8 @@ Phase 3: UI Polish (Bugs 1 & 4) - Independent
 **Checkpoint:** Clean shutdown of all sessions, no orphans
 
 ### Week 2-3: Polish (Phase 3)
-11. Task 11: LineGauge animation (2 hours)
+11. Task 11: LineGauge animation + footer fixes (3 hours)
+11a. Task 11a: Device caching with refresh indicator (3 hours)
 12. Task 12: Refactor tui/mod.rs (3 hours)
 
 **Checkpoint:** All tests pass, clippy clean
@@ -149,6 +160,8 @@ Phase 3: UI Polish (Bugs 1 & 4) - Independent
 - Event routing by app_id/device_id
 - Confirm dialog state transitions
 - LineGauge animation frame calculation
+- Device cache population and retrieval
+- Footer text conditional on session state
 
 ### Manual Testing
 - Visual inspection of LineGauge animation smoothness
