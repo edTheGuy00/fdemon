@@ -333,3 +333,55 @@ Nice to have, but not required for this task. Can be added later.
 | `src/tui/actions.rs` | Handle new `ReloadAllSessions` action |
 | `src/tui/process.rs` | Dispatch `ReloadAllSessions` with session info |
 | `src/app/handler/tests.rs` | Add tests for multi-session reload |
+| `src/daemon/commands.rs` | Add `new_for_test()` helper for tests |
+
+---
+
+## Completion Summary
+
+**Status: ✅ Done**
+
+### Files Modified
+
+- `src/app/handler/mod.rs` - Added `UpdateAction::ReloadAllSessions { sessions: Vec<(SessionId, String)> }` variant
+- `src/app/handler/update.rs` - Modified `AutoReloadTriggered` handler to reload all sessions
+- `src/app/session_manager.rs` - Added `reloadable_sessions()` and `any_session_busy()` helper methods
+- `src/tui/actions.rs` - Handle `ReloadAllSessions` action by spawning reload tasks for each session
+- `src/tui/process.rs` - Added `get_session_cmd_senders_for_action()` to collect cmd_senders for all sessions
+- `src/daemon/commands.rs` - Added `CommandSender::new_for_test()` helper for unit tests
+- `src/app/handler/tests.rs` - Added 12 new tests covering multi-session reload behavior
+
+### Notable Decisions/Tradeoffs
+
+1. **Skip ALL sessions if ANY is busy**: Chose Option 1 from the design document to keep all devices in sync. If any session is busy (reloading), the auto-reload is skipped entirely.
+
+2. **Session info passed in action**: The `ReloadAllSessions` action carries `Vec<(SessionId, String)>` (session_id, app_id pairs). The cmd_senders are looked up in `process.rs` where we have access to `AppState`.
+
+3. **Backward compatibility**: Kept legacy fallback path for cases where no sessions exist but `current_app_id` is set (for backward compatibility with non-multi-session mode).
+
+4. **Log messages**: Single-session auto-reload shows "File change detected, reloading..." while multi-session shows "File change detected, reloading X sessions..." to make the count visible.
+
+### Testing Performed
+
+- `cargo check` - ✅ Passes
+- `cargo test` - ✅ All 459 tests pass (including 12 new multi-session reload tests)
+- `cargo clippy` - ✅ No warnings
+- `cargo fmt` - ✅ Code formatted
+
+### New Tests Added
+
+- `test_auto_reload_triggers_all_sessions` - Verifies all sessions get reload action
+- `test_auto_reload_skips_all_when_any_busy` - Verifies busy session skips all
+- `test_auto_reload_skips_sessions_without_app_id` - Verifies non-started sessions skipped
+- `test_auto_reload_marks_sessions_as_reloading` - Verifies sessions marked as Reloading
+- `test_manual_reload_still_uses_selected_session` - Verifies `r` key only reloads selected
+- `test_auto_reload_logs_session_count` - Verifies log shows session count
+- `test_auto_reload_single_session_logs_without_count` - Verifies single session log message
+- `test_reloadable_sessions_helper` - Tests the helper method
+- `test_any_session_busy` - Tests busy detection
+- `test_auto_reload_falls_back_to_legacy` - Tests backward compatibility path
+
+### Risks/Limitations
+
+- Manual testing with actual Flutter devices not performed (as per plan guidelines)
+- The parallel reload spawning doesn't have explicit coordination - each session reloads independently

@@ -274,6 +274,16 @@ impl CommandSender {
         Self { stdin_tx, tracker }
     }
 
+    /// Create a CommandSender for testing (uses a dummy channel)
+    #[cfg(test)]
+    pub fn new_for_test() -> Self {
+        let (tx, _rx) = mpsc::channel(1);
+        Self {
+            stdin_tx: tx,
+            tracker: Arc::new(RequestTracker::default()),
+        }
+    }
+
     /// Send a command and wait for response
     pub async fn send(&self, command: DaemonCommand) -> Result<CommandResponse> {
         self.send_with_timeout(command, Duration::from_secs(30))

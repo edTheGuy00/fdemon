@@ -25,11 +25,27 @@ impl<'a> StatusBar<'a> {
 
     /// Get the state indicator with appropriate styling
     fn state_indicator(&self) -> Span<'static> {
-        match self.state.phase {
+        // Use selected session's phase if available, otherwise fall back to global phase
+        let phase = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.phase)
+            .unwrap_or(self.state.phase);
+
+        // Check if selected session is busy (for Running state)
+        let session_busy = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.is_busy())
+            .unwrap_or(false);
+
+        match phase {
             AppPhase::Initializing => {
                 Span::styled("○ Starting", Style::default().fg(Color::DarkGray))
             }
-            AppPhase::Running if self.state.is_busy() => Span::styled(
+            AppPhase::Running if session_busy || self.state.is_busy() => Span::styled(
                 "↻ Reloading",
                 Style::default()
                     .fg(Color::Yellow)
@@ -216,9 +232,25 @@ impl Widget for StatusBarCompact<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
+        // Use selected session's phase if available, otherwise fall back to global phase
+        let phase = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.phase)
+            .unwrap_or(self.state.phase);
+
+        // Check if selected session is busy
+        let session_busy = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.is_busy())
+            .unwrap_or(false);
+
         // Compact: just state and timer
-        let (state_char, color) = match self.state.phase {
-            AppPhase::Running if self.state.is_busy() => ("↻", Color::Yellow),
+        let (state_char, color) = match phase {
+            AppPhase::Running if session_busy || self.state.is_busy() => ("↻", Color::Yellow),
             AppPhase::Running => ("●", Color::Green),
             AppPhase::Reloading => ("↻", Color::Yellow),
             _ => ("○", Color::DarkGray),
@@ -459,6 +491,11 @@ mod tests {
             .unwrap();
         state.session_manager.select_by_id(id);
 
+        // Mark session as running (status bar now reads session phase)
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.mark_started("app-1".to_string());
+        }
+
         let bar = StatusBar::new(&state);
         let segments = bar.build_segments();
 
@@ -488,6 +525,11 @@ mod tests {
             .create_session_with_config(&device, config)
             .unwrap();
         state.session_manager.select_by_id(id);
+
+        // Mark session as running (status bar now reads session phase)
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.mark_started("app-1".to_string());
+        }
 
         terminal
             .draw(|frame| {

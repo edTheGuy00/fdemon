@@ -46,7 +46,7 @@ Note: Task 04 should be done LAST as it is the highest risk
 | 02 | [status-bar-config-info](tasks/02-status-bar-config-info.md) | ✅ Done | - | 2 hours | `status_bar.rs`, `state.rs` |
 | 03 | [shutdown-optimization](tasks/03-shutdown-optimization.md) | ✅ Done | - | 3 hours | `process.rs`, `actions.rs`, `startup.rs` |
 | 04 | [legacy-code-removal](tasks/04-legacy-code-removal.md) | Not Started | 01, 02, 03, 05 | 6 hours | Multiple (see task) |
-| 05 | [watcher-all-sessions-reload](tasks/05-watcher-all-sessions-reload.md) | Not Started | - | 2 hours | `update.rs`, `actions.rs`, `session_manager.rs` |
+| 05 | [watcher-all-sessions-reload](tasks/05-watcher-all-sessions-reload.md) | ✅ Done | - | 2 hours | `update.rs`, `actions.rs`, `session_manager.rs` |
 
 ---
 
@@ -195,6 +195,6 @@ These can be done in parallel or sequence as preferred.
 | 01 - Persistent Session Header | ✅ Done | Implemented single-session subheader display |
 | 02 - Status Bar Config Info | ✅ Done | Replaced device info with build config |
 | 03 - Shutdown Optimization | ✅ Done | Reduced timeouts, added fast exit path |
-| 04 - Legacy Code Removal | Not Started | Do last |
-| 05 - Watcher Multi-Session Reload | Not Started | |
-| **Overall Progress** | **60%** | 3/5 tasks complete |
+| 04 - Legacy Code Removal | Not Started | Do last - all dependencies now complete |
+| 05 - Watcher Multi-Session Reload | ✅ Done | Auto-reload triggers all sessions, added ReloadAllSessions action |
+| **Overall Progress** | **80%** | 4/5 tasks complete |

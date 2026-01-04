@@ -96,17 +96,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Control Messages
         // ─────────────────────────────────────────────────────────
         Message::HotReload => {
-            if state.is_busy() {
-                return UpdateResult::none();
-            }
-
             // Try to get session info from selected session
-            if let Some(handle) = state.session_manager.selected() {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                // Check if THIS session is busy (not global state)
+                if handle.session.is_busy() {
+                    return UpdateResult::none();
+                }
                 if let Some(app_id) = handle.session.app_id.clone() {
                     if handle.cmd_sender.is_some() {
                         let session_id = handle.session.id;
-                        state.start_reload();
-                        state.log_info(LogSource::App, "Reloading...");
+                        // Mark the SESSION as reloading (not global state)
+                        handle.session.start_reload();
+                        handle.session.add_log(crate::core::LogEntry::info(
+                            LogSource::App,
+                            "Reloading...".to_string(),
+                        ));
                         return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
                             session_id,
                             app_id,
@@ -115,7 +119,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
             }
 
-            // Fall back to legacy global app_id
+            // Fall back to legacy global app_id (uses global state)
+            if state.is_busy() {
+                return UpdateResult::none();
+            }
             if let Some(app_id) = state.current_app_id.clone() {
                 // Use session_id 0 for legacy mode (will use global cmd_sender)
                 state.start_reload();
@@ -131,17 +138,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::HotRestart => {
-            if state.is_busy() {
-                return UpdateResult::none();
-            }
-
             // Try to get session info from selected session
-            if let Some(handle) = state.session_manager.selected() {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                // Check if THIS session is busy (not global state)
+                if handle.session.is_busy() {
+                    return UpdateResult::none();
+                }
                 if let Some(app_id) = handle.session.app_id.clone() {
                     if handle.cmd_sender.is_some() {
                         let session_id = handle.session.id;
-                        state.start_reload();
-                        state.log_info(LogSource::App, "Restarting...");
+                        // Mark the SESSION as reloading (not global state)
+                        handle.session.start_reload();
+                        handle.session.add_log(crate::core::LogEntry::info(
+                            LogSource::App,
+                            "Restarting...".to_string(),
+                        ));
                         return UpdateResult::action(UpdateAction::SpawnTask(Task::Restart {
                             session_id,
                             app_id,
@@ -150,7 +161,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
             }
 
-            // Fall back to legacy global app_id
+            // Fall back to legacy global app_id (uses global state)
+            if state.is_busy() {
+                return UpdateResult::none();
+            }
             if let Some(app_id) = state.current_app_id.clone() {
                 state.start_reload();
                 state.log_info(LogSource::App, "Restarting (legacy mode)...");
@@ -217,6 +231,33 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // Session-specific reload completion (for multi-session auto-reload)
+        Message::SessionReloadCompleted {
+            session_id,
+            time_ms,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.complete_reload();
+                handle.session.add_log(crate::core::LogEntry::info(
+                    LogSource::App,
+                    format!("Reloaded in {}ms", time_ms),
+                ));
+            }
+            UpdateResult::none()
+        }
+
+        Message::SessionReloadFailed { session_id, reason } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.phase = AppPhase::Running;
+                handle.session.reload_start_time = None;
+                handle.session.add_log(crate::core::LogEntry::error(
+                    LogSource::App,
+                    format!("Reload failed: {}", reason),
+                ));
+            }
+            UpdateResult::none()
+        }
+
         Message::RestartStarted => {
             state.start_reload();
             UpdateResult::none()
@@ -235,46 +276,81 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // Session-specific restart completion (for multi-session mode)
+        Message::SessionRestartCompleted { session_id } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.complete_reload();
+                handle.session.add_log(crate::core::LogEntry::info(
+                    LogSource::App,
+                    "Restarted".to_string(),
+                ));
+            }
+            UpdateResult::none()
+        }
+
+        Message::SessionRestartFailed { session_id, reason } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.phase = AppPhase::Running;
+                handle.session.reload_start_time = None;
+                handle.session.add_log(crate::core::LogEntry::error(
+                    LogSource::App,
+                    format!("Restart failed: {}", reason),
+                ));
+            }
+            UpdateResult::none()
+        }
+
         // ─────────────────────────────────────────────────────────
         // File Watcher Messages
         // ─────────────────────────────────────────────────────────
         Message::AutoReloadTriggered => {
-            // Only auto-reload if app is running and not already reloading
-            if !state.is_busy() {
-                // Try to get session info from selected session first
-                if let Some(handle) = state.session_manager.selected() {
-                    if let Some(app_id) = handle.session.app_id.clone() {
-                        if handle.cmd_sender.is_some() {
-                            let session_id = handle.session.id;
-                            state
-                                .log_info(LogSource::Watcher, "File change detected, reloading...");
-                            state.start_reload();
-                            return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
-                                session_id,
-                                app_id,
-                            }));
-                        }
+            // Skip if any session is busy (to keep all devices in sync)
+            if state.session_manager.any_session_busy() {
+                tracing::debug!("Auto-reload skipped: some session(s) already reloading");
+                return UpdateResult::none();
+            }
+
+            // Get all sessions that can be reloaded
+            let reloadable = state.session_manager.reloadable_sessions();
+
+            if !reloadable.is_empty() {
+                // Mark all reloadable sessions as reloading
+                for (session_id, _) in &reloadable {
+                    if let Some(handle) = state.session_manager.get_mut(*session_id) {
+                        handle.session.start_reload();
                     }
                 }
 
-                // Fall back to legacy global app_id
+                let count = reloadable.len();
+                if count == 1 {
+                    state.log_info(LogSource::Watcher, "File change detected, reloading...");
+                } else {
+                    state.log_info(
+                        LogSource::Watcher,
+                        format!("File change detected, reloading {} sessions...", count),
+                    );
+                }
+
+                return UpdateResult::action(UpdateAction::ReloadAllSessions {
+                    sessions: reloadable,
+                });
+            }
+
+            // Fall back to legacy global app_id (for backward compatibility)
+            if !state.is_busy() {
                 if let Some(app_id) = state.current_app_id.clone() {
                     state.log_info(LogSource::Watcher, "File change detected, reloading...");
                     state.start_reload();
-                    UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
+                    return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
                         session_id: 0,
                         app_id,
-                    }))
-                } else {
-                    // App not running, just log it
-                    tracing::debug!("Auto-reload skipped: no app running");
-                    UpdateResult::none()
+                    }));
                 }
-            } else {
-                // Already reloading, skip
-                tracing::debug!("Auto-reload skipped: already reloading");
-                UpdateResult::none()
             }
+
+            // No running sessions
+            tracing::debug!("Auto-reload skipped: no running sessions");
+            UpdateResult::none()
         }
 
         Message::FilesChanged { count } => {

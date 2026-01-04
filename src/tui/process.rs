@@ -43,6 +43,8 @@ pub fn process_message(
 
         // Handle any action
         if let Some(action) = result.action {
+            // For ReloadAllSessions, collect cmd_senders for all sessions
+            let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
 
             handle_action(
@@ -50,6 +52,7 @@ pub fn process_message(
                 msg_tx.clone(),
                 cmd_sender.clone(),
                 session_cmd_sender,
+                session_senders,
                 session_tasks.clone(),
                 shutdown_rx.clone(),
                 project_path,
@@ -126,4 +129,25 @@ fn get_session_cmd_sender(action: &UpdateAction, state: &AppState) -> Option<Com
         }
     }
     None
+}
+
+/// Get command senders for all sessions in ReloadAllSessions action
+fn get_session_cmd_senders_for_action(
+    action: &UpdateAction,
+    state: &AppState,
+) -> Vec<(SessionId, String, CommandSender)> {
+    if let UpdateAction::ReloadAllSessions { sessions } = action {
+        sessions
+            .iter()
+            .filter_map(|(session_id, app_id)| {
+                state
+                    .session_manager
+                    .get(*session_id)
+                    .and_then(|h| h.cmd_sender.clone())
+                    .map(|sender| (*session_id, app_id.clone(), sender))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    }
 }

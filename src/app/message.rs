@@ -70,12 +70,26 @@ pub enum Message {
     ReloadCompleted { time_ms: u64 },
     /// Reload failed
     ReloadFailed { reason: String },
+    /// Session-specific reload completed (for multi-session auto-reload)
+    SessionReloadCompleted { session_id: SessionId, time_ms: u64 },
+    /// Session-specific reload failed (for multi-session auto-reload)
+    SessionReloadFailed {
+        session_id: SessionId,
+        reason: String,
+    },
     /// Restart started
     RestartStarted,
     /// Restart completed
     RestartCompleted,
     /// Restart failed
     RestartFailed { reason: String },
+    /// Session-specific restart completed (for multi-session mode)
+    SessionRestartCompleted { session_id: SessionId },
+    /// Session-specific restart failed (for multi-session mode)
+    SessionRestartFailed {
+        session_id: SessionId,
+        reason: String,
+    },
 
     // ─────────────────────────────────────────────────────────
     // File Watcher Messages

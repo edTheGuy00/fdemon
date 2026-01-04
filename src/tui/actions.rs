@@ -23,11 +23,13 @@ use super::spawn;
 pub type SessionTaskMap = Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>;
 
 /// Execute an action by spawning a background task
+#[allow(clippy::too_many_arguments)]
 pub fn handle_action(
     action: UpdateAction,
     msg_tx: mpsc::Sender<Message>,
     cmd_sender: Arc<Mutex<Option<CommandSender>>>,
     session_cmd_sender: Option<CommandSender>,
+    session_senders: Vec<(SessionId, String, CommandSender)>,
     session_tasks: SessionTaskMap,
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
@@ -46,6 +48,17 @@ pub fn handle_action(
                 tokio::spawn(async move {
                     let sender = cmd_sender_clone.lock().await.clone();
                     execute_task(task, msg_tx, sender).await;
+                });
+            }
+        }
+
+        UpdateAction::ReloadAllSessions { sessions: _ } => {
+            // Spawn reload tasks for each session
+            for (session_id, app_id, sender) in session_senders {
+                let msg_tx_clone = msg_tx.clone();
+                let task = Task::Reload { session_id, app_id };
+                tokio::spawn(async move {
+                    execute_task(task, msg_tx_clone, Some(sender)).await;
                 });
             }
         }
@@ -305,23 +318,40 @@ pub async fn execute_task(
                 Ok(response) => {
                     if response.success {
                         let time_ms = start.elapsed().as_millis() as u64;
-                        let _ = msg_tx.send(Message::ReloadCompleted { time_ms }).await;
+                        // Use session-specific message for multi-session mode (session_id > 0)
+                        // Use legacy message for single-session mode (session_id == 0)
+                        if session_id > 0 {
+                            let _ = msg_tx
+                                .send(Message::SessionReloadCompleted {
+                                    session_id,
+                                    time_ms,
+                                })
+                                .await;
+                        } else {
+                            let _ = msg_tx.send(Message::ReloadCompleted { time_ms }).await;
+                        }
                     } else {
-                        let _ = msg_tx
-                            .send(Message::ReloadFailed {
-                                reason: response
-                                    .error
-                                    .unwrap_or_else(|| "Unknown error".to_string()),
-                            })
-                            .await;
+                        let reason = response
+                            .error
+                            .unwrap_or_else(|| "Unknown error".to_string());
+                        if session_id > 0 {
+                            let _ = msg_tx
+                                .send(Message::SessionReloadFailed { session_id, reason })
+                                .await;
+                        } else {
+                            let _ = msg_tx.send(Message::ReloadFailed { reason }).await;
+                        }
                     }
                 }
                 Err(e) => {
-                    let _ = msg_tx
-                        .send(Message::ReloadFailed {
-                            reason: e.to_string(),
-                        })
-                        .await;
+                    let reason = e.to_string();
+                    if session_id > 0 {
+                        let _ = msg_tx
+                            .send(Message::SessionReloadFailed { session_id, reason })
+                            .await;
+                    } else {
+                        let _ = msg_tx.send(Message::ReloadFailed { reason }).await;
+                    }
                 }
             }
         }
@@ -333,23 +363,36 @@ pub async fn execute_task(
             match sender.send(DaemonCommand::Restart { app_id }).await {
                 Ok(response) => {
                     if response.success {
-                        let _ = msg_tx.send(Message::RestartCompleted).await;
+                        // Use session-specific message for multi-session mode (session_id > 0)
+                        if session_id > 0 {
+                            let _ = msg_tx
+                                .send(Message::SessionRestartCompleted { session_id })
+                                .await;
+                        } else {
+                            let _ = msg_tx.send(Message::RestartCompleted).await;
+                        }
                     } else {
-                        let _ = msg_tx
-                            .send(Message::RestartFailed {
-                                reason: response
-                                    .error
-                                    .unwrap_or_else(|| "Unknown error".to_string()),
-                            })
-                            .await;
+                        let reason = response
+                            .error
+                            .unwrap_or_else(|| "Unknown error".to_string());
+                        if session_id > 0 {
+                            let _ = msg_tx
+                                .send(Message::SessionRestartFailed { session_id, reason })
+                                .await;
+                        } else {
+                            let _ = msg_tx.send(Message::RestartFailed { reason }).await;
+                        }
                     }
                 }
                 Err(e) => {
-                    let _ = msg_tx
-                        .send(Message::RestartFailed {
-                            reason: e.to_string(),
-                        })
-                        .await;
+                    let reason = e.to_string();
+                    if session_id > 0 {
+                        let _ = msg_tx
+                            .send(Message::SessionRestartFailed { session_id, reason })
+                            .await;
+                    } else {
+                        let _ = msg_tx.send(Message::RestartFailed { reason }).await;
+                    }
                 }
             }
         }

@@ -55,6 +55,10 @@ pub enum UpdateAction {
         /// Optional launch configuration
         config: Option<Box<LaunchConfig>>,
     },
+
+    /// Reload all running sessions (file watcher auto-reload)
+    /// Contains list of (session_id, app_id) pairs to reload
+    ReloadAllSessions { sessions: Vec<(SessionId, String)> },
 }
 
 /// Background tasks to spawn

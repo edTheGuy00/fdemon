@@ -1398,3 +1398,290 @@ fn test_stop_app_without_app_id_shows_error() {
         .iter()
         .any(|e| e.message.contains("No app running")));
 }
+
+// ─────────────────────────────────────────────────────────
+// Multi-session auto-reload tests (Task 05)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_auto_reload_triggers_all_sessions() {
+    let mut state = AppState::new();
+
+    // Create two running sessions with app_ids and fake cmd_senders
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Mark sessions as running with app_ids
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    if let Some(handle) = state.session_manager.get_mut(session2) {
+        handle.session.mark_started("app-2".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+
+    // Trigger auto-reload
+    let result = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should return ReloadAllSessions action
+    if let Some(UpdateAction::ReloadAllSessions { sessions }) = result.action {
+        assert_eq!(sessions.len(), 2);
+        // Should contain both sessions
+        assert!(sessions.iter().any(|(id, _)| *id == session1));
+        assert!(sessions.iter().any(|(id, _)| *id == session2));
+    } else {
+        panic!("Expected ReloadAllSessions action, got {:?}", result.action);
+    }
+}
+
+#[test]
+fn test_auto_reload_skips_all_when_any_busy() {
+    let mut state = AppState::new();
+
+    // Create two sessions
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Mark both as running
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    if let Some(handle) = state.session_manager.get_mut(session2) {
+        handle.session.mark_started("app-2".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+        // Make session 2 busy (reloading)
+        handle.session.start_reload();
+    }
+
+    // Trigger auto-reload
+    let result = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should skip all since one is busy
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_auto_reload_skips_sessions_without_app_id() {
+    let mut state = AppState::new();
+
+    // Create two sessions, only one running
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let _session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Only session 1 has app_id
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    // Session 2 is still initializing (no app_id)
+
+    // Trigger auto-reload
+    let result = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should only reload session 1
+    if let Some(UpdateAction::ReloadAllSessions { sessions }) = result.action {
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].0, session1);
+    } else {
+        panic!("Expected ReloadAllSessions action");
+    }
+}
+
+#[test]
+fn test_auto_reload_marks_sessions_as_reloading() {
+    let mut state = AppState::new();
+
+    // Create one session
+    let device = test_device("device-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+
+    // Session should be Running initially
+    assert_eq!(
+        state.session_manager.get(session_id).unwrap().session.phase,
+        AppPhase::Running
+    );
+
+    // Trigger auto-reload
+    let _ = update(&mut state, Message::AutoReloadTriggered);
+
+    // Session should now be Reloading
+    assert_eq!(
+        state.session_manager.get(session_id).unwrap().session.phase,
+        AppPhase::Reloading
+    );
+}
+
+#[test]
+fn test_manual_reload_still_uses_selected_session() {
+    let mut state = AppState::new();
+
+    // Create two sessions
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Mark both as running with app_ids
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    if let Some(handle) = state.session_manager.get_mut(session2) {
+        handle.session.mark_started("app-2".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+
+    // Select session 2
+    state.session_manager.select_by_id(session2);
+
+    // Manual reload (r key)
+    let result = update(&mut state, Message::HotReload);
+
+    // Should only reload session 2 (the selected one)
+    if let Some(UpdateAction::SpawnTask(Task::Reload { session_id, app_id })) = result.action {
+        assert_eq!(session_id, session2);
+        assert_eq!(app_id, "app-2");
+    } else {
+        panic!("Expected SpawnTask Reload action");
+    }
+}
+
+#[test]
+fn test_auto_reload_logs_session_count() {
+    let mut state = AppState::new();
+
+    // Create two sessions
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Mark both as running
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    if let Some(handle) = state.session_manager.get_mut(session2) {
+        handle.session.mark_started("app-2".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+
+    // Trigger auto-reload
+    let _ = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should log with session count
+    assert!(state
+        .logs
+        .iter()
+        .any(|e| e.message.contains("reloading 2 sessions")));
+}
+
+#[test]
+fn test_auto_reload_single_session_logs_without_count() {
+    let mut state = AppState::new();
+
+    // Create one session
+    let device = test_device("device-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+
+    // Trigger auto-reload
+    let _ = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should log simple message (no count)
+    assert!(state
+        .logs
+        .iter()
+        .any(|e| e.message.contains("reloading...")));
+    // Should NOT contain session count
+    assert!(!state.logs.iter().any(|e| e.message.contains("1 sessions")));
+}
+
+#[test]
+fn test_reloadable_sessions_helper() {
+    let mut state = AppState::new();
+
+    // Create 3 sessions
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let device3 = test_device("device-3", "Device 3");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let session2 = state.session_manager.create_session(&device2).unwrap();
+    let _session3 = state.session_manager.create_session(&device3).unwrap();
+
+    // Session 1: running, has cmd_sender
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.mark_started("app-1".to_string());
+        handle.cmd_sender = Some(crate::daemon::CommandSender::new_for_test());
+    }
+    // Session 2: running, NO cmd_sender
+    if let Some(handle) = state.session_manager.get_mut(session2) {
+        handle.session.mark_started("app-2".to_string());
+        // No cmd_sender
+    }
+    // Session 3: not running (no app_id)
+
+    let reloadable = state.session_manager.reloadable_sessions();
+
+    // Only session 1 should be reloadable
+    assert_eq!(reloadable.len(), 1);
+    assert_eq!(reloadable[0].0, session1);
+    assert_eq!(reloadable[0].1, "app-1");
+}
+
+#[test]
+fn test_any_session_busy() {
+    let mut state = AppState::new();
+
+    let device1 = test_device("device-1", "Device 1");
+    let device2 = test_device("device-2", "Device 2");
+    let session1 = state.session_manager.create_session(&device1).unwrap();
+    let _session2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Neither busy initially
+    assert!(!state.session_manager.any_session_busy());
+
+    // Mark session 1 as reloading
+    if let Some(handle) = state.session_manager.get_mut(session1) {
+        handle.session.start_reload();
+    }
+
+    // Should detect busy
+    assert!(state.session_manager.any_session_busy());
+}
+
+#[test]
+fn test_auto_reload_falls_back_to_legacy() {
+    let mut state = AppState::new();
+
+    // No sessions, but legacy app_id is set
+    state.current_app_id = Some("legacy-app".to_string());
+    state.phase = AppPhase::Running;
+
+    let result = update(&mut state, Message::AutoReloadTriggered);
+
+    // Should fall back to legacy single-session reload
+    if let Some(UpdateAction::SpawnTask(Task::Reload { session_id, app_id })) = result.action {
+        assert_eq!(session_id, 0); // Legacy mode uses session_id 0
+        assert_eq!(app_id, "legacy-app");
+    } else {
+        panic!("Expected SpawnTask Reload action");
+    }
+}

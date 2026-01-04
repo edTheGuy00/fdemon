@@ -270,6 +270,32 @@ impl SessionManager {
             .collect()
     }
 
+    /// Get sessions that can be reloaded (have app_id and cmd_sender, not busy)
+    /// Returns (session_id, app_id) pairs
+    pub fn reloadable_sessions(&self) -> Vec<(SessionId, String)> {
+        self.sessions
+            .values()
+            .filter_map(|h| {
+                // Skip busy sessions
+                if h.session.is_busy() {
+                    return None;
+                }
+                // Need both app_id and cmd_sender
+                let app_id = h.session.app_id.clone()?;
+                if h.cmd_sender.is_some() {
+                    Some((h.session.id, app_id))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Check if any session is busy (reloading)
+    pub fn any_session_busy(&self) -> bool {
+        self.sessions.values().any(|h| h.session.is_busy())
+    }
+
     /// Attach a Flutter process to a session
     pub fn attach_process(&mut self, session_id: SessionId, process: FlutterProcess) -> bool {
         if let Some(handle) = self.sessions.get_mut(&session_id) {
