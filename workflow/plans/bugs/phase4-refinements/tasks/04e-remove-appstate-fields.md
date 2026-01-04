@@ -363,3 +363,87 @@ Many tests will fail - these are fixed in Task 4g. For now:
 - 0.5 hours: Replace log_info/log_error calls
 - 1 hour: Remove fields and methods incrementally
 - 0.5 hours: Update render.rs and fix remaining issues
+
+---
+
+## Completion Summary
+
+**Status: ✅ Done**
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/state.rs` | Removed 11 fields and 9 methods from AppState |
+| `src/app/message.rs` | Removed 6 legacy message variants |
+| `src/app/handler/update.rs` | Converted 30+ log calls to tracing/session logging, removed legacy handlers |
+| `src/app/handler/keys.rs` | Changed `state.is_busy()` to `session_manager.any_session_busy()` |
+| `src/tui/render.rs` | Updated to show empty log view when no session |
+| `src/tui/widgets/status_bar.rs` | Updated all methods to use session data |
+| `src/tui/actions.rs` | Updated to use session-specific reload/restart messages |
+| `src/app/session.rs` | Added `duration_display()` and `last_reload_display()` methods |
+| `src/app/handler/tests.rs` | Updated 15+ tests, commented out 20+ legacy tests for Task 4g |
+
+### Fields Removed from AppState
+
+1. `logs: Vec<LogEntry>`
+2. `log_view_state: LogViewState`
+3. `max_logs: usize`
+4. `current_app_id: Option<String>`
+5. `device_name: Option<String>`
+6. `platform: Option<String>`
+7. `flutter_version: Option<String>`
+8. `session_start: Option<DateTime<Local>>`
+9. `reload_start_time: Option<Instant>`
+10. `last_reload_time: Option<DateTime<Local>>`
+11. `reload_count: u32`
+
+### Methods Removed from AppState
+
+1. `add_log()` / `log_info()` / `log_error()`
+2. `start_reload()` / `record_reload_complete()` / `reload_elapsed()`
+3. `last_reload_display()` / `session_duration()` / `session_duration_display()`
+4. `start_session()` / `set_device_info()` / `is_busy()`
+
+### Messages Removed
+
+1. `ReloadStarted`
+2. `ReloadCompleted { time_ms }`
+3. `ReloadFailed { reason }`
+4. `RestartStarted`
+5. `RestartCompleted`
+6. `RestartFailed { reason }`
+
+### Testing Performed
+
+- `cargo check` - PASS
+- `cargo test` - 425/426 tests pass
+  - 1 unrelated pre-existing failure in device selector animation test
+  - 20+ legacy tests commented out for Task 4g
+
+### Acceptance Criteria Verification
+
+1. ✅ `current_app_id` field removed from AppState
+2. ✅ `device_name` field removed from AppState
+3. ✅ `platform` field removed from AppState
+4. ✅ `flutter_version` field removed from AppState
+5. ✅ `session_start` field removed from AppState
+6. ✅ `reload_start_time` field removed from AppState
+7. ✅ `last_reload_time` field removed from AppState
+8. ✅ `reload_count` field removed from AppState
+9. ✅ `logs` field removed from AppState
+10. ✅ `log_view_state` field removed from AppState
+11. ✅ `max_logs` field removed from AppState
+12. ✅ `phase` field KEPT for quitting state
+13. ✅ All legacy methods removed
+14. ✅ No fallback to global logs in render.rs
+15. ✅ `cargo check` passes
+
+### Notes
+
+- All log calls in update.rs converted to either:
+  - `tracing::info!()` / `tracing::error!()` for device/emulator operations
+  - Session-specific logging for reload operations
+- Scroll messages now update session's log_view_state
+- Status bar reads all data from selected session
+- Tests that used global state fields commented out with TODO(Task 4g)

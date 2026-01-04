@@ -5,9 +5,7 @@ use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, LogSource};
 
 use super::{
-    daemon::{handle_daemon_event, handle_session_daemon_event},
-    keys::handle_key,
-    Task, UpdateAction, UpdateResult,
+    daemon::handle_session_daemon_event, keys::handle_key, Task, UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state
@@ -42,43 +40,50 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
-        Message::Daemon(event) => {
-            handle_daemon_event(state, event);
-            UpdateResult::none()
-        }
-
         Message::SessionDaemon { session_id, event } => {
             handle_session_daemon_event(state, session_id, event);
             UpdateResult::none()
         }
 
         Message::ScrollUp => {
-            state.log_view_state.scroll_up(1);
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_up(1);
+            }
             UpdateResult::none()
         }
 
         Message::ScrollDown => {
-            state.log_view_state.scroll_down(1);
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_down(1);
+            }
             UpdateResult::none()
         }
 
         Message::ScrollToTop => {
-            state.log_view_state.scroll_to_top();
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_to_top();
+            }
             UpdateResult::none()
         }
 
         Message::ScrollToBottom => {
-            state.log_view_state.scroll_to_bottom();
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_to_bottom();
+            }
             UpdateResult::none()
         }
 
         Message::PageUp => {
-            state.log_view_state.page_up();
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.page_up();
+            }
             UpdateResult::none()
         }
 
         Message::PageDown => {
-            state.log_view_state.page_down();
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.page_down();
+            }
             UpdateResult::none()
         }
 
@@ -98,14 +103,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::HotReload => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy (not global state)
+                // Check if THIS session is busy
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
                 if let Some(app_id) = handle.session.app_id.clone() {
                     if handle.cmd_sender.is_some() {
                         let session_id = handle.session.id;
-                        // Mark the SESSION as reloading (not global state)
                         handle.session.start_reload();
                         handle.session.add_log(crate::core::LogEntry::info(
                             LogSource::App,
@@ -117,37 +121,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         }));
                     }
                 }
+                // No app running - log error to session
+                handle.session.add_log(crate::core::LogEntry::error(
+                    LogSource::App,
+                    "No app running to reload".to_string(),
+                ));
             }
-
-            // Fall back to legacy global app_id (uses global state)
-            if state.is_busy() {
-                return UpdateResult::none();
-            }
-            if let Some(app_id) = state.current_app_id.clone() {
-                // Use session_id 0 for legacy mode (will use global cmd_sender)
-                state.start_reload();
-                state.log_info(LogSource::App, "Reloading (legacy mode)...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
-                    session_id: 0,
-                    app_id,
-                }))
-            } else {
-                state.log_error(LogSource::App, "No app running to reload");
-                UpdateResult::none()
-            }
+            UpdateResult::none()
         }
 
         Message::HotRestart => {
             // Try to get session info from selected session
             if let Some(handle) = state.session_manager.selected_mut() {
-                // Check if THIS session is busy (not global state)
+                // Check if THIS session is busy
                 if handle.session.is_busy() {
                     return UpdateResult::none();
                 }
                 if let Some(app_id) = handle.session.app_id.clone() {
                     if handle.cmd_sender.is_some() {
                         let session_id = handle.session.id;
-                        // Mark the SESSION as reloading (not global state)
                         handle.session.start_reload();
                         handle.session.add_log(crate::core::LogEntry::info(
                             LogSource::App,
@@ -159,79 +151,47 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         }));
                     }
                 }
+                // No app running - log error to session
+                handle.session.add_log(crate::core::LogEntry::error(
+                    LogSource::App,
+                    "No app running to restart".to_string(),
+                ));
             }
-
-            // Fall back to legacy global app_id (uses global state)
-            if state.is_busy() {
-                return UpdateResult::none();
-            }
-            if let Some(app_id) = state.current_app_id.clone() {
-                state.start_reload();
-                state.log_info(LogSource::App, "Restarting (legacy mode)...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Restart {
-                    session_id: 0,
-                    app_id,
-                }))
-            } else {
-                state.log_error(LogSource::App, "No app running to restart");
-                UpdateResult::none()
-            }
+            UpdateResult::none()
         }
 
         Message::StopApp => {
-            if state.is_busy() {
-                return UpdateResult::none();
-            }
-
             // Try to get session info from selected session
-            if let Some(handle) = state.session_manager.selected() {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                // Check if THIS session is busy
+                if handle.session.is_busy() {
+                    return UpdateResult::none();
+                }
                 if let Some(app_id) = handle.session.app_id.clone() {
                     if handle.cmd_sender.is_some() {
                         let session_id = handle.session.id;
-                        state.log_info(LogSource::App, "Stopping app...");
+                        handle.session.add_log(crate::core::LogEntry::info(
+                            LogSource::App,
+                            "Stopping app...".to_string(),
+                        ));
                         return UpdateResult::action(UpdateAction::SpawnTask(Task::Stop {
                             session_id,
                             app_id,
                         }));
                     }
                 }
+                // No app running - log error to session
+                handle.session.add_log(crate::core::LogEntry::error(
+                    LogSource::App,
+                    "No app running to stop".to_string(),
+                ));
             }
-
-            // Fall back to legacy global app_id
-            if let Some(app_id) = state.current_app_id.clone() {
-                state.log_info(LogSource::App, "Stopping app (legacy mode)...");
-                UpdateResult::action(UpdateAction::SpawnTask(Task::Stop {
-                    session_id: 0,
-                    app_id,
-                }))
-            } else {
-                state.log_error(LogSource::App, "No app running to stop");
-                UpdateResult::none()
-            }
+            UpdateResult::none()
         }
 
         // ─────────────────────────────────────────────────────────
-        // Internal State Updates
+        // Session Reload/Restart Completion (multi-session mode)
         // ─────────────────────────────────────────────────────────
-        Message::ReloadStarted => {
-            state.start_reload();
-            UpdateResult::none()
-        }
-
-        Message::ReloadCompleted { time_ms } => {
-            state.record_reload_complete();
-            state.log_info(LogSource::App, format!("Reloaded in {}ms", time_ms));
-            UpdateResult::none()
-        }
-
-        Message::ReloadFailed { reason } => {
-            state.phase = AppPhase::Running;
-            state.reload_start_time = None;
-            state.log_error(LogSource::App, format!("Reload failed: {}", reason));
-            UpdateResult::none()
-        }
-
-        // Session-specific reload completion (for multi-session auto-reload)
         Message::SessionReloadCompleted {
             session_id,
             time_ms,
@@ -258,25 +218,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        Message::RestartStarted => {
-            state.start_reload();
-            UpdateResult::none()
-        }
-
-        Message::RestartCompleted => {
-            state.record_reload_complete();
-            state.log_info(LogSource::App, "Restarted");
-            UpdateResult::none()
-        }
-
-        Message::RestartFailed { reason } => {
-            state.phase = AppPhase::Running;
-            state.reload_start_time = None;
-            state.log_error(LogSource::App, format!("Restart failed: {}", reason));
-            UpdateResult::none()
-        }
-
-        // Session-specific restart completion (for multi-session mode)
         Message::SessionRestartCompleted { session_id } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.complete_reload();
@@ -314,52 +255,38 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let reloadable = state.session_manager.reloadable_sessions();
 
             if !reloadable.is_empty() {
-                // Mark all reloadable sessions as reloading
+                let count = reloadable.len();
+
+                // Mark all reloadable sessions as reloading and log to each
                 for (session_id, _) in &reloadable {
                     if let Some(handle) = state.session_manager.get_mut(*session_id) {
                         handle.session.start_reload();
+                        handle.session.add_log(crate::core::LogEntry::info(
+                            LogSource::Watcher,
+                            "File change detected, reloading...".to_string(),
+                        ));
                     }
                 }
 
-                let count = reloadable.len();
-                if count == 1 {
-                    state.log_info(LogSource::Watcher, "File change detected, reloading...");
-                } else {
-                    state.log_info(
-                        LogSource::Watcher,
-                        format!("File change detected, reloading {} sessions...", count),
-                    );
-                }
+                tracing::info!("Auto-reload triggered for {} session(s)", count);
 
                 return UpdateResult::action(UpdateAction::ReloadAllSessions {
                     sessions: reloadable,
                 });
             }
 
-            // Fall back to legacy global app_id (for backward compatibility)
-            if !state.is_busy() {
-                if let Some(app_id) = state.current_app_id.clone() {
-                    state.log_info(LogSource::Watcher, "File change detected, reloading...");
-                    state.start_reload();
-                    return UpdateResult::action(UpdateAction::SpawnTask(Task::Reload {
-                        session_id: 0,
-                        app_id,
-                    }));
-                }
-            }
-
-            // No running sessions
+            // No running sessions to reload
             tracing::debug!("Auto-reload skipped: no running sessions");
             UpdateResult::none()
         }
 
         Message::FilesChanged { count } => {
-            state.log_info(LogSource::Watcher, format!("{} file(s) changed", count));
+            tracing::debug!("{} file(s) changed", count);
             UpdateResult::none()
         }
 
         Message::WatcherError { message } => {
-            state.log_error(LogSource::Watcher, format!("Watcher error: {}", message));
+            tracing::error!("Watcher error: {}", message);
             UpdateResult::none()
         }
 
@@ -410,10 +337,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .find_by_device_id(&device.id)
                 .is_some()
             {
-                state.log_error(
-                    LogSource::App,
-                    format!("Device '{}' already has an active session", device.name),
-                );
+                tracing::warn!("Device '{}' already has an active session", device.name);
                 // Stay in device selector to pick another device
                 return UpdateResult::none();
             }
@@ -421,12 +345,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Create session in manager FIRST
             match state.session_manager.create_session(&device) {
                 Ok(session_id) => {
-                    state.log_info(
-                        LogSource::App,
-                        format!(
-                            "Session created for {} (id: {}, device: {})",
-                            device.name, session_id, device.id
-                        ),
+                    tracing::info!(
+                        "Session created for {} (id: {}, device: {})",
+                        device.name,
+                        session_id,
+                        device.id
                     );
 
                     // Auto-switch to the newly created session
@@ -445,20 +368,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
                 Err(e) => {
                     // Max sessions reached or other error
-                    state.log_error(LogSource::App, format!("Failed to create session: {}", e));
+                    tracing::error!("Failed to create session: {}", e);
                     UpdateResult::none()
                 }
             }
         }
 
         Message::LaunchAndroidEmulator => {
-            state.log_info(LogSource::App, "Discovering Android emulators...");
+            tracing::info!("Discovering Android emulators...");
             state.ui_mode = UiMode::EmulatorSelector;
             UpdateResult::action(UpdateAction::DiscoverEmulators)
         }
 
         Message::LaunchIOSSimulator => {
-            state.log_info(LogSource::App, "Launching iOS Simulator...");
+            tracing::info!("Launching iOS Simulator...");
             UpdateResult::action(UpdateAction::LaunchIOSSimulator)
         }
 
@@ -472,12 +395,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
 
             if device_count > 0 {
-                state.log_info(
-                    LogSource::App,
-                    format!("Discovered {} device(s)", device_count),
-                );
+                tracing::info!("Discovered {} device(s)", device_count);
             } else {
-                state.log_info(LogSource::App, "No devices found");
+                tracing::info!("No devices found");
             }
 
             UpdateResult::none()
@@ -491,10 +411,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state.ui_mode = UiMode::DeviceSelector;
             }
 
-            state.log_error(
-                LogSource::App,
-                format!("Device discovery failed: {}", error),
-            );
+            tracing::error!("Device discovery failed: {}", error);
             UpdateResult::none()
         }
 
@@ -507,17 +424,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Emulator Messages
         // ─────────────────────────────────────────────────────────
         Message::DiscoverEmulators => {
-            state.log_info(LogSource::App, "Discovering emulators...");
+            tracing::info!("Discovering emulators...");
             UpdateResult::action(UpdateAction::DiscoverEmulators)
         }
 
         Message::EmulatorsDiscovered { emulators } => {
             let count = emulators.len();
             if count > 0 {
-                state.log_info(LogSource::App, format!("Found {} emulator(s)", count));
+                tracing::info!("Found {} emulator(s)", count);
                 // TODO: Task 09 - Show emulator selector UI with the emulators
             } else {
-                state.log_info(LogSource::App, "No emulators available");
+                tracing::info!("No emulators available");
             }
             // For now, go back to device selector - emulator selector UI is Task 09
             state.ui_mode = UiMode::DeviceSelector;
@@ -525,31 +442,23 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::EmulatorDiscoveryFailed { error } => {
-            state.log_error(
-                LogSource::App,
-                format!("Emulator discovery failed: {}", error),
-            );
+            tracing::error!("Emulator discovery failed: {}", error);
             // Go back to device selector on failure
             state.ui_mode = UiMode::DeviceSelector;
             UpdateResult::none()
         }
 
         Message::LaunchEmulator { emulator_id } => {
-            state.log_info(
-                LogSource::App,
-                format!("Launching emulator: {}", emulator_id),
-            );
+            tracing::info!("Launching emulator: {}", emulator_id);
             UpdateResult::action(UpdateAction::LaunchEmulator { emulator_id })
         }
 
         Message::EmulatorLaunched { result } => {
             if result.success {
-                state.log_info(
-                    LogSource::App,
-                    format!(
-                        "Emulator '{}' launched successfully ({:?})",
-                        result.emulator_id, result.elapsed
-                    ),
+                tracing::info!(
+                    "Emulator '{}' launched successfully ({:?})",
+                    result.emulator_id,
+                    result.elapsed
                 );
                 // After launching, refresh devices to pick up the new emulator
                 // Go back to device selector to see the new device
@@ -560,12 +469,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 let error_msg = result
                     .message
                     .unwrap_or_else(|| "Unknown error".to_string());
-                state.log_error(
-                    LogSource::App,
-                    format!(
-                        "Failed to launch emulator '{}': {}",
-                        result.emulator_id, error_msg
-                    ),
+                tracing::error!(
+                    "Failed to launch emulator '{}': {}",
+                    result.emulator_id,
+                    error_msg
                 );
                 // Go back to device selector on failure
                 state.ui_mode = UiMode::DeviceSelector;
@@ -580,7 +487,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             device_id: _,
             device_name,
-            platform,
+            platform: _,
             pid,
         } => {
             // Update session-specific state
@@ -592,28 +499,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 handle.session.log_info(
                     LogSource::App,
                     format!(
-                        "Flutter process started (PID: {})",
+                        "Flutter process started on {} (PID: {})",
+                        device_name,
                         pid.map_or("unknown".to_string(), |p| p.to_string())
                     ),
                 );
             }
 
-            // Also update legacy global state for backward compatibility
-            state.device_name = Some(device_name.clone());
-            state.platform = Some(platform.clone());
-            state.phase = AppPhase::Running;
-            state.session_start = Some(chrono::Local::now());
-
-            // Log to global logs as well
-            state.log_info(
-                LogSource::App,
-                format!(
-                    "Flutter session {} started on {} (PID: {})",
-                    session_id,
-                    device_name,
-                    pid.map_or("unknown".to_string(), |p| p.to_string())
-                ),
-            );
             UpdateResult::none()
         }
 
@@ -631,11 +523,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 );
             }
 
-            // Log to global logs
-            state.log_error(
-                LogSource::App,
-                format!("Failed to start session {}: {}", session_id, error),
-            );
+            tracing::error!("Failed to start session {}: {}", session_id, error);
 
             // Remove the failed session from manager
             state.session_manager.remove_session(session_id);
@@ -652,15 +540,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Attach the command sender to the session
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.cmd_sender = Some(cmd_sender);
-                state.log_info(
-                    LogSource::App,
-                    format!("Command sender attached to session {}", session_id),
-                );
+                tracing::debug!("Command sender attached to session {}", session_id);
             } else {
-                state.log_error(
-                    LogSource::App,
-                    format!("Cannot attach cmd_sender: session {} not found", session_id),
-                );
+                tracing::error!("Cannot attach cmd_sender: session {} not found", session_id);
             }
             UpdateResult::none()
         }
@@ -701,12 +583,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 });
 
                 if let Some((app_id, cmd_sender_opt)) = session_info {
-                    state.log_info(
-                        LogSource::App,
-                        format!(
-                            "Closing session {} (app: {})...",
-                            current_session_id, app_id
-                        ),
+                    tracing::info!(
+                        "Closing session {} (app: {})...",
+                        current_session_id,
+                        app_id
                     );
 
                     // Send stop command if we have a cmd_sender
@@ -745,11 +625,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ClearLogs => {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.clear_logs();
-            } else {
-                // Fallback to global logs
-                state.logs.clear();
-                state.log_view_state.offset = 0;
             }
+            // No fallback needed - only clear logs if a session is selected
             UpdateResult::none()
         }
     }

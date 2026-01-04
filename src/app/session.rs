@@ -194,6 +194,17 @@ impl Session {
         })
     }
 
+    /// Alias for status bar widget compatibility
+    pub fn duration_display(&self) -> Option<String> {
+        self.session_duration_display()
+    }
+
+    /// Format last reload time for display
+    pub fn last_reload_display(&self) -> Option<String> {
+        self.last_reload_time
+            .map(|t| t.format("%H:%M:%S").to_string())
+    }
+
     /// Check if session is running
     pub fn is_running(&self) -> bool {
         matches!(self.phase, AppPhase::Running | AppPhase::Reloading)

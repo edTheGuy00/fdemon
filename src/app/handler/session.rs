@@ -105,8 +105,6 @@ pub fn handle_session_message_state(
                 app_start.app_id
             );
         }
-        // Also update global state for legacy compatibility
-        state.current_app_id = Some(app_start.app_id.clone());
     }
 
     // Handle app.stop event
@@ -121,10 +119,6 @@ pub fn handle_session_message_state(
                     app_stop.app_id
                 );
             }
-        }
-        // Also update global state for legacy compatibility
-        if state.current_app_id.as_ref() == Some(&app_stop.app_id) {
-            state.current_app_id = None;
         }
     }
 }

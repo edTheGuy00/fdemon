@@ -89,8 +89,8 @@ fn handle_key_loading(key: KeyEvent) -> Option<Message> {
 
 /// Handle key events in normal mode
 fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
-    // Check if we're busy (reloading)
-    let is_busy = state.is_busy();
+    // Check if any session is busy (reloading)
+    let is_busy = state.session_manager.any_session_busy();
 
     match (key.code, key.modifiers) {
         // Request quit (may show confirmation dialog if sessions running)

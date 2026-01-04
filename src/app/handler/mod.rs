@@ -2,7 +2,7 @@
 //!
 //! Organized into submodules:
 //! - `update`: Main update() function and message dispatch
-//! - `daemon`: Legacy and multi-session daemon event handling
+//! - `daemon`: Multi-session daemon event handling
 //! - `session`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
 //! - `helpers`: Utility functions

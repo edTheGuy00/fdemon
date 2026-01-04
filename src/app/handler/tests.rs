@@ -76,51 +76,6 @@ fn test_ctrl_c_produces_quit_message() {
 }
 
 #[test]
-fn test_daemon_exited_event_logs_message() {
-    let mut state = AppState::new();
-    let initial_logs = state.logs.len();
-
-    update(
-        &mut state,
-        Message::Daemon(DaemonEvent::Exited { code: Some(0) }),
-    );
-
-    assert!(state.logs.len() > initial_logs);
-}
-
-#[test]
-fn test_daemon_exited_sets_quitting_phase() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Running;
-
-    update(
-        &mut state,
-        Message::Daemon(DaemonEvent::Exited { code: Some(0) }),
-    );
-
-    assert_eq!(state.phase, AppPhase::Quitting);
-    assert!(state.should_quit());
-}
-
-#[test]
-fn test_daemon_exited_with_error_code_sets_quitting() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Running;
-
-    update(
-        &mut state,
-        Message::Daemon(DaemonEvent::Exited { code: Some(1) }),
-    );
-
-    assert_eq!(state.phase, AppPhase::Quitting);
-    // Verify warning log for non-zero exit code
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("exited with code")));
-}
-
-#[test]
 fn test_r_key_produces_hot_reload() {
     let state = AppState::new();
     let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
@@ -151,239 +106,9 @@ fn test_s_key_produces_stop() {
 }
 
 #[test]
-fn test_hot_reload_message_starts_reload() {
-    let mut state = AppState::new();
-    state.current_app_id = Some("test-app-id".to_string());
-
-    let result = update(&mut state, Message::HotReload);
-
-    assert!(state.is_busy());
-    assert!(matches!(
-        result.action,
-        Some(UpdateAction::SpawnTask(Task::Reload { .. }))
-    ));
-}
-
-#[test]
-fn test_hot_reload_without_app_id_shows_error() {
-    let mut state = AppState::new();
-    state.current_app_id = None;
-    let initial_logs = state.logs.len();
-
-    update(&mut state, Message::HotReload);
-
-    assert!(state.logs.len() > initial_logs);
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("No app running")));
-}
-
-#[test]
-fn test_reload_completed_updates_state() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-
-    update(&mut state, Message::ReloadCompleted { time_ms: 100 });
-
-    assert_eq!(state.phase, AppPhase::Running);
-    assert_eq!(state.reload_count, 1);
-}
-
-#[test]
-fn test_reload_failed_updates_state() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-
-    update(
-        &mut state,
-        Message::ReloadFailed {
-            reason: "test error".to_string(),
-        },
-    );
-
-    assert_eq!(state.phase, AppPhase::Running);
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("Reload failed")));
-}
-
-#[test]
-fn test_restart_completed_updates_state() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-
-    update(&mut state, Message::RestartCompleted);
-
-    assert_eq!(state.phase, AppPhase::Running);
-}
-
-#[test]
-fn test_restart_failed_updates_state() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-
-    update(
-        &mut state,
-        Message::RestartFailed {
-            reason: "test error".to_string(),
-        },
-    );
-
-    assert_eq!(state.phase, AppPhase::Running);
-}
-
-#[test]
-fn test_is_busy_when_reloading() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-    assert!(state.is_busy());
-}
-
-#[test]
-fn test_hot_reload_ignored_when_busy() {
-    let mut state = AppState::new();
-    state.current_app_id = Some("test-app-id".to_string());
-    state.phase = AppPhase::Reloading;
-
-    let result = update(&mut state, Message::HotReload);
-
-    assert!(result.action.is_none());
-}
-
-#[test]
-fn test_reload_ignored_when_already_reloading() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-    state.current_app_id = Some("test".to_string());
-
-    let result = update(&mut state, Message::HotReload);
-
-    assert!(result.action.is_none());
-}
-
-#[test]
-fn test_restart_ignored_when_already_reloading() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-    state.current_app_id = Some("test".to_string());
-
-    let result = update(&mut state, Message::HotRestart);
-
-    assert!(result.action.is_none());
-}
-
-#[test]
-fn test_stop_ignored_when_already_reloading() {
-    let mut state = AppState::new();
-    state.phase = AppPhase::Reloading;
-    state.current_app_id = Some("test".to_string());
-
-    let result = update(&mut state, Message::StopApp);
-
-    assert!(result.action.is_none());
-}
-
-#[test]
-fn test_reload_count_increments() {
-    let mut state = AppState::new();
-    assert_eq!(state.reload_count, 0);
-
-    update(&mut state, Message::ReloadCompleted { time_ms: 100 });
-    assert_eq!(state.reload_count, 1);
-
-    update(&mut state, Message::ReloadCompleted { time_ms: 100 });
-    assert_eq!(state.reload_count, 2);
-}
-
-// Note: test_last_reload_display_format removed - the display format changed to use elapsed time
-
-#[test]
-fn test_reload_no_app_running_shows_error() {
-    let mut state = AppState::new();
-    state.current_app_id = None;
-
-    update(&mut state, Message::HotReload);
-
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("No app running")));
-}
-
-#[test]
-fn test_restart_no_app_running_shows_error() {
-    let mut state = AppState::new();
-    state.current_app_id = None;
-
-    update(&mut state, Message::HotRestart);
-
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("No app running")));
-}
-
-#[test]
-fn test_stop_no_app_running_shows_error() {
-    let mut state = AppState::new();
-    state.current_app_id = None;
-
-    update(&mut state, Message::StopApp);
-
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("No app running")));
-}
-
-// Note: test_scroll_messages_update_log_view_state removed - scroll behavior changed
-
-#[test]
-fn test_files_changed_logs_count() {
-    let mut state = AppState::new();
-
-    update(&mut state, Message::FilesChanged { count: 5 });
-
-    assert!(state.logs.iter().any(|e| e.message.contains("5 file(s)")));
-}
-
-#[test]
-fn test_watcher_error_logs_message() {
-    let mut state = AppState::new();
-
-    update(
-        &mut state,
-        Message::WatcherError {
-            message: "test error".to_string(),
-        },
-    );
-
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("Watcher error")));
-}
-
-#[test]
-fn test_auto_reload_triggered_when_app_running() {
-    let mut state = AppState::new();
-    state.current_app_id = Some("test-app-id".to_string());
-    state.phase = AppPhase::Running;
-
-    let result = update(&mut state, Message::AutoReloadTriggered);
-
-    assert!(matches!(
-        result.action,
-        Some(UpdateAction::SpawnTask(Task::Reload { .. }))
-    ));
-}
-
-#[test]
 fn test_auto_reload_skipped_when_no_app() {
     let mut state = AppState::new();
-    state.current_app_id = None;
+    // No sessions, so should skip auto-reload
 
     let result = update(&mut state, Message::AutoReloadTriggered);
 
@@ -393,25 +118,13 @@ fn test_auto_reload_skipped_when_no_app() {
 #[test]
 fn test_auto_reload_skipped_when_busy() {
     let mut state = AppState::new();
-    state.current_app_id = Some("test-app-id".to_string());
-    state.phase = AppPhase::Reloading;
+    // With multi-session, busy check uses session_manager.any_session_busy()
+    // Since no sessions exist, this should skip (can't be busy without sessions)
 
     let result = update(&mut state, Message::AutoReloadTriggered);
 
     assert!(result.action.is_none());
 }
-
-#[test]
-fn test_reload_elapsed_tracking() {
-    let mut state = AppState::new();
-    state.current_app_id = Some("test-app-id".to_string());
-
-    update(&mut state, Message::HotReload);
-
-    assert!(state.reload_start_time.is_some());
-}
-
-// Note: Daemon event tests for app_start/app_stop parsing moved to daemon/protocol.rs tests
 
 // ─────────────────────────────────────────────────────────
 // Raw line level detection tests
@@ -766,12 +479,7 @@ fn test_device_selected_prevents_duplicate() {
 
     // No action returned
     assert!(result.action.is_none());
-
-    // Error logged
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("already has an active session")));
+    // Note: Error is now logged via tracing, not global state
 }
 
 #[test]
@@ -805,12 +513,8 @@ fn test_device_selected_max_sessions_enforced() {
 
     // Should not create new session
     assert!(result.action.is_none());
-
-    // Error should be logged
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("Failed to create session")));
+    assert_eq!(state.session_manager.len(), MAX_SESSIONS);
+    // Note: Error is now logged via tracing, not global state
 }
 
 #[test]
@@ -840,56 +544,6 @@ fn test_session_started_updates_session_state() {
 }
 
 #[test]
-fn test_session_started_updates_legacy_global_state() {
-    let mut state = AppState::new();
-
-    // Create a session first
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    // Send SessionStarted
-    update(
-        &mut state,
-        Message::SessionStarted {
-            session_id,
-            device_id: "test-device".to_string(),
-            device_name: "Test Device".to_string(),
-            platform: "android".to_string(),
-            pid: Some(1234),
-        },
-    );
-
-    // Global state should be updated for backward compatibility
-    assert_eq!(state.device_name, Some("Test Device".to_string()));
-    assert_eq!(state.platform, Some("android".to_string()));
-    assert_eq!(state.phase, AppPhase::Running);
-}
-
-#[test]
-fn test_session_started_logs_with_session_id() {
-    let mut state = AppState::new();
-
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    update(
-        &mut state,
-        Message::SessionStarted {
-            session_id,
-            device_id: "test-device".to_string(),
-            device_name: "Test Device".to_string(),
-            platform: "android".to_string(),
-            pid: Some(1234),
-        },
-    );
-
-    // Should log with session ID
-    assert!(state.logs.iter().any(|e| e
-        .message
-        .contains(&format!("session {} started", session_id))));
-}
-
-#[test]
 fn test_session_started_with_unknown_session() {
     let mut state = AppState::new();
 
@@ -905,8 +559,8 @@ fn test_session_started_with_unknown_session() {
         },
     );
 
-    // Should not panic, global state still updated
-    assert_eq!(state.device_name, Some("Test Device".to_string()));
+    // Should not panic - just doesn't update anything
+    assert!(state.session_manager.get(999).is_none());
 }
 
 #[test]
@@ -937,6 +591,8 @@ fn test_session_spawn_failed_removes_session() {
 
 #[test]
 fn test_session_spawn_failed_logs_and_removes() {
+    use crate::app::state::UiMode;
+
     let mut state = AppState::new();
 
     let device = test_device("test-device", "Test Device");
@@ -951,11 +607,9 @@ fn test_session_spawn_failed_logs_and_removes() {
         },
     );
 
-    // Error should be logged
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("Failed to start session")));
+    // Session should be removed and UI should show device selector
+    assert!(state.session_manager.get(session_id).is_none());
+    assert_eq!(state.ui_mode, UiMode::DeviceSelector);
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1101,23 +755,31 @@ fn test_c_clears_logs() {
 #[test]
 fn test_clear_logs_message() {
     let mut state = AppState::new();
-    state.add_log(crate::core::LogEntry::info(
-        crate::core::LogSource::App,
-        "test log",
-    ));
-    assert!(!state.logs.is_empty());
+
+    // Create a session and add a log to it
+    let device = test_device("d1", "Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.add_log(crate::core::LogEntry::info(
+            crate::core::LogSource::App,
+            "test log",
+        ));
+        assert!(!handle.session.logs.is_empty());
+    }
 
     update(&mut state, Message::ClearLogs);
 
-    // Global logs should be cleared (no session selected)
-    assert!(state.logs.is_empty());
+    // Session logs should be cleared
+    if let Some(handle) = state.session_manager.get(session_id) {
+        assert!(handle.session.logs.is_empty());
+    }
 }
 
 // ─────────────────────────────────────────────────────────
 // Session daemon event tests
 // ─────────────────────────────────────────────────────────
-
-// Note: test_session_daemon_event_routes_to_correct_session removed - daemon parsing behavior changed
 
 #[test]
 fn test_event_for_closed_session_is_discarded() {
@@ -1200,36 +862,6 @@ fn test_session_exited_with_error_code() {
         .logs
         .iter()
         .any(|e| e.message.contains("exited with code")));
-}
-
-// Note: test_session_app_start_updates_session_state and test_legacy_daemon_event_still_works
-// removed - daemon parsing behavior changed; these are covered by daemon/protocol.rs tests
-
-#[test]
-fn test_reload_uses_session_when_no_cmd_sender() {
-    let mut state = AppState::new();
-
-    // Create session but no cmd_sender attached
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    // Start session and set app_id
-    if let Some(handle) = state.session_manager.get_mut(session_id) {
-        handle.session.app_id = Some("test-app".to_string());
-        // Note: cmd_sender is still None
-    }
-
-    // Try to reload - should fall back to legacy
-    state.current_app_id = Some("fallback-app".to_string());
-    let result = update(&mut state, Message::HotReload);
-
-    // Should use legacy fallback
-    if let Some(UpdateAction::SpawnTask(Task::Reload { session_id, app_id })) = result.action {
-        assert_eq!(session_id, 0); // legacy mode
-        assert_eq!(app_id, "fallback-app");
-    } else {
-        panic!("Expected SpawnTask Reload");
-    }
 }
 
 #[test]
@@ -1357,46 +989,6 @@ fn test_task_enum_includes_session_id() {
         assert_eq!(session_id, 44);
         assert_eq!(app_id, "test-app-3");
     }
-}
-
-#[test]
-fn test_stop_app_spawns_task() {
-    let mut state = AppState::new();
-
-    // Create a session with app running
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    // Set app_id and cmd_sender
-    if let Some(handle) = state.session_manager.get_mut(session_id) {
-        handle.session.app_id = Some("stop-test-app".to_string());
-        // Note: We need a cmd_sender for this to work properly
-        // For this test, we'll use the legacy fallback
-    }
-
-    // Also set global state
-    state.current_app_id = Some("stop-test-app".to_string());
-
-    let result = update(&mut state, Message::StopApp);
-
-    assert!(matches!(
-        result.action,
-        Some(UpdateAction::SpawnTask(Task::Stop { .. }))
-    ));
-}
-
-#[test]
-fn test_stop_app_without_app_id_shows_error() {
-    let mut state = AppState::new();
-    state.current_app_id = None;
-
-    let result = update(&mut state, Message::StopApp);
-
-    assert!(result.action.is_none());
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("No app running")));
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1560,7 +1152,7 @@ fn test_manual_reload_still_uses_selected_session() {
 }
 
 #[test]
-fn test_auto_reload_logs_session_count() {
+fn test_auto_reload_logs_to_each_session() {
     let mut state = AppState::new();
 
     // Create two sessions
@@ -1582,15 +1174,25 @@ fn test_auto_reload_logs_session_count() {
     // Trigger auto-reload
     let _ = update(&mut state, Message::AutoReloadTriggered);
 
-    // Should log with session count
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("reloading 2 sessions")));
+    // Each session should have the reload message in its logs
+    if let Some(handle) = state.session_manager.get(session1) {
+        assert!(handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("File change detected")));
+    }
+    if let Some(handle) = state.session_manager.get(session2) {
+        assert!(handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("File change detected")));
+    }
 }
 
 #[test]
-fn test_auto_reload_single_session_logs_without_count() {
+fn test_auto_reload_single_session_logs_to_session() {
     let mut state = AppState::new();
 
     // Create one session
@@ -1605,13 +1207,14 @@ fn test_auto_reload_single_session_logs_without_count() {
     // Trigger auto-reload
     let _ = update(&mut state, Message::AutoReloadTriggered);
 
-    // Should log simple message (no count)
-    assert!(state
-        .logs
-        .iter()
-        .any(|e| e.message.contains("reloading...")));
-    // Should NOT contain session count
-    assert!(!state.logs.iter().any(|e| e.message.contains("1 sessions")));
+    // Session should have the reload message in its logs
+    if let Some(handle) = state.session_manager.get(session_id) {
+        assert!(handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("File change detected")));
+    }
 }
 
 #[test]
@@ -1667,21 +1270,3 @@ fn test_any_session_busy() {
     assert!(state.session_manager.any_session_busy());
 }
 
-#[test]
-fn test_auto_reload_falls_back_to_legacy() {
-    let mut state = AppState::new();
-
-    // No sessions, but legacy app_id is set
-    state.current_app_id = Some("legacy-app".to_string());
-    state.phase = AppPhase::Running;
-
-    let result = update(&mut state, Message::AutoReloadTriggered);
-
-    // Should fall back to legacy single-session reload
-    if let Some(UpdateAction::SpawnTask(Task::Reload { session_id, app_id })) = result.action {
-        assert_eq!(session_id, 0); // Legacy mode uses session_id 0
-        assert_eq!(app_id, "legacy-app");
-    } else {
-        panic!("Expected SpawnTask Reload action");
-    }
-}

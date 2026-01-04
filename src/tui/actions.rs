@@ -27,7 +27,6 @@ pub type SessionTaskMap = Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<(
 pub fn handle_action(
     action: UpdateAction,
     msg_tx: mpsc::Sender<Message>,
-    cmd_sender: Arc<Mutex<Option<CommandSender>>>,
     session_cmd_sender: Option<CommandSender>,
     session_senders: Vec<(SessionId, String, CommandSender)>,
     session_tasks: SessionTaskMap,
@@ -36,20 +35,10 @@ pub fn handle_action(
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
-            // Spawn async task for command execution
-            // Prefer session-specific cmd_sender, fall back to global
-            if let Some(sender) = session_cmd_sender {
-                tokio::spawn(async move {
-                    execute_task(task, msg_tx, Some(sender)).await;
-                });
-            } else {
-                // Fall back to global cmd_sender (legacy mode)
-                let cmd_sender_clone = cmd_sender.clone();
-                tokio::spawn(async move {
-                    let sender = cmd_sender_clone.lock().await.clone();
-                    execute_task(task, msg_tx, sender).await;
-                });
-            }
+            // Spawn async task for command execution using session-specific sender
+            tokio::spawn(async move {
+                execute_task(task, msg_tx, session_cmd_sender).await;
+            });
         }
 
         UpdateAction::ReloadAllSessions { sessions: _ } => {
@@ -78,7 +67,6 @@ pub fn handle_action(
                 config,
                 project_path,
                 msg_tx,
-                cmd_sender,
                 session_tasks,
                 shutdown_rx,
             );
@@ -99,20 +87,17 @@ pub fn handle_action(
 }
 
 /// Spawn a Flutter session for a device (multi-session mode)
-#[allow(clippy::too_many_arguments)]
 fn spawn_session(
     session_id: SessionId,
     device: Device,
     config: Option<Box<LaunchConfig>>,
     project_path: &Path,
     msg_tx: mpsc::Sender<Message>,
-    cmd_sender: Arc<Mutex<Option<CommandSender>>>,
     session_tasks: SessionTaskMap,
     shutdown_rx: watch::Receiver<bool>,
 ) {
     let project_path = project_path.to_path_buf();
     let msg_tx_clone = msg_tx.clone();
-    let cmd_sender_clone = cmd_sender.clone();
     let session_tasks_clone = session_tasks.clone();
     let mut shutdown_rx_clone = shutdown_rx.clone();
     let device_id = device.id.clone();
@@ -154,9 +139,6 @@ fn spawn_session(
                         cmd_sender: session_sender.clone(),
                     })
                     .await;
-
-                // Also update legacy global cmd_sender for backward compatibility
-                *cmd_sender_clone.lock().await = Some(session_sender.clone());
 
                 // Send session started message
                 let _ = msg_tx_clone
@@ -248,12 +230,6 @@ fn spawn_session(
                         );
                     }
                 }
-
-                // Clear the global command sender if it was ours
-                // (only matters for legacy single-session compatibility)
-                let mut guard = cmd_sender_clone.lock().await;
-                *guard = None;
-                drop(guard);
             }
             Err(e) => {
                 error!(
@@ -293,12 +269,14 @@ pub async fn execute_task(
     cmd_sender: Option<CommandSender>,
 ) {
     let Some(sender) = cmd_sender else {
-        // No command sender available
+        // No command sender available - send session-specific failure
         let msg = match task {
-            Task::Reload { .. } => Message::ReloadFailed {
+            Task::Reload { session_id, .. } => Message::SessionReloadFailed {
+                session_id,
                 reason: "Flutter not running".to_string(),
             },
-            Task::Restart { .. } => Message::RestartFailed {
+            Task::Restart { session_id, .. } => Message::SessionRestartFailed {
+                session_id,
                 reason: "Flutter not running".to_string(),
             },
             Task::Stop { .. } => return, // Nothing to do
@@ -318,40 +296,26 @@ pub async fn execute_task(
                 Ok(response) => {
                     if response.success {
                         let time_ms = start.elapsed().as_millis() as u64;
-                        // Use session-specific message for multi-session mode (session_id > 0)
-                        // Use legacy message for single-session mode (session_id == 0)
-                        if session_id > 0 {
-                            let _ = msg_tx
-                                .send(Message::SessionReloadCompleted {
-                                    session_id,
-                                    time_ms,
-                                })
-                                .await;
-                        } else {
-                            let _ = msg_tx.send(Message::ReloadCompleted { time_ms }).await;
-                        }
+                        let _ = msg_tx
+                            .send(Message::SessionReloadCompleted {
+                                session_id,
+                                time_ms,
+                            })
+                            .await;
                     } else {
                         let reason = response
                             .error
                             .unwrap_or_else(|| "Unknown error".to_string());
-                        if session_id > 0 {
-                            let _ = msg_tx
-                                .send(Message::SessionReloadFailed { session_id, reason })
-                                .await;
-                        } else {
-                            let _ = msg_tx.send(Message::ReloadFailed { reason }).await;
-                        }
+                        let _ = msg_tx
+                            .send(Message::SessionReloadFailed { session_id, reason })
+                            .await;
                     }
                 }
                 Err(e) => {
                     let reason = e.to_string();
-                    if session_id > 0 {
-                        let _ = msg_tx
-                            .send(Message::SessionReloadFailed { session_id, reason })
-                            .await;
-                    } else {
-                        let _ = msg_tx.send(Message::ReloadFailed { reason }).await;
-                    }
+                    let _ = msg_tx
+                        .send(Message::SessionReloadFailed { session_id, reason })
+                        .await;
                 }
             }
         }
@@ -363,36 +327,23 @@ pub async fn execute_task(
             match sender.send(DaemonCommand::Restart { app_id }).await {
                 Ok(response) => {
                     if response.success {
-                        // Use session-specific message for multi-session mode (session_id > 0)
-                        if session_id > 0 {
-                            let _ = msg_tx
-                                .send(Message::SessionRestartCompleted { session_id })
-                                .await;
-                        } else {
-                            let _ = msg_tx.send(Message::RestartCompleted).await;
-                        }
+                        let _ = msg_tx
+                            .send(Message::SessionRestartCompleted { session_id })
+                            .await;
                     } else {
                         let reason = response
                             .error
                             .unwrap_or_else(|| "Unknown error".to_string());
-                        if session_id > 0 {
-                            let _ = msg_tx
-                                .send(Message::SessionRestartFailed { session_id, reason })
-                                .await;
-                        } else {
-                            let _ = msg_tx.send(Message::RestartFailed { reason }).await;
-                        }
+                        let _ = msg_tx
+                            .send(Message::SessionRestartFailed { session_id, reason })
+                            .await;
                     }
                 }
                 Err(e) => {
                     let reason = e.to_string();
-                    if session_id > 0 {
-                        let _ = msg_tx
-                            .send(Message::SessionRestartFailed { session_id, reason })
-                            .await;
-                    } else {
-                        let _ = msg_tx.send(Message::RestartFailed { reason }).await;
-                    }
+                    let _ = msg_tx
+                        .send(Message::SessionRestartFailed { session_id, reason })
+                        .await;
                 }
             }
         }

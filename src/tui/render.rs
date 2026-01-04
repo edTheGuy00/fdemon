@@ -2,6 +2,8 @@
 
 use super::{layout, widgets};
 use crate::app::state::{AppState, UiMode};
+use crate::core::LogEntry;
+use crate::tui::widgets::LogViewState;
 use ratatui::Frame;
 
 /// Render the complete UI (View function in TEA)
@@ -23,14 +25,16 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         frame.render_widget(tabs, tabs_area);
     }
 
-    // Log view - use selected session's logs or global logs as fallback
+    // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
         let log_view = widgets::LogView::new(&handle.session.logs);
         frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
     } else {
-        // Fallback to global logs when no session active
-        let log_view = widgets::LogView::new(&state.logs);
-        frame.render_stateful_widget(log_view, areas.logs, &mut state.log_view_state);
+        // No session selected - show empty log view
+        let empty_logs: Vec<LogEntry> = Vec::new();
+        let log_view = widgets::LogView::new(&empty_logs);
+        let mut empty_state = LogViewState::new();
+        frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);
     }
 
     // Status bar - use session data if available, otherwise use global state

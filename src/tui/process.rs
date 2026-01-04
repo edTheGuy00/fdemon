@@ -1,8 +1,7 @@
 //! Message processing with session event routing
 //!
 //! Handles TEA message processing and routes JSON-RPC responses
-//! to the appropriate RequestTracker for both legacy single-session
-//! and multi-session modes.
+//! to the appropriate RequestTracker for multi-session mode.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -25,15 +24,11 @@ pub fn process_message(
     state: &mut AppState,
     message: Message,
     msg_tx: &mpsc::Sender<Message>,
-    cmd_sender: &Arc<Mutex<Option<CommandSender>>>,
     session_tasks: &Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: &watch::Receiver<bool>,
     project_path: &Path,
 ) {
-    // Route responses from Message::Daemon events (legacy single-session mode)
-    route_legacy_daemon_response(&message, cmd_sender);
-
-    // Route responses from Message::SessionDaemon events (multi-session mode)
+    // Route JSON-RPC responses from SessionDaemon events to RequestTracker
     route_session_daemon_response(&message, state);
 
     // Process message through TEA update loop
@@ -50,7 +45,6 @@ pub fn process_message(
             handle_action(
                 action,
                 msg_tx.clone(),
-                cmd_sender.clone(),
                 session_cmd_sender,
                 session_senders,
                 session_tasks.clone(),
@@ -61,28 +55,6 @@ pub fn process_message(
 
         // Continue with follow-up message
         msg = result.message;
-    }
-}
-
-/// Route JSON-RPC responses for legacy daemon events
-fn route_legacy_daemon_response(message: &Message, cmd_sender: &Arc<Mutex<Option<CommandSender>>>) {
-    if let Message::Daemon(DaemonEvent::Stdout(ref line)) = message {
-        if let Some(json) = protocol::strip_brackets(line) {
-            if let Some(DaemonMessage::Response { id, result, error }) = DaemonMessage::parse(json)
-            {
-                // Try to get the command sender for response routing
-                if let Ok(guard) = cmd_sender.try_lock() {
-                    if let Some(ref sender) = *guard {
-                        if let Some(id_num) = id.as_u64() {
-                            let tracker = sender.tracker().clone();
-                            tokio::spawn(async move {
-                                tracker.handle_response(id_num, result, error).await;
-                            });
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 
@@ -120,13 +92,10 @@ fn get_session_cmd_sender(action: &UpdateAction, state: &AppState) -> Option<Com
             Task::Restart { session_id, .. } => *session_id,
             Task::Stop { session_id, .. } => *session_id,
         };
-        // Look up session-specific cmd_sender (session_id 0 means legacy mode)
-        if session_id > 0 {
-            return state
-                .session_manager
-                .get(session_id)
-                .and_then(|h| h.cmd_sender.clone());
-        }
+        return state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.cmd_sender.clone());
     }
     None
 }

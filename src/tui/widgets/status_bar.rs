@@ -45,7 +45,7 @@ impl<'a> StatusBar<'a> {
             AppPhase::Initializing => {
                 Span::styled("○ Starting", Style::default().fg(Color::DarkGray))
             }
-            AppPhase::Running if session_busy || self.state.is_busy() => Span::styled(
+            AppPhase::Running if session_busy => Span::styled(
                 "↻ Reloading",
                 Style::default()
                     .fg(Color::Yellow)
@@ -102,46 +102,53 @@ impl<'a> StatusBar<'a> {
         Some(Span::styled(display, Style::default().fg(color)))
     }
 
-    /// Get Flutter version span
-    fn flutter_version(&self) -> Option<Span<'static>> {
-        self.state
-            .flutter_version
-            .as_ref()
-            .map(|v| Span::styled(format!("Flutter {}", v), Style::default().fg(Color::Blue)))
-    }
-
-    /// Get session timer span
+    /// Get session timer span (from selected session)
     fn session_timer(&self) -> Option<Span<'static>> {
         self.state
-            .session_duration_display()
+            .session_manager
+            .selected()
+            .and_then(|h| h.session.duration_display())
             .map(|d| Span::styled(format!("⏱ {}", d), Style::default().fg(Color::Gray)))
     }
 
-    /// Get last reload span
+    /// Get last reload span (from selected session)
     fn last_reload(&self) -> Option<Span<'static>> {
         self.state
-            .last_reload_display()
+            .session_manager
+            .selected()
+            .and_then(|h| h.session.last_reload_display())
             .map(|t| Span::styled(format!("↻ {}", t), Style::default().fg(Color::DarkGray)))
     }
 
-    /// Get scroll indicator span
+    /// Get scroll indicator span (from selected session)
     fn scroll_indicator(&self) -> Span<'static> {
-        if self.state.log_view_state.auto_scroll {
+        let auto_scroll = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.log_view_state.auto_scroll)
+            .unwrap_or(true);
+
+        if auto_scroll {
             Span::styled("⬇ Auto", Style::default().fg(Color::Green))
         } else {
             Span::styled("⬆ Manual", Style::default().fg(Color::Yellow))
         }
     }
 
-    /// Get log position string
+    /// Get log position string (from selected session)
     fn log_position(&self) -> String {
-        let state = &self.state.log_view_state;
-        if state.total_lines == 0 {
-            "0/0".to_string()
+        if let Some(handle) = self.state.session_manager.selected() {
+            let state = &handle.session.log_view_state;
+            if state.total_lines == 0 {
+                "0/0".to_string()
+            } else {
+                let current = state.offset + 1;
+                let end = (state.offset + state.visible_lines).min(state.total_lines);
+                format!("{}-{}/{}", current, end, state.total_lines)
+            }
         } else {
-            let current = state.offset + 1;
-            let end = (state.offset + state.visible_lines).min(state.total_lines);
-            format!("{}-{}/{}", current, end, state.total_lines)
+            "0/0".to_string()
         }
     }
 
@@ -159,12 +166,6 @@ impl<'a> StatusBar<'a> {
         if let Some(config) = self.config_info() {
             segments.push(separator.clone());
             segments.push(config);
-        }
-
-        // Flutter version
-        if let Some(version) = self.flutter_version() {
-            segments.push(separator.clone());
-            segments.push(version);
         }
 
         // Session timer
@@ -250,13 +251,18 @@ impl Widget for StatusBarCompact<'_> {
 
         // Compact: just state and timer
         let (state_char, color) = match phase {
-            AppPhase::Running if session_busy || self.state.is_busy() => ("↻", Color::Yellow),
+            AppPhase::Running if session_busy => ("↻", Color::Yellow),
             AppPhase::Running => ("●", Color::Green),
             AppPhase::Reloading => ("↻", Color::Yellow),
             _ => ("○", Color::DarkGray),
         };
 
-        let timer = self.state.session_duration_display().unwrap_or_default();
+        let timer = self
+            .state
+            .session_manager
+            .selected()
+            .and_then(|h| h.session.duration_display())
+            .unwrap_or_default();
 
         let line = Line::from(vec![
             Span::raw(" "),
@@ -432,20 +438,16 @@ mod tests {
     }
 
     #[test]
-    fn test_flutter_version() {
-        let mut state = create_test_state();
-        state.flutter_version = Some("3.19.0".to_string());
-
-        let bar = StatusBar::new(&state);
-        let version = bar.flutter_version().unwrap();
-
-        assert!(version.content.to_string().contains("Flutter 3.19.0"));
-    }
-
-    #[test]
     fn test_session_timer() {
         let mut state = create_test_state();
-        state.session_start = Some(Local::now() - Duration::seconds(3723)); // 1h 2m 3s
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Set session started_at to 1h 2m 3s ago
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.started_at = Some(Local::now() - Duration::seconds(3723));
+        }
 
         let bar = StatusBar::new(&state);
         let timer = bar.session_timer().unwrap();
@@ -456,7 +458,14 @@ mod tests {
     #[test]
     fn test_last_reload() {
         let mut state = create_test_state();
-        state.last_reload_time = Some(Local::now());
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Set session last_reload_time
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.last_reload_time = Some(Local::now());
+        }
 
         let bar = StatusBar::new(&state);
         let reload = bar.last_reload();
@@ -554,7 +563,15 @@ mod tests {
 
         let mut state = create_test_state();
         state.phase = AppPhase::Running;
-        state.session_start = Some(Local::now() - Duration::seconds(60));
+
+        // Create a session with started_at set
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.started_at = Some(Local::now() - Duration::seconds(60));
+            handle.session.phase = AppPhase::Running;
+        }
 
         terminal
             .draw(|frame| {
@@ -582,8 +599,11 @@ mod tests {
     #[test]
     fn test_scroll_indicator_auto() {
         let mut state = create_test_state();
-        state.log_view_state.auto_scroll = true;
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
 
+        // Session starts with auto_scroll = true by default
         let bar = StatusBar::new(&state);
         let indicator = bar.scroll_indicator();
 
@@ -594,7 +614,14 @@ mod tests {
     #[test]
     fn test_scroll_indicator_manual() {
         let mut state = create_test_state();
-        state.log_view_state.auto_scroll = false;
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Set auto_scroll to false on the session
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.log_view_state.auto_scroll = false;
+        }
 
         let bar = StatusBar::new(&state);
         let indicator = bar.scroll_indicator();

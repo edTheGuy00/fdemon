@@ -67,7 +67,7 @@ Task 04 Subtask Dependencies (MUST be done in order):
 | 01 | [persistent-session-header](tasks/01-persistent-session-header.md) | ✅ Done | - | 2 hours | `layout.rs`, `tabs.rs`, `render.rs` |
 | 02 | [status-bar-config-info](tasks/02-status-bar-config-info.md) | ✅ Done | - | 2 hours | `status_bar.rs`, `state.rs` |
 | 03 | [shutdown-optimization](tasks/03-shutdown-optimization.md) | ✅ Done | - | 3 hours | `process.rs`, `actions.rs`, `startup.rs` |
-| 04 | [legacy-code-removal](tasks/04-legacy-code-removal.md) | Not Started | 01, 02, 03, 05 | 8.5 hours | Multiple (see subtasks) |
+| 04 | [legacy-code-removal](tasks/04-legacy-code-removal.md) | ✅ Done | 01, 02, 03, 05 | 8.5 hours | Multiple (see subtasks) |
 | 05 | [watcher-all-sessions-reload](tasks/05-watcher-all-sessions-reload.md) | ✅ Done | - | 2 hours | `update.rs`, `actions.rs`, `session_manager.rs` |
 
 ---
@@ -78,13 +78,13 @@ Task 4 is a significant refactor broken into 7 incremental subtasks that **MUST 
 
 | # | Subtask | Status | Depends On | Effort | Key Changes |
 |---|---------|--------|------------|--------|-------------|
-| 4a | [autostart-session-refactor](tasks/04a-autostart-session-refactor.md) | Not Started | Tasks 01-03, 05 | 2 hours | Refactor auto-start to use sessions instead of owning FlutterProcess directly |
-| 4b | [remove-message-daemon](tasks/04b-remove-message-daemon.md) | Not Started | 4a | 1 hour | Remove `Message::Daemon` variant and `handle_daemon_event()` |
-| 4c | [remove-fallback-paths](tasks/04c-remove-fallback-paths.md) | Not Started | 4b | 1 hour | Remove legacy fallbacks to `current_app_id` in handlers |
-| 4d | [remove-global-state-updates](tasks/04d-remove-global-state-updates.md) | Not Started | 4c | 0.5 hours | Stop updating global AppState fields from session events |
-| 4e | [remove-appstate-fields](tasks/04e-remove-appstate-fields.md) | Not Started | 4d | 2 hours | Remove legacy fields and methods from AppState |
-| 4f | [cleanup-actions-legacy](tasks/04f-cleanup-actions-legacy.md) | Not Started | 4e | 0.5 hours | Remove session_id checks and global cmd_sender updates |
-| 4g | [update-tests](tasks/04g-update-tests.md) | Not Started | 4f | 1.5 hours | Update/remove tests that rely on legacy behavior |
+| 4a | [autostart-session-refactor](tasks/04a-autostart-session-refactor.md) | ✅ Done | Tasks 01-03, 05 | 2 hours | Refactor auto-start to use sessions instead of owning FlutterProcess directly |
+| 4b | [remove-message-daemon](tasks/04b-remove-message-daemon.md) | ✅ Done | 4a | 1 hour | Remove `Message::Daemon` variant and `handle_daemon_event()` |
+| 4c | [remove-fallback-paths](tasks/04c-remove-fallback-paths.md) | ✅ Done | 4b | 1 hour | Remove legacy fallbacks to `current_app_id` in handlers |
+| 4d | [remove-global-state-updates](tasks/04d-remove-global-state-updates.md) | ✅ Done | 4c | 0.5 hours | Stop updating global AppState fields from session events |
+| 4e | [remove-appstate-fields](tasks/04e-remove-appstate-fields.md) | ✅ Done | 4d | 2 hours | Remove legacy fields and methods from AppState |
+| 4f | [cleanup-actions-legacy](tasks/04f-cleanup-actions-legacy.md) | ✅ Done | 4e | 0.5 hours | Remove session_id checks and global cmd_sender updates |
+| 4g | [update-tests](tasks/04g-update-tests.md) | ✅ Done | 4f | 1.5 hours | Update/remove tests that rely on legacy behavior |
 
 ---
 
@@ -298,13 +298,13 @@ Task 4 is a significant refactor broken into 7 incremental subtasks that **MUST 
 | 01 - Persistent Session Header | ✅ Done | Implemented single-session subheader display |
 | 02 - Status Bar Config Info | ✅ Done | Replaced device info with build config |
 | 03 - Shutdown Optimization | ✅ Done | Reduced timeouts, added fast exit path |
-| 04 - Legacy Code Removal | Not Started | Expanded to 7 subtasks |
-| 04a - Auto-start Refactor | Not Started | First step - refactor to use sessions |
-| 04b - Remove Message::Daemon | Not Started | Depends on 4a |
-| 04c - Remove Fallback Paths | Not Started | Depends on 4b |
-| 04d - Remove Global Updates | Not Started | Depends on 4c |
-| 04e - Remove AppState Fields | Not Started | Depends on 4d - highest risk |
-| 04f - Clean Up actions.rs | Not Started | Depends on 4e |
-| 04g - Update Tests | Not Started | Depends on 4f - final step |
+| 04 - Legacy Code Removal | ✅ Done | 7/7 subtasks complete, ~500+ lines removed |
+| 04a - Auto-start Refactor | ✅ Done | Refactored to use sessions, removed daemon_rx |
+| 04b - Remove Message::Daemon | ✅ Done | Removed ~130 lines of legacy code |
+| 04c - Remove Fallback Paths | ✅ Done | Removed ~50 lines, 11 tests commented |
+| 04d - Remove Global Updates | ✅ Done | Removed ~21 lines from session.rs and update.rs |
+| 04e - Remove AppState Fields | ✅ Done | Removed 11 fields, 9 methods, 6 message variants |
+| 04f - Clean Up actions.rs | ✅ Done | Removed cmd_sender params, ~40 lines of legacy code |
+| 04g - Update Tests | ✅ Done | Removed ~200 lines of commented-out legacy test code |
 | 05 - Watcher Multi-Session Reload | ✅ Done | Auto-reload triggers all sessions |
-| **Overall Progress** | **80%** | 4/5 main tasks complete, Task 4 expanded |
+| **Overall Progress** | **100%** | 5/5 main tasks complete, Task 4: 7/7 subtasks done |

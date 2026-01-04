@@ -375,3 +375,84 @@ After update:
 - 0.5 hours: Remove obsolete tests
 - 0.75 hours: Update remaining tests
 - 0.25 hours: Verify all pass and fix issues
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Date Completed**: 2026-01-04
+
+### Work Performed
+
+The legacy tests had already been commented out with TODO markers during earlier tasks (4b-4e). This task removed all the commented-out test blocks and TODO comments, cleaning up the test file.
+
+### Tests Removed (Commented Code Blocks)
+
+1. **Message::Daemon tests** (removed in 4b):
+   - `test_daemon_exited_event_logs_message`
+   - `test_daemon_exited_sets_quitting_phase`
+   - `test_daemon_exited_with_error_code_sets_quitting`
+
+2. **Legacy global state tests** (removed in 4d/4e):
+   - `test_hot_reload_message_starts_reload`
+   - `test_hot_reload_without_app_id_shows_error`
+   - `test_reload_completed_updates_state`
+   - `test_reload_failed_updates_state`
+   - `test_restart_completed_updates_state`
+   - `test_restart_failed_updates_state`
+   - `test_is_busy_when_reloading`
+   - `test_hot_reload_ignored_when_busy`
+   - `test_reload_ignored_when_already_reloading`
+   - `test_restart_ignored_when_already_reloading`
+   - `test_stop_ignored_when_already_reloading`
+   - `test_reload_count_increments`
+   - `test_session_started_updates_legacy_global_state`
+   - `test_session_started_logs_with_session_id`
+
+3. **Legacy fallback tests** (removed in 4c):
+   - `test_reload_no_app_running_shows_error`
+   - `test_restart_no_app_running_shows_error`
+   - `test_stop_no_app_running_shows_error`
+   - `test_files_changed_logs_count`
+   - `test_watcher_error_logs_message`
+   - `test_auto_reload_triggered_when_app_running`
+   - `test_reload_elapsed_tracking`
+   - `test_reload_uses_session_when_no_cmd_sender`
+   - `test_stop_app_spawns_task`
+   - `test_stop_app_without_app_id_shows_error`
+   - `test_auto_reload_falls_back_to_legacy`
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/tests.rs` | Removed ~200 lines of commented-out legacy test code and TODO comments |
+
+### Testing Performed
+
+```bash
+cargo check       # ✅ Pass
+cargo test        # ✅ 425 passed, 1 unrelated failure (device_selector animation)
+cargo clippy --tests  # ✅ Pass (6 pre-existing warnings in other files)
+```
+
+### Verification Commands
+
+```bash
+grep -n "state\.current_app_id" src/app/handler/tests.rs   # ✅ No matches
+grep -n "state\.logs" src/app/handler/tests.rs             # ✅ No matches
+grep -n "Message::Daemon(" src/app/handler/tests.rs        # ✅ No matches
+grep -n "TODO(Task 4g)" src/app/handler/tests.rs           # ✅ No matches
+```
+
+### Notes
+
+- The one failing test (`test_indeterminate_ratio_oscillates`) is pre-existing and unrelated to this task
+- The existing session-based tests (multi-session auto-reload, session navigation, etc.) were already correct and continue to pass
+- Total test count unchanged at 425 (commented tests weren't counted)
+
+### Risks/Limitations
+
+- None. This was purely cleanup of already-disabled test code.

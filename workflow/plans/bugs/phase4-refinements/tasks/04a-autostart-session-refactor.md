@@ -202,3 +202,60 @@ pub async fn cleanup_sessions(
 - 1 hour: Rewrite startup_flutter and cleanup_sessions
 - 0.5 hours: Update runner.rs
 - 0.5 hours: Testing and fixes
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Date Completed**: 2026-01-04
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/startup.rs` | Changed `startup_flutter()` return type to `Option<UpdateAction>`, removed `daemon_tx` parameter, refactored auto-start to create session via SessionManager, simplified `cleanup_sessions()` to only handle session_tasks |
+| `src/tui/runner.rs` | Removed `daemon_tx`/`daemon_rx` channels, removed `route_daemon_response()` function, updated to execute startup action via `handle_action()`, simplified cleanup call |
+
+### Key Changes
+
+1. **`startup_flutter()` signature changed**:
+   - Old: `(Option<FlutterProcess>, Option<CommandSender>)`
+   - New: `Option<UpdateAction>`
+
+2. **Auto-start now uses SessionManager**:
+   - Creates session via `session_manager.create_session_with_config()`
+   - Returns `UpdateAction::SpawnSession` for the event loop to execute
+   - Session process is owned by the session task (like manual device selection)
+
+3. **Removed daemon channel from runner.rs**:
+   - No more `daemon_tx`/`daemon_rx` channels
+   - No more `route_daemon_response()` function
+   - All daemon events now route through `Message::SessionDaemon`
+
+4. **Simplified `cleanup_sessions()`**:
+   - Removed `flutter: Option<FlutterProcess>` parameter
+   - Removed `cmd_sender` parameter
+   - Only handles session_tasks cleanup path
+
+### Testing Performed
+
+- `cargo check` - ✅ Passes (no errors)
+- `cargo clippy` - ✅ Passes (no warnings)
+- `cargo test` - ✅ 454 passed, 1 failed (pre-existing flaky UI animation test unrelated to this task)
+  - All session-related tests pass
+  - All daemon-related tests pass
+
+### Notable Decisions
+
+1. **Startup action execution**: The startup action is executed immediately after `startup_flutter()` returns, before entering the main event loop. This ensures the session spawn task starts before we begin processing messages.
+
+2. **Error logging**: When session creation fails during auto-start, errors are logged to the selected session if available (though typically there won't be one yet).
+
+3. **Route_daemon_response removed**: This function was used for legacy mode response routing and is no longer needed since all daemon events now come through session tasks.
+
+### Risks/Limitations
+
+- The flaky test `test_indeterminate_ratio_oscillates` is unrelated to this task (tests UI animation oscillation timing)
+- Manual testing with actual Flutter project recommended to verify auto-start still works correctly

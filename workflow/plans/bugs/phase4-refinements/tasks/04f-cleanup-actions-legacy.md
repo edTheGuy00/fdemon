@@ -351,5 +351,60 @@ After this task, consider whether the global `cmd_sender: Arc<Mutex<Option<Comma
 **30 minutes**
 
 - 15 minutes: Remove session_id checks and global sender updates
-- 10 minutes: Update signatures and call sites  
+- 10 minutes: Update signatures and call sites
 - 5 minutes: Compile and verify
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Date Completed**: 2026-01-04
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/actions.rs` | Removed cmd_sender parameter from `handle_action` and `spawn_session`, removed global cmd_sender fallback, removed legacy cmd_sender updates/clears |
+| `src/tui/process.rs` | Removed cmd_sender parameter from `process_message`, removed `session_id > 0` check in `get_session_cmd_sender` |
+| `src/tui/runner.rs` | Removed global `cmd_sender` variable, removed `CommandSender` import, updated all call sites |
+
+### Lines Removed
+
+- **actions.rs**: ~25 lines removed (global cmd_sender fallback, update, clear)
+- **process.rs**: ~5 lines removed (cmd_sender parameter, session_id check)
+- **runner.rs**: ~10 lines removed (cmd_sender creation and passing)
+
+**Total: ~40 lines removed**
+
+### Notable Decisions
+
+1. **Simplified SpawnTask handling**: Instead of having an if/else with fallback, now directly passes `session_cmd_sender` to `execute_task` (which already handles `None` gracefully)
+
+2. **Removed global cmd_sender entirely from runner.rs**: Since it was only used for backward compatibility, it was completely removed rather than kept as dead code
+
+3. **Updated run_loop signature**: Reduced from 8 to 7 parameters by removing cmd_sender
+
+### Testing Performed
+
+```bash
+cargo check       # ✅ Pass
+cargo clippy      # ✅ Pass (no warnings)
+cargo fmt         # ✅ Pass (fixed unrelated formatting in update.rs)
+cargo test        # ✅ 425 passed, 1 unrelated failure in device_selector animation test
+```
+
+### Verification Commands
+
+```bash
+grep -n "session_id > 0" src/tui/actions.rs   # ✅ No matches
+grep -n "session_id: 0" src/tui/actions.rs    # ✅ No matches
+grep -n "legacy" src/tui/actions.rs           # ✅ No matches
+grep -n "cmd_sender_clone" src/tui/actions.rs # ✅ No matches
+```
+
+### Risks/Limitations
+
+- None identified. The changes are straightforward removal of dead code paths.
+- The one failing test (`test_indeterminate_ratio_oscillates`) is pre-existing and unrelated to this task.

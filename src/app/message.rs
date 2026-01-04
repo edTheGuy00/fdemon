@@ -11,9 +11,6 @@ pub enum Message {
     /// Keyboard event from terminal
     Key(KeyEvent),
 
-    /// Event from Flutter daemon (legacy single-session mode)
-    Daemon(DaemonEvent),
-
     /// Event from Flutter daemon with session context (multi-session mode)
     SessionDaemon {
         session_id: SessionId,
@@ -62,30 +59,18 @@ pub enum Message {
     StopApp,
 
     // ─────────────────────────────────────────────────────────
-    // Internal State Updates
+    // Session Reload/Restart Completion (multi-session mode)
     // ─────────────────────────────────────────────────────────
-    /// Reload started
-    ReloadStarted,
-    /// Reload completed successfully
-    ReloadCompleted { time_ms: u64 },
-    /// Reload failed
-    ReloadFailed { reason: String },
-    /// Session-specific reload completed (for multi-session auto-reload)
+    /// Session-specific reload completed
     SessionReloadCompleted { session_id: SessionId, time_ms: u64 },
-    /// Session-specific reload failed (for multi-session auto-reload)
+    /// Session-specific reload failed
     SessionReloadFailed {
         session_id: SessionId,
         reason: String,
     },
-    /// Restart started
-    RestartStarted,
-    /// Restart completed
-    RestartCompleted,
-    /// Restart failed
-    RestartFailed { reason: String },
-    /// Session-specific restart completed (for multi-session mode)
+    /// Session-specific restart completed
     SessionRestartCompleted { session_id: SessionId },
-    /// Session-specific restart failed (for multi-session mode)
+    /// Session-specific restart failed
     SessionRestartFailed {
         session_id: SessionId,
         reason: String,

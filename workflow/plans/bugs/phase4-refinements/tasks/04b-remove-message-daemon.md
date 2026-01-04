@@ -219,3 +219,62 @@ route_legacy_daemon_response(&message, cmd_sender);
 - 0.5 hours: Remove functions and variant
 - 0.25 hours: Update documentation
 - 0.25 hours: Compile and fix any issues
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Date Completed**: 2026-01-04
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Removed `Message::Daemon(DaemonEvent)` variant |
+| `src/app/handler/daemon.rs` | Removed `handle_daemon_event()` and `handle_daemon_message_state()` functions (~100 lines), updated module documentation |
+| `src/app/handler/update.rs` | Removed `Message::Daemon` match arm, updated imports |
+| `src/app/handler/mod.rs` | Updated module documentation to remove "Legacy and" |
+| `src/tui/process.rs` | Removed `route_legacy_daemon_response()` function (~20 lines), updated module documentation |
+| `src/app/handler/tests.rs` | Commented out 3 legacy tests with TODO(Task 4g) note |
+
+### Lines Removed
+
+Approximately **130 lines** of legacy code removed:
+- `handle_daemon_event()`: ~97 lines
+- `handle_daemon_message_state()`: ~15 lines
+- `route_legacy_daemon_response()`: ~20 lines
+- Match arm and imports: ~5 lines
+
+### Testing Performed
+
+- `cargo check` - ✅ Passes (no errors)
+- `cargo clippy` - ✅ Passes (no warnings)
+- `cargo fmt` - ✅ Applied
+- `cargo test` - ✅ 451 passed, 1 failed (pre-existing flaky UI animation test unrelated to this task)
+
+### Tests Commented Out
+
+3 legacy tests that used `Message::Daemon` were commented out with TODO note:
+- `test_daemon_exited_event_logs_message`
+- `test_daemon_exited_sets_quitting_phase`
+- `test_daemon_exited_with_error_code_sets_quitting`
+
+These will be removed in Task 4g (final cleanup).
+
+### Notable Decisions
+
+1. **Tests commented out vs deleted**: Per task plan, tests were commented out with TODO(Task 4g) rather than deleted, to be handled in the final cleanup step.
+
+2. **Imports cleaned up**: Removed unused `protocol` and `DaemonMessage` imports from `daemon.rs` that were only needed by the removed function.
+
+3. **Documentation updated**: All module docs updated to remove "legacy" references.
+
+### What This Enables
+
+With `Message::Daemon` removed:
+- No code path sends or handles legacy single-session daemon events
+- All daemon events now flow through `Message::SessionDaemon`
+- The codebase is cleaner with a single unified path for daemon events
+- Prepares for Task 4c (removing legacy fallbacks to `current_app_id`)

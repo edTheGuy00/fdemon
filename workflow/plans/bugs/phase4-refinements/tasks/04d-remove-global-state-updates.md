@@ -262,3 +262,56 @@ grep -n "state\.platform\s*=" src/app/handler/*.rs
 
 - 15 minutes: Remove the lines
 - 15 minutes: Compile and verify
+
+---
+
+## Completion Summary
+
+**Status: ✅ Done**
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/session.rs` | Removed 6 lines: global `state.current_app_id` updates in both AppStart and AppStop handlers |
+| `src/app/handler/update.rs` | Removed 15 lines: global state updates (`device_name`, `platform`, `phase`, `session_start`) and global log call in SessionStarted handler |
+
+### Changes Made
+
+1. **session.rs** (`handle_session_message_state`):
+   - Removed `state.current_app_id = Some(app_start.app_id.clone());` in AppStart handler
+   - Removed `if state.current_app_id.as_ref() == Some(&app_stop.app_id) { ... }` block in AppStop handler
+   - Removed "legacy compatibility" comments
+
+2. **update.rs** (`Message::SessionStarted` handler):
+   - Removed `state.device_name = Some(device_name.clone());`
+   - Removed `state.platform = Some(platform.clone());`
+   - Removed `state.phase = AppPhase::Running;`
+   - Removed `state.session_start = Some(chrono::Local::now());`
+   - Removed `state.log_info(...)` global log call
+   - Prefixed unused `platform` parameter with `_`
+   - Updated session log message to include device_name
+
+### Testing Performed
+
+- `cargo check` - PASS (compiles cleanly)
+- Grep verification:
+  - `state.device_name =` in handlers: 0 matches
+  - `state.platform =` in handlers: 0 matches
+  - `state.current_app_id =` in handlers: only in tests (to be updated in Task 4g)
+  - "legacy compatibility" comments: 0 matches
+
+### Acceptance Criteria Verification
+
+1. ✅ No `state.current_app_id = ` assignments in session.rs
+2. ✅ No `state.device_name = ` assignments in update.rs
+3. ✅ No `state.platform = ` assignments in update.rs
+4. ✅ No comments mentioning "legacy compatibility" in handlers
+5. ✅ Session-level state still updated correctly
+6. ✅ `cargo check` passes
+
+### Notes
+
+- Tests in `tests.rs` that use `state.current_app_id` are either commented out (from Task 4c) or setup code for other tests
+- These test updates will be handled in Task 4g as planned
+- Unused fields in AppState will generate warnings - these are expected and will be resolved in Task 4e
