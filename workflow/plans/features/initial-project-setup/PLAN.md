@@ -632,78 +632,38 @@ For **plugins**, we recursively check `example/` and `sample/` subdirectories fo
 
 ---
 
-### Phase 4: Advanced Features (Polish)
+**Note**: Phases 4 and 5 from the original plan have been moved to dedicated feature plans:
 
-**Goal**: Feature parity with VS Code Flutter extension.
-
-**Duration**: 2-3 weeks
-
-#### Steps
-
-1. **DevTools Integration**
-   - Capture DevTools URL from `app.devTools` event
-   - Open in default browser using `open` crate
-   - Display URL in status bar for manual copy
-
-2. **Log Filtering & Search**
-   - Filter modes: All, Errors, Network, Print statements
-   - Regex search within logs
-   - Highlight matched terms
-   - Persist filter preference
-
-3. **Error Highlighting**
-   - Parse Dart stack traces with regex
-   - Highlight file:line references
-   - Color-code error severity
-   - Collapsible stack trace sections
-
-4. **Pubspec Watcher**
-   - Watch `pubspec.yaml` and `pubspec.lock`
-   - Detect dependency changes
-   - Prompt to run `flutter pub get`
-   - Show pub get output in log area
-
-5. **Session Persistence**
-   - Remember last used device
-   - Remember window position/size (if terminal supports)
-   - Log history saved to file (optional)
-
-6. **Mouse Support**
-   - Clickable header buttons
-   - Scrollable log area with mouse wheel
-   - Log entry selection
-
-**Milestone Deliverable**: Production-ready TUI with all essential Flutter development features.
+- **DevTools Integration**: See [../devtools-integration/PLAN.md](../devtools-integration/PLAN.md)
+- **Log & Config Enhancements**: See [../log-config-enhancements/PLAN.md](../log-config-enhancements/PLAN.md)
+- **Deferred Ideas**: See [../../../../docs/IDEAS.md](../../../../docs/IDEAS.md)
 
 ---
 
-### Phase 5: Multi-Session & Extensibility (Future)
+## Completed Phases Summary
 
-**Goal**: Support advanced workflows and extensibility.
+### ✅ Phase 1: Foundation (Complete)
+- TUI initializes and displays without errors
+- Flutter process spawns and output appears
+- Clean exit with Ctrl+C or 'q'
 
-**Duration**: 3-4 weeks (future roadmap)
+### ✅ Phase 1.1: Flutter Project Discovery (Complete)
+- Automatic discovery of runnable Flutter projects
+- Plugin/package detection and example project discovery
+- Project selector for multi-project directories
 
-#### Steps
+### ✅ Phase 2: Protocol Integration (Complete)
+- Parsed, formatted logs display correctly
+- Hot reload (r) and restart (R) work
+- File save triggers auto-reload
+- Status bar shows current app state
 
-1. **Multiple App Sessions**
-   - Tab-based UI for multiple running apps
-   - Keyboard shortcuts to switch tabs
-   - Independent log buffers per session
-
-2. **Terminal Hyperlinks**
-   - OSC 8 escape sequences for clickable links
-   - Click file:line to open in editor
-   - Configurable editor command
-
-3. **Plugin System**
-   - Lua or WASM-based plugins
-   - Custom commands and widgets
-   - Theme customization
-
-4. **Remote Development**
-   - SSH tunnel support
-   - Remote Flutter daemon connection
-   - Cloud device support
+### ✅ Phase 3: Device & Launch Management (Complete)
+- Device selection works at startup
+- Configuration file is parsed and applied
+- UI layout matches design specification
+- All keyboard shortcuts functional
+- Multi-session support (multiple devices per app)
 
 ---
 
@@ -1038,18 +998,35 @@ Status bar segments:
 
 ---
 
-## Future Considerations (Deferred)
+## Future Considerations
 
-These features are explicitly deferred for future versions:
+Features planned for future development are documented in dedicated plans:
+
+### Active Feature Plans
+
+| Feature | Plan Document | Priority |
+|---------|---------------|----------|
+| **DevTools Integration** | [../devtools-integration/PLAN.md](../devtools-integration/PLAN.md) | High |
+| **Log & Config Enhancements** | [../log-config-enhancements/PLAN.md](../log-config-enhancements/PLAN.md) | High |
+| **MCP Server Integration** | [../mcp-server/PLAN.md](../mcp-server/PLAN.md) | High |
+
+### Deferred Ideas
+
+Lower-priority ideas and features under consideration are documented in:
+- [../../../../docs/IDEAS.md](../../../../docs/IDEAS.md)
+
+This includes:
+- Pubspec Watcher
+- Mouse Support
+- Remote Development
+- Plugin System
+
+### Other Considerations
 
 1. **Flutter Attach Mode** - Connect to already-running apps
 2. **Additional Editor Support** - VS Code, Neovim, Emacs, Sublime
 3. **Log Persistence** - Save logs to disk for post-mortem analysis
 4. **Daemon/Headless Mode** - IPC-based communication for editor extensions
-5. **Multiple Sessions** - Tab-based UI for running multiple apps
-6. **Terminal Hyperlinks** - OSC 8 clickable links in log output
-7. **Plugin System** - Lua/WASM extensibility
-8. **MCP Server Integration** - Expose Flutter Demon as an MCP (Model Context Protocol) server for AI agent control
 
 ### MCP Server Integration (Priority Feature)
 
@@ -1080,28 +1057,36 @@ To minimize future refactoring, the following patterns should be adopted during 
 
 ## Success Criteria
 
-### Phase 1 Complete When:
-- [ ] TUI initializes and displays without errors
-- [ ] Flutter process spawns and output appears
-- [ ] Clean exit with Ctrl+C or 'q'
+### ✅ Phase 1 Complete:
+- [x] TUI initializes and displays without errors
+- [x] Flutter process spawns and output appears
+- [x] Clean exit with Ctrl+C or 'q'
 
-### Phase 2 Complete When:
-- [ ] Parsed, formatted logs display correctly
-- [ ] Hot reload (r) and restart (R) work
-- [ ] File save triggers auto-reload
-- [ ] Status bar shows current app state
+### ✅ Phase 1.1 Complete:
+- [x] Runnable Flutter projects discovered automatically
+- [x] Plugins/packages detected and examples found
+- [x] Project selector works for multi-project directories
 
-### Phase 3 Complete When:
-- [ ] Device selection works at startup
-- [ ] Configuration file is parsed and applied
-- [ ] UI layout matches design specification
-- [ ] All keyboard shortcuts functional
+### ✅ Phase 2 Complete:
+- [x] Parsed, formatted logs display correctly
+- [x] Hot reload (r) and restart (R) work
+- [x] File save triggers auto-reload
+- [x] Status bar shows current app state
 
-### Phase 4 Complete When:
-- [ ] DevTools opens in browser
-- [ ] Log filtering works with multiple modes
-- [ ] Error stack traces are highlighted
-- [ ] Pubspec changes trigger pub get prompt
+### ✅ Phase 3 Complete:
+- [x] Device selection works at startup
+- [x] Configuration file is parsed and applied
+- [x] UI layout matches design specification
+- [x] All keyboard shortcuts functional
+- [x] Multi-session support for multiple devices
+
+### Initial Project Setup Complete ✅
+
+The initial project setup phases (1-3) are now complete. Further development continues in dedicated feature plans:
+
+- **DevTools Integration**: [../devtools-integration/PLAN.md](../devtools-integration/PLAN.md)
+- **Log & Config Enhancements**: [../log-config-enhancements/PLAN.md](../log-config-enhancements/PLAN.md)
+- **MCP Server**: [../mcp-server/PLAN.md](../mcp-server/PLAN.md)
 
 ### Project Complete When:
 - [ ] Works on macOS, Linux, and Windows
