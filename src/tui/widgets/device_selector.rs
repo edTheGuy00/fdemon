@@ -14,9 +14,6 @@ use ratatui::{
 
 use crate::daemon::Device;
 
-/// Spinner frames for loading animation (Braille pattern)
-const SPINNER_FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
-
 /// State for the device selector UI
 #[derive(Debug, Clone, Default)]
 pub struct DeviceSelectorState {
@@ -74,17 +71,11 @@ impl DeviceSelectorState {
         self.animation_frame = self.animation_frame.wrapping_add(1);
     }
 
-    /// Get the current spinner character
-    pub fn spinner_char(&self) -> &'static str {
-        let idx = (self.animation_frame / 3) as usize % SPINNER_FRAMES.len();
-        SPINNER_FRAMES[idx]
-    }
-
     /// Calculate indeterminate progress ratio (0.0 to 1.0)
     /// Creates a bouncing effect from left to right and back
     pub fn indeterminate_ratio(&self) -> f64 {
         // Complete cycle every 60 frames (about 1 second at 60fps)
-        let cycle_length = 60;
+        let cycle_length = 300;
         let position = self.animation_frame % cycle_length;
 
         // First half: 0.0 -> 1.0, Second half: 1.0 -> 0.0
@@ -109,6 +100,7 @@ impl DeviceSelectorState {
     /// Show with cached devices, refresh in background
     pub fn show_refreshing(&mut self) {
         self.visible = true;
+        self.animation_frame = 0;
 
         // Use cached devices if available
         if let Some(ref cached) = self.cached_devices {
@@ -822,29 +814,6 @@ mod tests {
 
         state.tick();
         assert_eq!(state.animation_frame, 0);
-    }
-
-    #[test]
-    fn test_spinner_char_cycles() {
-        let mut state = DeviceSelectorState::new();
-
-        // Each spinner frame is shown for 3 ticks
-        let first = state.spinner_char();
-
-        // After 3 ticks, should show next frame
-        state.tick();
-        state.tick();
-        state.tick();
-        let second = state.spinner_char();
-        assert_ne!(first, second);
-
-        // To cycle back to first frame, we need 21 more ticks
-        // (total 24 ticks -> frame index 24/3 = 8, and 8 % 8 = 0)
-        for _ in 0..21 {
-            state.tick();
-        }
-        // Should cycle back to first frame
-        assert_eq!(state.spinner_char(), first);
     }
 
     #[test]
