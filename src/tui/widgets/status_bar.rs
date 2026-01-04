@@ -1,8 +1,9 @@
 //! Status bar widget
 //!
-//! Displays app state, device info, session timer, and reload status.
+//! Displays app state, build config info, session timer, and reload status.
 
 use crate::app::state::AppState;
+use crate::config::FlutterMode;
 use crate::core::AppPhase;
 use ratatui::{
     buffer::Buffer,
@@ -51,22 +52,38 @@ impl<'a> StatusBar<'a> {
         }
     }
 
-    /// Get device info span
-    fn device_info(&self) -> Option<Span<'static>> {
-        match (&self.state.device_name, &self.state.platform) {
-            (Some(name), Some(platform)) => Some(Span::styled(
-                format!("{} ({})", name, platform),
-                Style::default().fg(Color::Cyan),
-            )),
-            (Some(name), None) => {
-                Some(Span::styled(name.clone(), Style::default().fg(Color::Cyan)))
-            }
-            (None, Some(platform)) => Some(Span::styled(
-                format!("({})", platform),
-                Style::default().fg(Color::Cyan),
-            )),
-            _ => None,
-        }
+    /// Get build configuration info span (Debug/Profile/Release + optional flavor)
+    fn config_info(&self) -> Option<Span<'static>> {
+        // Get selected session's config
+        let session = self.state.session_manager.selected()?;
+        let session_data = &session.session;
+
+        // Get mode and flavor from launch_config, default to Debug
+        let (mode, flavor) = match &session_data.launch_config {
+            Some(config) => (config.mode, config.flavor.clone()),
+            None => (FlutterMode::Debug, None),
+        };
+
+        // Format the display string with capitalized mode name
+        let mode_str = match mode {
+            FlutterMode::Debug => "Debug",
+            FlutterMode::Profile => "Profile",
+            FlutterMode::Release => "Release",
+        };
+
+        let display = match flavor {
+            Some(f) => format!("{} ({})", mode_str, f),
+            None => mode_str.to_string(),
+        };
+
+        // Color based on mode
+        let color = match mode {
+            FlutterMode::Debug => Color::Green,
+            FlutterMode::Profile => Color::Yellow,
+            FlutterMode::Release => Color::Magenta,
+        };
+
+        Some(Span::styled(display, Style::default().fg(color)))
     }
 
     /// Get Flutter version span
@@ -122,10 +139,10 @@ impl<'a> StatusBar<'a> {
         segments.push(Span::raw(" "));
         segments.push(self.state_indicator());
 
-        // Device info
-        if let Some(device) = self.device_info() {
+        // Build config info (Debug/Profile/Release + flavor)
+        if let Some(config) = self.config_info() {
             segments.push(separator.clone());
-            segments.push(device);
+            segments.push(config);
         }
 
         // Flutter version
@@ -226,12 +243,27 @@ impl Widget for StatusBarCompact<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::LaunchConfig;
+    use crate::daemon::Device;
     use chrono::{Duration, Local};
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
     fn create_test_state() -> AppState {
         AppState::new()
+    }
+
+    fn test_device(id: &str, name: &str) -> Device {
+        Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
     }
 
     #[test]
@@ -281,35 +313,90 @@ mod tests {
     }
 
     #[test]
-    fn test_device_info_both() {
+    fn test_config_info_debug_mode() {
         let mut state = create_test_state();
-        state.device_name = Some("iPhone 15 Pro".to_string());
-        state.platform = Some("ios".to_string());
+        let device = test_device("d1", "iPhone");
+        let mut config = LaunchConfig::default();
+        config.mode = FlutterMode::Debug;
+        config.flavor = None;
+
+        let id = state
+            .session_manager
+            .create_session_with_config(&device, config)
+            .unwrap();
+        state.session_manager.select_by_id(id);
 
         let bar = StatusBar::new(&state);
-        let device = bar.device_info().unwrap();
+        let config_span = bar.config_info().unwrap();
 
-        assert!(device.content.to_string().contains("iPhone 15 Pro"));
-        assert!(device.content.to_string().contains("ios"));
+        assert!(config_span.content.to_string().contains("Debug"));
+        assert_eq!(config_span.style.fg, Some(Color::Green));
     }
 
     #[test]
-    fn test_device_info_name_only() {
+    fn test_config_info_profile_mode() {
         let mut state = create_test_state();
-        state.device_name = Some("Pixel".to_string());
+        let device = test_device("d1", "iPhone");
+        let mut config = LaunchConfig::default();
+        config.mode = FlutterMode::Profile;
+        config.flavor = None;
+
+        let id = state
+            .session_manager
+            .create_session_with_config(&device, config)
+            .unwrap();
+        state.session_manager.select_by_id(id);
 
         let bar = StatusBar::new(&state);
-        let device = bar.device_info().unwrap();
+        let config_span = bar.config_info().unwrap();
 
-        assert!(device.content.to_string().contains("Pixel"));
+        assert!(config_span.content.to_string().contains("Profile"));
+        assert_eq!(config_span.style.fg, Some(Color::Yellow));
     }
 
     #[test]
-    fn test_device_info_none() {
+    fn test_config_info_release_with_flavor() {
+        let mut state = create_test_state();
+        let device = test_device("d1", "Pixel");
+        let mut config = LaunchConfig::default();
+        config.mode = FlutterMode::Release;
+        config.flavor = Some("production".to_string());
+
+        let id = state
+            .session_manager
+            .create_session_with_config(&device, config)
+            .unwrap();
+        state.session_manager.select_by_id(id);
+
+        let bar = StatusBar::new(&state);
+        let config_span = bar.config_info().unwrap();
+
+        assert!(config_span.content.to_string().contains("Release"));
+        assert!(config_span.content.to_string().contains("production"));
+        assert_eq!(config_span.style.fg, Some(Color::Magenta));
+    }
+
+    #[test]
+    fn test_config_info_no_session() {
         let state = create_test_state();
         let bar = StatusBar::new(&state);
 
-        assert!(bar.device_info().is_none());
+        assert!(bar.config_info().is_none());
+    }
+
+    #[test]
+    fn test_config_info_no_launch_config() {
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        let bar = StatusBar::new(&state);
+        let config_span = bar.config_info().unwrap();
+
+        // Should default to Debug
+        assert!(config_span.content.to_string().contains("Debug"));
+        assert_eq!(config_span.style.fg, Some(Color::Green));
     }
 
     #[test]
@@ -356,11 +443,21 @@ mod tests {
     }
 
     #[test]
-    fn test_build_segments_with_device() {
+    fn test_build_segments_with_config() {
         let mut state = create_test_state();
         state.phase = AppPhase::Running;
-        state.device_name = Some("Pixel".to_string());
-        state.platform = Some("android".to_string());
+
+        // Create a session with release config and flavor
+        let device = test_device("d1", "Pixel");
+        let mut config = LaunchConfig::default();
+        config.mode = FlutterMode::Release;
+        config.flavor = Some("staging".to_string());
+
+        let id = state
+            .session_manager
+            .create_session_with_config(&device, config)
+            .unwrap();
+        state.session_manager.select_by_id(id);
 
         let bar = StatusBar::new(&state);
         let segments = bar.build_segments();
@@ -369,8 +466,8 @@ mod tests {
         let content: String = segments.iter().map(|s| s.content.to_string()).collect();
 
         assert!(content.contains("Running"));
-        assert!(content.contains("Pixel"));
-        assert!(content.contains("android"));
+        assert!(content.contains("Release"));
+        assert!(content.contains("staging"));
     }
 
     #[test]
@@ -380,8 +477,17 @@ mod tests {
 
         let mut state = create_test_state();
         state.phase = AppPhase::Running;
-        state.device_name = Some("Test Device".to_string());
-        state.platform = Some("test".to_string());
+
+        // Create a session with config
+        let device = test_device("d1", "Test Device");
+        let mut config = LaunchConfig::default();
+        config.mode = FlutterMode::Debug;
+
+        let id = state
+            .session_manager
+            .create_session_with_config(&device, config)
+            .unwrap();
+        state.session_manager.select_by_id(id);
 
         terminal
             .draw(|frame| {
@@ -396,7 +502,7 @@ mod tests {
         let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
 
         assert!(content.contains("Running"));
-        assert!(content.contains("Test Device"));
+        assert!(content.contains("Debug")); // Config info now shows instead of device
     }
 
     #[test]

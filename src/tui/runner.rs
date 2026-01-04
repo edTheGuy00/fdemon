@@ -60,9 +60,14 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Determine startup behavior based on settings
-    let (flutter, initial_cmd_sender) =
-        startup::startup_flutter(&mut state, &settings, project_path, daemon_tx, msg_tx.clone())
-            .await;
+    let (flutter, initial_cmd_sender) = startup::startup_flutter(
+        &mut state,
+        &settings,
+        project_path,
+        daemon_tx,
+        msg_tx.clone(),
+    )
+    .await;
 
     // If we auto-started, set the initial command sender
     if let Some(sender) = initial_cmd_sender {

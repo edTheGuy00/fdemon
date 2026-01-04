@@ -182,10 +182,10 @@ pub async fn cleanup_sessions(
             );
             let _ = shutdown_tx.send(true);
 
-            // Wait for all tasks with timeout
+            // Wait for all tasks with reduced timeout (2s instead of 5s for faster shutdown)
             for (session_id, handle) in tasks {
                 info!("Waiting for session {} to complete shutdown...", session_id);
-                match tokio::time::timeout(std::time::Duration::from_secs(5), handle).await {
+                match tokio::time::timeout(std::time::Duration::from_secs(2), handle).await {
                     Ok(Ok(())) => info!("Session {} completed cleanly", session_id),
                     Ok(Err(e)) => warn!("Session {} task panicked: {}", session_id, e),
                     Err(_) => warn!(

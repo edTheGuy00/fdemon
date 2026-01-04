@@ -159,6 +159,9 @@ fn spawn_session(
                 // Track app_id from events for shutdown
                 let mut app_id: Option<String> = None;
 
+                // Track if process has already exited (for fast shutdown path)
+                let mut process_exited = false;
+
                 // Forward daemon events to the main message channel
                 // This runs until the process exits, main loop closes, or shutdown signal
                 loop {
@@ -166,6 +169,11 @@ fn spawn_session(
                         event = daemon_rx.recv() => {
                             match event {
                                 Some(event) => {
+                                    // Track exit events for fast shutdown
+                                    if matches!(event, DaemonEvent::Exited { .. }) {
+                                        process_exited = true;
+                                    }
+
                                     // Capture app_id from stdout events
                                     if let DaemonEvent::Stdout(ref line) = event {
                                         if let Some(json) = protocol::strip_brackets(line) {
@@ -191,7 +199,8 @@ fn spawn_session(
                                     }
                                 }
                                 None => {
-                                    // Channel closed, process ended
+                                    // Channel closed, process likely ended
+                                    process_exited = true;
                                     break;
                                 }
                             }
@@ -207,16 +216,24 @@ fn spawn_session(
                     }
                 }
 
-                // Graceful shutdown when loop ends - use session's own sender
-                info!("Session {} ending, initiating shutdown...", session_id);
-                if let Err(e) = process
-                    .shutdown(app_id.as_deref(), Some(&session_sender))
-                    .await
-                {
-                    warn!(
-                        "Shutdown error for session {} (process may already be gone): {}",
-                        session_id, e
+                // Fast shutdown path: skip shutdown commands if we know process already exited
+                if process_exited {
+                    info!(
+                        "Session {} process already exited, skipping shutdown commands",
+                        session_id
                     );
+                } else {
+                    // Graceful shutdown when loop ends - use session's own sender
+                    info!("Session {} ending, initiating shutdown...", session_id);
+                    if let Err(e) = process
+                        .shutdown(app_id.as_deref(), Some(&session_sender))
+                        .await
+                    {
+                        warn!(
+                            "Shutdown error for session {} (process may already be gone): {}",
+                            session_id, e
+                        );
+                    }
                 }
 
                 // Clear the global command sender if it was ours

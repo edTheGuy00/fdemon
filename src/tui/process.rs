@@ -62,10 +62,7 @@ pub fn process_message(
 }
 
 /// Route JSON-RPC responses for legacy daemon events
-fn route_legacy_daemon_response(
-    message: &Message,
-    cmd_sender: &Arc<Mutex<Option<CommandSender>>>,
-) {
+fn route_legacy_daemon_response(message: &Message, cmd_sender: &Arc<Mutex<Option<CommandSender>>>) {
     if let Message::Daemon(DaemonEvent::Stdout(ref line)) = message {
         if let Some(json) = protocol::strip_brackets(line) {
             if let Some(DaemonMessage::Response { id, result, error }) = DaemonMessage::parse(json)

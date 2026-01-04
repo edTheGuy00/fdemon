@@ -286,10 +286,12 @@ impl FlutterProcess {
 
     /// Gracefully shutdown the Flutter process
     ///
-    /// 1. Send app.stop command (if app_id and cmd_sender provided)
-    /// 2. Send daemon.shutdown command
-    /// 3. Wait with timeout
-    /// 4. Force kill if needed
+    /// Optimized for fast shutdown:
+    /// 1. Early exit if process already dead
+    /// 2. Send app.stop command with 1s timeout (reduced from 5s)
+    /// 3. Send daemon.shutdown command
+    /// 4. Wait 2s for graceful exit (reduced from 5s)
+    /// 5. Force kill if needed
     pub async fn shutdown(
         &mut self,
         app_id: Option<&str>,
@@ -298,9 +300,16 @@ impl FlutterProcess {
         use std::time::Duration;
         use tokio::time::timeout;
 
+        // Fast path: if process already exited, we're done
+        if self.has_exited() {
+            info!("Flutter process already exited, skipping shutdown commands");
+            return Ok(());
+        }
+
         info!("Initiating Flutter process shutdown");
 
         // Step 1: Stop the app if we have an app_id and command sender
+        // Reduced timeout from 5s to 1s for faster shutdown
         if let (Some(id), Some(sender)) = (app_id, cmd_sender) {
             info!("Stopping Flutter app: {}", id);
             match sender
@@ -308,12 +317,19 @@ impl FlutterProcess {
                     DaemonCommand::Stop {
                         app_id: id.to_string(),
                     },
-                    Duration::from_secs(5),
+                    Duration::from_secs(1),
                 )
                 .await
             {
                 Ok(_) => info!("App stop command acknowledged"),
-                Err(e) => warn!("App stop command failed (continuing): {}", e),
+                Err(e) => {
+                    // Check if process died while we were waiting
+                    if self.has_exited() {
+                        info!("Process exited during stop command");
+                        return Ok(());
+                    }
+                    warn!("App stop command failed (continuing): {}", e);
+                }
             }
         }
 
@@ -321,8 +337,8 @@ impl FlutterProcess {
         let shutdown_cmd = r#"{"method":"daemon.shutdown","id":9999}"#;
         let _ = self.send_json(shutdown_cmd).await;
 
-        // Step 3: Wait up to 5 seconds for graceful exit
-        match timeout(Duration::from_secs(5), self.child.wait()).await {
+        // Step 3: Wait up to 2 seconds for graceful exit (reduced from 5s)
+        match timeout(Duration::from_secs(2), self.child.wait()).await {
             Ok(Ok(status)) => {
                 info!("Flutter process exited gracefully: {:?}", status);
                 Ok(())
@@ -332,7 +348,7 @@ impl FlutterProcess {
                 self.force_kill().await
             }
             Err(_) => {
-                warn!("Timeout waiting for graceful exit");
+                warn!("Timeout waiting for graceful exit, force killing");
                 self.force_kill().await
             }
         }
@@ -350,6 +366,11 @@ impl FlutterProcess {
     /// Check if the process is still running
     pub fn is_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
+    }
+
+    /// Check if the process has already exited
+    pub fn has_exited(&mut self) -> bool {
+        matches!(self.child.try_wait(), Ok(Some(_)))
     }
 
     /// Get the process ID

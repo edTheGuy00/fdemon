@@ -48,12 +48,44 @@ impl<'a> SessionTabs<'a> {
     }
 }
 
-impl Widget for SessionTabs<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if self.session_manager.is_empty() {
-            return;
-        }
+impl<'a> SessionTabs<'a> {
+    /// Render a simplified single-session header showing device name with status icon
+    fn render_single_session(&self, area: Rect, buf: &mut Buffer) {
+        if let Some(handle) = self.session_manager.selected() {
+            let session = &handle.session;
 
+            let (icon, icon_color) = match session.phase {
+                AppPhase::Running => ("●", Color::Green),
+                AppPhase::Reloading => ("↻", Color::Yellow),
+                AppPhase::Initializing => ("○", Color::DarkGray),
+                AppPhase::Stopped => ("○", Color::DarkGray),
+                AppPhase::Quitting => ("✗", Color::Red),
+            };
+
+            // Truncate device name if necessary
+            let max_name_len = area.width.saturating_sub(4) as usize; // 2 for icon+space, 2 for padding
+            let name = truncate_name(&session.device_name, max_name_len.max(8));
+
+            let content = Line::from(vec![
+                Span::styled(icon, Style::default().fg(icon_color)),
+                Span::raw(" "),
+                Span::raw(name),
+            ]);
+
+            // Render with left padding
+            let padded_area = Rect {
+                x: area.x + 1,
+                y: area.y,
+                width: area.width.saturating_sub(2),
+                height: area.height,
+            };
+
+            Paragraph::new(content).render(padded_area, buf);
+        }
+    }
+
+    /// Render full tabs UI for multiple sessions
+    fn render_tabs(&self, area: Rect, buf: &mut Buffer) {
         let titles = self.tab_titles();
         let selected = self.session_manager.selected_index();
 
@@ -76,6 +108,22 @@ impl Widget for SessionTabs<'_> {
         };
 
         tabs.render(padded_area, buf);
+    }
+}
+
+impl Widget for SessionTabs<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.session_manager.is_empty() {
+            return;
+        }
+
+        if self.session_manager.len() == 1 {
+            // Single session - render simplified device header
+            self.render_single_session(area, buf);
+        } else {
+            // Multiple sessions - render full tabs UI
+            self.render_tabs(area, buf);
+        }
     }
 }
 
@@ -496,5 +544,66 @@ mod tests {
         // Should show both device names
         assert!(content.contains("iPhone 15"));
         assert!(content.contains("Pixel 8"));
+    }
+
+    #[test]
+    fn test_session_tabs_single_session_renders_device_name() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut manager = SessionManager::new();
+        manager
+            .create_session(&test_device("d1", "iPhone 15"))
+            .unwrap();
+
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let tabs = SessionTabs::new(&manager);
+                f.render_widget(tabs, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
+
+        // Single session should show device name with status icon
+        assert!(content.contains("iPhone 15"));
+        assert!(content.contains('○')); // Initializing icon
+    }
+
+    #[test]
+    fn test_session_tabs_single_session_running_status() {
+        use ratatui::{backend::TestBackend, Terminal};
+
+        let mut manager = SessionManager::new();
+        let id = manager
+            .create_session(&test_device("d1", "iPhone 15"))
+            .unwrap();
+
+        // Mark session as running
+        manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app-1".to_string());
+
+        let backend = TestBackend::new(80, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let tabs = SessionTabs::new(&manager);
+                f.render_widget(tabs, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content.iter().map(|c| c.symbol()).collect();
+
+        // Running session should show device name with running icon
+        assert!(content.contains("iPhone 15"));
+        assert!(content.contains('●')); // Running icon
     }
 }

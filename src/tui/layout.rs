@@ -64,7 +64,7 @@ pub fn create(area: Rect) -> ScreenAreas {
 /// * `area` - Total screen area
 /// * `session_count` - Number of active sessions (determines if tabs are shown)
 pub fn create_with_sessions(area: Rect, session_count: usize) -> ScreenAreas {
-    let show_tabs = session_count > 1;
+    let show_tabs = session_count >= 1;
 
     let header_height = 3; // 2 for content + 1 for border
     let tabs_height = if show_tabs { 1 } else { 0 };
@@ -116,8 +116,8 @@ pub fn use_compact_header(area: Rect) -> bool {
 
 /// Get header height based on session count
 pub fn header_height(session_count: usize) -> u16 {
-    if session_count > 1 {
-        4 // Main header + border + tabs
+    if session_count >= 1 {
+        4 // Main header + border + tabs/device row
     } else {
         3 // Main header + border
     }
@@ -172,7 +172,9 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 1);
 
-        assert!(layout.tabs.is_none());
+        // Single session now shows tabs/subheader row
+        assert!(layout.tabs.is_some());
+        assert_eq!(layout.tabs.unwrap().height, 1);
         assert!(layout.header.height > 0);
         assert!(layout.logs.height > 0);
         assert!(layout.status.height > 0);
@@ -220,7 +222,8 @@ mod tests {
     #[test]
     fn test_header_height() {
         assert_eq!(header_height(0), 3);
-        assert_eq!(header_height(1), 3);
+        // Single session now gets subheader row too
+        assert_eq!(header_height(1), 4);
         assert_eq!(header_height(2), 4);
         assert_eq!(header_height(5), 4);
     }
@@ -237,9 +240,17 @@ mod tests {
     fn test_layout_areas_sum_to_total() {
         let area = Rect::new(0, 0, 80, 24);
 
-        // Single session
-        let layout = create_with_sessions(area, 1);
+        // No sessions
+        let layout = create_with_sessions(area, 0);
         let total = layout.header.height + layout.logs.height + layout.status.height;
+        assert_eq!(total, area.height);
+
+        // Single session (now includes tabs/subheader)
+        let layout = create_with_sessions(area, 1);
+        let total = layout.header.height
+            + layout.tabs.unwrap().height
+            + layout.logs.height
+            + layout.status.height;
         assert_eq!(total, area.height);
 
         // Multiple sessions
