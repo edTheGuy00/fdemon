@@ -6,7 +6,7 @@ use std::time::Instant;
 use chrono::{DateTime, Local};
 
 use crate::config::LaunchConfig;
-use crate::core::{AppPhase, LogEntry, LogSource};
+use crate::core::{AppPhase, FilterState, LogEntry, LogSource, SearchState};
 use crate::daemon::{CommandSender, FlutterProcess, RequestTracker};
 use crate::tui::widgets::LogViewState;
 
@@ -40,6 +40,15 @@ pub struct Session {
 
     /// Maximum log buffer size
     pub max_logs: usize,
+
+    // ─────────────────────────────────────────────────────────
+    // Filter & Search State
+    // ─────────────────────────────────────────────────────────
+    /// Log filter state for this session
+    pub filter_state: FilterState,
+
+    /// Search state for this session
+    pub search_state: SearchState,
 
     // ─────────────────────────────────────────────────────────
     // Device & App Tracking
@@ -96,6 +105,8 @@ impl Session {
             logs: Vec::new(),
             log_view_state: LogViewState::new(),
             max_logs: 10_000,
+            filter_state: FilterState::default(),
+            search_state: SearchState::default(),
             device_id,
             device_name,
             platform,
@@ -145,6 +156,9 @@ impl Session {
     pub fn clear_logs(&mut self) {
         self.logs.clear();
         self.log_view_state.offset = 0;
+        // Clear search matches since logs are gone
+        self.search_state.matches.clear();
+        self.search_state.current_match = None;
     }
 
     /// Mark session as started
@@ -235,6 +249,155 @@ impl Session {
             self.name.clone()
         };
         format!("{} {}", icon, name)
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Filter Methods
+    // ─────────────────────────────────────────────────────────
+
+    /// Cycle the log level filter
+    pub fn cycle_level_filter(&mut self) {
+        self.filter_state.level_filter = self.filter_state.level_filter.cycle();
+    }
+
+    /// Cycle the log source filter
+    pub fn cycle_source_filter(&mut self) {
+        self.filter_state.source_filter = self.filter_state.source_filter.cycle();
+    }
+
+    /// Reset all filters to default
+    pub fn reset_filters(&mut self) {
+        self.filter_state.reset();
+    }
+
+    /// Get filtered logs (returns indices of matching entries)
+    pub fn filtered_log_indices(&self) -> Vec<usize> {
+        self.logs
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| self.filter_state.matches(entry))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Check if any filter is active
+    pub fn has_active_filter(&self) -> bool {
+        self.filter_state.is_active()
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Search Methods
+    // ─────────────────────────────────────────────────────────
+
+    /// Start search mode
+    pub fn start_search(&mut self) {
+        self.search_state.activate();
+    }
+
+    /// Cancel search mode
+    pub fn cancel_search(&mut self) {
+        self.search_state.deactivate();
+    }
+
+    /// Clear search completely
+    pub fn clear_search(&mut self) {
+        self.search_state.clear();
+    }
+
+    /// Update search query
+    pub fn set_search_query(&mut self, query: &str) {
+        self.search_state.set_query(query);
+    }
+
+    /// Check if search mode is active
+    pub fn is_searching(&self) -> bool {
+        self.search_state.is_active
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Error Navigation Methods
+    // ─────────────────────────────────────────────────────────
+
+    /// Get indices of all error log entries
+    pub fn error_indices(&self) -> Vec<usize> {
+        self.logs
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.is_error())
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Get indices of errors that pass the current filter
+    pub fn filtered_error_indices(&self) -> Vec<usize> {
+        self.logs
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.is_error() && self.filter_state.matches(entry))
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// Count total errors in log
+    pub fn error_count(&self) -> usize {
+        self.logs.iter().filter(|e| e.is_error()).count()
+    }
+
+    /// Find next error after current scroll position
+    /// Returns the log entry index of the next error
+    pub fn find_next_error(&self) -> Option<usize> {
+        let errors = self.filtered_error_indices();
+        if errors.is_empty() {
+            return None;
+        }
+
+        let current_pos = self.current_log_position();
+
+        // Find first error after current position
+        for &error_idx in &errors {
+            if error_idx > current_pos {
+                return Some(error_idx);
+            }
+        }
+
+        // Wrap around to first error
+        Some(errors[0])
+    }
+
+    /// Find previous error before current scroll position
+    /// Returns the log entry index of the previous error
+    pub fn find_prev_error(&self) -> Option<usize> {
+        let errors = self.filtered_error_indices();
+        if errors.is_empty() {
+            return None;
+        }
+
+        let current_pos = self.current_log_position();
+
+        // Find last error before current position
+        for &error_idx in errors.iter().rev() {
+            if error_idx < current_pos {
+                return Some(error_idx);
+            }
+        }
+
+        // Wrap around to last error
+        errors.last().copied()
+    }
+
+    /// Get the current log position based on scroll offset
+    /// Accounts for filtering
+    fn current_log_position(&self) -> usize {
+        if self.filter_state.is_active() {
+            // Map filtered offset to original index
+            let filtered = self.filtered_log_indices();
+            filtered
+                .get(self.log_view_state.offset)
+                .copied()
+                .unwrap_or(0)
+        } else {
+            self.log_view_state.offset
+        }
     }
 }
 
@@ -468,5 +631,248 @@ mod tests {
 
         assert!(!handle.has_process());
         assert!(handle.app_id().is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Filter & Search Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_session_has_filter_state() {
+        use crate::core::{LogLevelFilter, LogSourceFilter};
+
+        let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert_eq!(session.filter_state.level_filter, LogLevelFilter::All);
+        assert_eq!(session.filter_state.source_filter, LogSourceFilter::All);
+    }
+
+    #[test]
+    fn test_session_has_search_state() {
+        let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert!(session.search_state.query.is_empty());
+        assert!(!session.search_state.is_active);
+    }
+
+    #[test]
+    fn test_session_cycle_level_filter() {
+        use crate::core::LogLevelFilter;
+
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert_eq!(session.filter_state.level_filter, LogLevelFilter::All);
+
+        session.cycle_level_filter();
+        assert_eq!(session.filter_state.level_filter, LogLevelFilter::Errors);
+
+        session.cycle_level_filter();
+        assert_eq!(session.filter_state.level_filter, LogLevelFilter::Warnings);
+    }
+
+    #[test]
+    fn test_session_cycle_source_filter() {
+        use crate::core::LogSourceFilter;
+
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert_eq!(session.filter_state.source_filter, LogSourceFilter::All);
+
+        session.cycle_source_filter();
+        assert_eq!(session.filter_state.source_filter, LogSourceFilter::App);
+
+        session.cycle_source_filter();
+        assert_eq!(session.filter_state.source_filter, LogSourceFilter::Daemon);
+    }
+
+    #[test]
+    fn test_session_reset_filters() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.cycle_level_filter();
+        session.cycle_source_filter();
+        assert!(session.has_active_filter());
+
+        session.reset_filters();
+        assert!(!session.has_active_filter());
+    }
+
+    #[test]
+    fn test_session_filtered_log_indices() {
+        use crate::core::LogLevelFilter;
+
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.log_info(LogSource::App, "info message");
+        session.log_error(LogSource::App, "error message");
+        session.log_info(LogSource::Flutter, "flutter info");
+
+        // No filter - all logs
+        let indices = session.filtered_log_indices();
+        assert_eq!(indices.len(), 3);
+        assert_eq!(indices, vec![0, 1, 2]);
+
+        // Errors only
+        session.filter_state.level_filter = LogLevelFilter::Errors;
+        let indices = session.filtered_log_indices();
+        assert_eq!(indices.len(), 1);
+        assert_eq!(indices[0], 1); // The error message
+    }
+
+    #[test]
+    fn test_session_search_mode() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert!(!session.is_searching());
+
+        session.start_search();
+        assert!(session.is_searching());
+
+        session.cancel_search();
+        assert!(!session.is_searching());
+    }
+
+    #[test]
+    fn test_session_set_search_query() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        session.set_search_query("error");
+        assert_eq!(session.search_state.query, "error");
+        assert!(session.search_state.is_valid);
+    }
+
+    #[test]
+    fn test_session_clear_search() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.set_search_query("test");
+        session.start_search();
+
+        session.clear_search();
+
+        assert!(session.search_state.query.is_empty());
+        assert!(!session.search_state.is_active);
+    }
+
+    #[test]
+    fn test_session_clear_logs_clears_search() {
+        use crate::core::SearchMatch;
+
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.log_info(LogSource::App, "test");
+        session
+            .search_state
+            .update_matches(vec![SearchMatch::new(0, 0, 4)]);
+        session.search_state.current_match = Some(0);
+
+        session.clear_logs();
+
+        assert!(session.search_state.matches.is_empty());
+        assert!(session.search_state.current_match.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Error Navigation Tests (Task 7)
+    // ─────────────────────────────────────────────────────────
+
+    fn create_session_with_logs() -> Session {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.log_info(LogSource::App, "info 0"); // index 0
+        session.log_error(LogSource::App, "error 1"); // index 1
+        session.log_info(LogSource::App, "info 2"); // index 2
+        session.log_error(LogSource::App, "error 3"); // index 3
+        session.log_info(LogSource::App, "info 4"); // index 4
+        session.log_error(LogSource::App, "error 5"); // index 5
+        session
+    }
+
+    #[test]
+    fn test_error_indices() {
+        let session = create_session_with_logs();
+        let errors = session.error_indices();
+        assert_eq!(errors, vec![1, 3, 5]);
+    }
+
+    #[test]
+    fn test_error_count() {
+        let session = create_session_with_logs();
+        assert_eq!(session.error_count(), 3);
+    }
+
+    #[test]
+    fn test_find_next_error_from_start() {
+        let session = create_session_with_logs();
+        // Scroll offset 0, should find first error at index 1
+        let next = session.find_next_error();
+        assert_eq!(next, Some(1));
+    }
+
+    #[test]
+    fn test_find_next_error_wraps() {
+        let mut session = create_session_with_logs();
+        session.log_view_state.offset = 5; // After last error
+
+        let next = session.find_next_error();
+        assert_eq!(next, Some(1)); // Wraps to first error
+    }
+
+    #[test]
+    fn test_find_prev_error_from_end() {
+        let mut session = create_session_with_logs();
+        session.log_view_state.offset = 5;
+
+        let prev = session.find_prev_error();
+        assert_eq!(prev, Some(3)); // Error before position 5
+    }
+
+    #[test]
+    fn test_find_prev_error_wraps() {
+        let mut session = create_session_with_logs();
+        session.log_view_state.offset = 0; // Before first error
+
+        let prev = session.find_prev_error();
+        assert_eq!(prev, Some(5)); // Wraps to last error
+    }
+
+    #[test]
+    fn test_find_error_no_errors() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.log_info(LogSource::App, "info only");
+
+        assert_eq!(session.find_next_error(), None);
+        assert_eq!(session.find_prev_error(), None);
+    }
+
+    #[test]
+    fn test_find_error_respects_filter() {
+        use crate::core::LogSourceFilter;
+
+        let mut session = create_session_with_logs();
+
+        // Filter to App source only (all errors are from App, so all visible)
+        session.filter_state.source_filter = LogSourceFilter::App;
+        let errors = session.filtered_error_indices();
+        assert_eq!(errors.len(), 3);
+
+        // Filter to Daemon source (no errors)
+        session.filter_state.source_filter = LogSourceFilter::Daemon;
+        let errors = session.filtered_error_indices();
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_find_next_error_from_middle() {
+        let mut session = create_session_with_logs();
+        session.log_view_state.offset = 2; // Between first and second error
+
+        let next = session.find_next_error();
+        assert_eq!(next, Some(3)); // Next error after position 2
+    }
+
+    #[test]
+    fn test_find_prev_error_from_middle() {
+        let mut session = create_session_with_logs();
+        session.log_view_state.offset = 4; // Between second and third error
+
+        let prev = session.find_prev_error();
+        assert_eq!(prev, Some(3)); // Previous error before position 4
+    }
+
+    #[test]
+    fn test_error_count_empty() {
+        let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert_eq!(session.error_count(), 0);
     }
 }

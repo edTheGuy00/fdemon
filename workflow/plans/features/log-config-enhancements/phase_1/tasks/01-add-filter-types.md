@@ -147,3 +147,45 @@ mod filter_tests {
 - The `Warnings` filter should show warnings AND errors (cumulative), similar to log level filtering in most logging frameworks
 - Consider if we want a separate "Warnings Only" option in the future
 - `FlutterError` source should be grouped with `Flutter` for source filtering purposes
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `src/core/types.rs` - Added `LogLevelFilter`, `LogSourceFilter`, and `FilterState` types with all helper methods and unit tests
+
+**Implementation Details:**
+
+1. **LogLevelFilter** (lines 104-156):
+   - Enum with `All`, `Errors`, `Warnings`, `Info`, `Debug` variants
+   - `cycle()` rotates through all options, wrapping back to `All`
+   - `matches(&LogLevel)` implements cumulative filtering (Warnings+ includes errors)
+   - `display_name()` returns user-friendly strings
+
+2. **LogSourceFilter** (lines 185-236):
+   - Enum with `All`, `App`, `Daemon`, `Flutter`, `Watcher` variants
+   - `cycle()` rotates through all options
+   - `matches(&LogSource)` correctly groups `Flutter` and `FlutterError` under `Flutter` filter
+   - `display_name()` returns user-friendly strings
+
+3. **FilterState** (lines 238-263):
+   - Struct containing both filters
+   - `reset()` sets both to `All`
+   - `is_active()` returns true if any filter is not `All`
+   - `matches(&LogEntry)` combines both filter checks
+
+**Testing Performed:**
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test core::types` - 28 tests passed (22 new filter tests + 6 existing tests)
+
+**Notable Decisions:**
+- Tests added to existing `mod tests` block in `types.rs` rather than separate `mod filter_tests` (matches existing code organization)
+- Display names use `+` suffix (e.g., "Warnings+") to indicate cumulative filtering
+
+**Risks/Limitations:**
+- None identified. Types are purely additive with no impact on existing functionality.

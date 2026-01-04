@@ -507,3 +507,59 @@ fn test_search_input_mode_escape() {
 - Search query persists even when exiting search mode, allowing `n`/`N` navigation
 - Consider adding `?` for reverse search as a future enhancement
 - Regex errors are shown inline to help users understand invalid patterns
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+### Files Modified
+
+- `src/app/state.rs` - Added `SearchInput` variant to `UiMode` enum
+- `src/app/handler/keys.rs` - Added search handlers (`/`, `n`, `N`) and `handle_key_search_input` function
+- `src/app/handler/update.rs` - Updated `StartSearch`, `CancelSearch`, `ClearSearch` to manage `ui_mode`
+- `src/tui/widgets/search_input.rs` - **NEW** Search input widget with inline and popup modes
+- `src/tui/widgets/mod.rs` - Exported `SearchInput` widget
+- `src/tui/render.rs` - Added search prompt rendering for `SearchInput` mode and persistent search status display in `Normal` mode
+- `src/app/handler/tests.rs` - Added 20 new search handler tests
+
+### Notable Decisions/Tradeoffs
+
+1. **`n` key is overloaded**: When there's an active search query, `n` navigates to next match; otherwise it opens device selector. This follows vim convention while preserving existing functionality.
+2. **Search status persists in Normal mode**: When not actively inputting search text, the search status bar still shows at the bottom of the log view if there's an active query (with match count).
+3. **Enter and Escape both exit search input mode**: Both keep the query text (per vim convention). Use `ClearSearch` message to clear the query entirely.
+4. **Cursor is `_` not `█`**: Used underscore cursor for better visibility in some terminal fonts.
+
+### Testing Performed
+
+- `cargo check` - PASS
+- `cargo fmt` - PASS
+- `cargo clippy` - PASS (no warnings)
+- `cargo test search` - PASS (46 search-related tests)
+  - All new handler tests pass (20 tests)
+  - All search_input widget tests pass (5 tests)
+  - All existing core search type tests pass (21 tests)
+
+### Acceptance Criteria Status
+
+1. ✅ Pressing `/` in normal mode enters search input mode
+2. ✅ Search prompt appears at bottom of log view with `/` prefix
+3. ✅ Typing characters appends to search query
+4. ✅ Backspace removes last character
+5. ✅ Ctrl+u clears the entire query
+6. ✅ Enter exits search input mode but keeps query
+7. ✅ Escape exits search input mode and keeps query
+8. ✅ Cursor indicator (`_`) shows when in input mode
+9. ✅ Invalid regex shows error message in red
+10. ⏳ Match count displays when query has results (matches computed in Task 6)
+11. ⏳ "No matches" displays in red when query finds nothing (matches computed in Task 6)
+12. ✅ `n` key navigates to next match (when search query exists)
+13. ✅ `N` (Shift+n) navigates to previous match
+14. ✅ Ctrl+C still works to quit even in search mode
+15. ✅ Search state persists per session
+
+### Risks/Limitations
+
+- Match count and "No matches" display will only function after Task 6 implements the actual search logic
+- Search history (up/down arrows) deferred to future enhancement

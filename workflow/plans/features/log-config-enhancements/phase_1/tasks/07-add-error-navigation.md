@@ -375,3 +375,72 @@ fn test_error_navigation_no_errors() {
 - Future enhancement: Add error position markers in the scrollbar track
 - Future enhancement: Show "Error X of Y" in status bar when navigating errors
 - Consider supporting both `e`/`E` and `[`/`]` for error navigation (vim-style quickfix navigation)
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date Completed:** 2026-01-05
+
+### Files Modified
+
+- `src/app/message.rs` - Added `NextError` and `PrevError` message variants
+- `src/app/session.rs` - Added error navigation methods: `error_indices()`, `filtered_error_indices()`, `error_count()`, `find_next_error()`, `find_prev_error()`, `current_log_position()`
+- `src/app/handler/keys.rs` - Added `e` and `E` key bindings for error navigation
+- `src/app/handler/update.rs` - Added message handlers for `NextError` and `PrevError`
+- `src/app/handler/tests.rs` - Added 5 tests for error navigation key bindings and handlers
+
+### Implementation Details
+
+1. **Message Types**: Added `Message::NextError` and `Message::PrevError` variants for error navigation.
+
+2. **Session Methods**:
+   - `error_indices()` - Returns indices of all error entries in the log
+   - `filtered_error_indices()` - Returns indices of errors that pass the current filter
+   - `error_count()` - Returns total count of errors
+   - `find_next_error()` - Finds next error after current position, wraps around
+   - `find_prev_error()` - Finds previous error before current position, wraps around
+   - `current_log_position()` - Maps scroll offset to log index, accounting for filters
+
+3. **Key Bindings**:
+   - `e` - Jump to next error
+   - `E` (Shift+e) - Jump to previous error
+
+4. **Handler Integration**: Reuses `scroll_to_log_entry()` helper from Task 6 for consistent scrolling behavior.
+
+### Testing Performed
+
+```bash
+cargo fmt    # ✓ No formatting issues
+cargo check  # ✓ Compiles cleanly
+cargo clippy # ✓ No warnings
+cargo test session::tests::test_error  # ✓ 3 tests passed
+cargo test session::tests::test_find   # ✓ 8 tests passed
+cargo test handler::tests::test_e_key  # ✓ 1 test passed
+cargo test handler::tests::test_next_error  # ✓ 1 test passed
+cargo test handler::tests::test_prev_error  # ✓ 1 test passed
+```
+
+Added 16 new tests:
+- Session tests: `test_error_indices`, `test_error_count`, `test_find_next_error_from_start`, `test_find_next_error_wraps`, `test_find_prev_error_from_end`, `test_find_prev_error_wraps`, `test_find_error_no_errors`, `test_find_error_respects_filter`, `test_find_next_error_from_middle`, `test_find_prev_error_from_middle`, `test_error_count_empty`
+- Handler tests: `test_e_key_produces_next_error`, `test_shift_e_produces_prev_error`, `test_next_error_scrolls_to_error`, `test_error_navigation_no_errors`, `test_prev_error_message`
+
+### Acceptance Criteria Status
+
+1. ✅ `e` jumps to next error after current scroll position
+2. ✅ `E` (Shift+e) jumps to previous error before current position
+3. ✅ Navigation wraps around (last→first, first→last)
+4. ✅ Error navigation respects active filters (only visible errors)
+5. ✅ View scrolls to center the error in the viewport
+6. ✅ Auto-scroll is disabled when jumping to error
+7. ✅ Works correctly when no errors exist (no-op)
+8. ✅ Error count is tracked per session
+9. ✅ Performance acceptable with 1000+ log entries
+
+### Risks/Limitations
+
+- Error count is not displayed in the status bar (optional enhancement deferred)
+- No visual error position indicator in scrollbar (future enhancement)
+- No "Error X of Y" display when navigating (future enhancement)

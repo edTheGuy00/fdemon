@@ -26,6 +26,9 @@ pub enum UiMode {
 
     /// Initial loading screen (discovering devices)
     Loading,
+
+    /// Search input mode - capturing text for log search
+    SearchInput,
 }
 
 /// Complete application state (the Model in TEA)

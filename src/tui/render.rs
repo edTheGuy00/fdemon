@@ -4,6 +4,8 @@ use super::{layout, widgets};
 use crate::app::state::{AppState, UiMode};
 use crate::core::LogEntry;
 use crate::tui::widgets::LogViewState;
+use ratatui::layout::Rect;
+use ratatui::widgets::Clear;
 use ratatui::Frame;
 
 /// Render the complete UI (View function in TEA)
@@ -27,7 +29,14 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
-        let log_view = widgets::LogView::new(&handle.session.logs);
+        let mut log_view =
+            widgets::LogView::new(&handle.session.logs).filter_state(&handle.session.filter_state);
+
+        // Add search state if there's an active search
+        if !handle.session.search_state.query.is_empty() {
+            log_view = log_view.search_state(&handle.session.search_state);
+        }
+
         frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
     } else {
         // No session selected - show empty log view
@@ -67,8 +76,44 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
             frame.render_widget(selector, area);
         }
+        UiMode::SearchInput => {
+            // Render search input at bottom of log area
+            if let Some(handle) = state.session_manager.selected() {
+                // Calculate position for inline search (bottom of log area, inside border)
+                let search_area = Rect::new(
+                    areas.logs.x + 1,
+                    areas.logs.y + areas.logs.height.saturating_sub(2),
+                    areas.logs.width.saturating_sub(2),
+                    1,
+                );
+
+                // Clear the line and render search input
+                frame.render_widget(Clear, search_area);
+                frame.render_widget(
+                    widgets::SearchInput::new(&handle.session.search_state).inline(),
+                    search_area,
+                );
+            }
+        }
         UiMode::Normal => {
-            // No overlay
+            // No overlay - but show search status if search has results
+            if let Some(handle) = state.session_manager.selected() {
+                if !handle.session.search_state.query.is_empty() {
+                    // Show mini search status at bottom of log area
+                    let search_area = Rect::new(
+                        areas.logs.x + 1,
+                        areas.logs.y + areas.logs.height.saturating_sub(2),
+                        areas.logs.width.saturating_sub(2),
+                        1,
+                    );
+
+                    frame.render_widget(Clear, search_area);
+                    frame.render_widget(
+                        widgets::SearchInput::new(&handle.session.search_state).inline(),
+                        search_area,
+                    );
+                }
+            }
         }
     }
 }

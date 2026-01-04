@@ -629,5 +629,148 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // No fallback needed - only clear logs if a session is selected
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Log Filter Messages (Phase 1 - Task 4)
+        // ─────────────────────────────────────────────────────────
+        Message::CycleLevelFilter => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.cycle_level_filter();
+            }
+            UpdateResult::none()
+        }
+
+        Message::CycleSourceFilter => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.cycle_source_filter();
+            }
+            UpdateResult::none()
+        }
+
+        Message::ResetFilters => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.reset_filters();
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Log Search Messages (Phase 1 - Tasks 5-6)
+        // ─────────────────────────────────────────────────────────
+        Message::StartSearch => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.start_search();
+            }
+            state.ui_mode = UiMode::SearchInput;
+            UpdateResult::none()
+        }
+
+        Message::CancelSearch => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.cancel_search();
+            }
+            state.ui_mode = UiMode::Normal;
+            UpdateResult::none()
+        }
+
+        Message::ClearSearch => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.clear_search();
+            }
+            state.ui_mode = UiMode::Normal;
+            UpdateResult::none()
+        }
+
+        Message::SearchInput { text } => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.set_search_query(&text);
+
+                // Execute search immediately
+                let logs = &handle.session.logs;
+                handle.session.search_state.execute_search(logs);
+
+                // Scroll to first match if found
+                if let Some(entry_index) = handle.session.search_state.current_match_entry_index() {
+                    scroll_to_log_entry(&mut handle.session, entry_index);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NextSearchMatch => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.search_state.next_match();
+
+                // Scroll to new current match
+                if let Some(entry_index) = handle.session.search_state.current_match_entry_index() {
+                    scroll_to_log_entry(&mut handle.session, entry_index);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::PrevSearchMatch => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.search_state.prev_match();
+
+                // Scroll to new current match
+                if let Some(entry_index) = handle.session.search_state.current_match_entry_index() {
+                    scroll_to_log_entry(&mut handle.session, entry_index);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::SearchCompleted { matches } => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.search_state.update_matches(matches);
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Error Navigation Messages (Phase 1)
+        // ─────────────────────────────────────────────────────────
+        Message::NextError => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                if let Some(error_idx) = handle.session.find_next_error() {
+                    scroll_to_log_entry(&mut handle.session, error_idx);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::PrevError => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                if let Some(error_idx) = handle.session.find_prev_error() {
+                    scroll_to_log_entry(&mut handle.session, error_idx);
+                }
+            }
+            UpdateResult::none()
+        }
+    }
+}
+
+/// Scroll the log view to show a specific log entry
+fn scroll_to_log_entry(session: &mut crate::app::session::Session, entry_index: usize) {
+    // Account for filtering if active
+    let visible_index = if session.filter_state.is_active() {
+        // Find the position in filtered list
+        session
+            .logs
+            .iter()
+            .enumerate()
+            .filter(|(_, e)| session.filter_state.matches(e))
+            .position(|(i, _)| i == entry_index)
+    } else {
+        Some(entry_index)
+    };
+
+    if let Some(idx) = visible_index {
+        // Center the match in the view if possible
+        let visible_lines = session.log_view_state.visible_lines;
+        let center_offset = visible_lines / 2;
+        session.log_view_state.offset = idx.saturating_sub(center_offset);
+        session.log_view_state.auto_scroll = false;
     }
 }

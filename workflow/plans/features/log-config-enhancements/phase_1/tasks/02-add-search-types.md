@@ -231,3 +231,44 @@ mod search_tests {
 - Consider adding a separate `CompiledSearch` struct in the widget layer that holds the actual compiled `Regex`
 - Case sensitivity could be a future enhancement (default to case-insensitive)
 - For very large log buffers, consider limiting the number of matches tracked
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Files Modified:**
+- `Cargo.toml` - Added `regex = "1"` as direct dependency
+- `src/core/types.rs` - Added `SearchMatch` and `SearchState` types with all helper methods and unit tests
+
+**Implementation Details:**
+
+1. **SearchMatch** (lines 265-295):
+   - Struct with `entry_index`, `start`, `end` fields
+   - `new()` constructor
+   - `len()` and `is_empty()` methods
+   - Derives `Debug, Clone, PartialEq, Eq` for test assertions
+
+2. **SearchState** (lines 297-467):
+   - Fields: `query`, `is_active`, `pattern`, `is_valid`, `matches`, `current_match`, `error`
+   - `new()`, `clear()`, `activate()`, `deactivate()` for lifecycle
+   - `set_query()` validates regex using `regex::Regex::new()`
+   - `has_matches()`, `match_count()`, `current_match_index()`, `current_match()` for querying
+   - `next_match()`, `prev_match()`, `jump_to_match()` for navigation (all wrap around)
+   - `update_matches()` handles out-of-bounds current_match reset
+   - `display_status()` returns formatted strings per spec
+
+**Testing Performed:**
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test core::types` - 52 tests passed (24 new search tests + 28 filter/existing tests)
+
+**Notable Decisions:**
+- Added `is_empty()` method to `SearchMatch` to pair with `len()` (clippy would warn otherwise)
+- `jump_to_match()` finds first match at or after the given entry index, wraps to first if none found
+- Regex validation happens in `set_query()` - pattern is stored as Option<String> since Regex doesn't implement Clone
+
+**Risks/Limitations:**
+- None identified. Types are purely additive with no impact on existing functionality.

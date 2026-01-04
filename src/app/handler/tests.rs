@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::app::message::Message;
-use crate::app::state::AppState;
+use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, DaemonEvent};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -1270,3 +1270,545 @@ fn test_any_session_busy() {
     assert!(state.session_manager.any_session_busy());
 }
 
+// ─────────────────────────────────────────────────────────
+// Log Filter Tests (Phase 1 - Task 4)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_f_key_produces_cycle_level_filter() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::CycleLevelFilter)));
+}
+
+#[test]
+fn test_shift_f_produces_cycle_source_filter() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::CycleSourceFilter)));
+}
+
+#[test]
+fn test_ctrl_f_produces_reset_filters() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::ResetFilters)));
+}
+
+#[test]
+fn test_cycle_level_filter_message() {
+    use crate::core::LogLevelFilter;
+
+    let mut state = AppState::new();
+
+    // Create a session first
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Initial state should be All
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .level_filter,
+        LogLevelFilter::All
+    );
+
+    // Cycle to Errors
+    update(&mut state, Message::CycleLevelFilter);
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .level_filter,
+        LogLevelFilter::Errors
+    );
+
+    // Cycle to Warnings
+    update(&mut state, Message::CycleLevelFilter);
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .level_filter,
+        LogLevelFilter::Warnings
+    );
+}
+
+#[test]
+fn test_cycle_source_filter_message() {
+    use crate::core::LogSourceFilter;
+
+    let mut state = AppState::new();
+
+    // Create a session first
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Initial state should be All
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .source_filter,
+        LogSourceFilter::All
+    );
+
+    // Cycle to App
+    update(&mut state, Message::CycleSourceFilter);
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .source_filter,
+        LogSourceFilter::App
+    );
+
+    // Cycle to Daemon
+    update(&mut state, Message::CycleSourceFilter);
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .source_filter,
+        LogSourceFilter::Daemon
+    );
+}
+
+#[test]
+fn test_reset_filters_message() {
+    use crate::core::{LogLevelFilter, LogSourceFilter};
+
+    let mut state = AppState::new();
+
+    // Create a session first
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set some filters
+    update(&mut state, Message::CycleLevelFilter);
+    update(&mut state, Message::CycleSourceFilter);
+
+    // Verify filters are active
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .level_filter,
+        LogLevelFilter::Errors
+    );
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .filter_state
+            .source_filter,
+        LogSourceFilter::App
+    );
+
+    // Reset filters
+    update(&mut state, Message::ResetFilters);
+
+    // Verify filters are reset
+    let filter_state = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .filter_state;
+    assert_eq!(filter_state.level_filter, LogLevelFilter::All);
+    assert_eq!(filter_state.source_filter, LogSourceFilter::All);
+}
+
+#[test]
+fn test_filter_messages_without_session() {
+    let mut state = AppState::new();
+
+    // No session - should not panic
+    let result = update(&mut state, Message::CycleLevelFilter);
+    assert!(matches!(result, UpdateResult { .. }));
+
+    let result = update(&mut state, Message::CycleSourceFilter);
+    assert!(matches!(result, UpdateResult { .. }));
+
+    let result = update(&mut state, Message::ResetFilters);
+    assert!(matches!(result, UpdateResult { .. }));
+}
+
+// ─────────────────────────────────────────────────────────
+// Log Search Tests (Phase 1 - Task 5)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_slash_key_produces_start_search() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::StartSearch)));
+}
+
+#[test]
+fn test_start_search_changes_ui_mode() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    assert_eq!(state.ui_mode, UiMode::Normal);
+
+    update(&mut state, Message::StartSearch);
+    assert_eq!(state.ui_mode, UiMode::SearchInput);
+}
+
+#[test]
+fn test_cancel_search_returns_to_normal() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    update(&mut state, Message::StartSearch);
+    assert_eq!(state.ui_mode, UiMode::SearchInput);
+
+    update(&mut state, Message::CancelSearch);
+    assert_eq!(state.ui_mode, UiMode::Normal);
+}
+
+#[test]
+fn test_search_input_updates_query() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    update(&mut state, Message::StartSearch);
+    update(
+        &mut state,
+        Message::SearchInput {
+            text: "error".to_string(),
+        },
+    );
+
+    let query = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .search_state
+        .query;
+    assert_eq!(query, "error");
+}
+
+#[test]
+fn test_search_input_mode_escape() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::CancelSearch)));
+}
+
+#[test]
+fn test_search_input_mode_enter() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::CancelSearch)));
+}
+
+#[test]
+fn test_search_input_mode_backspace() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set initial query
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.set_search_query("test");
+    }
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::SearchInput { text }) if text == "tes"));
+}
+
+#[test]
+fn test_search_input_mode_ctrl_u_clears() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::SearchInput { text }) if text.is_empty()));
+}
+
+#[test]
+fn test_search_input_mode_typing() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set initial query
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.set_search_query("tes");
+    }
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::SearchInput { text }) if text == "test"));
+}
+
+#[test]
+fn test_search_input_mode_ctrl_c_quits() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    state.ui_mode = UiMode::SearchInput;
+    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+    let msg = handle_key(&state, key);
+    assert!(matches!(msg, Some(Message::Quit)));
+}
+
+#[test]
+fn test_n_key_with_search_query_navigates() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set a search query
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.set_search_query("error");
+    }
+
+    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+
+    assert!(matches!(msg, Some(Message::NextSearchMatch)));
+}
+
+#[test]
+fn test_n_key_without_search_shows_device_selector() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+
+    let msg = handle_key(&state, key);
+
+    // Without an active search query, 'n' should show device selector
+    assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+}
+
+#[test]
+fn test_shift_n_produces_prev_search_match() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::PrevSearchMatch)));
+}
+
+#[test]
+fn test_next_search_match_message() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some matches
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.search_state.update_matches(vec![
+            crate::core::SearchMatch::new(0, 0, 4),
+            crate::core::SearchMatch::new(1, 0, 4),
+        ]);
+        handle.session.search_state.current_match = Some(0);
+    }
+
+    update(&mut state, Message::NextSearchMatch);
+
+    let current = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .search_state
+        .current_match;
+    assert_eq!(current, Some(1));
+}
+
+#[test]
+fn test_prev_search_match_message() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some matches
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.search_state.update_matches(vec![
+            crate::core::SearchMatch::new(0, 0, 4),
+            crate::core::SearchMatch::new(1, 0, 4),
+        ]);
+        handle.session.search_state.current_match = Some(1);
+    }
+
+    update(&mut state, Message::PrevSearchMatch);
+
+    let current = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .search_state
+        .current_match;
+    assert_eq!(current, Some(0));
+}
+
+#[test]
+fn test_clear_search_resets_ui_mode() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    state.ui_mode = UiMode::SearchInput;
+    update(&mut state, Message::ClearSearch);
+
+    assert_eq!(state.ui_mode, UiMode::Normal);
+}
+
+// ─────────────────────────────────────────────────────────
+// Error Navigation Tests (Task 7)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_e_key_produces_next_error() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::NextError)));
+}
+
+#[test]
+fn test_shift_e_produces_prev_error() {
+    let state = AppState::new();
+    let key = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
+
+    let result = handle_key(&state, key);
+
+    assert!(matches!(result, Some(Message::PrevError)));
+}
+
+#[test]
+fn test_next_error_scrolls_to_error() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some logs including errors
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.log_info(crate::core::LogSource::App, "info");
+        handle
+            .session
+            .log_error(crate::core::LogSource::App, "error");
+        handle.session.log_view_state.visible_lines = 10;
+        handle.session.log_view_state.total_lines = 2;
+    }
+
+    update(&mut state, Message::NextError);
+
+    // Should have scrolled (auto_scroll disabled)
+    let session = &state.session_manager.get(session_id).unwrap().session;
+    assert!(!session.log_view_state.auto_scroll);
+}
+
+#[test]
+fn test_error_navigation_no_errors() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add only info logs
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle
+            .session
+            .log_info(crate::core::LogSource::App, "info only");
+    }
+
+    // Should not crash or change state
+    let result = update(&mut state, Message::NextError);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_prev_error_message() {
+    let mut state = AppState::new();
+    let device = test_device("device-1", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some logs with errors
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle
+            .session
+            .log_error(crate::core::LogSource::App, "error 0");
+        handle.session.log_info(crate::core::LogSource::App, "info");
+        handle
+            .session
+            .log_error(crate::core::LogSource::App, "error 2");
+        handle.session.log_view_state.offset = 3; // Position after errors
+        handle.session.log_view_state.visible_lines = 10;
+    }
+
+    update(&mut state, Message::PrevError);
+
+    // Should have scrolled to previous error
+    let session = &state.session_manager.get(session_id).unwrap().session;
+    assert!(!session.log_view_state.auto_scroll);
+}

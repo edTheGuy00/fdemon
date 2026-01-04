@@ -164,4 +164,42 @@ pub enum Message {
     // ─────────────────────────────────────────────────────────
     /// Clear logs for current session
     ClearLogs,
+
+    // ─────────────────────────────────────────────────────────
+    // Log Filter Messages (Phase 1)
+    // ─────────────────────────────────────────────────────────
+    /// Cycle to next log level filter
+    CycleLevelFilter,
+    /// Cycle to next log source filter
+    CycleSourceFilter,
+    /// Reset all filters to default
+    ResetFilters,
+
+    // ─────────────────────────────────────────────────────────
+    // Log Search Messages (Phase 1)
+    // ─────────────────────────────────────────────────────────
+    /// Enter search mode (show search prompt)
+    StartSearch,
+    /// Cancel search mode (hide prompt, keep query)
+    CancelSearch,
+    /// Clear search completely (remove query and matches)
+    ClearSearch,
+    /// Update search query text
+    SearchInput { text: String },
+    /// Navigate to next search match
+    NextSearchMatch,
+    /// Navigate to previous search match
+    PrevSearchMatch,
+    /// Search completed with matches (internal)
+    SearchCompleted {
+        matches: Vec<crate::core::SearchMatch>,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // Error Navigation Messages (Phase 1)
+    // ─────────────────────────────────────────────────────────
+    /// Jump to next error in log
+    NextError,
+    /// Jump to previous error in log
+    PrevError,
 }

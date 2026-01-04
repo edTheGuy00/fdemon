@@ -1,6 +1,8 @@
 //! Scrollable log view widget with rich formatting
 
-use crate::core::{LogEntry, LogLevel, LogSource};
+use crate::core::{
+    FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter, SearchState,
+};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -94,6 +96,10 @@ pub struct LogView<'a> {
     title: &'a str,
     show_timestamps: bool,
     show_source: bool,
+    /// Filter state for displaying indicator and filtering logs
+    filter_state: Option<&'a FilterState>,
+    /// Search state for highlighting matches
+    search_state: Option<&'a SearchState>,
 }
 
 impl<'a> LogView<'a> {
@@ -103,6 +109,8 @@ impl<'a> LogView<'a> {
             title: " Logs ",
             show_timestamps: true,
             show_source: true,
+            filter_state: None,
+            search_state: None,
         }
     }
 
@@ -118,6 +126,18 @@ impl<'a> LogView<'a> {
 
     pub fn show_source(mut self, show: bool) -> Self {
         self.show_source = show;
+        self
+    }
+
+    /// Set the filter state for filtering and indicator display
+    pub fn filter_state(mut self, state: &'a FilterState) -> Self {
+        self.filter_state = Some(state);
+        self
+    }
+
+    /// Set the search state for match highlighting
+    pub fn search_state(mut self, state: &'a SearchState) -> Self {
+        self.search_state = Some(state);
         self
     }
 
@@ -183,7 +203,7 @@ impl<'a> LogView<'a> {
     }
 
     /// Format a single log entry as a styled Line with icons
-    fn format_entry(&self, entry: &LogEntry) -> Line<'static> {
+    fn format_entry(&self, entry: &LogEntry, entry_index: usize) -> Line<'static> {
         let (level_style, msg_style) = Self::level_style(entry.level);
         let source_style = Self::source_style(entry.source);
 
@@ -212,10 +232,76 @@ impl<'a> LogView<'a> {
             ));
         }
 
-        // Message content with inline highlighting
-        spans.push(Self::format_message(&entry.message, msg_style));
+        // Message content with search highlighting
+        let message_spans =
+            self.format_message_with_highlights(&entry.message, entry_index, msg_style);
+        spans.extend(message_spans);
 
         Line::from(spans)
+    }
+
+    /// Format message text with search match highlighting
+    fn format_message_with_highlights(
+        &self,
+        message: &str,
+        entry_index: usize,
+        base_style: Style,
+    ) -> Vec<Span<'static>> {
+        let Some(search) = self.search_state else {
+            // No search active, return plain message
+            return vec![Self::format_message(message, base_style)];
+        };
+
+        if search.query.is_empty() || !search.is_valid {
+            return vec![Self::format_message(message, base_style)];
+        }
+
+        // Get matches for this entry
+        let matches = search.matches_for_entry(entry_index);
+        if matches.is_empty() {
+            return vec![Self::format_message(message, base_style)];
+        }
+
+        // Build spans with highlighted regions
+        let mut spans = Vec::new();
+        let mut last_end = 0;
+
+        // Highlight styles
+        let highlight_style = Style::default()
+            .bg(Color::Yellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD);
+        let current_highlight_style = Style::default()
+            .bg(Color::LightYellow)
+            .fg(Color::Black)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
+
+        for mat in matches {
+            // Add text before match
+            if mat.start > last_end {
+                let before = &message[last_end..mat.start];
+                spans.push(Span::styled(before.to_string(), base_style));
+            }
+
+            // Add highlighted match
+            let matched_text = &message[mat.start..mat.end];
+            let style = if search.is_current_match(mat) {
+                current_highlight_style
+            } else {
+                highlight_style
+            };
+            spans.push(Span::styled(matched_text.to_string(), style));
+
+            last_end = mat.end;
+        }
+
+        // Add remaining text after last match
+        if last_end < message.len() {
+            let after = &message[last_end..];
+            spans.push(Span::styled(after.to_string(), base_style));
+        }
+
+        spans
     }
 
     /// Render empty state with centered message
@@ -248,6 +334,75 @@ impl<'a> LogView<'a> {
             .alignment(ratatui::layout::Alignment::Center)
             .render(inner, buf);
     }
+
+    /// Generate the title string including filter and search indicators
+    fn build_title(&self) -> String {
+        let base = self.title.trim();
+        let mut parts = Vec::new();
+
+        // Add filter indicators
+        if let Some(filter) = self.filter_state {
+            if filter.is_active() {
+                let mut indicators = Vec::new();
+                if filter.level_filter != LogLevelFilter::All {
+                    indicators.push(filter.level_filter.display_name());
+                }
+                if filter.source_filter != LogSourceFilter::All {
+                    indicators.push(filter.source_filter.display_name());
+                }
+                if !indicators.is_empty() {
+                    parts.push(indicators.join(" | "));
+                }
+            }
+        }
+
+        // Add search status
+        if let Some(search) = self.search_state {
+            if !search.query.is_empty() {
+                let status = search.display_status();
+                if !status.is_empty() {
+                    parts.push(status);
+                }
+            }
+        }
+
+        if parts.is_empty() {
+            format!(" {} ", base)
+        } else {
+            format!(" {} {} ", base, parts.join(" • "))
+        }
+    }
+
+    /// Render empty filtered state
+    fn render_no_matches(&self, area: Rect, buf: &mut Buffer) {
+        let title = self.build_title();
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        let message = vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                "No logs match current filter",
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::ITALIC),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press Ctrl+f to reset filters",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+
+        Paragraph::new(message)
+            .alignment(ratatui::layout::Alignment::Center)
+            .render(inner, buf);
+    }
 }
 
 impl<'a> StatefulWidget for LogView<'a> {
@@ -260,27 +415,46 @@ impl<'a> StatefulWidget for LogView<'a> {
             return;
         }
 
-        // Create bordered block
+        // Apply filter to get visible log indices
+        let filtered_indices: Vec<usize> = if let Some(filter) = self.filter_state {
+            self.logs
+                .iter()
+                .enumerate()
+                .filter(|(_, entry)| filter.matches(entry))
+                .map(|(i, _)| i)
+                .collect()
+        } else {
+            (0..self.logs.len()).collect()
+        };
+
+        // Handle empty filtered state
+        if filtered_indices.is_empty() {
+            self.render_no_matches(area, buf);
+            return;
+        }
+
+        // Create bordered block with dynamic title
+        let title = self.build_title();
         let block = Block::default()
-            .title(self.title)
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::DarkGray));
 
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Update state with current dimensions
+        // Update state with filtered content dimensions
         let visible_lines = inner.height as usize;
-        state.update_content_size(self.logs.len(), visible_lines);
+        state.update_content_size(filtered_indices.len(), visible_lines);
 
-        // Get visible slice of logs
+        // Get visible slice of filtered logs
         let start = state.offset;
-        let end = (start + visible_lines).min(self.logs.len());
+        let end = (start + visible_lines).min(filtered_indices.len());
 
-        // Format visible entries
-        let lines: Vec<Line> = self.logs[start..end]
+        // Format visible entries using original log indices
+        let lines: Vec<Line> = filtered_indices[start..end]
             .iter()
-            .map(|entry| self.format_entry(entry))
+            .map(|&idx| self.format_entry(&self.logs[idx], idx))
             .collect();
 
         // Render log content
@@ -289,14 +463,15 @@ impl<'a> StatefulWidget for LogView<'a> {
             .render(inner, buf);
 
         // Render scrollbar if content exceeds visible area
-        if self.logs.len() > visible_lines {
+        if filtered_indices.len() > visible_lines {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼"))
                 .track_symbol(Some("│"))
                 .thumb_symbol("█");
 
-            let mut scrollbar_state = ScrollbarState::new(self.logs.len()).position(state.offset);
+            let mut scrollbar_state =
+                ScrollbarState::new(filtered_indices.len()).position(state.offset);
 
             scrollbar.render(area, buf, &mut scrollbar_state);
         }
@@ -396,7 +571,7 @@ mod tests {
     fn test_format_entry_includes_timestamp() {
         let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
         let view = LogView::new(&logs).show_timestamps(true);
-        let line = view.format_entry(&logs[0]);
+        let line = view.format_entry(&logs[0], 0);
 
         // Should have multiple spans including timestamp
         assert!(line.spans.len() >= 3);
@@ -406,11 +581,11 @@ mod tests {
     fn test_format_entry_no_timestamp() {
         let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
         let view = LogView::new(&logs).show_timestamps(false);
-        let line = view.format_entry(&logs[0]);
+        let line = view.format_entry(&logs[0], 0);
 
         // Fewer spans without timestamp
         let with_ts = LogView::new(&logs).show_timestamps(true);
-        let line_with = with_ts.format_entry(&logs[0]);
+        let line_with = with_ts.format_entry(&logs[0], 0);
         assert!(line.spans.len() < line_with.spans.len());
     }
 
@@ -418,11 +593,11 @@ mod tests {
     fn test_format_entry_no_source() {
         let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
         let view = LogView::new(&logs).show_source(false);
-        let line = view.format_entry(&logs[0]);
+        let line = view.format_entry(&logs[0], 0);
 
         // Fewer spans without source
         let with_src = LogView::new(&logs).show_source(true);
-        let line_with = with_src.format_entry(&logs[0]);
+        let line_with = with_src.format_entry(&logs[0], 0);
         assert!(line.spans.len() < line_with.spans.len());
     }
 
@@ -453,5 +628,276 @@ mod tests {
     fn test_error_has_bold_modifier() {
         let (err_level, _) = LogView::level_style(LogLevel::Error);
         assert!(err_level.add_modifier.contains(Modifier::BOLD));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Filter Tests (Phase 1 - Task 4)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_title_no_filter() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let view = LogView::new(&logs).title("Logs");
+        assert_eq!(view.build_title(), " Logs ");
+    }
+
+    #[test]
+    fn test_build_title_with_default_filter() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let filter = FilterState::default();
+        let view = LogView::new(&logs).title("Logs").filter_state(&filter);
+        // Default filter (All/All) should not show indicator
+        assert_eq!(view.build_title(), " Logs ");
+    }
+
+    #[test]
+    fn test_build_title_with_level_filter() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::Errors,
+            source_filter: LogSourceFilter::All,
+        };
+        let view = LogView::new(&logs).title("Logs").filter_state(&filter);
+        let title = view.build_title();
+        assert!(title.contains("Errors only"), "Title was: {}", title);
+    }
+
+    #[test]
+    fn test_build_title_with_source_filter() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::All,
+            source_filter: LogSourceFilter::App,
+        };
+        let view = LogView::new(&logs).title("Logs").filter_state(&filter);
+        let title = view.build_title();
+        assert!(title.contains("App logs"), "Title was: {}", title);
+    }
+
+    #[test]
+    fn test_build_title_with_combined_filter() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::Errors,
+            source_filter: LogSourceFilter::Flutter,
+        };
+        let view = LogView::new(&logs).title("Logs").filter_state(&filter);
+        let title = view.build_title();
+        assert!(title.contains("Errors only"), "Title was: {}", title);
+        assert!(title.contains("Flutter logs"), "Title was: {}", title);
+        assert!(title.contains(" | "), "Title was: {}", title);
+    }
+
+    #[test]
+    fn test_filter_state_builder() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let filter = FilterState::default();
+        let view = LogView::new(&logs).filter_state(&filter);
+        assert!(view.filter_state.is_some());
+    }
+
+    #[test]
+    fn test_filtered_logs_count() {
+        let logs = vec![
+            make_entry(LogLevel::Info, LogSource::App, "info"),
+            make_entry(LogLevel::Error, LogSource::App, "error"),
+            make_entry(LogLevel::Warning, LogSource::Daemon, "warning"),
+        ];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::Errors,
+            source_filter: LogSourceFilter::All,
+        };
+
+        let filtered: Vec<_> = logs.iter().filter(|e| filter.matches(e)).collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_filtered_logs_by_source() {
+        let logs = vec![
+            make_entry(LogLevel::Info, LogSource::App, "app info"),
+            make_entry(LogLevel::Error, LogSource::Flutter, "flutter error"),
+            make_entry(LogLevel::Warning, LogSource::Daemon, "daemon warning"),
+        ];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::All,
+            source_filter: LogSourceFilter::App,
+        };
+
+        let filtered: Vec<_> = logs.iter().filter(|e| filter.matches(e)).collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].source, LogSource::App);
+    }
+
+    #[test]
+    fn test_combined_filter() {
+        let logs = vec![
+            make_entry(LogLevel::Error, LogSource::App, "app error"),
+            make_entry(LogLevel::Error, LogSource::Flutter, "flutter error"),
+            make_entry(LogLevel::Info, LogSource::App, "app info"),
+            make_entry(LogLevel::Warning, LogSource::App, "app warning"),
+        ];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::Errors,
+            source_filter: LogSourceFilter::App,
+        };
+
+        let filtered: Vec<_> = logs.iter().filter(|e| filter.matches(e)).collect();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].message, "app error");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Search Highlighting Tests (Phase 1 - Task 6)
+    // ─────────────────────────────────────────────────────────
+
+    use crate::core::SearchState;
+
+    #[test]
+    fn test_format_message_with_highlights_no_search() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Hello world")];
+        let view = LogView::new(&logs);
+
+        let spans = view.format_message_with_highlights("Hello world", 0, Style::default());
+
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_format_message_with_highlights_with_match() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Hello world")];
+        let mut search = SearchState::default();
+        search.set_query("world");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs).search_state(&search);
+
+        let spans = view.format_message_with_highlights("Hello world", 0, Style::default());
+
+        // Should be: "Hello " + "world" (highlighted)
+        assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn test_format_message_with_highlights_multiple_matches() {
+        let logs = vec![make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "test one test two",
+        )];
+        let mut search = SearchState::default();
+        search.set_query("test");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs).search_state(&search);
+
+        let spans = view.format_message_with_highlights("test one test two", 0, Style::default());
+
+        // Should be: "test" (highlighted) + " one " + "test" (highlighted) + " two"
+        assert_eq!(spans.len(), 4);
+    }
+
+    #[test]
+    fn test_format_message_with_highlights_no_match_in_entry() {
+        let logs = vec![
+            make_entry(LogLevel::Info, LogSource::App, "test here"),
+            make_entry(LogLevel::Info, LogSource::App, "no match"),
+        ];
+        let mut search = SearchState::default();
+        search.set_query("test");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs).search_state(&search);
+
+        // Entry 1 has no matches - should return single span
+        let spans = view.format_message_with_highlights("no match", 1, Style::default());
+
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_format_message_with_highlights_invalid_regex() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let mut search = SearchState::default();
+        search.set_query("[invalid");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs).search_state(&search);
+
+        // Invalid regex should not highlight
+        let spans = view.format_message_with_highlights("test", 0, Style::default());
+
+        assert_eq!(spans.len(), 1);
+    }
+
+    #[test]
+    fn test_build_title_with_search_status() {
+        let logs = vec![
+            make_entry(LogLevel::Info, LogSource::App, "test message"),
+            make_entry(LogLevel::Info, LogSource::App, "another test"),
+        ];
+        let mut search = SearchState::default();
+        search.set_query("test");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs).title("Logs").search_state(&search);
+
+        let title = view.build_title();
+        assert!(title.contains("["), "Title was: {}", title);
+        assert!(title.contains("2"), "Title was: {}", title);
+        assert!(title.contains("matches"), "Title was: {}", title);
+    }
+
+    #[test]
+    fn test_build_title_with_filter_and_search() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let filter = FilterState {
+            level_filter: LogLevelFilter::Errors,
+            source_filter: LogSourceFilter::All,
+        };
+        let mut search = SearchState::default();
+        search.set_query("test");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs)
+            .title("Logs")
+            .filter_state(&filter)
+            .search_state(&search);
+
+        let title = view.build_title();
+        // Should contain both filter and search indicators
+        assert!(title.contains("Errors"), "Title was: {}", title);
+        assert!(title.contains("•"), "Title was: {}", title); // separator
+    }
+
+    #[test]
+    fn test_search_state_builder() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let search = SearchState::default();
+        let view = LogView::new(&logs).search_state(&search);
+        assert!(view.search_state.is_some());
+    }
+
+    #[test]
+    fn test_format_entry_with_search_highlights() {
+        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "error occurred")];
+        let mut search = SearchState::default();
+        search.set_query("error");
+        search.execute_search(&logs);
+
+        let view = LogView::new(&logs)
+            .show_timestamps(false)
+            .show_source(false)
+            .search_state(&search);
+
+        let line = view.format_entry(&logs[0], 0);
+
+        // Should have at least 2 spans for message: "error" (highlighted) + " occurred"
+        // Plus the level indicator span
+        assert!(line.spans.len() >= 3, "Got {} spans", line.spans.len());
     }
 }

@@ -41,6 +41,7 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # Utilities
 dirs = "5"
+regex = "1"
 
 # File watching
 notify = "7"

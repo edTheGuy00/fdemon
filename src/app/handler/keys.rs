@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
     match state.ui_mode {
+        UiMode::SearchInput => handle_key_search_input(state, key),
         UiMode::DeviceSelector => handle_key_device_selector(state, key),
         UiMode::ConfirmDialog => handle_key_confirm_dialog(key),
         UiMode::EmulatorSelector => handle_key_emulator_selector(key),
@@ -87,6 +88,51 @@ fn handle_key_loading(key: KeyEvent) -> Option<Message> {
     }
 }
 
+/// Handle key events in search input mode
+fn handle_key_search_input(state: &AppState, key: KeyEvent) -> Option<Message> {
+    match (key.code, key.modifiers) {
+        // Cancel search input (return to normal mode)
+        (KeyCode::Esc, _) => Some(Message::CancelSearch),
+
+        // Submit search and return to normal mode
+        (KeyCode::Enter, _) => Some(Message::CancelSearch), // Keep query, exit input mode
+
+        // Delete character
+        (KeyCode::Backspace, _) => {
+            if let Some(handle) = state.session_manager.selected() {
+                let mut query = handle.session.search_state.query.clone();
+                query.pop();
+                Some(Message::SearchInput { text: query })
+            } else {
+                None
+            }
+        }
+
+        // Clear all input
+        (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Message::SearchInput {
+                text: String::new(),
+            })
+        }
+
+        // Type character
+        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+            if let Some(handle) = state.session_manager.selected() {
+                let mut query = handle.session.search_state.query.clone();
+                query.push(c);
+                Some(Message::SearchInput { text: query })
+            } else {
+                None
+            }
+        }
+
+        // Force quit even in search mode
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+
+        _ => None,
+    }
+}
+
 /// Handle key events in normal mode
 fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
     // Check if any session is busy (reloading)
@@ -143,10 +189,58 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // Stop app (lowercase 's') - only when not busy
         (KeyCode::Char('s'), KeyModifiers::NONE) if !is_busy => Some(Message::StopApp),
 
-        // New session (lowercase 'n') - show device selector
-        (KeyCode::Char('n'), KeyModifiers::NONE) => Some(Message::ShowDeviceSelector),
-        // Also allow 'd' for device selector (as shown in header)
+        // 'd' for device selector (as shown in header)
+        // Note: 'n' also triggers device selector but is overloaded with search navigation
         (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Message::ShowDeviceSelector),
+
+        // ─────────────────────────────────────────────────────────
+        // Log Filtering (Phase 1 - Task 4)
+        // ─────────────────────────────────────────────────────────
+        // 'f' - Cycle log level filter
+        (KeyCode::Char('f'), KeyModifiers::NONE) => Some(Message::CycleLevelFilter),
+
+        // 'F' - Cycle log source filter
+        (KeyCode::Char('F'), KeyModifiers::NONE) => Some(Message::CycleSourceFilter),
+        (KeyCode::Char('F'), m) if m.contains(KeyModifiers::SHIFT) => {
+            Some(Message::CycleSourceFilter)
+        }
+
+        // Ctrl+f - Reset all filters
+        (KeyCode::Char('f'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::ResetFilters),
+
+        // ─────────────────────────────────────────────────────────
+        // Log Search (Phase 1 - Task 5)
+        // ─────────────────────────────────────────────────────────
+        // '/' - Enter search mode (vim-style)
+        (KeyCode::Char('/'), KeyModifiers::NONE) => Some(Message::StartSearch),
+
+        // 'n' - Next search match (only when search has query)
+        // Note: 'n' is overloaded - it's also used for "New session"
+        // If there's an active search query, use it for next match
+        (KeyCode::Char('n'), KeyModifiers::NONE) => {
+            if let Some(handle) = state.session_manager.selected() {
+                if !handle.session.search_state.query.is_empty() {
+                    return Some(Message::NextSearchMatch);
+                }
+            }
+            Some(Message::ShowDeviceSelector)
+        }
+
+        // 'N' - Previous search match
+        (KeyCode::Char('N'), KeyModifiers::NONE) => Some(Message::PrevSearchMatch),
+        (KeyCode::Char('N'), m) if m.contains(KeyModifiers::SHIFT) => {
+            Some(Message::PrevSearchMatch)
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Error Navigation (Phase 1 - Task 7)
+        // ─────────────────────────────────────────────────────────
+        // 'e' - Jump to next error
+        (KeyCode::Char('e'), KeyModifiers::NONE) => Some(Message::NextError),
+
+        // 'E' - Jump to previous error
+        (KeyCode::Char('E'), KeyModifiers::NONE) => Some(Message::PrevError),
+        (KeyCode::Char('E'), m) if m.contains(KeyModifiers::SHIFT) => Some(Message::PrevError),
 
         // ─────────────────────────────────────────────────────────
         // Scrolling - always allowed

@@ -52,13 +52,13 @@ Phase 1 implements log filtering and search functionality for Flutter Demon. Use
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-add-filter-types](tasks/01-add-filter-types.md) | Not Started | - | 3-4h | `core/types.rs` |
-| 2 | [02-add-search-types](tasks/02-add-search-types.md) | Not Started | - | 2-3h | `core/types.rs` |
-| 3 | [03-integrate-filter-search-state](tasks/03-integrate-filter-search-state.md) | Not Started | 1, 2 | 3-4h | `app/session.rs`, `app/message.rs` |
-| 4 | [04-implement-filter-handlers-logic](tasks/04-implement-filter-handlers-logic.md) | Not Started | 3 | 5-6h | `app/handler/keys.rs`, `app/handler/update.rs`, `tui/widgets/log_view.rs` |
-| 5 | [05-implement-search-mode](tasks/05-implement-search-mode.md) | Not Started | 3 | 4-5h | `app/handler/keys.rs`, `tui/widgets/log_view.rs`, `tui/widgets/search_input.rs` |
-| 6 | [06-implement-search-logic-highlighting](tasks/06-implement-search-logic-highlighting.md) | Not Started | 5 | 5-6h | `tui/widgets/log_view.rs`, `app/handler/update.rs` |
-| 7 | [07-add-error-navigation](tasks/07-add-error-navigation.md) | Not Started | 4, 6 | 3-4h | `app/handler/keys.rs`, `tui/widgets/log_view.rs` |
+| 1 | [01-add-filter-types](tasks/01-add-filter-types.md) | ✅ Done | - | 3-4h | `core/types.rs` |
+| 2 | [02-add-search-types](tasks/02-add-search-types.md) | ✅ Done | - | 2-3h | `core/types.rs` |
+| 3 | [03-integrate-filter-search-state](tasks/03-integrate-filter-search-state.md) | ✅ Done | 1, 2 | 3-4h | `app/session.rs`, `app/message.rs` |
+| 4 | [04-implement-filter-handlers-logic](tasks/04-implement-filter-handlers-logic.md) | ✅ Done | 3 | 5-6h | `app/handler/keys.rs`, `app/handler/update.rs`, `tui/widgets/log_view.rs` |
+| 5 | [05-implement-search-mode](tasks/05-implement-search-mode.md) | ✅ Done | 3 | 4-5h | `app/handler/keys.rs`, `tui/widgets/log_view.rs`, `tui/widgets/search_input.rs` |
+| 6 | [06-implement-search-logic-highlighting](tasks/06-implement-search-logic-highlighting.md) | ✅ Done | 5 | 5-6h | `tui/widgets/log_view.rs`, `app/handler/update.rs` |
+| 7 | [07-add-error-navigation](tasks/07-add-error-navigation.md) | ✅ Done | 4, 6 | 3-4h | `app/handler/keys.rs`, `tui/widgets/log_view.rs` |
 
 ## Success Criteria
 

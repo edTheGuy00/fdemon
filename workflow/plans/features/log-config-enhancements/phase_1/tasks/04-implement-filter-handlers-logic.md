@@ -411,3 +411,40 @@ fn test_filtered_logs_count() {
   - `f` was previously unused
   - `F` (Shift+f) was previously unused
   - `Ctrl+f` was previously unused (not a standard quit/control binding)
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+### Files Modified
+
+- `src/app/handler/keys.rs` - Added filter keyboard handlers (`f`, `F`, `Ctrl+f`)
+- `src/app/handler/update.rs` - (No changes needed - handlers were already implemented in Task 3)
+- `src/tui/widgets/log_view.rs` - Added filter_state field, build_title() method, render_no_matches() method, updated render() for filtering
+- `src/tui/render.rs` - Updated to pass filter_state to LogView widget
+- `src/app/handler/tests.rs` - Added 7 new filter handler tests
+- `src/tui/widgets/log_view.rs` (tests section) - Added 9 new filter widget tests
+
+### Notable Decisions/Tradeoffs
+
+1. Used `Ctrl+f` instead of `Shift+f` for reset filters, as some terminals send `F` for both `Shift+f` and uppercase `F`, making reliable detection difficult
+2. Filter state is passed as a reference to LogView to avoid cloning
+3. Filtering is applied during render (not when logs are added) to preserve full log buffer
+4. "No logs match current filter" message displayed with instructions to press `Ctrl+f` to reset
+
+### Testing Performed
+
+- `cargo check` - PASS
+- `cargo fmt` - PASS
+- `cargo clippy` - PASS (no warnings)
+- `cargo test filter` - PASS (51 filter-related tests)
+  - All new keyboard handler tests pass
+  - All new log_view widget tests pass
+  - All existing filter type tests pass
+
+### Risks/Limitations
+
+- Filter is recomputed on every render (no caching). For very large log buffers (>10k logs) this could impact performance. Can be addressed in a future optimization if needed.
+- The scroll offset refers to filtered list indices, so when filters change, the view may jump. This is expected behavior.
