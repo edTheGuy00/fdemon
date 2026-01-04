@@ -64,11 +64,21 @@ Run your app on up to 9 devices simultaneously! Switch between sessions with num
 
 File watcher monitors your `lib/` directory and triggers hot reload automatically when you save — with smart debouncing to avoid reload spam.
 
+### 🔎 Log Filtering & Search
+
+Powerful log management to find what you need:
+
+- **Filter by level**: Show only errors, warnings, info, or debug messages
+- **Filter by source**: Focus on app, daemon, Flutter, or watcher logs
+- **Regex search**: Find patterns with `/` (vim-style), navigate with `n`/`N`
+- **Error navigation**: Jump between errors with `e`/`E`
+
 ### 🎨 Beautiful TUI
 
 Clean, responsive terminal interface built with [ratatui](https://github.com/ratatui/ratatui):
 
 - Scrollable log view with syntax highlighting
+- Search match highlighting with current match indicator
 - Session tabs for multi-device development
 - Status bar with reload count and timing
 - Device/emulator selection modal
@@ -151,6 +161,8 @@ fdemon
 
 ## Keyboard Controls
 
+### General
+
 | Key | Action |
 |-----|--------|
 | `q` / `Esc` | Quit |
@@ -158,14 +170,43 @@ fdemon
 | `R` | Hot restart |
 | `d` / `n` | Open device selector |
 | `c` | Clear logs |
+
+### Session Management
+
+| Key | Action |
+|-----|--------|
 | `1-9` | Switch to session |
 | `Tab` / `Shift+Tab` | Next/previous session |
 | `x` / `Ctrl+W` | Close current session |
+
+### Log Navigation
+
+| Key | Action |
+|-----|--------|
 | `j` / `↓` | Scroll down |
 | `k` / `↑` | Scroll up |
 | `g` | Go to top |
 | `G` | Go to bottom |
 | `Page Up/Down` | Page scroll |
+
+### Log Filtering
+
+| Key | Action |
+|-----|--------|
+| `f` | Cycle level filter (All → Errors → Warnings → Info → Debug) |
+| `F` | Cycle source filter (All → App → Daemon → Flutter → Watcher) |
+| `Ctrl+F` | Reset all filters |
+
+### Log Search
+
+| Key | Action |
+|-----|--------|
+| `/` | Start search (vim-style) |
+| `n` | Next search match |
+| `N` | Previous search match |
+| `Esc` | Cancel search |
+| `e` | Jump to next error |
+| `E` | Jump to previous error |
 
 ## Configuration
 
