@@ -120,6 +120,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub devtools: DevToolsSettings,
+
+    #[serde(default)]
+    pub editor: EditorSettings,
 }
 
 /// Behavior settings
@@ -253,6 +256,90 @@ pub struct DevToolsSettings {
     /// Browser to use (empty = system default)
     #[serde(default)]
     pub browser: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Editor Settings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Editor integration settings for opening files from stack traces.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct EditorSettings {
+    /// Editor command or name (e.g., "code", "zed", "nvim").
+    /// If empty, attempts auto-detection.
+    #[serde(default)]
+    pub command: String,
+
+    /// Pattern for opening file at line/column.
+    /// Variables: $EDITOR, $FILE, $LINE, $COLUMN
+    /// Example: "$EDITOR --goto $FILE:$LINE:$COLUMN"
+    #[serde(default = "default_open_pattern")]
+    pub open_pattern: String,
+}
+
+impl Default for EditorSettings {
+    fn default() -> Self {
+        Self {
+            command: String::new(), // Auto-detect
+            open_pattern: default_open_pattern(),
+        }
+    }
+}
+
+fn default_open_pattern() -> String {
+    "$EDITOR $FILE:$LINE".to_string()
+}
+
+/// Detected parent IDE when running in an integrated terminal.
+///
+/// This is used to open files in the *current* IDE instance rather than
+/// spawning a new window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentIde {
+    VSCode,
+    VSCodeInsiders,
+    Cursor,
+    Zed,
+    IntelliJ,
+    AndroidStudio,
+    Neovim,
+}
+
+impl ParentIde {
+    /// URL scheme for OSC 8 hyperlinks (Ctrl+click support).
+    pub fn url_scheme(&self) -> &'static str {
+        match self {
+            ParentIde::VSCode => "vscode",
+            ParentIde::VSCodeInsiders => "vscode-insiders",
+            ParentIde::Cursor => "cursor",
+            ParentIde::Zed => "zed",
+            ParentIde::IntelliJ | ParentIde::AndroidStudio => "idea",
+            ParentIde::Neovim => "file", // Neovim doesn't have URL scheme
+        }
+    }
+
+    /// Command-line flag to reuse existing window.
+    pub fn reuse_flag(&self) -> Option<&'static str> {
+        match self {
+            ParentIde::VSCode | ParentIde::VSCodeInsiders | ParentIde::Cursor => {
+                Some("--reuse-window")
+            }
+            _ => None,
+        }
+    }
+
+    /// Display name for the IDE.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ParentIde::VSCode => "VS Code",
+            ParentIde::VSCodeInsiders => "VS Code Insiders",
+            ParentIde::Cursor => "Cursor",
+            ParentIde::Zed => "Zed",
+            ParentIde::IntelliJ => "IntelliJ IDEA",
+            ParentIde::AndroidStudio => "Android Studio",
+            ParentIde::Neovim => "Neovim",
+        }
+    }
 }
 
 /// Source of a launch configuration (for tracking origin)
@@ -401,5 +488,48 @@ debounce_ms = 1000
         assert!(settings.behavior.confirm_quit); // default
         assert_eq!(settings.watcher.debounce_ms, 1000);
         assert!(settings.watcher.auto_reload); // default
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Editor Settings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_editor_settings_default() {
+        let settings = EditorSettings::default();
+        assert!(settings.command.is_empty());
+        assert_eq!(settings.open_pattern, "$EDITOR $FILE:$LINE");
+    }
+
+    #[test]
+    fn test_settings_includes_editor() {
+        let settings = Settings::default();
+        // Editor settings should be present with defaults
+        assert!(settings.editor.command.is_empty());
+        assert_eq!(settings.editor.open_pattern, "$EDITOR $FILE:$LINE");
+    }
+
+    #[test]
+    fn test_parent_ide_equality() {
+        assert_eq!(ParentIde::VSCode, ParentIde::VSCode);
+        assert_ne!(ParentIde::VSCode, ParentIde::Cursor);
+    }
+
+    #[test]
+    fn test_parent_ide_clone() {
+        let ide = ParentIde::Zed;
+        let cloned = ide;
+        assert_eq!(ide, cloned);
+    }
+
+    #[test]
+    fn test_editor_settings_clone() {
+        let settings = EditorSettings {
+            command: "code".to_string(),
+            open_pattern: "code --goto $FILE:$LINE".to_string(),
+        };
+        let cloned = settings.clone();
+        assert_eq!(settings.command, cloned.command);
+        assert_eq!(settings.open_pattern, cloned.open_pattern);
     }
 }

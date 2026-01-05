@@ -1,11 +1,306 @@
 //! Settings parser for .fdemon/config.toml
 
-use super::types::Settings;
+use super::types::{EditorSettings, ParentIde, Settings};
 use crate::common::prelude::*;
 use std::path::Path;
+use std::process::Command;
 
 const CONFIG_FILENAME: &str = "config.toml";
 const FDEMON_DIR: &str = ".fdemon";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Editor Detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Known editor configuration with command and open pattern.
+#[derive(Debug, Clone)]
+pub struct EditorConfig {
+    pub command: &'static str,
+    pub pattern: &'static str,
+    pub display_name: &'static str,
+}
+
+/// List of known editors with their file:line patterns.
+///
+/// Note: Patterns include --reuse-window where applicable for IDE instance reuse.
+pub const KNOWN_EDITORS: &[EditorConfig] = &[
+    EditorConfig {
+        command: "code",
+        pattern: "code --reuse-window --goto $FILE:$LINE:$COLUMN",
+        display_name: "Visual Studio Code",
+    },
+    EditorConfig {
+        command: "cursor",
+        pattern: "cursor --reuse-window --goto $FILE:$LINE:$COLUMN",
+        display_name: "Cursor",
+    },
+    EditorConfig {
+        command: "zed",
+        pattern: "zed $FILE:$LINE",
+        display_name: "Zed",
+    },
+    EditorConfig {
+        command: "nvim",
+        pattern: "nvim +$LINE $FILE",
+        display_name: "Neovim",
+    },
+    EditorConfig {
+        command: "vim",
+        pattern: "vim +$LINE $FILE",
+        display_name: "Vim",
+    },
+    EditorConfig {
+        command: "emacs",
+        pattern: "emacs +$LINE:$COLUMN $FILE",
+        display_name: "Emacs",
+    },
+    EditorConfig {
+        command: "subl",
+        pattern: "subl $FILE:$LINE:$COLUMN",
+        display_name: "Sublime Text",
+    },
+    EditorConfig {
+        command: "idea",
+        pattern: "idea --line $LINE $FILE",
+        display_name: "IntelliJ IDEA",
+    },
+];
+
+/// Detect if running inside an IDE's integrated terminal.
+///
+/// This is crucial for opening files in the CURRENT IDE instance
+/// rather than spawning a new window.
+pub fn detect_parent_ide() -> Option<ParentIde> {
+    use std::env;
+
+    // Check TERM_PROGRAM first (most reliable)
+    if let Ok(term_program) = env::var("TERM_PROGRAM") {
+        match term_program.as_str() {
+            "vscode" => return Some(ParentIde::VSCode),
+            "vscode-insiders" => return Some(ParentIde::VSCodeInsiders),
+            "cursor" => return Some(ParentIde::Cursor),
+            "Zed" => return Some(ParentIde::Zed),
+            _ => {}
+        }
+    }
+
+    // Check for Zed's terminal marker
+    if env::var("ZED_TERM").is_ok() {
+        return Some(ParentIde::Zed);
+    }
+
+    // Check for VS Code's IPC hook (backup detection)
+    if env::var("VSCODE_IPC_HOOK_CLI").is_ok() {
+        // Could be VS Code or a fork - check more specifically
+        if env::var("TERM_PROGRAM")
+            .map(|v| v == "cursor")
+            .unwrap_or(false)
+        {
+            return Some(ParentIde::Cursor);
+        }
+        return Some(ParentIde::VSCode);
+    }
+
+    // Check for JetBrains terminal
+    if let Ok(terminal_emulator) = env::var("TERMINAL_EMULATOR") {
+        if terminal_emulator.starts_with("JetBrains") {
+            // Try to distinguish between IntelliJ and Android Studio
+            if let Ok(idea_dir) = env::var("IDEA_INITIAL_DIRECTORY") {
+                if idea_dir.contains("AndroidStudio") {
+                    return Some(ParentIde::AndroidStudio);
+                }
+            }
+            return Some(ParentIde::IntelliJ);
+        }
+    }
+
+    // Check for Neovim's socket (running inside :terminal)
+    if env::var("NVIM").is_ok() {
+        return Some(ParentIde::Neovim);
+    }
+
+    None
+}
+
+/// Get the editor config for a detected parent IDE.
+pub fn editor_config_for_ide(ide: ParentIde) -> EditorConfig {
+    match ide {
+        ParentIde::VSCode => EditorConfig {
+            command: "code",
+            pattern: "code --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "Visual Studio Code",
+        },
+        ParentIde::VSCodeInsiders => EditorConfig {
+            command: "code-insiders",
+            pattern: "code-insiders --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "VS Code Insiders",
+        },
+        ParentIde::Cursor => EditorConfig {
+            command: "cursor",
+            pattern: "cursor --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "Cursor",
+        },
+        ParentIde::Zed => EditorConfig {
+            command: "zed",
+            pattern: "zed $FILE:$LINE",
+            display_name: "Zed",
+        },
+        ParentIde::IntelliJ => EditorConfig {
+            command: "idea",
+            pattern: "idea --line $LINE $FILE",
+            display_name: "IntelliJ IDEA",
+        },
+        ParentIde::AndroidStudio => EditorConfig {
+            command: "studio",
+            pattern: "studio --line $LINE $FILE",
+            display_name: "Android Studio",
+        },
+        ParentIde::Neovim => EditorConfig {
+            command: "nvim",
+            pattern: "nvim --server $NVIM --remote-send '<Esc>:e +$LINE $FILE<CR>'",
+            display_name: "Neovim",
+        },
+    }
+}
+
+/// Detect the user's preferred editor.
+///
+/// Detection order:
+/// 1. **Parent IDE** - If running in an IDE's terminal, use that IDE
+/// 2. $VISUAL environment variable
+/// 3. $EDITOR environment variable
+/// 4. Check for common editors in PATH
+pub fn detect_editor() -> Option<EditorConfig> {
+    use std::env;
+
+    // Priority 1: Parent IDE (most important for instance reuse)
+    if let Some(ide) = detect_parent_ide() {
+        return Some(editor_config_for_ide(ide));
+    }
+
+    // Check environment variables
+    for var in ["VISUAL", "EDITOR"] {
+        if let Ok(editor) = env::var(var) {
+            // Extract command name from path
+            let cmd = std::path::Path::new(&editor)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&editor);
+
+            // Look for matching known editor
+            if let Some(config) = find_editor_config(cmd) {
+                return Some(config);
+            }
+        }
+    }
+
+    // Check for common editors in PATH
+    for config in KNOWN_EDITORS {
+        if is_command_available(config.command) {
+            return Some(EditorConfig {
+                command: config.command,
+                pattern: config.pattern,
+                display_name: config.display_name,
+            });
+        }
+    }
+
+    None
+}
+
+/// Find editor config by command name.
+pub fn find_editor_config(cmd: &str) -> Option<EditorConfig> {
+    KNOWN_EDITORS
+        .iter()
+        .find(|e| cmd.contains(e.command))
+        .map(|e| EditorConfig {
+            command: e.command,
+            pattern: e.pattern,
+            display_name: e.display_name,
+        })
+}
+
+/// Check if a command is available in PATH.
+fn is_command_available(cmd: &str) -> bool {
+    #[cfg(unix)]
+    {
+        Command::new("which")
+            .arg(cmd)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(windows)]
+    {
+        Command::new("where.exe")
+            .arg(cmd)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// EditorSettings Implementation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Default open pattern for settings.
+fn default_open_pattern() -> String {
+    "$EDITOR $FILE:$LINE".to_string()
+}
+
+impl EditorSettings {
+    /// Resolve the effective editor command and pattern.
+    ///
+    /// Uses configured values or falls back to auto-detection.
+    ///
+    /// Priority order:
+    /// 1. Explicitly configured command (if set)
+    /// 2. Parent IDE detection (if running in an IDE terminal)
+    /// 3. $VISUAL / $EDITOR environment variables
+    /// 4. Common editors in PATH
+    pub fn resolve(&self) -> Option<(String, String)> {
+        let command = if self.command.is_empty() {
+            detect_editor().map(|e| e.command.to_string())?
+        } else {
+            self.command.clone()
+        };
+
+        let pattern = if self.open_pattern == default_open_pattern() {
+            // If using default pattern, check for editor-specific pattern
+            find_editor_config(&command)
+                .map(|e| e.pattern.to_string())
+                .unwrap_or_else(|| self.open_pattern.clone())
+        } else {
+            self.open_pattern.clone()
+        };
+
+        Some((command, pattern))
+    }
+
+    /// Get the display name of the configured editor.
+    pub fn editor_display_name(&self) -> String {
+        if self.command.is_empty() {
+            detect_editor()
+                .map(|e| e.display_name.to_string())
+                .unwrap_or_else(|| "None detected".to_string())
+        } else {
+            find_editor_config(&self.command)
+                .map(|e| e.display_name.to_string())
+                .unwrap_or_else(|| self.command.clone())
+        }
+    }
+
+    /// Check if we detected a parent IDE.
+    pub fn detected_parent_ide(&self) -> Option<ParentIde> {
+        detect_parent_ide()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings Loading
+// ─────────────────────────────────────────────────────────────────────────────
 
 /// Load settings from .fdemon/config.toml
 ///
@@ -69,6 +364,18 @@ theme = "default"
 [devtools]
 auto_open = false
 browser = ""            # Empty = system default
+
+[editor]
+# Editor command (leave empty for auto-detection)
+# Auto-detected from: parent IDE, $VISUAL, $EDITOR, or common editors in PATH
+command = ""
+# Pattern for opening file at line/column
+# Variables: $EDITOR, $FILE, $LINE, $COLUMN
+# Examples:
+#   VS Code:  "code --reuse-window --goto $FILE:$LINE:$COLUMN"
+#   Zed:      "zed $FILE:$LINE"
+#   Neovim:   "nvim +$LINE $FILE"
+open_pattern = "$EDITOR $FILE:$LINE"
 "#;
         std::fs::write(&config_path, default_content)
             .map_err(|e| Error::config(format!("Failed to write config.toml: {}", e)))?;
@@ -160,5 +467,181 @@ auto_reload = false
 
         let content = std::fs::read_to_string(&config_path).unwrap();
         assert!(content.contains("auto_start = true"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Editor Settings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_editor_settings_default() {
+        let settings = EditorSettings::default();
+        assert!(settings.command.is_empty());
+        assert_eq!(settings.open_pattern, "$EDITOR $FILE:$LINE");
+    }
+
+    #[test]
+    fn test_editor_settings_deserialize_partial() {
+        use super::super::types::Settings;
+        let toml = r#"
+[editor]
+command = "code"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.editor.command, "code");
+        assert_eq!(settings.editor.open_pattern, "$EDITOR $FILE:$LINE");
+    }
+
+    #[test]
+    fn test_editor_settings_deserialize_full() {
+        use super::super::types::Settings;
+        let toml = r#"
+[editor]
+command = "nvim"
+open_pattern = "nvim +$LINE $FILE"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.editor.command, "nvim");
+        assert_eq!(settings.editor.open_pattern, "nvim +$LINE $FILE");
+    }
+
+    #[test]
+    fn test_find_editor_config_exact() {
+        let config = find_editor_config("code").unwrap();
+        assert_eq!(config.command, "code");
+        assert!(config.pattern.contains("--goto"));
+    }
+
+    #[test]
+    fn test_find_editor_config_partial() {
+        // Should match "nvim" from "/usr/local/bin/nvim"
+        let config = find_editor_config("/usr/local/bin/nvim").unwrap();
+        assert_eq!(config.command, "nvim");
+    }
+
+    #[test]
+    fn test_find_editor_config_unknown() {
+        let config = find_editor_config("unknown_editor");
+        assert!(config.is_none());
+    }
+
+    #[test]
+    fn test_known_editors_patterns() {
+        // Verify all patterns contain required variables
+        for editor in KNOWN_EDITORS {
+            assert!(
+                editor.pattern.contains("$FILE"),
+                "{} pattern missing $FILE",
+                editor.command
+            );
+            assert!(
+                editor.pattern.contains("$LINE"),
+                "{} pattern missing $LINE",
+                editor.command
+            );
+        }
+    }
+
+    #[test]
+    fn test_parent_ide_url_schemes() {
+        assert_eq!(ParentIde::VSCode.url_scheme(), "vscode");
+        assert_eq!(ParentIde::VSCodeInsiders.url_scheme(), "vscode-insiders");
+        assert_eq!(ParentIde::Cursor.url_scheme(), "cursor");
+        assert_eq!(ParentIde::Zed.url_scheme(), "zed");
+        assert_eq!(ParentIde::IntelliJ.url_scheme(), "idea");
+        assert_eq!(ParentIde::AndroidStudio.url_scheme(), "idea");
+        assert_eq!(ParentIde::Neovim.url_scheme(), "file");
+    }
+
+    #[test]
+    fn test_parent_ide_reuse_flags() {
+        assert_eq!(ParentIde::VSCode.reuse_flag(), Some("--reuse-window"));
+        assert_eq!(
+            ParentIde::VSCodeInsiders.reuse_flag(),
+            Some("--reuse-window")
+        );
+        assert_eq!(ParentIde::Cursor.reuse_flag(), Some("--reuse-window"));
+        assert_eq!(ParentIde::Zed.reuse_flag(), None); // Zed reuses by default
+        assert_eq!(ParentIde::IntelliJ.reuse_flag(), None);
+        assert_eq!(ParentIde::Neovim.reuse_flag(), None);
+    }
+
+    #[test]
+    fn test_parent_ide_display_names() {
+        assert_eq!(ParentIde::VSCode.display_name(), "VS Code");
+        assert_eq!(ParentIde::VSCodeInsiders.display_name(), "VS Code Insiders");
+        assert_eq!(ParentIde::Cursor.display_name(), "Cursor");
+        assert_eq!(ParentIde::Zed.display_name(), "Zed");
+        assert_eq!(ParentIde::IntelliJ.display_name(), "IntelliJ IDEA");
+        assert_eq!(ParentIde::AndroidStudio.display_name(), "Android Studio");
+        assert_eq!(ParentIde::Neovim.display_name(), "Neovim");
+    }
+
+    #[test]
+    fn test_editor_config_for_ide() {
+        let config = editor_config_for_ide(ParentIde::VSCode);
+        assert_eq!(config.command, "code");
+        assert!(config.pattern.contains("--reuse-window"));
+
+        let config = editor_config_for_ide(ParentIde::Zed);
+        assert_eq!(config.command, "zed");
+        assert!(!config.pattern.contains("--reuse-window")); // Zed reuses by default
+    }
+
+    #[test]
+    fn test_editor_display_name_configured() {
+        let mut settings = EditorSettings::default();
+        settings.command = "code".to_string();
+        assert_eq!(settings.editor_display_name(), "Visual Studio Code");
+    }
+
+    #[test]
+    fn test_editor_display_name_unknown() {
+        let mut settings = EditorSettings::default();
+        settings.command = "my-custom-editor".to_string();
+        // Falls back to command name
+        assert_eq!(settings.editor_display_name(), "my-custom-editor");
+    }
+
+    #[test]
+    fn test_editor_resolve_with_configured_command() {
+        let mut settings = EditorSettings::default();
+        settings.command = "code".to_string();
+
+        let (cmd, pattern) = settings.resolve().unwrap();
+        assert_eq!(cmd, "code");
+        // Should get the editor-specific pattern since we're using default open_pattern
+        assert!(pattern.contains("--goto"));
+    }
+
+    #[test]
+    fn test_editor_resolve_with_custom_pattern() {
+        let mut settings = EditorSettings::default();
+        settings.command = "code".to_string();
+        settings.open_pattern = "custom $FILE:$LINE".to_string();
+
+        let (cmd, pattern) = settings.resolve().unwrap();
+        assert_eq!(cmd, "code");
+        // Should use custom pattern, not editor default
+        assert_eq!(pattern, "custom $FILE:$LINE");
+    }
+
+    #[test]
+    fn test_load_settings_with_editor() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        let config = r#"
+[editor]
+command = "zed"
+open_pattern = "zed $FILE:$LINE"
+"#;
+        std::fs::write(fdemon_dir.join("config.toml"), config).unwrap();
+
+        let settings = load_settings(temp.path());
+
+        assert_eq!(settings.editor.command, "zed");
+        assert_eq!(settings.editor.open_pattern, "zed $FILE:$LINE");
     }
 }

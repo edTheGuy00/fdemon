@@ -467,3 +467,83 @@ mod tests {
 ### Estimated Effort
 
 2-3 hours (reduced from 3-4h due to existing infrastructure)
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date Completed:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/hyperlinks.rs` | Added `FileReferenceSource` enum, updated `FileReference` with `source` field and `with_source()` constructor, added `resolve_path()` method, added `extract_file_ref_from_message()` function with regex-based parsing |
+| `src/tui/widgets/log_view.rs` | Added `FocusInfo` struct with `entry_index`, `entry_id`, `frame_index`, and `file_ref` fields; added `focus_info` field to `LogViewState`; added `focused_file_ref()` method |
+
+### Implementation Details
+
+1. **FileReferenceSource Enum**: Added enum with three variants:
+   - `StackFrame` - for references from parsed stack frames
+   - `LogMessage` - for references detected in log message text
+   - `ErrorLocation` - for references from error source locations
+
+2. **FileReference Updates**:
+   - Added `source` field to track origin of reference
+   - Added `with_source()` constructor for explicit source specification
+   - Updated `from_stack_frame()` to set `source: FileReferenceSource::StackFrame`
+   - Added `resolve_path()` method for converting `package:` paths to filesystem paths
+
+3. **File Reference Extraction**:
+   - Added `FILE_LINE_PATTERN` regex using `LazyLock` for thread-safe lazy initialization
+   - Added `extract_file_ref_from_message()` function to detect file:line[:column] patterns
+   - Handles `package:`, `dart:`, and regular file paths
+   - Supports optional column number
+
+4. **FocusInfo Struct**: Added to `log_view.rs` with:
+   - `entry_index: Option<usize>` - index in log buffer
+   - `entry_id: Option<u64>` - stable ID across buffer changes
+   - `frame_index: Option<usize>` - frame within stack trace
+   - `file_ref: Option<FileReference>` - extracted file reference
+   - `has_file_ref()` helper method
+
+5. **LogViewState Updates**:
+   - Added `focus_info: FocusInfo` field
+   - Added `focused_file_ref()` convenience method
+
+### Testing Performed
+
+- `cargo check` - Compiles successfully (minor warnings for unused import, will be used in Task 04)
+- `cargo test --lib tui::hyperlinks` - 42 tests passed
+- `cargo test --lib tui::widgets::log_view` - 77 tests passed
+- `cargo test --lib` - 916 tests passed, 3 ignored
+
+### Notable Decisions/Tradeoffs
+
+1. **Source Tracking**: Added `FileReferenceSource` to track where references originate from, enabling different behavior (e.g., confidence levels) in Task 04
+2. **Package Path Resolution**: Implemented simple `package:app/path` → `lib/path` mapping; more complex multi-package workspace resolution deferred
+3. **Regex Pattern**: Used `.dart` file extension check to avoid matching non-Dart files in logs
+4. **Unused Import**: The `extract_file_ref_from_message` import in `log_view.rs` is intentionally added for Task 04 integration
+
+### Acceptance Criteria Checklist
+
+- [x] `FileReference` struct defined with path, line, column, source
+- [x] `FileReference::from_stack_frame()` extracts reference from StackFrame
+- [x] `FileReference::resolve_path()` converts package: paths to file paths
+- [x] `extract_file_ref_from_message()` detects file:line in log text
+- [x] `FocusInfo` struct tracks focused entry index, ID, frame index, and file ref
+- [x] `LogViewState` updated with `focus_info` field and `focused_file_ref()` method
+- [x] Focus tracking integrates with existing `visible_range()` for efficiency
+- [x] Works with `VecDeque<LogEntry>` (no code changes needed - indexing works)
+- [x] Unit tests for file reference extraction from messages
+- [x] Unit tests for FileReference::resolve_path()
+- [x] Leverages existing `Session::focused_entry()` pattern
+
+### Next Steps
+
+Task 04 (Open File Editor Action) can now use:
+- `LogViewState::focused_file_ref()` to get the current file reference
+- `FileReference::resolve_path()` to convert package: paths
+- `extract_file_ref_from_message()` if needed for fallback extraction

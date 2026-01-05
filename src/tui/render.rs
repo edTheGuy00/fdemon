@@ -7,7 +7,9 @@ use crate::app::state::{AppState, UiMode};
 use crate::core::LogEntry;
 use crate::tui::widgets::LogViewState;
 use ratatui::layout::Rect;
-use ratatui::widgets::Clear;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Clear, Paragraph};
 use ratatui::Frame;
 
 /// Render the complete UI (View function in TEA)
@@ -32,6 +34,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         // Add search state if there's an active search
         if !handle.session.search_state.query.is_empty() {
             log_view = log_view.search_state(&handle.session.search_state);
+        }
+
+        // Add link highlight state if link mode is active (Phase 3.1)
+        if handle.session.link_highlight_state.is_active() {
+            log_view = log_view.link_highlight_state(&handle.session.link_highlight_state);
         }
 
         frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
@@ -110,6 +117,72 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                         search_area,
                     );
                 }
+            }
+        }
+        UiMode::LinkHighlight => {
+            // Link mode is active - the log view handles badge rendering
+            // via link_highlight_state passed above (Phase 3.1 Task 07)
+            // Instruction bar shows available shortcuts (Phase 3.1 Task 08)
+            if let Some(handle) = state.session_manager.selected() {
+                let link_count = handle.session.link_highlight_state.link_count();
+
+                // Calculate position for instruction bar (bottom of log area, inside border)
+                let bar_area = Rect::new(
+                    areas.logs.x + 1,
+                    areas.logs.y + areas.logs.height.saturating_sub(2),
+                    areas.logs.width.saturating_sub(2),
+                    1,
+                );
+
+                // Clear the line
+                frame.render_widget(Clear, bar_area);
+
+                // Build instruction text based on link count
+                let instruction = if link_count == 0 {
+                    // Empty state (shouldn't normally happen)
+                    Line::from(vec![
+                        Span::styled(
+                            " No links found in viewport ",
+                            Style::default().fg(Color::DarkGray),
+                        ),
+                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                        Span::styled(" to exit", Style::default().fg(Color::DarkGray)),
+                    ])
+                } else {
+                    // Determine shortcut range text
+                    let shortcut_range = match link_count {
+                        1 => "1".to_string(),
+                        2..=9 => format!("1-{}", link_count),
+                        10..=35 => {
+                            let last_letter = (b'a' + (link_count - 10) as u8) as char;
+                            format!("1-9,a-{}", last_letter)
+                        }
+                        _ => "1-9,a-z".to_string(),
+                    };
+
+                    Line::from(vec![
+                        Span::styled(" Links: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(
+                            link_count.to_string(),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(" │ Press ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(shortcut_range, Style::default().fg(Color::Yellow)),
+                        Span::styled(" to open │ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+                        Span::styled(" cancel │ ", Style::default().fg(Color::DarkGray)),
+                        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+                        Span::styled(" scroll", Style::default().fg(Color::DarkGray)),
+                    ])
+                };
+
+                let bar =
+                    Paragraph::new(instruction).style(Style::default().bg(Color::Rgb(30, 30, 30)));
+
+                frame.render_widget(bar, bar_area);
             }
         }
     }

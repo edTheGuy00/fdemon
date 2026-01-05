@@ -6,6 +6,7 @@ use crate::core::{
     FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter, SearchState,
     StackFrame,
 };
+use crate::tui::hyperlinks::LinkHighlightState;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -59,6 +60,36 @@ mod stack_trace_styles {
 /// Default buffer lines for virtualized rendering
 const DEFAULT_BUFFER_LINES: usize = 10;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// FocusInfo
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Information about the currently focused element in the log view.
+///
+/// Updated during render to track which log entry and optional stack frame
+/// is at the "focus" position (top of visible area).
+/// Note: file_ref removed in Phase 3.1 - link detection now happens in link highlight mode.
+#[derive(Debug, Default, Clone)]
+pub struct FocusInfo {
+    /// Index of the focused entry in the log buffer
+    pub entry_index: Option<usize>,
+    /// ID of the focused entry (for stability across buffer changes)
+    pub entry_id: Option<u64>,
+    /// Index of the focused frame within a stack trace (if applicable)
+    pub frame_index: Option<usize>,
+}
+
+impl FocusInfo {
+    /// Create a new empty focus info
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LogViewState
+// ─────────────────────────────────────────────────────────────────────────────
+
 /// State for log view scrolling with virtualization support
 #[derive(Debug)]
 pub struct LogViewState {
@@ -78,6 +109,8 @@ pub struct LogViewState {
     pub visible_width: usize,
     /// Buffer lines above/below viewport for smooth scrolling (Task 05)
     pub buffer_lines: usize,
+    /// Information about the currently focused element (Phase 3 Task 03)
+    pub focus_info: FocusInfo,
 }
 
 impl Default for LogViewState {
@@ -97,6 +130,7 @@ impl LogViewState {
             max_line_width: 0,
             visible_width: 0,
             buffer_lines: DEFAULT_BUFFER_LINES,
+            focus_info: FocusInfo::default(),
         }
     }
 
@@ -233,6 +267,8 @@ pub struct LogView<'a> {
     default_collapsed: bool,
     /// Maximum frames to show when collapsed
     max_collapsed_frames: usize,
+    /// Link highlight state for rendering shortcut badges (Phase 3.1)
+    link_highlight_state: Option<&'a LinkHighlightState>,
 }
 
 impl<'a> LogView<'a> {
@@ -247,6 +283,7 @@ impl<'a> LogView<'a> {
             collapse_state: None,
             default_collapsed: true,
             max_collapsed_frames: 3,
+            link_highlight_state: None,
         }
     }
 
@@ -292,6 +329,14 @@ impl<'a> LogView<'a> {
     /// Set maximum frames to show when collapsed
     pub fn max_collapsed_frames(mut self, max: usize) -> Self {
         self.max_collapsed_frames = max;
+        self
+    }
+
+    /// Set link highlight state for rendering shortcut badges (Phase 3.1)
+    pub fn link_highlight_state(mut self, state: &'a LinkHighlightState) -> Self {
+        if state.is_active() {
+            self.link_highlight_state = Some(state);
+        }
         self
     }
 
@@ -356,6 +401,76 @@ impl<'a> LogView<'a> {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Link Highlight Mode Badge Helpers (Phase 3.1 Task 07)
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Create a styled shortcut badge like "[1]" or "[a]"
+    fn link_badge(shortcut: char) -> Span<'static> {
+        Span::styled(
+            format!("[{}]", shortcut),
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        )
+    }
+
+    /// Style for highlighted file reference text in link mode
+    fn link_text_style() -> Style {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::UNDERLINED)
+    }
+
+    /// Insert a link badge into spans at the position of a file reference.
+    ///
+    /// This finds the span containing the display_text and splits it to insert
+    /// the badge before the file reference, applying link styling to the reference.
+    fn insert_link_badge_into_spans(
+        spans: Vec<Span<'static>>,
+        display_text: &str,
+        shortcut: char,
+    ) -> Vec<Span<'static>> {
+        let mut result = Vec::with_capacity(spans.len() + 2);
+        let badge = Self::link_badge(shortcut);
+        let link_style = Self::link_text_style();
+        let mut badge_inserted = false;
+
+        for span in spans {
+            if !badge_inserted {
+                if let Some(pos) = span.content.find(display_text) {
+                    // Found the file reference in this span - split it
+                    let before = &span.content[..pos];
+                    let file_part = &span.content[pos..pos + display_text.len()];
+                    let after = &span.content[pos + display_text.len()..];
+
+                    // Add text before the file reference
+                    if !before.is_empty() {
+                        result.push(Span::styled(before.to_string(), span.style));
+                    }
+
+                    // Add the badge
+                    result.push(badge.clone());
+
+                    // Add the file reference with link styling
+                    result.push(Span::styled(file_part.to_string(), link_style));
+
+                    // Add text after the file reference
+                    if !after.is_empty() {
+                        result.push(Span::styled(after.to_string(), span.style));
+                    }
+
+                    badge_inserted = true;
+                    continue;
+                }
+            }
+            result.push(span);
+        }
+
+        result
+    }
+
     /// Format a single log entry as a styled Line with icons
     fn format_entry(&self, entry: &LogEntry, entry_index: usize) -> Line<'static> {
         let (level_style, msg_style) = Self::level_style(entry.level);
@@ -390,6 +505,19 @@ impl<'a> LogView<'a> {
         let message_spans =
             self.format_message_with_highlights(&entry.message, entry_index, msg_style);
         spans.extend(message_spans);
+
+        // Check for link badge in link highlight mode (Phase 3.1)
+        // Links from log messages have frame_index == None
+        if let Some(link_state) = self.link_highlight_state {
+            if let Some(link) = link_state
+                .links
+                .iter()
+                .find(|l| l.entry_index == entry_index && l.frame_index.is_none())
+            {
+                spans =
+                    Self::insert_link_badge_into_spans(spans, &link.display_text, link.shortcut);
+            }
+        }
 
         Line::from(spans)
     }
@@ -459,6 +587,7 @@ impl<'a> LogView<'a> {
     }
 
     /// Format a single stack frame into styled spans
+    #[allow(dead_code)] // Used in tests
     fn format_stack_frame(frame: &StackFrame) -> Vec<Span<'static>> {
         use stack_trace_styles::*;
 
@@ -520,8 +649,110 @@ impl<'a> LogView<'a> {
     }
 
     /// Format a stack frame as a Line for rendering
+    #[allow(dead_code)] // Used in tests
     fn format_stack_frame_line(frame: &StackFrame) -> Line<'static> {
         Line::from(Self::format_stack_frame(frame))
+    }
+
+    /// Format a stack frame as a Line with optional link badge (Phase 3.1)
+    ///
+    /// When link highlight mode is active and this frame has a detected link,
+    /// inserts a shortcut badge before the file reference.
+    fn format_stack_frame_line_with_links(
+        &self,
+        frame: &StackFrame,
+        entry_index: usize,
+        frame_index: usize,
+    ) -> Line<'static> {
+        use stack_trace_styles::*;
+
+        // Handle async gap specially - no links possible
+        if frame.is_async_gap {
+            return Line::from(vec![
+                Span::styled(INDENT.to_string(), Style::default()),
+                Span::styled("<asynchronous suspension>".to_string(), ASYNC_GAP),
+            ]);
+        }
+
+        // Check if we have a link for this frame
+        let link = self.link_highlight_state.and_then(|state| {
+            state
+                .links
+                .iter()
+                .find(|l| l.entry_index == entry_index && l.frame_index == Some(frame_index))
+        });
+
+        // Determine styles based on frame type and link state
+        let (func_style, file_style, loc_style) = if link.is_some() {
+            // Link mode - use link styling for the file reference
+            let link_style = Self::link_text_style();
+            (
+                if frame.is_package_frame {
+                    FUNCTION_PACKAGE
+                } else {
+                    FUNCTION_PROJECT
+                },
+                link_style,
+                link_style,
+            )
+        } else if frame.is_package_frame {
+            // Package frame - all dimmed
+            (FUNCTION_PACKAGE, FILE_PACKAGE, LOCATION_PACKAGE)
+        } else {
+            // Project frame - highlighted
+            (FUNCTION_PROJECT, FILE_PROJECT, LOCATION_PROJECT)
+        };
+
+        let mut spans = Vec::with_capacity(12);
+
+        // Indentation
+        spans.push(Span::styled(INDENT.to_string(), Style::default()));
+
+        // Frame number: #0, #1, etc.
+        spans.push(Span::styled(
+            format!("#{:<3}", frame.frame_number),
+            FRAME_NUMBER,
+        ));
+
+        // Function name
+        spans.push(Span::styled(
+            format!("{} ", frame.function_name.clone()),
+            func_style,
+        ));
+
+        // Opening paren
+        spans.push(Span::styled("(".to_string(), PUNCTUATION));
+
+        // Insert link badge before file path if we have a link
+        if let Some(link) = link {
+            spans.push(Self::link_badge(link.shortcut));
+        }
+
+        // File path (short version)
+        spans.push(Span::styled(frame.short_path().to_string(), file_style));
+
+        // Colon separator
+        spans.push(Span::styled(
+            ":".to_string(),
+            if link.is_some() {
+                Self::link_text_style()
+            } else {
+                PUNCTUATION
+            },
+        ));
+
+        // Line number
+        spans.push(Span::styled(frame.line.to_string(), loc_style));
+
+        // Column (if present)
+        if frame.column > 0 {
+            spans.push(Span::styled(format!(":{}", frame.column), loc_style));
+        }
+
+        // Closing paren
+        spans.push(Span::styled(")".to_string(), PUNCTUATION));
+
+        Line::from(spans)
     }
 
     /// Format collapsed indicator: "▶ N more frames..."
@@ -822,6 +1053,9 @@ impl<'a> StatefulWidget for LogView<'a> {
         let mut lines_added = 0;
         let mut lines_skipped = 0;
 
+        // Track focus info for the first visible line (Phase 3 Task 03)
+        let mut focus_captured = false;
+
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
             let entry_line_count = self.calculate_entry_lines(entry);
@@ -842,6 +1076,14 @@ impl<'a> StatefulWidget for LogView<'a> {
 
             // Add the main log line if not skipped
             if skip_in_entry == 0 {
+                // Track focus if this is the first visible line
+                if !focus_captured {
+                    state.focus_info.entry_index = Some(idx);
+                    state.focus_info.entry_id = Some(entry.id);
+                    state.focus_info.frame_index = None;
+                    focus_captured = true;
+                }
+
                 all_lines.push(self.format_entry(entry, idx));
                 lines_added += 1;
             }
@@ -864,7 +1106,17 @@ impl<'a> StatefulWidget for LogView<'a> {
                             continue;
                         }
 
-                        all_lines.push(Self::format_stack_frame_line(frame));
+                        // Track focus if this is the first visible line
+                        if !focus_captured {
+                            state.focus_info.entry_index = Some(idx);
+                            state.focus_info.entry_id = Some(entry.id);
+                            state.focus_info.frame_index = Some(frame_idx);
+                            focus_captured = true;
+                        }
+
+                        // Use link-aware formatting (Phase 3.1)
+                        all_lines
+                            .push(self.format_stack_frame_line_with_links(frame, idx, frame_idx));
                         lines_added += 1;
                     }
                 } else {
@@ -883,7 +1135,17 @@ impl<'a> StatefulWidget for LogView<'a> {
                             continue;
                         }
 
-                        all_lines.push(Self::format_stack_frame_line(frame));
+                        // Track focus if this is the first visible line
+                        if !focus_captured {
+                            state.focus_info.entry_index = Some(idx);
+                            state.focus_info.entry_id = Some(entry.id);
+                            state.focus_info.frame_index = Some(frame_idx);
+                            focus_captured = true;
+                        }
+
+                        // Use link-aware formatting (Phase 3.1)
+                        all_lines
+                            .push(self.format_stack_frame_line_with_links(frame, idx, frame_idx));
                         lines_added += 1;
                     }
 
@@ -899,6 +1161,11 @@ impl<'a> StatefulWidget for LogView<'a> {
             }
 
             lines_skipped += entry_line_count;
+        }
+
+        // Clear focus info if nothing was captured (empty view)
+        if !focus_captured {
+            state.focus_info = FocusInfo::default();
         }
 
         // Calculate max line width for horizontal scroll bounds

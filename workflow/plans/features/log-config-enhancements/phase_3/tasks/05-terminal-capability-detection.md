@@ -526,3 +526,90 @@ cargo run -- --debug-terminal-info
 | File | Changes |
 |------|---------|
 | `src/tui/hyperlinks.rs` | Add detection functions, caching, TerminalInfo |
+
+---
+
+## Completion Summary
+
+### Status: ✅ Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/hyperlinks.rs` | Added `HyperlinkSupport` enum, terminal detection functions, `OnceLock` caching, `TerminalInfo` struct, and 40+ unit tests |
+
+### Implementation Details
+
+1. **HyperlinkSupport Enum** (`hyperlinks.rs:77-86`)
+   - `Supported`: Terminal definitely supports OSC 8
+   - `Unsupported`: Terminal definitely does NOT support OSC 8
+   - `Unknown`: Terminal may or may not support (e.g., multiplexers)
+   - Methods: `is_supported_conservative()`, `is_supported_optimistic()`
+
+2. **Terminal Detection Functions** (`hyperlinks.rs:110-248`)
+   - `detect_hyperlink_support()`: Main detection function
+   - `is_supported_terminal()`: Checks for known supported terminals (iTerm2, Kitty, WezTerm, Alacritty, VS Code, Cursor, foot, Windows Terminal, GNOME Terminal 3.26+, Konsole 18.07+, Hyper, mintty)
+   - `is_unsupported_terminal()`: Checks for known unsupported terminals (macOS Terminal.app, screen, dumb)
+   - `is_terminal_multiplexer()`: Checks for tmux/screen (returns Unknown)
+
+3. **Cached Detection** (`hyperlinks.rs:100-108`)
+   - Uses `OnceLock<HyperlinkSupport>` for thread-safe lazy initialization
+   - `hyperlink_support()`: Returns cached detection result
+
+4. **HyperlinkMode Methods** (`hyperlinks.rs:48-70`)
+   - `should_enable()`: Returns whether hyperlinks should be enabled (uses cached detection for Auto mode)
+   - `status_message()`: Returns human-readable status string
+
+5. **TerminalInfo Struct** (`hyperlinks.rs:254-301`)
+   - Captures all relevant environment variables for debugging
+   - `TerminalInfo::detect()`: Collects terminal info from environment
+   - `terminal_info()`: Convenience function
+   - Implements `Display` for easy debugging output
+
+### Testing Performed
+
+```bash
+cargo check  # ✅ Pass
+cargo test tui::hyperlinks -- --test-threads=1  # ✅ 78 tests passed
+cargo clippy  # ✅ No new warnings (pre-existing warnings unrelated to this task)
+```
+
+### Test Coverage (40+ new tests)
+
+- `HyperlinkSupport` enum: conservative/optimistic methods, equality
+- `is_supported_terminal()`: iTerm2, WezTerm, VS Code, Cursor, Kitty, Alacritty, foot, Windows Terminal, VTE versions, Konsole versions, Hyper, mintty
+- `is_unsupported_terminal()`: Apple Terminal, screen, dumb
+- `is_terminal_multiplexer()`: TMUX env, TERM=tmux-*, TERM=screen-*
+- `detect_hyperlink_support()` integration tests
+- `HyperlinkMode::should_enable()` and `status_message()`
+- `TerminalInfo`: detect, display, clone
+
+### Notable Decisions
+
+1. **Conservative default**: Unknown terminals treated as unsupported in Auto mode (avoids garbage output)
+2. **Order of checks**: Unsupported checked first (Apple Terminal takes priority over any other detection)
+3. **Terminal multiplexers return Unknown**: tmux may support OSC 8 passthrough, user can force enable
+4. **No mocking needed**: Tests use `with_env`/`without_env` helpers to temporarily modify environment
+5. **Run tests single-threaded**: Environment variable tests must not run in parallel (`--test-threads=1`)
+
+### Acceptance Criteria Status
+
+- [x] `HyperlinkSupport` enum with Supported, Unsupported, Unknown variants
+- [x] `detect_hyperlink_support()` correctly identifies known terminals
+- [x] iTerm2, Kitty, WezTerm, Alacritty detected as supported
+- [x] macOS Terminal.app detected as unsupported
+- [x] Windows Terminal detected via WT_SESSION
+- [x] VTE-based terminals (GNOME Terminal) detected via VTE_VERSION
+- [x] Terminal multiplexers (tmux, screen) detected
+- [x] Detection result cached with OnceLock
+- [x] `HyperlinkMode::should_enable()` respects both mode and detection
+- [x] `terminal_info()` provides debugging information
+- [x] All detection logic has unit tests
+
+### Risks/Limitations
+
+1. **Environment variable masking**: Nested terminals (e.g., tmux inside iTerm2) may have inner terminal's env vars
+2. **SSH sessions**: Detection may not reflect actual terminal capabilities when SSHed
+3. **Docker containers**: Minimal containers may lack env vars, defaulting to Unknown
+4. **New terminals**: Terminals released after this code may not be detected (users can force enable)

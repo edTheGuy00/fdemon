@@ -365,3 +365,58 @@ cargo check
 |------|---------|
 | `src/tui/hyperlinks.rs` | **NEW** - Complete module implementation |
 | `src/tui/mod.rs` | Add module export |
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/hyperlinks.rs` | **NEW** - Complete module with `HyperlinkMode`, `FileReference`, URL generation, and OSC 8 utilities (270 lines including tests) |
+| `src/tui/mod.rs` | Added `pub mod hyperlinks;` declaration and re-exports for `FileReference`, `HyperlinkMode` |
+
+### Acceptance Criteria Results
+
+1. [x] `HyperlinkMode` enum with Auto, Enabled, Disabled variants
+2. [x] `HyperlinkMode::is_enabled()` correctly evaluates based on mode and detection
+3. [x] `FileReference` struct stores path, line, column
+4. [x] `FileReference::from_stack_frame()` extracts data from StackFrame
+5. [x] `FileReference::display()` formats as "path:line:column"
+6. [x] `file_url()` generates valid file:// URLs
+7. [x] `file_url()` handles Unix and Windows paths correctly (via `#[cfg]`)
+8. [x] `file_url()` handles package: and dart: URIs gracefully
+9. [x] `osc8_wrap()` generates correct OSC 8 escape sequences
+10. [x] `osc8_wrap_file()` combines URL generation with OSC 8 wrapping
+11. [x] `contains_osc8()` detects OSC 8 sequences in text
+12. [x] Module exported from `tui/mod.rs`
+
+### Testing Performed
+
+```bash
+cargo check     # ✅ Passed
+cargo test tui::hyperlinks   # ✅ 25 tests passed
+```
+
+### Notable Decisions/Tradeoffs
+
+1. **Column normalization**: Zero columns are normalized to 1 in `FileReference::new()` since editors typically use 1-based indexing.
+
+2. **Package/dart URIs**: These are passed through as `file:///package:...` format since actual resolution requires project context (deferred to Task 04 editor integration).
+
+3. **Serde support**: Added `Serialize`/`Deserialize` derives to `HyperlinkMode` for future config file support.
+
+4. **Test coverage**: Implemented 25 unit tests covering all public APIs including edge cases (async gaps, zero columns, partial OSC 8 sequences).
+
+### Risks/Limitations
+
+1. **Package URI resolution**: The `file_url()` function does not resolve `package:` URIs to actual file paths. This requires project context and is handled in Task 04.
+
+2. **Platform-specific code**: Windows path handling uses conditional compilation but has not been tested on Windows (only Unix tests run).
+
+3. **OSC 8 integration**: The sequences are generated but not yet emitted to terminals - that's Task 06's responsibility.

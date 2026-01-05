@@ -208,6 +208,25 @@ fdemon
 | `e` | Jump to next error |
 | `E` | Jump to previous error |
 
+### Link Navigation
+
+| Key | Action |
+|-----|--------|
+| `L` | Enter link highlight mode |
+| `1-9` | Open link 1-9 (in link mode) |
+| `a-z` | Open link 10-35 (in link mode) |
+| `Esc` | Exit link mode |
+
+## Opening Files from Logs
+
+Press `L` to enter **Link Highlight Mode**. All file references in the visible
+viewport will be highlighted with shortcut badges (`[1]`, `[2]`, `[a]`, `[b]`, etc.).
+Press the corresponding key to open that file in your editor. Press `Esc` or `L`
+again to exit.
+
+Files are opened in your configured editor. If running inside an IDE's integrated
+terminal (VS Code, Cursor, Zed, IntelliJ), files open in that IDE instance automatically.
+
 ## Configuration
 
 Flutter Demon supports configuration via `.fdemon/config.toml`:
@@ -226,6 +245,14 @@ extensions = ["dart"]   # File extensions to watch
 [ui]
 log_buffer_size = 10000
 show_timestamps = true
+
+[editor]
+# Editor command (leave empty for auto-detection)
+# Auto-detected from: $VISUAL, $EDITOR, or common editors in PATH
+command = ""
+# Pattern for opening file at line/column
+# Variables: $EDITOR, $FILE, $LINE, $COLUMN
+open_pattern = "$EDITOR $FILE:$LINE"
 ```
 
 ### Launch Configurations

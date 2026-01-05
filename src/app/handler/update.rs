@@ -3,6 +3,7 @@
 use crate::app::message::Message;
 use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, LogSource};
+use crate::tui::editor::{open_in_editor, sanitize_path};
 
 use super::{
     daemon::handle_session_daemon_event, keys::handle_key, Task, UpdateAction, UpdateResult,
@@ -49,6 +50,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.scroll_up(1);
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -56,6 +58,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.scroll_down(1);
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -63,6 +66,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.scroll_to_top();
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -70,6 +74,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.scroll_to_bottom();
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -77,6 +82,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.page_up();
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -84,6 +90,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle.session.log_view_state.page_down();
             }
+            rescan_links_if_active(state);
             UpdateResult::none()
         }
 
@@ -796,6 +803,105 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Link Highlight Mode (Phase 3.1)
+        // ─────────────────────────────────────────────────────────
+        Message::EnterLinkMode => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                // Get visible range from log view state
+                let (visible_start, visible_end) = handle.session.log_view_state.visible_range();
+
+                // Scan viewport for links
+                handle.session.link_highlight_state.scan_viewport(
+                    &handle.session.logs,
+                    visible_start,
+                    visible_end,
+                    Some(&handle.session.filter_state),
+                    &handle.session.collapse_state,
+                    state.settings.ui.stack_trace_collapsed,
+                    state.settings.ui.stack_trace_max_frames,
+                );
+
+                // Only enter link mode if there are links to show
+                if handle.session.link_highlight_state.has_links() {
+                    handle.session.link_highlight_state.activate();
+                    state.ui_mode = UiMode::LinkHighlight;
+                    tracing::debug!(
+                        "Entered link mode with {} links",
+                        handle.session.link_highlight_state.link_count()
+                    );
+                } else {
+                    tracing::debug!("No links found in viewport");
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::ExitLinkMode => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.link_highlight_state.deactivate();
+            }
+            state.ui_mode = UiMode::Normal;
+            tracing::debug!("Exited link mode");
+            UpdateResult::none()
+        }
+
+        Message::SelectLink(shortcut) => {
+            // Find the link by shortcut before exiting link mode
+            let file_ref = if let Some(handle) = state.session_manager.selected_mut() {
+                handle
+                    .session
+                    .link_highlight_state
+                    .link_by_shortcut(shortcut)
+                    .map(|link| link.file_ref.clone())
+            } else {
+                None
+            };
+
+            // Exit link mode
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.link_highlight_state.deactivate();
+            }
+            state.ui_mode = UiMode::Normal;
+
+            // Open the file if we found a matching link
+            if let Some(file_ref) = file_ref {
+                // Sanitize path
+                if sanitize_path(&file_ref.path).is_none() {
+                    tracing::warn!("Rejected suspicious file path: {}", file_ref.path);
+                    return UpdateResult::none();
+                }
+
+                // Open in editor
+                match open_in_editor(&file_ref, &state.settings.editor, &state.project_path) {
+                    Ok(result) => {
+                        if result.used_parent_ide {
+                            tracing::info!(
+                                "Opened {}:{} in {} (parent IDE)",
+                                result.file,
+                                result.line,
+                                result.editor_display_name
+                            );
+                        } else {
+                            tracing::info!(
+                                "Opened {}:{} in {}",
+                                result.file,
+                                result.line,
+                                result.editor_display_name
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to open file: {}", e);
+                    }
+                }
+            } else {
+                tracing::debug!("No link found for shortcut '{}'", shortcut);
+            }
+
+            UpdateResult::none()
+        }
     }
 }
 
@@ -820,5 +926,34 @@ fn scroll_to_log_entry(session: &mut crate::app::session::Session, entry_index: 
         let center_offset = visible_lines / 2;
         session.log_view_state.offset = idx.saturating_sub(center_offset);
         session.log_view_state.auto_scroll = false;
+    }
+}
+
+/// Re-scan links if in link highlight mode (called after scroll operations).
+///
+/// When the user scrolls while in link mode, the viewport changes and we need
+/// to re-scan for file references to update the shortcut assignments.
+fn rescan_links_if_active(state: &mut AppState) {
+    if state.ui_mode != UiMode::LinkHighlight {
+        return;
+    }
+
+    if let Some(handle) = state.session_manager.selected_mut() {
+        let (visible_start, visible_end) = handle.session.log_view_state.visible_range();
+
+        handle.session.link_highlight_state.scan_viewport(
+            &handle.session.logs,
+            visible_start,
+            visible_end,
+            Some(&handle.session.filter_state),
+            &handle.session.collapse_state,
+            state.settings.ui.stack_trace_collapsed,
+            state.settings.ui.stack_trace_max_frames,
+        );
+
+        tracing::debug!(
+            "Re-scanned links after scroll: {} links found",
+            handle.session.link_highlight_state.link_count()
+        );
     }
 }

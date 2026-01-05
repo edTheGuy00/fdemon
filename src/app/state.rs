@@ -29,6 +29,10 @@ pub enum UiMode {
 
     /// Search input mode - capturing text for log search
     SearchInput,
+
+    /// Link highlight mode - showing clickable file references
+    /// User can press 1-9 or a-z to open a file in their editor
+    LinkHighlight,
 }
 
 /// Complete application state (the Model in TEA)

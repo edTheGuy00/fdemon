@@ -10,6 +10,7 @@ use crate::app::handler::helpers::{is_block_end, is_block_start};
 use crate::config::LaunchConfig;
 use crate::core::{AppPhase, FilterState, LogEntry, LogLevel, LogSource, SearchState};
 use crate::daemon::{CommandSender, FlutterProcess, RequestTracker};
+use crate::tui::hyperlinks::LinkHighlightState;
 use crate::tui::widgets::LogViewState;
 
 // ─────────────────────────────────────────────────────────
@@ -222,6 +223,9 @@ pub struct Session {
     /// Collapse state for stack traces
     pub collapse_state: CollapseState,
 
+    /// Link highlight mode state (Phase 3.1)
+    pub link_highlight_state: LinkHighlightState,
+
     /// Block state for Logger package block level propagation
     block_state: LogBlockState,
 
@@ -292,6 +296,7 @@ impl Session {
             filter_state: FilterState::default(),
             search_state: SearchState::default(),
             collapse_state: CollapseState::new(),
+            link_highlight_state: LinkHighlightState::new(),
             block_state: LogBlockState::default(),
             device_id,
             device_name,

@@ -124,12 +124,12 @@ OSC 8 hyperlinks support native terminal click handling. However, `file://` URLs
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-hyperlink-module-url-generation](tasks/01-hyperlink-module-url-generation.md) | Not Started | - | 2-3h | `tui/hyperlinks.rs` (NEW) |
-| 2 | [02-editor-configuration](tasks/02-editor-configuration.md) | Not Started | - | 2-3h | `config/types.rs`, `config/settings.rs` |
-| 3 | [03-cursor-file-reference-tracking](tasks/03-cursor-file-reference-tracking.md) | Not Started | - | 2-3h | `tui/widgets/log_view.rs` |
-| 4 | [04-open-file-editor-action](tasks/04-open-file-editor-action.md) | Not Started | 2, 3 | 3-4h | `app/message.rs`, `app/handler/keys.rs`, `tui/editor.rs` (NEW) |
-| 5 | [05-terminal-capability-detection](tasks/05-terminal-capability-detection.md) | Not Started | 1 | 2-3h | `tui/hyperlinks.rs` |
-| 6 | [06-osc8-hyperlink-rendering](tasks/06-osc8-hyperlink-rendering.md) | Not Started | 1, 2, 5 | 3-4h | `tui/hyperlinks.rs`, `tui/render.rs`, `config/types.rs` |
+| 1 | [01-hyperlink-module-url-generation](tasks/01-hyperlink-module-url-generation.md) | ✅ Done | - | 2-3h | `tui/hyperlinks.rs` (NEW) |
+| 2 | [02-editor-configuration](tasks/02-editor-configuration.md) | ✅ Done | - | 2-3h | `config/types.rs`, `config/settings.rs` |
+| 3 | [03-cursor-file-reference-tracking](tasks/03-cursor-file-reference-tracking.md) | ✅ Done | - | 2-3h | `tui/widgets/log_view.rs`, `tui/hyperlinks.rs` |
+| 4 | [04-open-file-editor-action](tasks/04-open-file-editor-action.md) | ✅ Done | 2, 3 | 3-4h | `app/message.rs`, `app/handler/keys.rs`, `tui/editor.rs` (NEW) |
+| 5 | [05-terminal-capability-detection](tasks/05-terminal-capability-detection.md) | ✅ Done | 1 | 2-3h | `tui/hyperlinks.rs` |
+| 6 | [06-osc8-hyperlink-rendering](tasks/06-osc8-hyperlink-rendering.md) | ✅ Done | 1, 2, 5 | 3-4h | `tui/hyperlinks.rs`, `tui/render.rs`, `config/types.rs` |
 
 ## Core vs Experimental
 

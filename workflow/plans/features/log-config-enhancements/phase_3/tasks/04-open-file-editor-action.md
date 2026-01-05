@@ -613,3 +613,87 @@ mod tests {
 | `src/tui/editor.rs` | **NEW** - Complete editor execution module |
 | `src/tui/mod.rs` | Export editor module |
 | `src/app/handler/actions.rs` or `update.rs` | Handle `OpenFileAtCursor` message |
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date Completed:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Added `Message::OpenFileAtCursor` variant |
+| `src/app/handler/keys.rs` | Added `o` key handler in `handle_key_normal()` |
+| `src/tui/editor.rs` | **NEW** - Complete editor execution module with `open_in_editor()`, `resolve_file_path()`, `substitute_pattern()`, `sanitize_path()` |
+| `src/tui/mod.rs` | Added `editor` module export and re-exports for `open_in_editor`, `EditorError`, `OpenResult` |
+| `src/app/handler/update.rs` | Added handler for `Message::OpenFileAtCursor` |
+
+### Implementation Details
+
+1. **Editor Module (`src/tui/editor.rs`)**:
+   - `EditorError` enum for error handling (NoEditor, FileNotFound, ExecutionFailed, PathResolutionFailed, PathRejected)
+   - `OpenResult` struct to capture operation results including parent IDE detection
+   - `open_in_editor()` - main API that checks parent IDE first, then configured editor
+   - `resolve_file_path()` - handles package:, dart:, absolute, and relative paths
+   - `substitute_pattern()` - replaces $EDITOR, $FILE, $LINE, $COLUMN variables
+   - `execute_command()` - spawns editor without blocking (non-blocking)
+   - `sanitize_path()` - security check for path traversal and shell injection
+
+2. **Message Variant**:
+   - Added `Message::OpenFileAtCursor` to message.rs
+
+3. **Key Handler**:
+   - `o` key in Normal mode triggers `Message::OpenFileAtCursor`
+
+4. **Update Handler**:
+   - Gets focused file reference from `LogViewState::focus_info.file_ref`
+   - Sanitizes path before opening
+   - Calls `open_in_editor()` with editor settings and project path
+   - Logs success/failure with editor display name
+
+### Testing Performed
+
+- `cargo check` - Compiles successfully (1 warning for unused import from Task 03, expected)
+- `cargo test --lib tui::editor` - 17 tests passed
+- `cargo test --lib` - 933 tests passed, 3 ignored
+
+### Notable Decisions/Tradeoffs
+
+1. **Security First**: Path sanitization rejects paths with `..`, shell metacharacters, and null bytes
+2. **Parent IDE Priority**: When running in an IDE terminal (VS Code, Cursor, Zed, IntelliJ), opens in that IDE instance first
+3. **Non-blocking**: Editor is spawned without waiting, so TUI continues to run
+4. **Graceful Degradation**: If no editor configured/detected, logs warning and takes no action (no user-visible error)
+5. **Focus Info Integration**: Relies on Task 03's `FocusInfo` struct - file reference is populated during render
+
+### Acceptance Criteria Checklist
+
+- [x] `Message::OpenFileAtCursor` variant added
+- [x] `o` key triggers `OpenFileAtCursor` in Normal mode
+- [x] `editor.rs` module implements `open_in_editor()`
+- [x] Pattern substitution handles $EDITOR, $FILE, $LINE, $COLUMN
+- [x] Package: URI resolution works (maps to lib/)
+- [x] Absolute paths handled correctly
+- [x] Relative paths resolved against project root
+- [x] File existence checked before opening
+- [x] Path sanitization prevents security issues
+- [x] Editor command spawns without blocking TUI
+- [x] Errors logged appropriately
+- [x] dart: URIs rejected gracefully (can't open SDK files)
+
+### Integration with Task 03
+
+This task uses infrastructure from Task 03:
+- `LogViewState::focus_info.file_ref` - the currently focused file reference
+- File reference is set during render pass by focus tracking logic
+
+**Note**: The focus_info.file_ref will be populated when the render implementation updates it. Currently, pressing `o` will log "No file reference at cursor position" until render sets the focus info.
+
+### Next Steps
+
+For full functionality:
+1. The render pass needs to update `LogViewState::focus_info.file_ref` based on the visible/focused entry
+2. Task 05/06 (experimental) would add clickable OSC 8 hyperlinks

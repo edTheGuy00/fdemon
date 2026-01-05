@@ -548,3 +548,64 @@ open_pattern = "nvim +$LINE $FILE"
 - VS Code, Cursor use `--reuse-window` flag; Zed and JetBrains IDEs reuse by default
 - Neovim when running inside `:terminal` can use `--server $NVIM --remote-send` for RPC
 - The `ParentIde` enum provides URL schemes for OSC 8 hyperlinks (Task 06 Ctrl+click support)
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/config/types.rs` | Added `EditorSettings` struct, `ParentIde` enum, updated `Settings` struct to include `editor` field |
+| `src/config/settings.rs` | Added `EditorConfig` struct, `KNOWN_EDITORS` constant, `detect_parent_ide()`, `editor_config_for_ide()`, `detect_editor()`, `find_editor_config()`, `is_command_available()`, `EditorSettings` impl methods, updated default config template |
+| `src/config/mod.rs` | Added exports for new editor detection types and functions |
+
+### Acceptance Criteria Results
+
+1. [x] `EditorSettings` struct added with `command` and `open_pattern` fields
+2. [x] Settings struct includes `editor: EditorSettings`
+3. [x] Default editor detection works for VS Code, Zed, Neovim, Vim
+4. [x] Detection respects $VISUAL and $EDITOR environment variables
+5. [x] `resolve()` method returns effective command and pattern
+6. [x] Config file parsing handles [editor] section
+7. [x] Deserialization works with partial config (missing fields use defaults)
+8. [x] All new code has unit tests
+
+### Additional Features Implemented
+
+- **Parent IDE detection** (`detect_parent_ide()`) - detects VS Code, VS Code Insiders, Cursor, Zed, IntelliJ, Android Studio, Neovim
+- **IDE URL schemes** (`ParentIde::url_scheme()`) - for OSC 8 hyperlink Ctrl+click support
+- **Reuse flags** (`ParentIde::reuse_flag()`) - `--reuse-window` for VS Code/Cursor
+- **Cross-platform command detection** - uses `which` on Unix, `where.exe` on Windows
+- **8 known editors** with patterns including reuse flags where applicable
+
+### Testing Performed
+
+```bash
+cargo check     # ✅ Passed
+cargo test config::settings   # ✅ 21 tests passed
+cargo test config::           # ✅ 67 tests passed
+```
+
+### Notable Decisions/Tradeoffs
+
+1. **Parent IDE takes priority**: When running in an IDE terminal, that IDE is used regardless of $EDITOR setting. This ensures files open in the current instance.
+
+2. **Pattern substitution deferred**: The actual $FILE, $LINE, $COLUMN substitution is Task 04's responsibility. This task provides the infrastructure.
+
+3. **Runtime detection**: Editor detection happens at runtime rather than config load time. This allows detecting the parent IDE dynamically.
+
+4. **Cross-platform support**: Added `#[cfg(windows)]` variant for `where.exe` though Windows testing was not performed.
+
+### Risks/Limitations
+
+1. **Environment variable dependency**: Parent IDE detection relies on environment variables that may not be set in all terminal configurations.
+
+2. **Command availability check**: Uses subprocess (`which`/`where.exe`) which has performance overhead. Consider caching if called frequently.
+
+3. **Neovim RPC**: The Neovim pattern uses `--server $NVIM --remote-send` which requires the $NVIM socket to be available.

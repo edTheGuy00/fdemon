@@ -17,7 +17,7 @@ use crate::core::{contains_word, strip_ansi_codes, LogLevel};
 /// | `├`       | U+251C  | Box Drawings Light Vertical + Right | Section divider |
 /// | `┄`       | U+2504  | Box Drawings Light Triple Dash Horiz| Dashed divider |
 /// | `─`       | U+2500  | Box Drawings Light Horizontal       | Horizontal line |
-
+///
 /// Check if a line is part of a Logger package structured block
 ///
 /// Strips ANSI codes before checking for box-drawing characters to ensure

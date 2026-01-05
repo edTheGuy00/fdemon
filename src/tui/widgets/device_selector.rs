@@ -74,7 +74,7 @@ impl DeviceSelectorState {
     /// Calculate indeterminate progress ratio (0.0 to 1.0)
     /// Creates a bouncing effect from left to right and back
     pub fn indeterminate_ratio(&self) -> f64 {
-        // Complete cycle every 60 frames (about 1 second at 60fps)
+        // Complete cycle every 300 frames (about 5 seconds at 60fps)
         let cycle_length = 300;
         let position = self.animation_frame % cycle_length;
 
@@ -862,7 +862,9 @@ mod tests {
         let mut state = DeviceSelectorState::new();
 
         let mut ratios = Vec::new();
-        for _ in 0..60 {
+        // Run for 200 frames to capture both increasing (0-149) and decreasing (150-299) phases
+        // of the 300-frame cycle
+        for _ in 0..200 {
             state.tick();
             ratios.push(state.indeterminate_ratio());
         }

@@ -220,4 +220,18 @@ pub enum Message {
     ScrollToLineStart,
     /// Scroll to end of line
     ScrollToLineEnd,
+
+    // ─────────────────────────────────────────────────────────
+    // Link Highlight Mode (Phase 3.1)
+    // ─────────────────────────────────────────────────────────
+    /// Enter link highlight mode - scan viewport for file references
+    /// and display shortcut keys (1-9, a-z) for each link
+    EnterLinkMode,
+
+    /// Exit link highlight mode - return to normal mode
+    ExitLinkMode,
+
+    /// Select a link by its shortcut key ('1'-'9' or 'a'-'z')
+    /// The char identifies which link shortcut was pressed
+    SelectLink(char),
 }
