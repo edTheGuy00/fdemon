@@ -1,8 +1,8 @@
 //! Per-instance session state for a running Flutter app
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Local};
 
@@ -11,6 +11,112 @@ use crate::config::LaunchConfig;
 use crate::core::{AppPhase, FilterState, LogEntry, LogLevel, LogSource, SearchState};
 use crate::daemon::{CommandSender, FlutterProcess, RequestTracker};
 use crate::tui::widgets::LogViewState;
+
+// ─────────────────────────────────────────────────────────
+// Log Batching for Performance (Task 04)
+// ─────────────────────────────────────────────────────────
+
+/// Default batch flush interval (~60fps)
+const BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
+
+/// Maximum batch size before forced flush
+const BATCH_MAX_SIZE: usize = 100;
+
+/// Batches rapid log arrivals to reduce processing overhead
+///
+/// During high-volume logging (hot reload, verbose debugging, etc.),
+/// each log line would normally trigger processing and potentially
+/// a UI re-render. This struct batches logs and flushes them
+/// at a controlled rate (~60fps) or when a size threshold is reached.
+#[derive(Debug)]
+pub struct LogBatcher {
+    /// Pending log entries awaiting flush
+    pending: Vec<LogEntry>,
+    /// Timestamp of last flush
+    last_flush: Instant,
+}
+
+impl Default for LogBatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl LogBatcher {
+    /// Create a new log batcher
+    pub fn new() -> Self {
+        Self {
+            pending: Vec::with_capacity(BATCH_MAX_SIZE),
+            last_flush: Instant::now(),
+        }
+    }
+
+    /// Add a log entry to the batch
+    ///
+    /// Returns true if the batch should be flushed (size or time threshold reached)
+    pub fn add(&mut self, entry: LogEntry) -> bool {
+        self.pending.push(entry);
+        self.should_flush()
+    }
+
+    /// Check if batch should be flushed
+    ///
+    /// Returns true if:
+    /// - Batch has reached max size (100 entries), OR
+    /// - Time since last flush has exceeded interval (16ms)
+    pub fn should_flush(&self) -> bool {
+        self.pending.len() >= BATCH_MAX_SIZE
+            || (!self.pending.is_empty() && self.last_flush.elapsed() >= BATCH_FLUSH_INTERVAL)
+    }
+
+    /// Flush and return pending entries
+    ///
+    /// Resets the flush timer and returns all pending entries.
+    pub fn flush(&mut self) -> Vec<LogEntry> {
+        self.last_flush = Instant::now();
+        std::mem::take(&mut self.pending)
+    }
+
+    /// Check if there are pending entries
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Get count of pending entries
+    pub fn pending_count(&self) -> usize {
+        self.pending.len()
+    }
+
+    /// Time until next scheduled flush (for event loop timing)
+    pub fn time_until_flush(&self) -> Duration {
+        BATCH_FLUSH_INTERVAL.saturating_sub(self.last_flush.elapsed())
+    }
+}
+
+// ─────────────────────────────────────────────────────────
+// Stateful Block Tracking for Logger Package Blocks
+// ─────────────────────────────────────────────────────────
+
+/// Tracks state for Logger package block detection
+///
+/// Instead of backward-scanning on every block end (O(N*M)), this struct
+/// tracks block state incrementally as lines arrive (O(1) per line).
+#[derive(Debug, Clone)]
+pub struct LogBlockState {
+    /// Index where current block started (if any)
+    block_start: Option<usize>,
+    /// Highest severity seen in current block
+    block_max_level: LogLevel,
+}
+
+impl Default for LogBlockState {
+    fn default() -> Self {
+        Self {
+            block_start: None,
+            block_max_level: LogLevel::Info,
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────
 // Collapse State for Stack Traces (Phase 2 Task 6)
@@ -95,7 +201,8 @@ pub struct Session {
     pub phase: AppPhase,
 
     /// Log buffer for this session
-    pub logs: Vec<LogEntry>,
+    /// Log entries stored in a ring buffer for bounded memory usage
+    pub logs: VecDeque<LogEntry>,
 
     /// Log view scroll state
     pub log_view_state: LogViewState,
@@ -114,6 +221,9 @@ pub struct Session {
 
     /// Collapse state for stack traces
     pub collapse_state: CollapseState,
+
+    /// Block state for Logger package block level propagation
+    block_state: LogBlockState,
 
     // ─────────────────────────────────────────────────────────
     // Device & App Tracking
@@ -156,6 +266,12 @@ pub struct Session {
 
     /// Cached count of error-level log entries (for status bar display)
     error_count: usize,
+
+    // ─────────────────────────────────────────────────────────
+    // Log Batching (Task 04)
+    // ─────────────────────────────────────────────────────────
+    /// Log batcher for coalescing rapid log arrivals
+    log_batcher: LogBatcher,
 }
 
 impl Session {
@@ -170,12 +286,13 @@ impl Session {
             id: next_session_id(),
             name: device_name.clone(),
             phase: AppPhase::Initializing,
-            logs: Vec::new(),
+            logs: VecDeque::with_capacity(10_000),
             log_view_state: LogViewState::new(),
             max_logs: 10_000,
             filter_state: FilterState::default(),
             search_state: SearchState::default(),
             collapse_state: CollapseState::new(),
+            block_state: LogBlockState::default(),
             device_id,
             device_name,
             platform,
@@ -188,6 +305,7 @@ impl Session {
             last_reload_time: None,
             reload_count: 0,
             error_count: 0,
+            log_batcher: LogBatcher::new(),
         }
     }
 
@@ -202,100 +320,93 @@ impl Session {
     ///
     /// Automatically detects Logger package blocks (from ┌ to └) and propagates
     /// the highest severity level found in the block to all lines within it.
+    ///
+    /// Uses incremental state tracking (O(1) per line) instead of backward
+    /// scanning (O(N*M)) for block level propagation.
     pub fn add_log(&mut self, entry: LogEntry) {
+        let idx = self.logs.len();
+
+        // Check for block boundaries BEFORE pushing
+        let is_start = is_block_start(&entry.message);
+        let is_end = is_block_end(&entry.message);
+
+        // Track block state as we go
+        if is_start {
+            // New block starting - record position and initialize max level
+            self.block_state.block_start = Some(idx);
+            self.block_state.block_max_level = entry.level;
+        } else if self.block_state.block_start.is_some() {
+            // Inside a block - update max level if this entry is more severe
+            self.block_state.block_max_level =
+                self.block_state.block_max_level.max_severity(entry.level);
+        }
+
         // Track error count before adding
         if entry.is_error() {
             self.error_count += 1;
         }
 
-        // Check if this entry completes a Logger block before pushing
-        let is_end_of_block = is_block_end(&entry.message);
+        // Push the entry to the back of the ring buffer
+        self.logs.push_back(entry);
 
-        self.logs.push(entry);
+        // Block ended - apply max level to all block lines
+        if is_end && self.block_state.block_start.is_some() {
+            let start = self.block_state.block_start.take().unwrap();
+            let max_level = self.block_state.block_max_level;
 
-        // If this completes a Logger block, propagate the highest level
-        if is_end_of_block {
-            self.propagate_block_level();
-        }
+            // Only propagate if we found something more severe than Info
+            if max_level.is_more_severe_than(&LogLevel::Info) {
+                // Track error count changes
+                let mut error_delta: i32 = 0;
 
-        // Trim if over max size
-        if self.logs.len() > self.max_logs {
-            let drain_count = self.logs.len() - self.max_logs;
-
-            // Count errors being removed
-            let errors_removed = self.logs[..drain_count]
-                .iter()
-                .filter(|e| e.is_error())
-                .count();
-            self.error_count = self.error_count.saturating_sub(errors_removed);
-
-            self.logs.drain(0..drain_count);
-
-            // Adjust scroll offset
-            self.log_view_state.offset = self.log_view_state.offset.saturating_sub(drain_count);
-        }
-    }
-
-    /// Propagate the highest log level across a Logger package block
-    ///
-    /// When a block end (└) is detected, this scans backwards to find the
-    /// block start (┌), determines the highest severity level in the block,
-    /// and applies it to all lines. This ensures entire error/warning blocks
-    /// are styled consistently.
-    ///
-    /// Maximum scan depth: 50 lines (to prevent performance issues)
-    fn propagate_block_level(&mut self) {
-        if self.logs.is_empty() {
-            return;
-        }
-
-        let block_end = self.logs.len() - 1;
-        let mut block_start = block_end;
-        let mut highest_level = LogLevel::Info;
-
-        // Scan backwards to find block start (┌)
-        // Also track the highest severity level in the block
-        for i in (0..=block_end).rev() {
-            let entry = &self.logs[i];
-
-            // Track highest severity in block
-            highest_level = highest_level.max_severity(entry.level);
-
-            // Found block start
-            if is_block_start(&entry.message) {
-                block_start = i;
-                break;
-            }
-
-            // Safety: don't scan more than 50 lines back
-            if block_end - i >= 50 {
-                return; // No block start found within limit, don't propagate
-            }
-        }
-
-        // Only propagate if we found a valid block and highest level is > Info
-        if block_start < block_end && highest_level.is_more_severe_than(&LogLevel::Info) {
-            // Count new errors being promoted (for error_count tracking)
-            let mut new_errors = 0;
-            let mut removed_errors = 0;
-
-            for i in block_start..=block_end {
-                let old_level = self.logs[i].level;
-                if old_level != highest_level {
-                    // Track error count changes
-                    if old_level == LogLevel::Error {
-                        removed_errors += 1;
+                for i in start..=idx {
+                    let old_level = self.logs[i].level;
+                    if old_level != max_level {
+                        // Update error counts
+                        if old_level == LogLevel::Error {
+                            error_delta -= 1;
+                        }
+                        if max_level == LogLevel::Error {
+                            error_delta += 1;
+                        }
+                        self.logs[i].level = max_level;
                     }
-                    if highest_level == LogLevel::Error {
-                        new_errors += 1;
-                    }
-                    self.logs[i].level = highest_level;
+                }
+
+                // Apply error count delta
+                if error_delta > 0 {
+                    self.error_count += error_delta as usize;
+                } else if error_delta < 0 {
+                    self.error_count = self.error_count.saturating_sub((-error_delta) as usize);
                 }
             }
 
-            // Update error count
-            self.error_count = self.error_count.saturating_sub(removed_errors);
-            self.error_count += new_errors;
+            // Reset block state for next block
+            self.block_state = LogBlockState::default();
+        }
+
+        // Trim oldest entries if over max size (ring buffer behavior)
+        while self.logs.len() > self.max_logs {
+            if let Some(evicted) = self.logs.pop_front() {
+                // Update error count if evicting an error
+                if evicted.is_error() {
+                    self.error_count = self.error_count.saturating_sub(1);
+                }
+            }
+
+            // Adjust block_start index since we removed from front
+            if let Some(start) = self.block_state.block_start {
+                if start == 0 {
+                    // Block start is being evicted - cancel block tracking
+                    self.block_state = LogBlockState::default();
+                } else {
+                    // Shift block start index down
+                    self.block_state.block_start = Some(start - 1);
+                }
+            }
+
+            // Adjust scroll offset
+            self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
         }
     }
 
@@ -317,6 +428,81 @@ impl Session {
         // Clear search matches since logs are gone
         self.search_state.matches.clear();
         self.search_state.current_match = None;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Log Batching Methods (Task 04)
+    // ─────────────────────────────────────────────────────────
+
+    /// Queue a log entry for batched processing
+    ///
+    /// Instead of immediately processing the log, this adds it to a batch
+    /// that will be flushed when the time or size threshold is reached.
+    /// Returns true if the batch should be flushed now.
+    ///
+    /// Use `flush_batched_logs()` to process the pending batch.
+    pub fn queue_log(&mut self, entry: LogEntry) -> bool {
+        self.log_batcher.add(entry)
+    }
+
+    /// Check if there are pending batched logs
+    pub fn has_pending_logs(&self) -> bool {
+        self.log_batcher.has_pending()
+    }
+
+    /// Check if batched logs should be flushed
+    pub fn should_flush_logs(&self) -> bool {
+        self.log_batcher.should_flush()
+    }
+
+    /// Flush pending batched logs
+    ///
+    /// Processes all pending log entries through the normal add_log path,
+    /// which handles block-level propagation and ring buffer management.
+    /// Returns the number of logs that were flushed.
+    pub fn flush_batched_logs(&mut self) -> usize {
+        let entries = self.log_batcher.flush();
+        let count = entries.len();
+        for entry in entries {
+            self.add_log(entry);
+        }
+        count
+    }
+
+    /// Add multiple log entries at once (batch insertion)
+    ///
+    /// Each entry is processed through add_log to ensure proper
+    /// block-level propagation and ring buffer management.
+    pub fn add_logs_batch(&mut self, entries: Vec<LogEntry>) {
+        for entry in entries {
+            self.add_log(entry);
+        }
+    }
+
+    /// Get time until next scheduled batch flush
+    ///
+    /// Useful for event loop timing to know when to check for pending logs.
+    pub fn time_until_batch_flush(&self) -> Duration {
+        self.log_batcher.time_until_flush()
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Virtualized Log Access (Task 05)
+    // ─────────────────────────────────────────────────────────
+
+    /// Get logs in a specific range for virtualized rendering
+    ///
+    /// Returns an iterator over log entries in the specified range.
+    /// Bounds are clamped to the valid range [0, len).
+    pub fn get_logs_range(&self, start: usize, end: usize) -> impl Iterator<Item = &LogEntry> + '_ {
+        let end = end.min(self.logs.len());
+        let start = start.min(end);
+        self.logs.range(start..end)
+    }
+
+    /// Get total number of log entries
+    pub fn log_count(&self) -> usize {
+        self.logs.len()
     }
 
     /// Mark session as started
@@ -1506,5 +1692,500 @@ mod tests {
 
         // Should still propagate correctly
         assert!(session.logs.iter().all(|e| e.level == LogLevel::Error));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Stateful Block Tracking Tests (Bug Fix: Logger Block Propagation)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_stateful_empty_block_handled() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Empty block (┌ immediately followed by └)
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Both lines should remain Info (no errors to propagate)
+        assert_eq!(session.logs.len(), 2);
+        assert!(session.logs.iter().all(|e| e.level == LogLevel::Info));
+    }
+
+    #[test]
+    fn test_stateful_back_to_back_blocks() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // First block (error)
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Second block (warning) - immediately after first
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::warn(LogSource::Flutter, "│ ⚠ Warning"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Third block (info only) - immediately after second
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ 💡 Info"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // First block should be Error
+        assert_eq!(session.logs[0].level, LogLevel::Error);
+        assert_eq!(session.logs[1].level, LogLevel::Error);
+        assert_eq!(session.logs[2].level, LogLevel::Error);
+
+        // Second block should be Warning
+        assert_eq!(session.logs[3].level, LogLevel::Warning);
+        assert_eq!(session.logs[4].level, LogLevel::Warning);
+        assert_eq!(session.logs[5].level, LogLevel::Warning);
+
+        // Third block should remain Info (no promotion needed)
+        assert_eq!(session.logs[6].level, LogLevel::Info);
+        assert_eq!(session.logs[7].level, LogLevel::Info);
+        assert_eq!(session.logs[8].level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_stateful_block_start_trimmed_during_rotation() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.max_logs = 3;
+
+        // Start a block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        // logs = ["┌"], block_start = Some(0)
+
+        // Add content (within limit)
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Content line 1"));
+        // logs = ["┌", "│ Content 1"], block_start = Some(0)
+
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Content line 2"));
+        // logs = ["┌", "│ Content 1", "│ Content 2"], block_start = Some(0)
+
+        // This will trigger trim, removing block start!
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        // Before trim: logs = ["┌", "│1", "│2", "│⛔"], block_start = Some(0)
+        // After trim (remove 1): logs = ["│1", "│2", "│⛔"]
+        // block_start was 0, which is < drain_count (1), so block_state is reset!
+
+        // End the block - but start was trimmed, so no propagation should happen
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Block state should have been reset when block_start was trimmed
+        // Only the error line should be Error level (no propagation occurred)
+        let error_count = session
+            .logs
+            .iter()
+            .filter(|e| e.level == LogLevel::Error)
+            .count();
+        assert_eq!(
+            error_count, 1,
+            "Only the explicit error line should be Error level after block_start was trimmed"
+        );
+
+        // Verify the block state was reset
+        assert!(
+            session.block_state.block_start.is_none(),
+            "Block state should be reset"
+        );
+    }
+
+    #[test]
+    fn test_stateful_large_block_no_50_line_limit() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Start a block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+
+        // Add 100 lines in the block (would exceed old 50-line scan limit)
+        for i in 0..100 {
+            session.add_log(LogEntry::info(LogSource::Flutter, format!("│ Line {}", i)));
+        }
+
+        // Add an error in the middle (but we're past the 50-line mark)
+        session.add_log(LogEntry::error(
+            LogSource::Flutter,
+            "│ ⛔ Error at line 101",
+        ));
+
+        // More content
+        for i in 0..10 {
+            session.add_log(LogEntry::info(
+                LogSource::Flutter,
+                format!("│ Line {}", 102 + i),
+            ));
+        }
+
+        // End the block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // With stateful tracking, ALL lines should be promoted to Error
+        // (old implementation would fail after 50 lines)
+        assert!(
+            session.logs.iter().all(|e| e.level == LogLevel::Error),
+            "All {} lines should be Error level with stateful tracking",
+            session.logs.len()
+        );
+    }
+
+    #[test]
+    fn test_stateful_block_state_reset_after_complete() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Complete block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Block state should be reset
+        assert!(session.block_state.block_start.is_none());
+        assert_eq!(session.block_state.block_max_level, LogLevel::Info);
+
+        // Next entry should not be affected by previous block state
+        session.add_log(LogEntry::info(LogSource::Flutter, "Plain message"));
+        assert_eq!(session.logs[3].level, LogLevel::Info);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Log Batching Tests (Task 04)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_log_batcher_new() {
+        let batcher = LogBatcher::new();
+        assert!(!batcher.has_pending());
+        assert_eq!(batcher.pending_count(), 0);
+        assert!(!batcher.should_flush()); // Empty batch shouldn't flush
+    }
+
+    #[test]
+    fn test_log_batcher_add_single() {
+        let mut batcher = LogBatcher::new();
+        let entry = LogEntry::info(LogSource::App, "Test message");
+
+        let should_flush = batcher.add(entry);
+
+        assert!(batcher.has_pending());
+        assert_eq!(batcher.pending_count(), 1);
+        // Single entry shouldn't trigger flush (unless time elapsed)
+        assert!(!should_flush || batcher.pending_count() >= BATCH_MAX_SIZE);
+    }
+
+    #[test]
+    fn test_log_batcher_size_threshold() {
+        let mut batcher = LogBatcher::new();
+
+        // Add entries up to max size - 1
+        for i in 0..(BATCH_MAX_SIZE - 1) {
+            let entry = LogEntry::info(LogSource::App, format!("Log {}", i));
+            let should_flush = batcher.add(entry);
+            assert!(!should_flush, "Should not flush before max size");
+        }
+
+        assert_eq!(batcher.pending_count(), BATCH_MAX_SIZE - 1);
+
+        // This entry should trigger flush due to size
+        let entry = LogEntry::info(LogSource::App, "Final log");
+        let should_flush = batcher.add(entry);
+        assert!(should_flush, "Should flush at max size");
+        assert_eq!(batcher.pending_count(), BATCH_MAX_SIZE);
+    }
+
+    #[test]
+    fn test_log_batcher_flush() {
+        let mut batcher = LogBatcher::new();
+
+        batcher.add(LogEntry::info(LogSource::App, "Log 1"));
+        batcher.add(LogEntry::error(LogSource::Flutter, "Log 2"));
+        batcher.add(LogEntry::warn(LogSource::Daemon, "Log 3"));
+
+        assert_eq!(batcher.pending_count(), 3);
+
+        let entries = batcher.flush();
+
+        assert_eq!(entries.len(), 3);
+        assert!(!batcher.has_pending());
+        assert_eq!(batcher.pending_count(), 0);
+
+        // Verify entry contents
+        assert_eq!(entries[0].level, LogLevel::Info);
+        assert_eq!(entries[1].level, LogLevel::Error);
+        assert_eq!(entries[2].level, LogLevel::Warning);
+    }
+
+    #[test]
+    fn test_log_batcher_time_until_flush() {
+        let batcher = LogBatcher::new();
+
+        // Just created - should have nearly full interval remaining
+        let time_remaining = batcher.time_until_flush();
+        assert!(time_remaining <= BATCH_FLUSH_INTERVAL);
+    }
+
+    #[test]
+    fn test_session_queue_and_flush() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Queue some logs
+        session.queue_log(LogEntry::info(LogSource::App, "Queued 1"));
+        session.queue_log(LogEntry::info(LogSource::App, "Queued 2"));
+        session.queue_log(LogEntry::info(LogSource::App, "Queued 3"));
+
+        assert!(session.has_pending_logs());
+        assert_eq!(session.logs.len(), 0); // Not yet flushed to main log buffer
+
+        // Flush the batch
+        let flushed_count = session.flush_batched_logs();
+
+        assert_eq!(flushed_count, 3);
+        assert!(!session.has_pending_logs());
+        assert_eq!(session.logs.len(), 3); // Now in main log buffer
+    }
+
+    #[test]
+    fn test_session_add_logs_batch() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        let entries = vec![
+            LogEntry::info(LogSource::App, "Batch 1"),
+            LogEntry::error(LogSource::App, "Batch 2"),
+            LogEntry::warn(LogSource::App, "Batch 3"),
+        ];
+
+        session.add_logs_batch(entries);
+
+        assert_eq!(session.logs.len(), 3);
+        assert_eq!(session.error_count(), 1);
+    }
+
+    #[test]
+    fn test_session_batched_block_propagation() {
+        // Verify block propagation works correctly with batched logs
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Queue a complete block
+        session.queue_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.queue_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        session.queue_log(LogEntry::info(LogSource::Flutter, "│ More content"));
+        session.queue_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Flush the batch
+        session.flush_batched_logs();
+
+        // All lines should be promoted to Error level
+        assert!(
+            session.logs.iter().all(|e| e.level == LogLevel::Error),
+            "Block propagation should work with batched logs"
+        );
+    }
+
+    #[test]
+    fn test_session_batched_error_count() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Queue logs with errors
+        session.queue_log(LogEntry::info(LogSource::App, "Info"));
+        session.queue_log(LogEntry::error(LogSource::App, "Error 1"));
+        session.queue_log(LogEntry::warn(LogSource::App, "Warning"));
+        session.queue_log(LogEntry::error(LogSource::App, "Error 2"));
+
+        // Before flush - error count should be 0
+        assert_eq!(session.error_count(), 0);
+
+        session.flush_batched_logs();
+
+        // After flush - error count should reflect actual errors
+        assert_eq!(session.error_count(), 2);
+    }
+
+    #[test]
+    fn test_log_batcher_empty_flush() {
+        let mut batcher = LogBatcher::new();
+
+        // Flush empty batcher
+        let entries = batcher.flush();
+
+        assert!(entries.is_empty());
+        assert!(!batcher.has_pending());
+    }
+
+    #[test]
+    fn test_session_queue_auto_flush_on_size() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Queue many logs - should auto-flush when we check
+        for i in 0..150 {
+            let should_flush =
+                session.queue_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+            if should_flush {
+                session.flush_batched_logs();
+            }
+        }
+
+        // All logs should have been flushed to main buffer
+        // (100 flushed at threshold, 50 remaining may or may not be flushed)
+        assert!(session.logs.len() >= 100);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Virtualized Log Access Tests (Task 05)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_logs_range_basic() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..10 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        let range: Vec<_> = session.get_logs_range(2, 5).collect();
+
+        assert_eq!(range.len(), 3);
+        assert!(range[0].message.contains("Log 2"));
+        assert!(range[1].message.contains("Log 3"));
+        assert!(range[2].message.contains("Log 4"));
+    }
+
+    #[test]
+    fn test_get_logs_range_start_at_zero() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..5 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        let range: Vec<_> = session.get_logs_range(0, 3).collect();
+
+        assert_eq!(range.len(), 3);
+        assert!(range[0].message.contains("Log 0"));
+    }
+
+    #[test]
+    fn test_get_logs_range_to_end() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..5 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        let range: Vec<_> = session.get_logs_range(3, 10).collect();
+
+        // End is clamped to len
+        assert_eq!(range.len(), 2);
+        assert!(range[0].message.contains("Log 3"));
+        assert!(range[1].message.contains("Log 4"));
+    }
+
+    #[test]
+    fn test_get_logs_range_out_of_bounds() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..5 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        let range: Vec<_> = session.get_logs_range(10, 20).collect();
+
+        // Both out of bounds, should be empty
+        assert!(range.is_empty());
+    }
+
+    #[test]
+    fn test_get_logs_range_empty_session() {
+        let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        let range: Vec<_> = session.get_logs_range(0, 10).collect();
+
+        assert!(range.is_empty());
+    }
+
+    #[test]
+    fn test_get_logs_range_inverted_bounds() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..5 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        // Start > end (after clamping)
+        let range: Vec<_> = session.get_logs_range(10, 5).collect();
+
+        // Should handle gracefully
+        assert!(range.is_empty());
+    }
+
+    #[test]
+    fn test_log_count() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        assert_eq!(session.log_count(), 0);
+
+        for i in 0..5 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        assert_eq!(session.log_count(), 5);
+    }
+
+    #[test]
+    fn test_get_logs_range_full_range() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        for i in 0..10 {
+            session.add_log(LogEntry::info(LogSource::App, format!("Log {}", i)));
+        }
+
+        let range: Vec<_> = session.get_logs_range(0, 10).collect();
+
+        assert_eq!(range.len(), 10);
     }
 }

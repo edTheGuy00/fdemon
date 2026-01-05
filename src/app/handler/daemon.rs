@@ -8,6 +8,10 @@ use super::helpers::detect_raw_line_level;
 use super::session::{handle_session_exited, handle_session_message_state, handle_session_stdout};
 
 /// Handle daemon events for a specific session (multi-session mode)
+///
+/// Uses log batching to coalesce rapid log arrivals during high-volume
+/// output (hot reload, verbose debugging, etc.). Logs are queued and
+/// flushed based on time (16ms) or size (100 entries) thresholds.
 pub fn handle_session_daemon_event(
     state: &mut AppState,
     session_id: SessionId,
@@ -42,11 +46,11 @@ pub fn handle_session_daemon_event(
                     let cleaned = strip_ansi_codes(&line);
                     let (level, message) = detect_raw_line_level(&cleaned);
                     if !message.is_empty() {
-                        handle.session.add_log(LogEntry::new(
-                            level,
-                            LogSource::Flutter,
-                            message,
-                        ));
+                        let entry = LogEntry::new(level, LogSource::Flutter, message);
+                        // Use batched logging for performance
+                        if handle.session.queue_log(entry) {
+                            handle.session.flush_batched_logs();
+                        }
                     }
                 }
             }
@@ -56,6 +60,7 @@ pub fn handle_session_daemon_event(
         }
         DaemonEvent::SpawnFailed { reason } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Spawn failures should be shown immediately (not batched)
                 handle.session.add_log(LogEntry::error(
                     LogSource::App,
                     format!("Failed to start Flutter: {}", reason),
@@ -66,11 +71,12 @@ pub fn handle_session_daemon_event(
             // Legacy path - convert typed message
             if let Some(entry_info) = msg.to_log_entry() {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
-                    handle.session.add_log(LogEntry::new(
-                        entry_info.level,
-                        entry_info.source,
-                        entry_info.message,
-                    ));
+                    let entry =
+                        LogEntry::new(entry_info.level, entry_info.source, entry_info.message);
+                    // Use batched logging for performance
+                    if handle.session.queue_log(entry) {
+                        handle.session.flush_batched_logs();
+                    }
                 }
             }
             // Update session state based on message type

@@ -157,6 +157,10 @@ fn run_loop(
             );
         }
 
+        // Flush any pending batched logs before rendering (Task 04)
+        // This ensures logs are processed at ~60fps during high-volume bursts
+        state.session_manager.flush_all_pending_logs();
+
         // Render
         terminal.draw(|frame| render::view(frame, state))?;
 

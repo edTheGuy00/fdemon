@@ -717,8 +717,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 handle.session.set_search_query(&text);
 
                 // Execute search immediately
-                let logs = &handle.session.logs;
-                handle.session.search_state.execute_search(logs);
+                handle
+                    .session
+                    .search_state
+                    .execute_search(&handle.session.logs);
 
                 // Scroll to first match if found
                 if let Some(entry_index) = handle.session.search_state.current_match_entry_index() {

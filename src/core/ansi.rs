@@ -1,6 +1,9 @@
-//! ANSI escape code handling utilities
+//! Text processing utilities for log messages
 //!
-//! Provides functions to strip ANSI escape sequences from log messages.
+//! Provides functions for:
+//! - Stripping ANSI escape sequences from log messages
+//! - Word boundary detection for log level classification
+//!
 //! The Flutter `logger` package and other logging libraries output ANSI codes
 //! for terminal coloring that appear as garbage in the TUI.
 //!
@@ -114,6 +117,87 @@ pub fn strip_ansi_codes(input: &str) -> String {
 /// ```
 pub fn contains_ansi_codes(input: &str) -> bool {
     ANSI_ESCAPE_PATTERN.is_match(input)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Word Boundary Detection
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Check if a word exists at word boundaries in the text.
+///
+/// This is used for log level detection to avoid false positives from
+/// identifiers like `ErrorTestingPage`, `handleError`, or `errorCount`.
+///
+/// Matches when the word appears:
+/// - As a standalone word: `"An error occurred"` ✓
+/// - With colon prefix/suffix: `"Error: failed"`, `"error:"` ✓
+/// - In brackets: `"[error]"`, `"[ERROR]"` ✓
+/// - At start of text: `"Error message"` ✓
+/// - At end of text: `"fatal error"` ✓
+///
+/// Does NOT match:
+/// - CamelCase identifiers: `"ErrorTestingPage"` ✗
+/// - Method names: `"handleError"` ✗
+/// - Variable names: `"errorCount"` ✗
+///
+/// # Examples
+///
+/// ```
+/// use flutter_demon::core::contains_word;
+///
+/// // These should match
+/// assert!(contains_word("An error occurred", "error"));
+/// assert!(contains_word("Error: connection failed", "error"));
+/// assert!(contains_word("[error] something failed", "error"));
+/// assert!(contains_word("fatal error", "error"));
+///
+/// // These should NOT match (false positives)
+/// assert!(!contains_word("ErrorTestingPage", "error"));
+/// assert!(!contains_word("handleError", "error"));
+/// assert!(!contains_word("errorCount", "error"));
+/// ```
+pub fn contains_word(text: &str, word: &str) -> bool {
+    // Empty inputs - no match
+    if text.is_empty() || word.is_empty() {
+        return false;
+    }
+
+    let lower = text.to_lowercase();
+    let word_lower = word.to_lowercase();
+    let word_len = word_lower.len();
+
+    // Find all occurrences and check word boundaries
+    let mut start = 0;
+    while let Some(pos) = lower[start..].find(&word_lower) {
+        let abs_pos = start + pos;
+        let end_pos = abs_pos + word_len;
+
+        // Check character before the match (if any)
+        let char_before = if abs_pos == 0 {
+            None
+        } else {
+            lower[..abs_pos].chars().last()
+        };
+
+        // Check character after the match (if any)
+        let char_after = lower[end_pos..].chars().next();
+
+        // A word boundary exists if the surrounding characters are not alphanumeric
+        let is_start_boundary = char_before.is_none() || !char_before.unwrap().is_alphanumeric();
+        let is_end_boundary = char_after.is_none() || !char_after.unwrap().is_alphanumeric();
+
+        if is_start_boundary && is_end_boundary {
+            return true;
+        }
+
+        // Move past this occurrence
+        start = abs_pos + 1;
+        if start >= lower.len() {
+            break;
+        }
+    }
+
+    false
 }
 
 #[cfg(test)]
@@ -427,5 +511,125 @@ mod tests {
         let input = r"\└───────────────────────────────────────\";
         let result = strip_ansi_codes(input);
         assert!(result.trim_start().starts_with('└'));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Word Boundary Detection Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_contains_word_standalone() {
+        // Standalone word surrounded by spaces
+        assert!(contains_word("An error occurred", "error"));
+        assert!(contains_word("fatal error detected", "error"));
+        assert!(contains_word("this is a warning message", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_with_colon() {
+        // Word followed by colon
+        assert!(contains_word("Error: something failed", "error"));
+        assert!(contains_word("error: connection refused", "error"));
+        assert!(contains_word("Warning: deprecated API", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_bracketed() {
+        // Word in brackets (Talker format)
+        assert!(contains_word("[error] something failed", "error"));
+        assert!(contains_word("[ERROR] critical", "error"));
+        assert!(contains_word("[warning] check this", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_start_of_text() {
+        // Word at start of text
+        assert!(contains_word("Error message here", "error"));
+        assert!(contains_word("error in processing", "error"));
+        assert!(contains_word("Warning: API deprecated", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_end_of_text() {
+        // Word at end of text
+        assert!(contains_word("fatal error", "error"));
+        assert!(contains_word("this is an error", "error"));
+        assert!(contains_word("deprecated API warning", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_with_punctuation() {
+        // Word followed by punctuation
+        assert!(contains_word("error. Next sentence", "error"));
+        assert!(contains_word("error, continued", "error"));
+        assert!(contains_word("error; more text", "error"));
+        assert!(contains_word("(error)", "error"));
+    }
+
+    #[test]
+    fn test_contains_word_false_positive_class_names() {
+        // CamelCase class names should NOT match
+        assert!(!contains_word("ErrorTestingPage", "error"));
+        assert!(!contains_word("MyErrorHandler", "error"));
+        assert!(!contains_word("ErrorBoundary widget", "error"));
+        assert!(!contains_word("NetworkError", "error"));
+        assert!(!contains_word("ValidationError", "error"));
+        assert!(!contains_word("TimeoutError", "error"));
+    }
+
+    #[test]
+    fn test_contains_word_false_positive_method_names() {
+        // Method names should NOT match
+        assert!(!contains_word("handleError called", "error"));
+        assert!(!contains_word("onErrorCallback", "error"));
+        assert!(!contains_word("throwError()", "error"));
+        assert!(!contains_word("reportError", "error"));
+    }
+
+    #[test]
+    fn test_contains_word_false_positive_variable_names() {
+        // Variable names should NOT match
+        assert!(!contains_word("errorCount: 5", "error"));
+        assert!(!contains_word("hasError = false", "error"));
+        assert!(!contains_word("isErrorState", "error"));
+        assert!(!contains_word("lastError", "error"));
+    }
+
+    #[test]
+    fn test_contains_word_case_insensitive() {
+        // Case insensitive matching
+        assert!(contains_word("ERROR occurred", "error"));
+        assert!(contains_word("Error: failed", "error"));
+        assert!(contains_word("An error here", "ERROR"));
+    }
+
+    #[test]
+    fn test_contains_word_warning_false_positives() {
+        // Warning class names should NOT match
+        assert!(!contains_word("WarningDialog", "warning"));
+        assert!(!contains_word("ShowWarningBanner", "warning"));
+        assert!(!contains_word("warningCount", "warning"));
+    }
+
+    #[test]
+    fn test_contains_word_multiple_occurrences() {
+        // Multiple occurrences - one should match
+        assert!(contains_word("ErrorHandler caught an error", "error"));
+        assert!(!contains_word("ErrorHandlerErrorManager", "error")); // Both are part of identifiers
+    }
+
+    #[test]
+    fn test_contains_word_empty_inputs() {
+        assert!(!contains_word("", "error"));
+        assert!(!contains_word("some text", ""));
+        assert!(!contains_word("", ""));
+    }
+
+    #[test]
+    fn test_contains_word_single_word_text() {
+        // Text is just the word
+        assert!(contains_word("error", "error"));
+        assert!(contains_word("Error", "error"));
+        assert!(contains_word("ERROR", "error"));
     }
 }

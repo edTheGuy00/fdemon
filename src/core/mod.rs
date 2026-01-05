@@ -6,7 +6,7 @@ pub mod events;
 pub mod stack_trace;
 pub mod types;
 
-pub use ansi::{contains_ansi_codes, strip_ansi_codes};
+pub use ansi::{contains_ansi_codes, contains_word, strip_ansi_codes};
 pub use discovery::{
     discover_flutter_projects, get_project_name, get_project_type, has_flutter_dependency,
     has_platform_directories, is_flutter_plugin, is_runnable_flutter_project, DiscoveryResult,

@@ -1,6 +1,6 @@
 //! Helper utilities for the handler module
 
-use crate::core::{strip_ansi_codes, LogLevel};
+use crate::core::{contains_word, strip_ansi_codes, LogLevel};
 
 // ─────────────────────────────────────────────────────────
 // Logger Package Block Detection (Phase 2 Task 11)
@@ -99,8 +99,7 @@ pub fn detect_raw_line_level(line: &str) -> (LogLevel, String) {
 /// often contain class names like "ErrorTestingPage" or "ExceptionHandler".
 fn is_stack_trace_line(message: &str) -> bool {
     // Strip leading box-drawing characters and whitespace
-    let trimmed = message
-        .trim_start_matches(|c: char| c.is_whitespace() || "│├└┌─┄".contains(c));
+    let trimmed = message.trim_start_matches(|c: char| c.is_whitespace() || "│├└┌─┄".contains(c));
 
     // Check for stack frame pattern: #<digit>
     if let Some(rest) = trimmed.strip_prefix('#') {
@@ -219,26 +218,47 @@ fn detect_log_level_from_content(message: &str) -> LogLevel {
     }
 
     // ─────────────────────────────────────────────────────────
-    // General keyword detection
+    // Dart exception type detection
+    // Handles CamelCase exception types like RangeError, TypeError, FormatException
+    // Pattern: "SomethingError (params):" or "SomethingError: message"
     // ─────────────────────────────────────────────────────────
 
-    // Error keywords
-    if lower.contains("error")
-        || lower.contains("exception")
-        || lower.contains("failed")
-        || lower.contains("fatal")
-        || lower.contains("crash")
+    // Check for Dart exception patterns (TypeNameError or TypeNameException)
+    // These are CamelCase but indicate real errors
+    if lower.contains("error (") || lower.contains("exception (") {
+        return LogLevel::Error;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Word boundary detection (prevents false positives)
+    // Uses word boundaries to avoid matching identifiers like
+    // "ErrorTestingPage", "handleError", "errorCount"
+    // ─────────────────────────────────────────────────────────
+
+    // Error keywords - must be at word boundaries
+    // Include common word variations (crashed, crashing, etc.)
+    if contains_word(message, "error")
+        || contains_word(message, "exception")
+        || contains_word(message, "failed")
+        || contains_word(message, "failure")
+        || contains_word(message, "fatal")
+        || contains_word(message, "crash")
+        || contains_word(message, "crashed")
+        || contains_word(message, "crashing")
     {
         return LogLevel::Error;
     }
 
-    // Warning keywords
-    if lower.contains("warning") || lower.contains("deprecated") || lower.contains("caution") {
+    // Warning keywords - must be at word boundaries
+    if contains_word(message, "warning")
+        || contains_word(message, "deprecated")
+        || contains_word(message, "caution")
+    {
         return LogLevel::Warning;
     }
 
     // Debug keywords
-    if lower.starts_with("debug") || lower.contains("verbose") {
+    if lower.starts_with("debug") || contains_word(message, "verbose") {
         return LogLevel::Debug;
     }
 
@@ -709,30 +729,54 @@ mod tests {
     #[test]
     fn test_block_start_with_ansi_codes() {
         // Logger package output with 256-color ANSI codes
-        assert!(is_block_start("\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"));
-        assert!(is_block_start("\x1b[38;5;196m┌───────────────────────────────────────\x1b[0m"));
-        assert!(is_block_start("\x1b[38;5;208m┌───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_start(
+            "\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"
+        ));
+        assert!(is_block_start(
+            "\x1b[38;5;196m┌───────────────────────────────────────\x1b[0m"
+        ));
+        assert!(is_block_start(
+            "\x1b[38;5;208m┌───────────────────────────────────────\x1b[0m"
+        ));
         // With RGB colors
-        assert!(is_block_start("\x1b[38;2;255;100;50m┌───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_start(
+            "\x1b[38;2;255;100;50m┌───────────────────────────────────────\x1b[0m"
+        ));
     }
 
     #[test]
     fn test_block_end_with_ansi_codes() {
         // Logger package output with 256-color ANSI codes
-        assert!(is_block_end("\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"));
-        assert!(is_block_end("\x1b[38;5;196m└───────────────────────────────────────\x1b[0m"));
-        assert!(is_block_end("\x1b[38;5;208m└───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_end(
+            "\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"
+        ));
+        assert!(is_block_end(
+            "\x1b[38;5;196m└───────────────────────────────────────\x1b[0m"
+        ));
+        assert!(is_block_end(
+            "\x1b[38;5;208m└───────────────────────────────────────\x1b[0m"
+        ));
     }
 
     #[test]
     fn test_is_logger_block_line_with_ansi_codes() {
         // All box-drawing characters with ANSI codes
-        assert!(is_logger_block_line("\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"));
-        assert!(is_logger_block_line("\x1b[38;5;12m│ Message content\x1b[0m"));
-        assert!(is_logger_block_line("\x1b[38;5;12m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m"));
-        assert!(is_logger_block_line("\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"));
+        assert!(is_logger_block_line(
+            "\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"
+        ));
+        assert!(is_logger_block_line(
+            "\x1b[38;5;12m│ Message content\x1b[0m"
+        ));
+        assert!(is_logger_block_line(
+            "\x1b[38;5;12m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m"
+        ));
+        assert!(is_logger_block_line(
+            "\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"
+        ));
         assert!(is_logger_block_line("\x1b[38;5;12m┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m"));
-        assert!(is_logger_block_line("\x1b[38;5;12m───────────────────\x1b[0m"));
+        assert!(is_logger_block_line(
+            "\x1b[38;5;12m───────────────────\x1b[0m"
+        ));
     }
 
     #[test]
@@ -765,7 +809,9 @@ mod tests {
     #[test]
     fn test_block_start_with_backslash_escape() {
         // Flutter --machine mode escapes box-drawing with backslashes
-        assert!(is_block_start(r"\┌───────────────────────────────────────\"));
+        assert!(is_block_start(
+            r"\┌───────────────────────────────────────\"
+        ));
         assert!(is_block_start(r"\┌───────────────────────────────────────"));
     }
 
@@ -777,10 +823,14 @@ mod tests {
 
     #[test]
     fn test_is_logger_block_line_with_backslash_escape() {
-        assert!(is_logger_block_line(r"\┌───────────────────────────────────────\"));
+        assert!(is_logger_block_line(
+            r"\┌───────────────────────────────────────\"
+        ));
         assert!(is_logger_block_line(r"\│ Message content\"));
         assert!(is_logger_block_line(r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\"));
-        assert!(is_logger_block_line(r"\└───────────────────────────────────────\"));
+        assert!(is_logger_block_line(
+            r"\└───────────────────────────────────────\"
+        ));
     }
 
     #[test]
@@ -797,7 +847,11 @@ mod tests {
 
         assert!(is_block_start(lines[0]));
         for line in &lines[1..lines.len() - 1] {
-            assert!(is_logger_block_line(line), "Line should be block line: {}", line);
+            assert!(
+                is_logger_block_line(line),
+                "Line should be block line: {}",
+                line
+            );
             assert!(!is_block_start(line));
             assert!(!is_block_end(line));
         }
@@ -819,18 +873,30 @@ mod tests {
     #[test]
     fn test_is_stack_trace_line() {
         // Standard Dart stack trace formats
-        assert!(is_stack_trace_line("#0   main (file:///path/main.dart:10:5)"));
-        assert!(is_stack_trace_line("#1   _runMain (dart:ui/hooks.dart:159:15)"));
-        assert!(is_stack_trace_line("#10  SomeClass.method (package:app/file.dart:42:10)"));
+        assert!(is_stack_trace_line(
+            "#0   main (file:///path/main.dart:10:5)"
+        ));
+        assert!(is_stack_trace_line(
+            "#1   _runMain (dart:ui/hooks.dart:159:15)"
+        ));
+        assert!(is_stack_trace_line(
+            "#10  SomeClass.method (package:app/file.dart:42:10)"
+        ));
 
         // With box-drawing prefix (Logger package output)
-        assert!(is_stack_trace_line("│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)"));
+        assert!(is_stack_trace_line(
+            "│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)"
+        ));
         assert!(is_stack_trace_line("│ #1   ErrorTestingPage.build.<anonymous closure> (package:flutter_deamon/main.dart:113:45)"));
-        assert!(is_stack_trace_line("├ #2   SomeWidget.build (file.dart:10:5)"));
+        assert!(is_stack_trace_line(
+            "├ #2   SomeWidget.build (file.dart:10:5)"
+        ));
 
         // With whitespace
         assert!(is_stack_trace_line("  #0   main (file.dart:1:1)"));
-        assert!(is_stack_trace_line("    │ #5   ClassName.methodName (file.dart:1:1)"));
+        assert!(is_stack_trace_line(
+            "    │ #5   ClassName.methodName (file.dart:1:1)"
+        ));
 
         // Not stack traces
         assert!(!is_stack_trace_line("Regular message"));
@@ -844,13 +910,17 @@ mod tests {
     #[test]
     fn test_stack_trace_does_not_trigger_error_detection() {
         // Stack traces with "Error" in class names should NOT be detected as errors
-        let (level, _) = detect_raw_line_level("│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)");
+        let (level, _) = detect_raw_line_level(
+            "│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)",
+        );
         assert_eq!(level, LogLevel::Info);
 
         let (level, _) = detect_raw_line_level("#0   ExceptionHandler.handle (file.dart:10:5)");
         assert_eq!(level, LogLevel::Info);
 
-        let (level, _) = detect_raw_line_level("│ #1   triggerNullError (package:flutter_deamon/errors/sync_errors.dart:14:23)");
+        let (level, _) = detect_raw_line_level(
+            "│ #1   triggerNullError (package:flutter_deamon/errors/sync_errors.dart:14:23)",
+        );
         assert_eq!(level, LogLevel::Info);
     }
 
@@ -864,6 +934,140 @@ mod tests {
         assert_eq!(level, LogLevel::Error);
 
         let (level, _) = detect_raw_line_level("RangeError (length): Invalid value");
+        assert_eq!(level, LogLevel::Error);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // False Positive Prevention Tests (Bug Fix: Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_class_name_not_error() {
+        // Class names should NOT trigger Error level
+        let (level, _) = detect_raw_line_level("ErrorTestingPage");
+        assert_eq!(
+            level,
+            LogLevel::Info,
+            "ErrorTestingPage should be Info, not Error"
+        );
+
+        let (level, _) = detect_raw_line_level("MyErrorHandler");
+        assert_eq!(level, LogLevel::Info, "MyErrorHandler should be Info");
+
+        let (level, _) = detect_raw_line_level("ErrorBoundary widget loaded");
+        assert_eq!(level, LogLevel::Info, "ErrorBoundary should be Info");
+    }
+
+    #[test]
+    fn test_method_name_not_error() {
+        // Method names should NOT trigger Error level
+        let (level, _) = detect_raw_line_level("handleError called");
+        assert_eq!(level, LogLevel::Info, "handleError should be Info");
+
+        let (level, _) = detect_raw_line_level("onErrorCallback triggered");
+        assert_eq!(level, LogLevel::Info, "onErrorCallback should be Info");
+
+        let (level, _) = detect_raw_line_level("throwError()");
+        assert_eq!(level, LogLevel::Info, "throwError() should be Info");
+    }
+
+    #[test]
+    fn test_variable_name_not_error() {
+        // Variable names should NOT trigger Error level
+        let (level, _) = detect_raw_line_level("errorCount: 5");
+        assert_eq!(level, LogLevel::Info, "errorCount should be Info");
+
+        let (level, _) = detect_raw_line_level("hasError = false");
+        assert_eq!(level, LogLevel::Info, "hasError should be Info");
+
+        let (level, _) = detect_raw_line_level("isErrorState check");
+        assert_eq!(level, LogLevel::Info, "isErrorState should be Info");
+    }
+
+    #[test]
+    fn test_camel_case_not_error() {
+        // CamelCase identifiers should NOT trigger Error level
+        let (level, _) = detect_raw_line_level("NetworkError");
+        assert_eq!(level, LogLevel::Info, "NetworkError should be Info");
+
+        let (level, _) = detect_raw_line_level("ValidationError");
+        assert_eq!(level, LogLevel::Info, "ValidationError should be Info");
+
+        let (level, _) = detect_raw_line_level("TimeoutError");
+        assert_eq!(level, LogLevel::Info, "TimeoutError should be Info");
+    }
+
+    #[test]
+    fn test_valid_error_detection_still_works() {
+        // Valid error patterns should still trigger Error level
+        let (level, _) = detect_raw_line_level("Error: something failed");
+        assert_eq!(level, LogLevel::Error, "Error: should trigger Error");
+
+        let (level, _) = detect_raw_line_level("An error occurred");
+        assert_eq!(
+            level,
+            LogLevel::Error,
+            "standalone error should trigger Error"
+        );
+
+        let (level, _) = detect_raw_line_level("[error] message");
+        assert_eq!(level, LogLevel::Error, "[error] should trigger Error");
+
+        let (level, _) = detect_raw_line_level("fatal error");
+        assert_eq!(level, LogLevel::Error, "fatal error should trigger Error");
+    }
+
+    #[test]
+    fn test_warning_class_name_not_warning() {
+        // Warning class names should NOT trigger Warning level
+        let (level, _) = detect_raw_line_level("WarningDialog");
+        assert_eq!(level, LogLevel::Info, "WarningDialog should be Info");
+
+        let (level, _) = detect_raw_line_level("ShowWarningBanner");
+        assert_eq!(level, LogLevel::Info, "ShowWarningBanner should be Info");
+    }
+
+    #[test]
+    fn test_valid_warning_detection_still_works() {
+        // Valid warning patterns should still trigger Warning level
+        let (level, _) = detect_raw_line_level("Warning: deprecated API");
+        assert_eq!(level, LogLevel::Warning, "Warning: should trigger Warning");
+
+        let (level, _) = detect_raw_line_level("[warning] check this");
+        assert_eq!(level, LogLevel::Warning, "[warning] should trigger Warning");
+
+        let (level, _) = detect_raw_line_level("⚠ Warning message");
+        assert_eq!(
+            level,
+            LogLevel::Warning,
+            "emoji warning should trigger Warning"
+        );
+    }
+
+    #[test]
+    fn test_build_failure_still_detected() {
+        // Build failures should still trigger Error level
+        let (level, _) = detect_raw_line_level("FAILURE: Build failed");
+        assert_eq!(
+            level,
+            LogLevel::Error,
+            "FAILURE: Build failed should be Error"
+        );
+
+        let (level, _) = detect_raw_line_level("Build failed with errors");
+        assert_eq!(level, LogLevel::Error, "Build failed should be Error");
+    }
+
+    #[test]
+    fn test_emoji_error_still_detected() {
+        // Emoji-based errors should still trigger Error level
+        let (level, _) = detect_raw_line_level("⛔ Error: failed");
+        assert_eq!(level, LogLevel::Error);
+
+        let (level, _) = detect_raw_line_level("❌ Build failed");
+        assert_eq!(level, LogLevel::Error);
+
+        let (level, _) = detect_raw_line_level("🔥 Fatal error");
         assert_eq!(level, LogLevel::Error);
     }
 }

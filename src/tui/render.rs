@@ -1,5 +1,7 @@
 //! Main render/view function (View in TEA pattern)
 
+use std::collections::VecDeque;
+
 use super::{layout, widgets};
 use crate::app::state::{AppState, UiMode};
 use crate::core::LogEntry;
@@ -35,7 +37,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
     } else {
         // No session selected - show empty log view
-        let empty_logs: Vec<LogEntry> = Vec::new();
+        let empty_logs: VecDeque<LogEntry> = VecDeque::new();
         let log_view = widgets::LogView::new(&empty_logs);
         let mut empty_state = LogViewState::new();
         frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);

@@ -1,5 +1,7 @@
 //! Scrollable log view widget with rich formatting
 
+use std::collections::VecDeque;
+
 use crate::core::{
     FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter, SearchState,
     StackFrame,
@@ -54,8 +56,11 @@ mod stack_trace_styles {
     pub const INDENT: &str = "    ";
 }
 
-/// State for log view scrolling
-#[derive(Debug, Default)]
+/// Default buffer lines for virtualized rendering
+const DEFAULT_BUFFER_LINES: usize = 10;
+
+/// State for log view scrolling with virtualization support
+#[derive(Debug)]
 pub struct LogViewState {
     /// Current vertical scroll offset from top
     pub offset: usize,
@@ -71,6 +76,14 @@ pub struct LogViewState {
     pub max_line_width: usize,
     /// Visible width (set during render)
     pub visible_width: usize,
+    /// Buffer lines above/below viewport for smooth scrolling (Task 05)
+    pub buffer_lines: usize,
+}
+
+impl Default for LogViewState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl LogViewState {
@@ -83,7 +96,23 @@ impl LogViewState {
             visible_lines: 0,
             max_line_width: 0,
             visible_width: 0,
+            buffer_lines: DEFAULT_BUFFER_LINES,
         }
+    }
+
+    /// Get the range of line indices to render (with buffer)
+    ///
+    /// Returns (start, end) where start is inclusive and end is exclusive.
+    /// Includes buffer_lines above and below the visible area for smooth scrolling.
+    pub fn visible_range(&self) -> (usize, usize) {
+        let start = self.offset.saturating_sub(self.buffer_lines);
+        let end = (self.offset + self.visible_lines + self.buffer_lines).min(self.total_lines);
+        (start, end)
+    }
+
+    /// Set buffer lines for virtualized rendering
+    pub fn set_buffer_lines(&mut self, buffer: usize) {
+        self.buffer_lines = buffer;
     }
 
     /// Scroll up by n lines
@@ -173,14 +202,14 @@ impl LogViewState {
     }
 
     /// Calculate total lines including expanded stack traces
-    pub fn calculate_total_lines(logs: &[LogEntry]) -> usize {
+    pub fn calculate_total_lines(logs: &VecDeque<LogEntry>) -> usize {
         logs.iter()
             .map(|entry| 1 + entry.stack_trace_frame_count()) // 1 for message + frames
             .sum()
     }
 
     /// Calculate total lines for filtered entries (by index)
-    pub fn calculate_total_lines_filtered(logs: &[LogEntry], indices: &[usize]) -> usize {
+    pub fn calculate_total_lines_filtered(logs: &VecDeque<LogEntry>, indices: &[usize]) -> usize {
         indices
             .iter()
             .map(|&idx| 1 + logs[idx].stack_trace_frame_count())
@@ -190,7 +219,7 @@ impl LogViewState {
 
 /// Log view widget with rich formatting
 pub struct LogView<'a> {
-    logs: &'a [LogEntry],
+    logs: &'a VecDeque<LogEntry>,
     title: &'a str,
     show_timestamps: bool,
     show_source: bool,
@@ -207,7 +236,7 @@ pub struct LogView<'a> {
 }
 
 impl<'a> LogView<'a> {
-    pub fn new(logs: &'a [LogEntry]) -> Self {
+    pub fn new(logs: &'a VecDeque<LogEntry>) -> Self {
         Self {
             logs,
             title: " Logs ",
@@ -923,6 +952,11 @@ mod tests {
         LogEntry::new(level, source, msg)
     }
 
+    /// Helper to create a VecDeque of log entries for tests
+    fn logs_from(entries: Vec<LogEntry>) -> VecDeque<LogEntry> {
+        VecDeque::from(entries)
+    }
+
     #[test]
     fn test_log_view_state_default() {
         let state = LogViewState::new();
@@ -992,7 +1026,7 @@ mod tests {
 
     #[test]
     fn test_format_entry_includes_timestamp() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let view = LogView::new(&logs).show_timestamps(true);
         let line = view.format_entry(&logs[0], 0);
 
@@ -1002,7 +1036,7 @@ mod tests {
 
     #[test]
     fn test_format_entry_no_timestamp() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let view = LogView::new(&logs).show_timestamps(false);
         let line = view.format_entry(&logs[0], 0);
 
@@ -1014,7 +1048,7 @@ mod tests {
 
     #[test]
     fn test_format_entry_no_source() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let view = LogView::new(&logs).show_source(false);
         let line = view.format_entry(&logs[0], 0);
 
@@ -1059,14 +1093,14 @@ mod tests {
 
     #[test]
     fn test_build_title_no_filter() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let view = LogView::new(&logs).title("Logs");
         assert_eq!(view.build_title(), " Logs ");
     }
 
     #[test]
     fn test_build_title_with_default_filter() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let filter = FilterState::default();
         let view = LogView::new(&logs).title("Logs").filter_state(&filter);
         // Default filter (All/All) should not show indicator
@@ -1075,7 +1109,7 @@ mod tests {
 
     #[test]
     fn test_build_title_with_level_filter() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let filter = FilterState {
             level_filter: LogLevelFilter::Errors,
             source_filter: LogSourceFilter::All,
@@ -1087,7 +1121,7 @@ mod tests {
 
     #[test]
     fn test_build_title_with_source_filter() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let filter = FilterState {
             level_filter: LogLevelFilter::All,
             source_filter: LogSourceFilter::App,
@@ -1099,7 +1133,7 @@ mod tests {
 
     #[test]
     fn test_build_title_with_combined_filter() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let filter = FilterState {
             level_filter: LogLevelFilter::Errors,
             source_filter: LogSourceFilter::Flutter,
@@ -1113,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_filter_state_builder() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
         let filter = FilterState::default();
         let view = LogView::new(&logs).filter_state(&filter);
         assert!(view.filter_state.is_some());
@@ -1121,11 +1155,11 @@ mod tests {
 
     #[test]
     fn test_filtered_logs_count() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Info, LogSource::App, "info"),
             make_entry(LogLevel::Error, LogSource::App, "error"),
             make_entry(LogLevel::Warning, LogSource::Daemon, "warning"),
-        ];
+        ]);
         let filter = FilterState {
             level_filter: LogLevelFilter::Errors,
             source_filter: LogSourceFilter::All,
@@ -1139,11 +1173,11 @@ mod tests {
 
     #[test]
     fn test_filtered_logs_by_source() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Info, LogSource::App, "app info"),
             make_entry(LogLevel::Error, LogSource::Flutter, "flutter error"),
             make_entry(LogLevel::Warning, LogSource::Daemon, "daemon warning"),
-        ];
+        ]);
         let filter = FilterState {
             level_filter: LogLevelFilter::All,
             source_filter: LogSourceFilter::App,
@@ -1157,12 +1191,12 @@ mod tests {
 
     #[test]
     fn test_combined_filter() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Error, LogSource::App, "app error"),
             make_entry(LogLevel::Error, LogSource::Flutter, "flutter error"),
             make_entry(LogLevel::Info, LogSource::App, "app info"),
             make_entry(LogLevel::Warning, LogSource::App, "app warning"),
-        ];
+        ]);
         let filter = FilterState {
             level_filter: LogLevelFilter::Errors,
             source_filter: LogSourceFilter::App,
@@ -1182,7 +1216,11 @@ mod tests {
 
     #[test]
     fn test_format_message_with_highlights_no_search() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Hello world")];
+        let logs = logs_from(vec![make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "Hello world",
+        )]);
         let view = LogView::new(&logs);
 
         let spans = view.format_message_with_highlights("Hello world", 0, Style::default());
@@ -1192,7 +1230,11 @@ mod tests {
 
     #[test]
     fn test_format_message_with_highlights_with_match() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "Hello world")];
+        let logs = logs_from(vec![make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "Hello world",
+        )]);
         let mut search = SearchState::default();
         search.set_query("world");
         search.execute_search(&logs);
@@ -1207,11 +1249,11 @@ mod tests {
 
     #[test]
     fn test_format_message_with_highlights_multiple_matches() {
-        let logs = vec![make_entry(
+        let logs = logs_from(vec![make_entry(
             LogLevel::Info,
             LogSource::App,
             "test one test two",
-        )];
+        )]);
         let mut search = SearchState::default();
         search.set_query("test");
         search.execute_search(&logs);
@@ -1226,10 +1268,10 @@ mod tests {
 
     #[test]
     fn test_format_message_with_highlights_no_match_in_entry() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Info, LogSource::App, "test here"),
             make_entry(LogLevel::Info, LogSource::App, "no match"),
-        ];
+        ]);
         let mut search = SearchState::default();
         search.set_query("test");
         search.execute_search(&logs);
@@ -1244,7 +1286,7 @@ mod tests {
 
     #[test]
     fn test_format_message_with_highlights_invalid_regex() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "test")]);
         let mut search = SearchState::default();
         search.set_query("[invalid");
         search.execute_search(&logs);
@@ -1259,10 +1301,10 @@ mod tests {
 
     #[test]
     fn test_build_title_with_search_status() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Info, LogSource::App, "test message"),
             make_entry(LogLevel::Info, LogSource::App, "another test"),
-        ];
+        ]);
         let mut search = SearchState::default();
         search.set_query("test");
         search.execute_search(&logs);
@@ -1277,7 +1319,7 @@ mod tests {
 
     #[test]
     fn test_build_title_with_filter_and_search() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "test")]);
         let filter = FilterState {
             level_filter: LogLevelFilter::Errors,
             source_filter: LogSourceFilter::All,
@@ -1299,7 +1341,7 @@ mod tests {
 
     #[test]
     fn test_search_state_builder() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "test")];
+        let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "test")]);
         let search = SearchState::default();
         let view = LogView::new(&logs).search_state(&search);
         assert!(view.search_state.is_some());
@@ -1307,7 +1349,11 @@ mod tests {
 
     #[test]
     fn test_format_entry_with_search_highlights() {
-        let logs = vec![make_entry(LogLevel::Info, LogSource::App, "error occurred")];
+        let logs = logs_from(vec![make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            "error occurred",
+        )]);
         let mut search = SearchState::default();
         search.set_query("error");
         search.execute_search(&logs);
@@ -1410,10 +1456,10 @@ mod tests {
 
     #[test]
     fn test_calculate_total_lines_no_traces() {
-        let logs = vec![
+        let logs = logs_from(vec![
             make_entry(LogLevel::Info, LogSource::App, "Hello"),
             make_entry(LogLevel::Error, LogSource::App, "Error"),
-        ];
+        ]);
 
         let total = LogViewState::calculate_total_lines(&logs);
         assert_eq!(total, 2); // No stack traces, just 2 entries
@@ -1434,7 +1480,7 @@ mod tests {
         );
         entry2.stack_trace = Some(trace);
 
-        let logs = vec![entry1, entry2];
+        let logs = logs_from(vec![entry1, entry2]);
 
         let total = LogViewState::calculate_total_lines(&logs);
         // entry1: 1 line, entry2: 1 line + 3 frames = 4 lines, total = 5
@@ -1448,7 +1494,7 @@ mod tests {
         let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
         entry2.stack_trace = Some(trace);
 
-        let logs = vec![entry1, entry2];
+        let logs = logs_from(vec![entry1, entry2]);
 
         // Only include entry2 (index 1)
         let indices = vec![1];
@@ -1527,7 +1573,7 @@ mod tests {
     #[test]
     fn test_calculate_entry_lines_no_trace() {
         let entry = make_entry(LogLevel::Info, LogSource::App, "Hello");
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
         let view = LogView::new(&logs)
             .default_collapsed(true)
             .max_collapsed_frames(3);
@@ -1549,7 +1595,7 @@ mod tests {
         );
         entry.stack_trace = Some(trace);
 
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
         let view = LogView::new(&logs)
             .default_collapsed(true)
             .max_collapsed_frames(3);
@@ -1572,7 +1618,7 @@ mod tests {
         );
         entry.stack_trace = Some(trace);
 
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
         let mut collapse_state = CollapseState::new();
         collapse_state.toggle(logs[0].id, true); // Expand it
 
@@ -1592,7 +1638,7 @@ mod tests {
         let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
         entry.stack_trace = Some(trace);
 
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
         let view = LogView::new(&logs)
             .default_collapsed(true)
             .max_collapsed_frames(3);
@@ -1607,7 +1653,7 @@ mod tests {
         let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
         entry.stack_trace = Some(trace);
 
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
 
         // Without collapse state, use default_collapsed setting
         let view = LogView::new(&logs).default_collapsed(true);
@@ -1623,7 +1669,7 @@ mod tests {
         let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
         entry.stack_trace = Some(trace);
 
-        let logs = vec![entry];
+        let logs = logs_from(vec![entry]);
         let mut collapse_state = CollapseState::new();
 
         // Toggle to expanded
@@ -1638,7 +1684,7 @@ mod tests {
 
     #[test]
     fn test_collapse_state_builder() {
-        let logs: Vec<LogEntry> = vec![];
+        let logs: VecDeque<LogEntry> = VecDeque::new();
         let collapse_state = CollapseState::new();
 
         let view = LogView::new(&logs).collapse_state(&collapse_state);
@@ -1648,7 +1694,7 @@ mod tests {
 
     #[test]
     fn test_max_collapsed_frames_builder() {
-        let logs: Vec<LogEntry> = vec![];
+        let logs: VecDeque<LogEntry> = VecDeque::new();
 
         let view = LogView::new(&logs).max_collapsed_frames(5);
 
@@ -1657,7 +1703,7 @@ mod tests {
 
     #[test]
     fn test_default_collapsed_builder() {
-        let logs: Vec<LogEntry> = vec![];
+        let logs: VecDeque<LogEntry> = VecDeque::new();
 
         let view = LogView::new(&logs).default_collapsed(false);
 
@@ -1830,5 +1876,120 @@ mod tests {
         let result = LogView::apply_horizontal_scroll(line, 100, 20);
         let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
         assert_eq!(content, "");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Virtualized Rendering Tests (Task 05)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_visible_range_basic() {
+        let mut state = LogViewState::new();
+        state.total_lines = 100;
+        state.visible_lines = 20;
+        state.buffer_lines = 5;
+        state.offset = 50;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 45); // 50 - 5 buffer
+        assert_eq!(end, 75); // 50 + 20 + 5 buffer
+    }
+
+    #[test]
+    fn test_visible_range_at_start() {
+        let mut state = LogViewState::new();
+        state.total_lines = 100;
+        state.visible_lines = 20;
+        state.buffer_lines = 5;
+        state.offset = 0;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 0); // Can't go negative
+        assert_eq!(end, 25); // 0 + 20 + 5
+    }
+
+    #[test]
+    fn test_visible_range_at_end() {
+        let mut state = LogViewState::new();
+        state.total_lines = 100;
+        state.visible_lines = 20;
+        state.buffer_lines = 5;
+        state.offset = 80;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 75); // 80 - 5
+        assert_eq!(end, 100); // Capped at total
+    }
+
+    #[test]
+    fn test_visible_range_small_content() {
+        let mut state = LogViewState::new();
+        state.total_lines = 10;
+        state.visible_lines = 20;
+        state.buffer_lines = 5;
+        state.offset = 0;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 0);
+        assert_eq!(end, 10); // Capped at total
+    }
+
+    #[test]
+    fn test_visible_range_zero_buffer() {
+        let mut state = LogViewState::new();
+        state.total_lines = 100;
+        state.visible_lines = 20;
+        state.buffer_lines = 0;
+        state.offset = 50;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 50); // No buffer
+        assert_eq!(end, 70); // No buffer
+    }
+
+    #[test]
+    fn test_buffer_lines_default() {
+        let state = LogViewState::new();
+        assert_eq!(state.buffer_lines, DEFAULT_BUFFER_LINES);
+    }
+
+    #[test]
+    fn test_set_buffer_lines() {
+        let mut state = LogViewState::new();
+        state.set_buffer_lines(20);
+        assert_eq!(state.buffer_lines, 20);
+    }
+
+    #[test]
+    fn test_visible_range_with_custom_buffer() {
+        let mut state = LogViewState::new();
+        state.total_lines = 200;
+        state.visible_lines = 30;
+        state.set_buffer_lines(15);
+        state.offset = 100;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 85); // 100 - 15
+        assert_eq!(end, 145); // 100 + 30 + 15
+    }
+
+    #[test]
+    fn test_visible_range_empty_content() {
+        let mut state = LogViewState::new();
+        state.total_lines = 0;
+        state.visible_lines = 20;
+        state.buffer_lines = 5;
+        state.offset = 0;
+
+        let (start, end) = state.visible_range();
+
+        assert_eq!(start, 0);
+        assert_eq!(end, 0);
     }
 }

@@ -46,11 +46,11 @@ This bug fix addresses inconsistent coloring of Logger package blocks and high C
 
 | # | Task | Status | Priority | Depends On | Effort | Modules |
 |---|------|--------|----------|------------|--------|---------|
-| 01 | [stateful-block-tracking](tasks/01-stateful-block-tracking.md) | Not Started | HIGH | - | 3-4h | `session.rs` |
-| 02 | [fix-false-positive-detection](tasks/02-fix-false-positive-detection.md) | Not Started | MEDIUM | - | 2-3h | `protocol.rs`, `helpers.rs` |
-| 03 | [ring-buffer-log-storage](tasks/03-ring-buffer-log-storage.md) | Not Started | LOW | 01 | 2-3h | `session.rs`, `config.rs` |
-| 04 | [coalesce-rapid-updates](tasks/04-coalesce-rapid-updates.md) | Not Started | LOW | 01 | 3-4h | `daemon.rs`, `session.rs` |
-| 05 | [virtualized-log-display](tasks/05-virtualized-log-display.md) | Not Started | LOW | 01, 03 | 4-5h | `ui/logs.rs`, `session.rs` |
+| 01 | [stateful-block-tracking](tasks/01-stateful-block-tracking.md) | ✅ Done | HIGH | - | 3-4h | `session.rs` |
+| 02 | [fix-false-positive-detection](tasks/02-fix-false-positive-detection.md) | ✅ Done | MEDIUM | - | 2-3h | `protocol.rs`, `helpers.rs`, `ansi.rs` |
+| 03 | [ring-buffer-log-storage](tasks/03-ring-buffer-log-storage.md) | ✅ Done | LOW | 01 | 2-3h | `session.rs`, `types.rs`, `log_view.rs`, `render.rs` |
+| 04 | [coalesce-rapid-updates](tasks/04-coalesce-rapid-updates.md) | ✅ Done | LOW | 01 | 3-4h | `daemon.rs`, `session.rs`, `runner.rs` |
+| 05 | [virtualized-log-display](tasks/05-virtualized-log-display.md) | ✅ Done | LOW | 01, 03 | 4-5h | `log_view.rs`, `session.rs` |
 
 ## Technical Note: The `error: true` Flag
 

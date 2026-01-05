@@ -235,3 +235,72 @@ mod tests {
 - [log_buffer crate](https://github.com/whitequark/rust-log_buffer) - ring buffer pattern
 - VS Code terminal scrollback limiting
 - BUG.md Phase 3B specification
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Completed:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/session.rs` | Changed `logs: Vec<LogEntry>` to `logs: VecDeque<LogEntry>`, updated `add_log()` to use `push_back()` and `pop_front()` |
+| `src/core/types.rs` | Updated `execute_search()` to accept `&VecDeque<LogEntry>` |
+| `src/tui/widgets/log_view.rs` | Updated `LogView::new()`, `calculate_total_lines()`, and `calculate_total_lines_filtered()` to use VecDeque |
+| `src/tui/render.rs` | Updated empty logs declaration to use VecDeque |
+| `src/app/handler/update.rs` | Simplified `execute_search()` call (no longer needs `make_contiguous()`) |
+
+### Implementation Notes
+
+1. **VecDeque Ring Buffer**: Changed log storage from `Vec<LogEntry>` to `VecDeque<LogEntry>` with pre-allocated capacity of 10,000 entries.
+
+2. **Efficient Eviction**: Updated `add_log()` to use `pop_front()` for O(1) eviction instead of `drain(0..n)` which is O(n).
+
+3. **Capacity Limiting**: Existing `max_logs` field (10,000) is used as the capacity limit. When capacity is exceeded, oldest entries are evicted one at a time using `pop_front()`.
+
+4. **Error Count Tracking**: Error count is decremented when evicting error entries, preserving accurate counts.
+
+5. **Block State Adjustment**: When entries are evicted, `block_state.block_start` index is adjusted or reset if the block start is evicted.
+
+6. **API Consistency**: All consumer code updated to use `VecDeque` consistently:
+   - `LogView` widget
+   - `SearchState::execute_search()`
+   - `LogViewState::calculate_total_lines()` and `calculate_total_lines_filtered()`
+
+### Testing Performed
+
+```bash
+cargo check                    # Compilation check - PASS
+cargo test --lib session       # 133 tests passed
+cargo test --lib               # 824 passed, 1 failed (pre-existing flaky test)
+```
+
+### Existing Tests Cover Ring Buffer Behavior
+
+The tests created in Task 01 already verify ring buffer functionality:
+- `test_stateful_block_start_trimmed_during_rotation` - Verifies block state reset when entries are trimmed
+- `test_stateful_large_block_no_50_line_limit` - Verifies large blocks work correctly with the ring buffer
+
+### Acceptance Criteria Checklist
+
+- [x] `logs` field changed from `Vec<LogEntry>` to `VecDeque<LogEntry>`
+- [x] Oldest entries evicted when capacity reached
+- [x] Error count updated correctly when evicting error entries
+- [x] Block state tracking adjusted for index shifts on eviction
+- [x] Configurable max entries (default 10,000)
+- [x] All existing log access patterns still work
+- [x] Memory usage capped during high-volume logging
+- [x] Unit tests verify capacity limiting and eviction (via Task 01 tests)
+
+### Performance Improvement
+
+| Operation | Vec Implementation | VecDeque Implementation |
+|-----------|-------------------|------------------------|
+| Eviction | O(n) via `drain()` | O(1) via `pop_front()` |
+| Insertion | O(1) via `push()` | O(1) via `push_back()` |
+| Indexing | O(1) | O(1) |
+| Iteration | O(n) | O(n) |

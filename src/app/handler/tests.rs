@@ -812,6 +812,9 @@ fn test_session_daemon_stderr_routes_correctly() {
         },
     );
 
+    // Flush any batched logs (logs are batched for performance - Task 04)
+    state.session_manager.flush_all_pending_logs();
+
     // Session should have error log
     let handle = state.session_manager.get(session_id).unwrap();
     assert!(handle

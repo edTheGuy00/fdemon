@@ -6,7 +6,7 @@ use super::events::{
     AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected,
     DaemonLogMessage, DeviceInfo,
 };
-use crate::core::{strip_ansi_codes, LogLevel, LogSource};
+use crate::core::{contains_word, strip_ansi_codes, LogLevel, LogSource};
 
 /// Strip the outer brackets from a daemon message
 ///
@@ -446,26 +446,47 @@ impl DaemonMessage {
         }
 
         // ─────────────────────────────────────────────────────────
-        // General keyword detection (existing logic)
+        // Dart exception type detection
+        // Handles CamelCase exception types like RangeError, TypeError, FormatException
+        // Pattern: "SomethingError (params):" or "SomethingError: message"
         // ─────────────────────────────────────────────────────────
 
-        // Error keywords (check after specific prefixes to avoid false positives)
-        if lower.contains("error")
-            || lower.contains("exception")
-            || lower.contains("failed")
-            || lower.contains("fatal")
-            || lower.contains("crash")
+        // Check for Dart exception patterns (TypeNameError or TypeNameException)
+        // These are CamelCase but indicate real errors
+        if lower.contains("error (") || lower.contains("exception (") {
+            return LogLevel::Error;
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Word boundary detection (prevents false positives)
+        // Uses word boundaries to avoid matching identifiers like
+        // "ErrorTestingPage", "handleError", "errorCount"
+        // ─────────────────────────────────────────────────────────
+
+        // Error keywords - must be at word boundaries
+        // Include common word variations (crashed, crashing, etc.)
+        if contains_word(message, "error")
+            || contains_word(message, "exception")
+            || contains_word(message, "failed")
+            || contains_word(message, "failure")
+            || contains_word(message, "fatal")
+            || contains_word(message, "crash")
+            || contains_word(message, "crashed")
+            || contains_word(message, "crashing")
         {
             return LogLevel::Error;
         }
 
-        // Warning keywords
-        if lower.contains("warning") || lower.contains("deprecated") || lower.contains("caution") {
+        // Warning keywords - must be at word boundaries
+        if contains_word(message, "warning")
+            || contains_word(message, "deprecated")
+            || contains_word(message, "caution")
+        {
             return LogLevel::Warning;
         }
 
         // Debug keywords
-        if lower.starts_with("debug") || lower.contains("verbose") {
+        if lower.starts_with("debug") || contains_word(message, "verbose") {
             return LogLevel::Debug;
         }
 

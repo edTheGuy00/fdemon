@@ -305,6 +305,32 @@ impl SessionManager {
             false
         }
     }
+
+    // ─────────────────────────────────────────────────────────
+    // Log Batching Support (Task 04)
+    // ─────────────────────────────────────────────────────────
+
+    /// Check if any session has pending batched logs that should be flushed
+    pub fn any_pending_log_flush(&self) -> bool {
+        self.sessions
+            .values()
+            .any(|h| h.session.should_flush_logs())
+    }
+
+    /// Flush pending batched logs for all sessions
+    ///
+    /// Flushes all pending logs regardless of whether thresholds are met.
+    /// This is called before rendering to ensure all logs are visible.
+    /// Returns total number of logs flushed across all sessions.
+    pub fn flush_all_pending_logs(&mut self) -> usize {
+        let mut total_flushed = 0;
+        for handle in self.sessions.values_mut() {
+            if handle.session.has_pending_logs() {
+                total_flushed += handle.session.flush_batched_logs();
+            }
+        }
+        total_flushed
+    }
 }
 
 #[cfg(test)]

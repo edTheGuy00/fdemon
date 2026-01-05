@@ -1,4 +1,7 @@
 //! Session lifecycle handlers for multi-session mode
+//!
+//! Uses log batching to coalesce rapid log arrivals during high-volume
+//! output (hot reload, verbose debugging, etc.).
 
 use crate::app::session::SessionId;
 use crate::app::state::AppState;
@@ -8,6 +11,8 @@ use crate::daemon::{protocol, DaemonMessage};
 use super::helpers::detect_raw_line_level;
 
 /// Handle stdout events for a specific session
+///
+/// Parses daemon JSON messages and queues log entries for batched processing.
 pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: &str) {
     // Try to parse as JSON daemon message
     if let Some(json) = protocol::strip_brackets(line) {
@@ -34,7 +39,10 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
                         LogEntry::new(entry_info.level, entry_info.source, entry_info.message)
                     };
 
-                    handle.session.add_log(log_entry);
+                    // Use batched logging for performance
+                    if handle.session.queue_log(log_entry) {
+                        handle.session.flush_batched_logs();
+                    }
                 }
             } else {
                 // Unknown event type, log at debug level
@@ -55,9 +63,11 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
         // Non-JSON output (build progress, etc.)
         let (level, message) = detect_raw_line_level(line);
         if let Some(handle) = state.session_manager.get_mut(session_id) {
-            handle
-                .session
-                .add_log(LogEntry::new(level, LogSource::Flutter, message));
+            let entry = LogEntry::new(level, LogSource::Flutter, message);
+            // Use batched logging for performance
+            if handle.session.queue_log(entry) {
+                handle.session.flush_batched_logs();
+            }
         }
     }
 }

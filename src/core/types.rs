@@ -1,5 +1,7 @@
 //! Core domain type definitions
 
+use std::collections::VecDeque;
+
 use chrono::{DateTime, Local};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -535,7 +537,7 @@ impl SearchState {
 
     /// Execute search against log entries and update matches
     /// Returns true if the match list changed
-    pub fn execute_search(&mut self, logs: &[LogEntry]) -> bool {
+    pub fn execute_search(&mut self, logs: &VecDeque<LogEntry>) -> bool {
         // Clear if no query
         if self.query.is_empty() {
             let changed = !self.matches.is_empty();
@@ -1411,11 +1413,11 @@ mod tests {
 
     #[test]
     fn test_execute_search_finds_matches() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "Hello world"),
             LogEntry::error(LogSource::App, "Error occurred"),
             LogEntry::info(LogSource::App, "Another hello"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("hello");
@@ -1428,10 +1430,10 @@ mod tests {
 
     #[test]
     fn test_execute_search_case_insensitive() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "ERROR in caps"),
             LogEntry::error(LogSource::App, "error lowercase"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("error");
@@ -1442,11 +1444,11 @@ mod tests {
 
     #[test]
     fn test_execute_search_regex() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "Took 150ms"),
             LogEntry::info(LogSource::App, "Took 2500ms"),
             LogEntry::info(LogSource::App, "No timing here"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query(r"\d+ms");
@@ -1457,7 +1459,7 @@ mod tests {
 
     #[test]
     fn test_execute_search_invalid_regex() {
-        let logs = vec![LogEntry::info(LogSource::App, "test")];
+        let logs = VecDeque::from(vec![LogEntry::info(LogSource::App, "test")]);
 
         let mut state = SearchState::default();
         state.set_query("[invalid");
@@ -1470,7 +1472,7 @@ mod tests {
 
     #[test]
     fn test_execute_search_empty_query_clears_matches() {
-        let logs = vec![LogEntry::info(LogSource::App, "test")];
+        let logs = VecDeque::from(vec![LogEntry::info(LogSource::App, "test")]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1489,10 +1491,10 @@ mod tests {
 
     #[test]
     fn test_execute_search_sets_current_match() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "first test"),
             LogEntry::info(LogSource::App, "second test"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1504,11 +1506,11 @@ mod tests {
 
     #[test]
     fn test_execute_search_preserves_current_match() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "test one"),
             LogEntry::info(LogSource::App, "test two"),
             LogEntry::info(LogSource::App, "test three"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1524,11 +1526,11 @@ mod tests {
 
     #[test]
     fn test_matches_for_entry() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "test one test"),
             LogEntry::info(LogSource::App, "no match"),
             LogEntry::info(LogSource::App, "test two"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1546,11 +1548,11 @@ mod tests {
 
     #[test]
     fn test_current_match_entry_index() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "first"),
             LogEntry::info(LogSource::App, "test"),
             LogEntry::info(LogSource::App, "last"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1570,10 +1572,10 @@ mod tests {
 
     #[test]
     fn test_is_current_match() {
-        let logs = vec![
+        let logs = VecDeque::from(vec![
             LogEntry::info(LogSource::App, "test one"),
             LogEntry::info(LogSource::App, "test two"),
-        ];
+        ]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1591,7 +1593,7 @@ mod tests {
 
     #[test]
     fn test_is_current_match_no_current() {
-        let logs = vec![LogEntry::info(LogSource::App, "test")];
+        let logs = VecDeque::from(vec![LogEntry::info(LogSource::App, "test")]);
 
         let mut state = SearchState::default();
         state.set_query("test");
@@ -1604,7 +1606,10 @@ mod tests {
 
     #[test]
     fn test_execute_search_multiple_matches_per_entry() {
-        let logs = vec![LogEntry::info(LogSource::App, "test abc test def test")];
+        let logs = VecDeque::from(vec![LogEntry::info(
+            LogSource::App,
+            "test abc test def test",
+        )]);
 
         let mut state = SearchState::default();
         state.set_query("test");

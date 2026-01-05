@@ -227,3 +227,70 @@ mod tests {
 - Current implementation: `src/app/session.rs` - `propagate_block_level()`
 - Block detection helpers: `src/app/handler/helpers.rs` - `is_block_start()`, `is_block_end()`
 - BUG.md Phase 1 specification
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Completed:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/session.rs` | Added `LogBlockState` struct with `block_start` and `block_max_level` fields |
+| `src/app/session.rs` | Added `block_state: LogBlockState` field to `Session` struct |
+| `src/app/session.rs` | Rewrote `add_log()` for incremental block tracking (O(1) per line) |
+| `src/app/session.rs` | Removed old `propagate_block_level()` backward-scanning method |
+| `src/app/session.rs` | Added handling for `block_start` index adjustment during log trimming |
+| `src/app/session.rs` | Added 5 new unit tests for stateful block tracking |
+
+### Implementation Notes
+
+1. **LogBlockState Struct**: Tracks current block's start index and maximum severity level seen so far
+2. **Incremental Tracking**: Block state is updated O(1) per log entry as lines arrive
+3. **Block End Propagation**: When `└` is detected and `block_start` is set, all lines from start to end are promoted to the maximum severity level (O(B) where B is block size)
+4. **Log Trimming Handling**: When logs are trimmed during rotation:
+   - If `block_start` index is being trimmed, reset block state entirely (no partial propagation)
+   - Otherwise, adjust `block_start` index to reflect new positions
+5. **No 50-Line Limit**: Unlike the old backward-scanning implementation, stateful tracking handles blocks of any size
+
+### Testing Performed
+
+```bash
+cargo check                    # Compilation check - PASS
+cargo test --lib session       # 133 tests passed
+cargo clippy                   # No warnings related to changes
+```
+
+### New Tests Added
+
+| Test | Coverage |
+|------|----------|
+| `test_stateful_empty_block_handled` | Empty blocks (┌ immediately followed by └) |
+| `test_stateful_back_to_back_blocks` | Multiple consecutive blocks with independent propagation |
+| `test_stateful_block_start_trimmed_during_rotation` | Block start index trimmed during log rotation |
+| `test_stateful_large_block_no_50_line_limit` | Large blocks (>100 lines) work correctly |
+| `test_stateful_block_state_reset_after_complete` | Block state resets properly after block completion |
+
+### Performance Improvement
+
+| Metric | Old Implementation | New Implementation |
+|--------|-------------------|-------------------|
+| Per-line cost | O(1) normal, O(M) on block end (M=50 max) | O(1) always |
+| Block end cost | O(N*M) worst case (backward scan) | O(B) where B is block size |
+| Large block handling | Limited to 50 lines | No limit |
+
+### Acceptance Criteria Checklist
+
+- [x] `LogBlockState` struct added to track block boundaries
+- [x] `add_log()` tracks block state incrementally (no backward scanning)
+- [x] Block level propagation applies highest severity to all lines in block
+- [x] Error count updated correctly when levels change
+- [x] Old `propagate_block_level()` backward-scanning code removed
+- [x] Incomplete blocks (no end) don't cause issues
+- [x] Back-to-back blocks handled correctly
+- [x] Unit tests for stateful block tracking
+- [x] Performance improvement verified (no O(N*M) scanning)
