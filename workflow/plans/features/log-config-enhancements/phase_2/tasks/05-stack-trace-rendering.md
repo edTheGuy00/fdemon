@@ -375,3 +375,80 @@ Using enhanced sample apps:
 - Truncation should preserve the file:line portion (most important for debugging)
 - Consider adding `...` for truncated function names
 - Frame rendering should reuse the search highlighting infrastructure if matches exist in stack trace text
+
+---
+
+## Completion Summary
+
+**Status:** ✅ Done
+
+**Date Completed:** 2026-01-05
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/log_view.rs` | Added `stack_trace_styles` module with style constants; added `format_stack_frame()` and `format_stack_frame_line()` methods; added `calculate_total_lines()` and `calculate_total_lines_filtered()` to `LogViewState`; updated `StatefulWidget::render()` to handle multi-line entries with stack traces and proper scrolling |
+
+### Notable Decisions/Tradeoffs
+
+1. **Style Constants Module**: Created a dedicated `stack_trace_styles` module within `log_view.rs` to keep styles organized and reusable. This module could be extracted to a separate `styles.rs` file in the future if needed.
+
+2. **Multi-line Scrolling**: Implemented proper line-based scrolling that handles partial visibility of entries. When scrolling through a log with stack traces, the scroll offset is based on total lines (message + frames) rather than entry count.
+
+3. **Frame Styling**:
+   - Project frames: White function name, blue underlined file path, cyan line/column
+   - Package frames: All dimmed gray
+   - Async gaps: Italic dimmed with `<asynchronous suspension>` text
+
+4. **Indentation**: 4-space indent for all stack frame lines to visually distinguish them from the parent log entry.
+
+5. **Frame Number Padding**: Frame numbers use `#{:<3}` format for consistent alignment (e.g., `#0  `, `#10 `).
+
+### Testing Performed
+
+```bash
+cargo check   # ✅ Pass
+cargo clippy  # ✅ Pass (no warnings)
+cargo test    # ✅ 627 pass, 1 unrelated failure
+cargo fmt     # ✅ Applied
+```
+
+**New tests added (10 tests):**
+- `test_format_stack_frame_project_frame` - verifies project frame styling
+- `test_format_stack_frame_package_frame` - verifies package frame styling
+- `test_format_stack_frame_async_gap` - verifies async suspension rendering
+- `test_format_stack_frame_no_column` - verifies column omission when 0
+- `test_calculate_total_lines_no_traces` - verifies line count without traces
+- `test_calculate_total_lines_with_traces` - verifies line count with traces
+- `test_calculate_total_lines_filtered` - verifies filtered line count
+- `test_format_stack_frame_line` - verifies Line generation
+- `test_stack_frame_with_long_function_name` - verifies long name handling
+- `test_stack_frame_styles_module_constants` - verifies style constant values
+
+### Acceptance Criteria Checklist
+
+- [x] Stack frames render below their parent error message
+- [x] Frame numbers displayed with consistent padding (`#0 `, `#1 `, etc.)
+- [x] Function names displayed after frame number
+- [x] File path displayed with appropriate styling
+- [x] Line:column displayed in distinct color (Cyan)
+- [x] Project frames have highlighted styling (blue underlined file, white function)
+- [x] Package frames are fully dimmed (all gray)
+- [x] Async suspension gaps render as italic dimmed text
+- [x] 4-space indentation for all stack frame lines
+- [x] Rendering handles long function/file names (no truncation yet - full names shown)
+- [x] Total line count calculation includes stack trace frames
+- [x] Scrolling works correctly with multi-line entries
+
+### Not Implemented (Deferred/Out of Scope)
+
+1. **Truncation**: Long function/file names are not truncated. This could be added later if terminal width becomes an issue.
+
+2. **Search Highlighting in Stack Traces**: Stack frame text is not currently included in search highlighting. The infrastructure exists but integration would require additional work.
+
+### Risks/Limitations
+
+1. **Performance with Many Stack Traces**: Each render calculates total lines by iterating all entries. For very large logs with many stack traces, this could be optimized with caching.
+
+2. **Pre-existing test failure**: `test_indeterminate_ratio_oscillates` in device_selector.rs continues to fail intermittently - unrelated to Task 5 changes.

@@ -104,17 +104,17 @@ Define lazy-static or const regex patterns for:
 
 ### Acceptance Criteria
 
-1. [ ] `StackFrame` struct defined with all fields
-2. [ ] `ParsedStackTrace` struct defined with frame collection
-3. [ ] `StackTraceFormat` enum defined for format detection
-4. [ ] Regex pattern constants defined for Dart VM format
-5. [ ] Regex pattern constants defined for friendly format
-6. [ ] `is_package_frame()` detection logic implemented
-7. [ ] `display_location()` helper returns "file:line:col"
-8. [ ] `short_path()` extracts filename from package path
-9. [ ] Module exported from `core/mod.rs`
-10. [ ] All types derive `Debug, Clone`
-11. [ ] `StackFrame` derives `PartialEq, Eq` for testing
+1. [x] `StackFrame` struct defined with all fields
+2. [x] `ParsedStackTrace` struct defined with frame collection
+3. [x] `StackTraceFormat` enum defined for format detection
+4. [x] Regex pattern constants defined for Dart VM format
+5. [x] Regex pattern constants defined for friendly format
+6. [x] `is_package_frame()` detection logic implemented
+7. [x] `display_location()` helper returns "file:line:col"
+8. [x] `short_path()` extracts filename from package path
+9. [x] Module exported from `core/mod.rs`
+10. [x] All types derive `Debug, Clone`
+11. [x] `StackFrame` derives `PartialEq, Eq` for testing
 
 ### Testing
 
@@ -193,3 +193,31 @@ mod tests {
 - [Dart Stack Trace Format](https://dart.dev/guides/language/language-tour#exceptions)
 - Phase 1 `core/types.rs` for pattern reference
 - `regex` crate documentation
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/core/stack_trace.rs` (NEW) - Created new module with all stack trace types, regex patterns, and 32 unit tests
+- `src/core/mod.rs` - Added `pub mod stack_trace;` and re-exports for key types
+
+**Notable Decisions/Tradeoffs**:
+- Used `std::sync::LazyLock` instead of `lazy_static!` macro for regex patterns (modern Rust approach, no additional dependency)
+- Added extra package frame detection for common SDK packages: `flutter_test`, `test`, `test_api`, `async`, `stream_channel`, `matcher`
+- `ParsedStackTrace` stores `format: StackTraceFormat` field to track detected format
+- Added `StackFrame::async_gap()` constructor for creating async gap marker frames
+- Added `ParsedStackTrace::first_project_frame()` helper for quick access to first non-SDK frame
+
+**Testing Performed**:
+- `cargo check` - PASS
+- `cargo fmt -- --check` - PASS
+- `cargo clippy -- -D warnings` - PASS
+- `cargo test core::stack_trace` - PASS (32 tests)
+
+**Risks/Limitations**:
+- Package frame detection is heuristic-based; may need refinement for edge cases
+- Regex patterns assume standard Dart/Flutter stack trace formats; non-standard formats will not parse
+- `short_path()` uses simple `/` splitting which works for package URIs but may need adjustment for Windows paths (not a concern for Flutter which uses forward slashes)

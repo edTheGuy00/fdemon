@@ -188,16 +188,16 @@ static PACKAGE_PATTERNS: &[&str] = &[
 
 ### Acceptance Criteria
 
-1. [ ] `ParsedStackTrace::parse()` correctly parses Dart VM format
-2. [ ] `ParsedStackTrace::parse()` correctly parses friendly format
-3. [ ] `detect_format()` correctly identifies trace formats
-4. [ ] Async suspension gaps parsed as special frames
-5. [ ] Missing column numbers handled (default to 0)
-6. [ ] Package frames correctly identified (`dart:`, `package:flutter/`)
-7. [ ] Project frames correctly identified (app package name)
-8. [ ] Empty/whitespace lines skipped
-9. [ ] Regex patterns compile without panic (tested)
-10. [ ] Performance acceptable for traces up to 100 frames
+1. [x] `ParsedStackTrace::parse()` correctly parses Dart VM format
+2. [x] `ParsedStackTrace::parse()` correctly parses friendly format
+3. [x] `detect_format()` correctly identifies trace formats
+4. [x] Async suspension gaps parsed as special frames
+5. [x] Missing column numbers handled (default to 0)
+6. [x] Package frames correctly identified (`dart:`, `package:flutter/`)
+7. [x] Project frames correctly identified (app package name)
+8. [x] Empty/whitespace lines skipped
+9. [x] Regex patterns compile without panic (tested)
+10. [x] Performance acceptable for traces up to 100 frames
 
 ### Testing
 
@@ -327,3 +327,37 @@ mod tests {
 - Task 01 types (StackFrame, ParsedStackTrace)
 - Rust `regex` crate documentation
 - Dart stack trace format examples from PLAN.md
+
+---
+
+## Completion Summary
+
+**Status**: ✅ Done
+
+**Files Modified**:
+- `src/core/stack_trace.rs` - Added parsing logic:
+  - `DART_VM_FRAME_NO_COL_REGEX` - regex for frames without column numbers
+  - `detect_format()` - detects stack trace format from content
+  - `parse_dart_vm_line()` - parses single Dart VM format line
+  - `parse_friendly_line()` - parses single friendly format line
+  - `ParsedStackTrace::parse()` - main entry point for parsing
+  - 24 new unit tests for parsing logic
+- `src/core/mod.rs` - Added exports for `detect_format` and `DART_VM_FRAME_NO_COL_REGEX`
+
+**Notable Decisions/Tradeoffs**:
+- Parser tries both with-column and without-column regex patterns (with-column first for efficiency)
+- Async gaps are assigned sequential frame numbers even though they don't have them in the original trace
+- Format detection skips leading empty lines and async gaps to find the first meaningful frame
+- Parser falls back to alternative format if primary format fails (handles mixed traces)
+- `is_complete` is set to true only if at least one frame was parsed
+
+**Testing Performed**:
+- `cargo check` - PASS
+- `cargo fmt` - PASS
+- `cargo clippy -- -D warnings` - PASS
+- `cargo test core::stack_trace` - PASS (56 tests total: 32 from Task 1 + 24 new)
+
+**Risks/Limitations**:
+- Friendly format parsing requires the file path to not contain whitespace before line:col
+- Mixed format traces (some lines Dart VM, some friendly) may not parse perfectly in all cases
+- Frame number continuity with async gaps: async gaps get synthetic frame numbers that may not match the original trace

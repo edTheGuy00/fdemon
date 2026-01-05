@@ -243,7 +243,23 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         (KeyCode::Char('E'), m) if m.contains(KeyModifiers::SHIFT) => Some(Message::PrevError),
 
         // ─────────────────────────────────────────────────────────
-        // Scrolling - always allowed
+        // Stack Trace Collapse (Phase 2 - Task 6)
+        // ─────────────────────────────────────────────────────────
+        // Enter - Toggle stack trace expand/collapse on focused entry
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            // Check if current focused entry has a stack trace
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(entry) = handle.session.focused_entry() {
+                    if entry.has_stack_trace() {
+                        return Some(Message::ToggleStackTrace);
+                    }
+                }
+            }
+            None
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Vertical Scrolling - always allowed
         // ─────────────────────────────────────────────────────────
         (KeyCode::Char('j'), KeyModifiers::NONE) => Some(Message::ScrollDown),
         (KeyCode::Down, _) => Some(Message::ScrollDown),
@@ -256,6 +272,19 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         (KeyCode::PageDown, _) => Some(Message::PageDown),
         (KeyCode::Home, _) => Some(Message::ScrollToTop),
         (KeyCode::End, _) => Some(Message::ScrollToBottom),
+
+        // ─────────────────────────────────────────────────────────
+        // Horizontal Scrolling (Phase 2 Task 12)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('h'), KeyModifiers::NONE) => Some(Message::ScrollLeft(10)),
+        (KeyCode::Left, KeyModifiers::NONE) => Some(Message::ScrollLeft(10)),
+        (KeyCode::Char('l'), KeyModifiers::NONE) => Some(Message::ScrollRight(10)),
+        (KeyCode::Right, KeyModifiers::NONE) => Some(Message::ScrollRight(10)),
+        (KeyCode::Char('0'), KeyModifiers::NONE) => Some(Message::ScrollToLineStart),
+        (KeyCode::Char('$'), KeyModifiers::NONE) => Some(Message::ScrollToLineEnd),
+        (KeyCode::Char('$'), m) if m.contains(KeyModifiers::SHIFT) => {
+            Some(Message::ScrollToLineEnd)
+        }
 
         _ => None,
     }

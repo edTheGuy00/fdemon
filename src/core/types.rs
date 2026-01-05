@@ -1,6 +1,10 @@
 //! Core domain type definitions
 
 use chrono::{DateTime, Local};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::core::ansi::strip_ansi_codes;
+use crate::core::stack_trace::ParsedStackTrace;
 
 /// Application state enumeration
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -18,6 +22,9 @@ pub enum AppPhase {
     Quitting,
 }
 
+/// Counter for generating unique log entry IDs
+static LOG_ENTRY_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 /// Represents a log entry with timestamp
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -25,17 +32,39 @@ pub struct LogEntry {
     pub level: LogLevel,
     pub source: LogSource,
     pub message: String,
+    /// Parsed stack trace, if this is an error with a trace
+    pub stack_trace: Option<ParsedStackTrace>,
+    /// Unique ID for this entry (for collapse state tracking)
+    pub id: u64,
 }
 
 impl LogEntry {
     /// Create a new log entry with current timestamp
+    ///
+    /// ANSI escape codes are automatically stripped from the message.
     pub fn new(level: LogLevel, source: LogSource, message: impl Into<String>) -> Self {
+        // Strip ANSI escape codes from log messages (from Logger package, etc.)
+        let cleaned_message = strip_ansi_codes(&message.into());
         Self {
             timestamp: Local::now(),
             level,
             source,
-            message: message.into(),
+            message: cleaned_message,
+            stack_trace: None,
+            id: LOG_ENTRY_COUNTER.fetch_add(1, Ordering::Relaxed),
         }
+    }
+
+    /// Create a new log entry with a stack trace
+    pub fn with_stack_trace(
+        level: LogLevel,
+        source: LogSource,
+        message: impl Into<String>,
+        trace: ParsedStackTrace,
+    ) -> Self {
+        let mut entry = Self::new(level, source, message);
+        entry.stack_trace = Some(trace);
+        entry
     }
 
     /// Create an info log entry
@@ -51,6 +80,19 @@ impl LogEntry {
     /// Create a warning log entry
     pub fn warn(source: LogSource, message: impl Into<String>) -> Self {
         Self::new(LogLevel::Warning, source, message)
+    }
+
+    /// Check if this entry has a stack trace
+    pub fn has_stack_trace(&self) -> bool {
+        self.stack_trace.is_some()
+    }
+
+    /// Get stack trace frame count
+    pub fn stack_trace_frame_count(&self) -> usize {
+        self.stack_trace
+            .as_ref()
+            .map(|t| t.frames.len())
+            .unwrap_or(0)
     }
 
     /// Format timestamp for display
@@ -97,6 +139,32 @@ impl LogLevel {
             LogLevel::Info => "INF",
             LogLevel::Warning => "WRN",
             LogLevel::Error => "ERR",
+        }
+    }
+
+    /// Get numeric severity value for comparison
+    /// Higher values indicate more severe levels
+    pub fn severity(&self) -> u8 {
+        match self {
+            LogLevel::Debug => 0,
+            LogLevel::Info => 1,
+            LogLevel::Warning => 2,
+            LogLevel::Error => 3,
+        }
+    }
+
+    /// Compare severity levels
+    /// Returns true if this level is more severe than other
+    pub fn is_more_severe_than(&self, other: &LogLevel) -> bool {
+        self.severity() > other.severity()
+    }
+
+    /// Get the more severe of two log levels
+    pub fn max_severity(self, other: LogLevel) -> LogLevel {
+        if self.severity() >= other.severity() {
+            self
+        } else {
+            other
         }
     }
 }
@@ -623,6 +691,123 @@ mod tests {
         assert!(!watcher.is_flutter());
     }
 
+    // ─────────────────────────────────────────────────────────
+    // Stack trace integration tests (Phase 2 Task 4)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_log_entry_with_stack_trace() {
+        let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
+        let entry = LogEntry::with_stack_trace(
+            LogLevel::Error,
+            LogSource::App,
+            "Something went wrong",
+            trace,
+        );
+
+        assert!(entry.has_stack_trace());
+        assert_eq!(entry.stack_trace_frame_count(), 1);
+        assert_eq!(entry.level, LogLevel::Error);
+        assert_eq!(entry.message, "Something went wrong");
+    }
+
+    #[test]
+    fn test_log_entry_without_stack_trace() {
+        let entry = LogEntry::new(LogLevel::Info, LogSource::App, "Hello");
+
+        assert!(!entry.has_stack_trace());
+        assert_eq!(entry.stack_trace_frame_count(), 0);
+    }
+
+    #[test]
+    fn test_log_entry_id_uniqueness() {
+        let entry1 = LogEntry::new(LogLevel::Info, LogSource::App, "First");
+        let entry2 = LogEntry::new(LogLevel::Info, LogSource::App, "Second");
+        let entry3 = LogEntry::new(LogLevel::Info, LogSource::App, "Third");
+
+        assert_ne!(entry1.id, entry2.id);
+        assert_ne!(entry2.id, entry3.id);
+        assert_ne!(entry1.id, entry3.id);
+    }
+
+    #[test]
+    fn test_backward_compatibility_convenience_constructors() {
+        // These should all compile and work without stack traces
+        let info = LogEntry::info(LogSource::App, "Info message");
+        assert!(!info.has_stack_trace());
+        assert_eq!(info.level, LogLevel::Info);
+
+        let error = LogEntry::error(LogSource::App, "Error message");
+        assert!(!error.has_stack_trace());
+        assert_eq!(error.level, LogLevel::Error);
+
+        let warn = LogEntry::warn(LogSource::App, "Warning message");
+        assert!(!warn.has_stack_trace());
+        assert_eq!(warn.level, LogLevel::Warning);
+    }
+
+    #[test]
+    fn test_stack_trace_frame_count_multiple_frames() {
+        let trace_str = r#"
+#0      main (package:app/main.dart:15:3)
+#1      runApp (package:flutter/src/widgets/binding.dart:100:5)
+#2      _startIsolate (dart:isolate-patch/isolate_patch.dart:307:19)
+"#;
+        let trace = ParsedStackTrace::parse(trace_str);
+        let entry = LogEntry::with_stack_trace(
+            LogLevel::Error,
+            LogSource::FlutterError,
+            "Crash occurred",
+            trace,
+        );
+
+        assert_eq!(entry.stack_trace_frame_count(), 3);
+    }
+
+    #[test]
+    fn test_log_entry_with_empty_stack_trace() {
+        let trace = ParsedStackTrace::parse(""); // No parseable frames
+        let entry = LogEntry::with_stack_trace(
+            LogLevel::Error,
+            LogSource::App,
+            "Error with empty trace",
+            trace,
+        );
+
+        // has_stack_trace returns true because stack_trace is Some
+        assert!(entry.has_stack_trace());
+        // But frame count is 0
+        assert_eq!(entry.stack_trace_frame_count(), 0);
+    }
+
+    #[test]
+    fn test_log_entry_strips_ansi_codes() {
+        // LogEntry::new should automatically strip ANSI escape codes
+        let entry = LogEntry::new(
+            LogLevel::Info,
+            LogSource::Flutter,
+            "\x1b[38;5;196m│ Null check operator used\x1b[0m",
+        );
+        assert_eq!(entry.message, "│ Null check operator used");
+        assert!(!entry.message.contains("\x1b"));
+
+        // Test via convenience constructors
+        let error_entry = LogEntry::error(
+            LogSource::App,
+            "\x1b[1m\x1b[31mError: Something failed\x1b[0m",
+        );
+        assert_eq!(error_entry.message, "Error: Something failed");
+
+        // Test that box-drawing and emojis are preserved
+        let logger_entry = LogEntry::info(
+            LogSource::Flutter,
+            "\x1b[38;5;244m┌──────────\x1b[0m\n\x1b[38;5;244m│ 🐛 Debug\x1b[0m",
+        );
+        assert!(logger_entry.message.contains("┌──────────"));
+        assert!(logger_entry.message.contains("🐛"));
+        assert!(!logger_entry.message.contains("\x1b"));
+    }
+
     // LogLevelFilter tests
 
     #[test]
@@ -698,6 +883,53 @@ mod tests {
     fn test_level_filter_default() {
         let filter = LogLevelFilter::default();
         assert_eq!(filter, LogLevelFilter::All);
+    }
+
+    // LogLevel severity tests (Phase 2 Task 11)
+
+    #[test]
+    fn test_log_level_severity() {
+        assert_eq!(LogLevel::Debug.severity(), 0);
+        assert_eq!(LogLevel::Info.severity(), 1);
+        assert_eq!(LogLevel::Warning.severity(), 2);
+        assert_eq!(LogLevel::Error.severity(), 3);
+    }
+
+    #[test]
+    fn test_log_level_is_more_severe_than() {
+        assert!(LogLevel::Error.is_more_severe_than(&LogLevel::Warning));
+        assert!(LogLevel::Error.is_more_severe_than(&LogLevel::Info));
+        assert!(LogLevel::Error.is_more_severe_than(&LogLevel::Debug));
+
+        assert!(LogLevel::Warning.is_more_severe_than(&LogLevel::Info));
+        assert!(LogLevel::Warning.is_more_severe_than(&LogLevel::Debug));
+        assert!(!LogLevel::Warning.is_more_severe_than(&LogLevel::Error));
+
+        assert!(LogLevel::Info.is_more_severe_than(&LogLevel::Debug));
+        assert!(!LogLevel::Info.is_more_severe_than(&LogLevel::Warning));
+        assert!(!LogLevel::Info.is_more_severe_than(&LogLevel::Error));
+
+        assert!(!LogLevel::Debug.is_more_severe_than(&LogLevel::Debug));
+        assert!(!LogLevel::Debug.is_more_severe_than(&LogLevel::Info));
+    }
+
+    #[test]
+    fn test_log_level_max_severity() {
+        assert_eq!(
+            LogLevel::Error.max_severity(LogLevel::Warning),
+            LogLevel::Error
+        );
+        assert_eq!(
+            LogLevel::Warning.max_severity(LogLevel::Error),
+            LogLevel::Error
+        );
+        assert_eq!(LogLevel::Info.max_severity(LogLevel::Debug), LogLevel::Info);
+        assert_eq!(LogLevel::Debug.max_severity(LogLevel::Info), LogLevel::Info);
+        assert_eq!(
+            LogLevel::Error.max_severity(LogLevel::Error),
+            LogLevel::Error
+        );
+        assert_eq!(LogLevel::Info.max_severity(LogLevel::Info), LogLevel::Info);
     }
 
     // LogSourceFilter tests

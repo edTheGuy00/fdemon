@@ -202,4 +202,22 @@ pub enum Message {
     NextError,
     /// Jump to previous error in log
     PrevError,
+
+    // ─────────────────────────────────────────────────────────
+    // Stack Trace Collapse Messages (Phase 2 Task 6)
+    // ─────────────────────────────────────────────────────────
+    /// Toggle stack trace expand/collapse for entry at current position
+    ToggleStackTrace,
+
+    // ─────────────────────────────────────────────────────────
+    // Horizontal Scroll Messages (Phase 2 Task 12)
+    // ─────────────────────────────────────────────────────────
+    /// Scroll log view left by n columns
+    ScrollLeft(usize),
+    /// Scroll log view right by n columns
+    ScrollRight(usize),
+    /// Scroll to start of line (column 0)
+    ScrollToLineStart,
+    /// Scroll to end of line
+    ScrollToLineEnd,
 }

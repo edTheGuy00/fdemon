@@ -136,6 +136,33 @@ impl<'a> StatusBar<'a> {
         }
     }
 
+    /// Get error count span (from selected session)
+    fn error_count(&self) -> Span<'static> {
+        let error_count = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.error_count())
+            .unwrap_or(0);
+
+        if error_count == 0 {
+            // No errors - dim green indicator
+            Span::styled("✓ No errors", Style::default().fg(Color::DarkGray))
+        } else {
+            // Has errors - red, bold, attention-grabbing
+            let text = if error_count == 1 {
+                "✗ 1 error".to_string()
+            } else {
+                format!("✗ {} errors", error_count)
+            };
+
+            Span::styled(
+                text,
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )
+        }
+    }
+
     /// Get log position string (from selected session)
     fn log_position(&self) -> String {
         if let Some(handle) = self.state.session_manager.selected() {
@@ -178,6 +205,12 @@ impl<'a> StatusBar<'a> {
         if let Some(reload) = self.last_reload() {
             segments.push(separator.clone());
             segments.push(reload);
+        }
+
+        // Error count (always show if session exists)
+        if self.state.session_manager.selected().is_some() {
+            segments.push(separator.clone());
+            segments.push(self.error_count());
         }
 
         // Scroll status and log position
@@ -264,7 +297,15 @@ impl Widget for StatusBarCompact<'_> {
             .and_then(|h| h.session.duration_display())
             .unwrap_or_default();
 
-        let line = Line::from(vec![
+        // Get error count for compact display
+        let error_count = self
+            .state
+            .session_manager
+            .selected()
+            .map(|h| h.session.error_count())
+            .unwrap_or(0);
+
+        let mut spans = vec![
             Span::raw(" "),
             Span::styled(
                 state_char,
@@ -272,8 +313,18 @@ impl Widget for StatusBarCompact<'_> {
             ),
             Span::raw(" "),
             Span::styled(timer, Style::default().fg(Color::Gray)),
-        ]);
+        ];
 
+        // Add compact error indicator if there are errors
+        if error_count > 0 {
+            spans.push(Span::styled(" │ ", Style::default().fg(Color::DarkGray)));
+            spans.push(Span::styled(
+                format!("✗{}", error_count),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ));
+        }
+
+        let line = Line::from(spans);
         Paragraph::new(line).render(inner, buf);
     }
 }
@@ -628,5 +679,185 @@ mod tests {
 
         assert!(indicator.content.to_string().contains("Manual"));
         assert!(indicator.style.fg == Some(Color::Yellow));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Error Count Tests (Phase 2 Task 7)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_error_count_zero() {
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        let bar = StatusBar::new(&state);
+        let span = bar.error_count();
+
+        assert!(span.content.to_string().contains("No errors"));
+        assert_eq!(span.style.fg, Some(Color::DarkGray));
+    }
+
+    #[test]
+    fn test_error_count_singular() {
+        use crate::core::{LogEntry, LogSource};
+
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Add one error
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "test error"));
+        }
+
+        let bar = StatusBar::new(&state);
+        let span = bar.error_count();
+
+        assert!(span.content.to_string().contains("1 error"));
+        assert!(!span.content.to_string().contains("errors")); // singular
+        assert_eq!(span.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_error_count_plural() {
+        use crate::core::{LogEntry, LogSource};
+
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Add multiple errors
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 1"));
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 2"));
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 3"));
+        }
+
+        let bar = StatusBar::new(&state);
+        let span = bar.error_count();
+
+        assert!(span.content.to_string().contains("3 errors")); // plural
+        assert_eq!(span.style.fg, Some(Color::Red));
+    }
+
+    #[test]
+    fn test_error_count_no_session() {
+        let state = create_test_state();
+        // No session selected
+
+        let bar = StatusBar::new(&state);
+        let span = bar.error_count();
+
+        // Should show "No errors" when no session
+        assert!(span.content.to_string().contains("No errors"));
+    }
+
+    #[test]
+    fn test_error_count_in_segments() {
+        use crate::core::{LogEntry, LogSource};
+
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Add some errors
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 1"));
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 2"));
+        }
+
+        let bar = StatusBar::new(&state);
+        let segments = bar.build_segments();
+
+        // Collect all content
+        let content: String = segments.iter().map(|s| s.content.to_string()).collect();
+
+        // Error count should appear in the segments
+        assert!(content.contains("2 errors"));
+    }
+
+    #[test]
+    fn test_compact_status_bar_with_errors() {
+        use crate::core::{LogEntry, LogSource};
+
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Add errors
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 1"));
+            handle
+                .session
+                .add_log(LogEntry::error(LogSource::App, "error 2"));
+            handle.session.phase = AppPhase::Running;
+        }
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let bar = StatusBarCompact::new(&state);
+                frame.render_widget(bar, area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        // Compact bar should show error count when there are errors
+        assert!(content.contains("✗2"));
+    }
+
+    #[test]
+    fn test_compact_status_bar_no_errors() {
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        let mut state = create_test_state();
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // No errors - just set phase
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.phase = AppPhase::Running;
+        }
+
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let bar = StatusBarCompact::new(&state);
+                frame.render_widget(bar, area);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+        // Compact bar should NOT show error indicator when 0 errors
+        assert!(!content.contains('✗'));
     }
 }

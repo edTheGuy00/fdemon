@@ -87,6 +87,37 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // ─────────────────────────────────────────────────────────
+        // Horizontal Scroll Messages (Phase 2 Task 12)
+        // ─────────────────────────────────────────────────────────
+        Message::ScrollLeft(n) => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_left(n);
+            }
+            UpdateResult::none()
+        }
+
+        Message::ScrollRight(n) => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_right(n);
+            }
+            UpdateResult::none()
+        }
+
+        Message::ScrollToLineStart => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_to_line_start();
+            }
+            UpdateResult::none()
+        }
+
+        Message::ScrollToLineEnd => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.scroll_to_line_end();
+            }
+            UpdateResult::none()
+        }
+
         Message::Tick => {
             // Advance device selector animation when visible and loading or refreshing
             if state.device_selector.visible
@@ -744,6 +775,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 if let Some(error_idx) = handle.session.find_prev_error() {
                     scroll_to_log_entry(&mut handle.session, error_idx);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Stack Trace Collapse Messages (Phase 2 Task 6)
+        // ─────────────────────────────────────────────────────────
+        Message::ToggleStackTrace => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                if let Some(entry_id) = handle.session.focused_entry_id() {
+                    let default_collapsed = state.settings.ui.stack_trace_collapsed;
+                    handle
+                        .session
+                        .toggle_stack_trace(entry_id, default_collapsed);
                 }
             }
             UpdateResult::none()

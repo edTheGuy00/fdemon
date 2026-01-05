@@ -6,7 +6,7 @@ use super::events::{
     AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected,
     DaemonLogMessage, DeviceInfo,
 };
-use crate::core::{LogLevel, LogSource};
+use crate::core::{strip_ansi_codes, LogLevel, LogSource};
 
 /// Strip the outer brackets from a daemon message
 ///
@@ -339,7 +339,9 @@ impl DaemonMessage {
 
     /// Parse a flutter log message to extract level and clean message
     pub fn parse_flutter_log(raw: &str, is_error: bool) -> (LogLevel, String) {
-        let message = raw.trim();
+        // Strip ANSI escape codes first (from Logger package, etc.)
+        let cleaned = strip_ansi_codes(raw);
+        let message = cleaned.trim();
 
         // Check for error indicators
         if is_error {
@@ -368,26 +370,102 @@ impl DaemonMessage {
     }
 
     /// Detect log level from message content
+    ///
+    /// Supports standard patterns plus Logger/Talker package formats:
+    /// - Logger: emoji indicators (🔥⛔⚠️💡🐛) and prefixes (Trace:, Debug:, etc.)
+    /// - Talker: bracketed prefixes ([verbose], [debug], [info], etc.)
     pub fn detect_log_level(message: &str) -> LogLevel {
-        let lower = message.to_lowercase();
+        // ─────────────────────────────────────────────────────────
+        // Emoji-based detection (Logger package uses these)
+        // Check emojis first - they're unambiguous indicators
+        // ─────────────────────────────────────────────────────────
+
+        // Fatal/Critical indicators (check first - highest priority)
+        if message.contains('🔥') || message.contains('💀') {
+            return LogLevel::Error;
+        }
 
         // Error indicators
-        if lower.contains("error")
-            || lower.contains("exception")
-            || lower.contains("failed")
-            || lower.contains("fatal")
-        {
+        if message.contains('⛔') || message.contains('❌') || message.contains('🚫') {
             return LogLevel::Error;
         }
 
         // Warning indicators
-        if lower.contains("warning") || lower.contains("warn") || lower.contains("deprecated") {
+        if message.contains('⚠') || message.contains('⚡') {
             return LogLevel::Warning;
         }
 
+        // Info indicators
+        if message.contains('💡') || message.contains('ℹ') {
+            return LogLevel::Info;
+        }
+
         // Debug indicators
-        if lower.starts_with("debug:") || lower.starts_with("[debug]") || lower.contains("verbose")
+        if message.contains('🐛') || message.contains('🔍') {
+            return LogLevel::Debug;
+        }
+
+        let lower = message.to_lowercase();
+
+        // ─────────────────────────────────────────────────────────
+        // Prefix-based detection (Logger/Talker package formats)
+        // ─────────────────────────────────────────────────────────
+
+        // Logger package prefixes (with colon)
+        if lower.contains("fatal:") || lower.contains("critical:") {
+            return LogLevel::Error;
+        }
+        if lower.contains("error:") || lower.contains("exception:") {
+            return LogLevel::Error;
+        }
+        if lower.contains("warning:") || lower.contains("warn:") {
+            return LogLevel::Warning;
+        }
+        if lower.contains("info:") {
+            return LogLevel::Info;
+        }
+        if lower.contains("debug:") || lower.contains("trace:") {
+            return LogLevel::Debug;
+        }
+
+        // Talker package format (bracketed)
+        if lower.contains("[critical]") || lower.contains("[fatal]") {
+            return LogLevel::Error;
+        }
+        if lower.contains("[error]") || lower.contains("[exception]") {
+            return LogLevel::Error;
+        }
+        if lower.contains("[warning]") || lower.contains("[warn]") {
+            return LogLevel::Warning;
+        }
+        if lower.contains("[info]") {
+            return LogLevel::Info;
+        }
+        if lower.contains("[debug]") || lower.contains("[verbose]") || lower.contains("[trace]") {
+            return LogLevel::Debug;
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // General keyword detection (existing logic)
+        // ─────────────────────────────────────────────────────────
+
+        // Error keywords (check after specific prefixes to avoid false positives)
+        if lower.contains("error")
+            || lower.contains("exception")
+            || lower.contains("failed")
+            || lower.contains("fatal")
+            || lower.contains("crash")
         {
+            return LogLevel::Error;
+        }
+
+        // Warning keywords
+        if lower.contains("warning") || lower.contains("deprecated") || lower.contains("caution") {
+            return LogLevel::Warning;
+        }
+
+        // Debug keywords
+        if lower.starts_with("debug") || lower.contains("verbose") {
             return LogLevel::Debug;
         }
 
@@ -861,5 +939,206 @@ mod tests {
         assert_eq!(entry.level, LogLevel::Error);
         assert!(entry.stack_trace.is_some());
         assert!(entry.stack_trace.as_ref().unwrap().contains("main.dart:42"));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Logger Package Detection Tests (Task 09)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_logger_trace_prefix() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Trace: Very detailed info"),
+            LogLevel::Debug
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│  Trace: message"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_logger_debug_emoji() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("🐛 Debug: Debugging info"),
+            LogLevel::Debug
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ 🐛  Debug: message"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_logger_info_emoji() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("💡 Info: General info"),
+            LogLevel::Info
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ 💡  Info: message"),
+            LogLevel::Info
+        );
+    }
+
+    #[test]
+    fn test_logger_warning_emoji() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("⚠️ Warning: Something wrong"),
+            LogLevel::Warning
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ ⚠  Warning: message"),
+            LogLevel::Warning
+        );
+    }
+
+    #[test]
+    fn test_logger_error_emoji() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("⛔ Error: Something failed"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ ⛔  Error: message"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("❌ Error: failure"),
+            LogLevel::Error
+        );
+    }
+
+    #[test]
+    fn test_logger_fatal_emoji() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("🔥 Fatal: Critical failure"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ 🔥  Fatal: message"),
+            LogLevel::Error
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Talker Package Detection Tests (Task 09)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_talker_verbose() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[verbose] Detailed message"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_talker_debug() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[debug] Debug message"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_talker_info() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[info] Info message"),
+            LogLevel::Info
+        );
+    }
+
+    #[test]
+    fn test_talker_warning() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[warning] Warning message"),
+            LogLevel::Warning
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("[warn] Warning message"),
+            LogLevel::Warning
+        );
+    }
+
+    #[test]
+    fn test_talker_error() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[error] Error message"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("[exception] Exception occurred"),
+            LogLevel::Error
+        );
+    }
+
+    #[test]
+    fn test_talker_critical() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("[critical] Critical failure"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("[fatal] Fatal error"),
+            LogLevel::Error
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Edge Cases (Task 09)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_box_drawing_with_level() {
+        // Logger package wraps messages in boxes
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ 💡  Info: Login successful"),
+            LogLevel::Info
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("│ 🐛  Debug: User data loaded"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_case_insensitive_prefixes() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("ERROR: something failed"),
+            LogLevel::Error
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("Warning: be careful"),
+            LogLevel::Warning
+        );
+        assert_eq!(
+            DaemonMessage::detect_log_level("DEBUG: verbose output"),
+            LogLevel::Debug
+        );
+    }
+
+    #[test]
+    fn test_info_colon_prefix() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Info: Application started"),
+            LogLevel::Info
+        );
+    }
+
+    #[test]
+    fn test_crash_keyword() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("App crashed unexpectedly"),
+            LogLevel::Error
+        );
+    }
+
+    #[test]
+    fn test_caution_keyword() {
+        assert_eq!(
+            DaemonMessage::detect_log_level("Caution: low memory"),
+            LogLevel::Warning
+        );
     }
 }

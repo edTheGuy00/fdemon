@@ -7,51 +7,8 @@ use ratatui::{
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, Borders, Widget},
 };
-
-/// Simple header widget displaying app title and shortcuts (legacy)
-pub struct Header;
-
-impl Header {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl Default for Header {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Widget for Header {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        let title = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
-        let dim = Style::default().fg(Color::DarkGray);
-        let key = Style::default().fg(Color::Yellow);
-
-        let content = Line::from(vec![
-            Span::styled(" Flutter Demon", title),
-            Span::raw("   "),
-            Span::styled("[", dim),
-            Span::styled("r", key),
-            Span::styled("] Reload  ", dim),
-            Span::styled("[", dim),
-            Span::styled("R", key),
-            Span::styled("] Restart  ", dim),
-            Span::styled("[", dim),
-            Span::styled("q", key),
-            Span::styled("] Quit", dim),
-        ]);
-
-        Paragraph::new(content)
-            .block(Block::default().borders(Borders::BOTTOM))
-            .render(area, buf);
-    }
-}
 
 /// Main header showing app title, project name, and keybindings
 pub struct MainHeader<'a> {
@@ -67,7 +24,7 @@ impl<'a> MainHeader<'a> {
 impl Widget for MainHeader<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render border
-        Block::default().borders(Borders::BOTTOM).render(area, buf);
+        Block::default().borders(Borders::ALL).render(area, buf);
 
         let content_area = Rect {
             x: area.x,
@@ -197,26 +154,5 @@ mod tests {
 
         // Should still contain the title
         assert!(content.contains("Flutter Demon"));
-    }
-
-    #[test]
-    fn test_legacy_header() {
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal
-            .draw(|f| {
-                let header = Header::new();
-                f.render_widget(header, f.area());
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-
-        assert!(content.contains("Flutter Demon"));
-        assert!(content.contains("Reload"));
-        assert!(content.contains("Restart"));
-        assert!(content.contains("Quit"));
     }
 }

@@ -2,7 +2,7 @@
 
 use crate::app::session::SessionId;
 use crate::app::state::AppState;
-use crate::core::{AppPhase, LogEntry, LogLevel, LogSource};
+use crate::core::{AppPhase, LogEntry, LogLevel, LogSource, ParsedStackTrace};
 use crate::daemon::{protocol, DaemonMessage};
 
 use super::helpers::detect_raw_line_level;
@@ -21,22 +21,20 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
             // Convert to log entry if applicable
             if let Some(entry_info) = msg.to_log_entry() {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
-                    handle.session.add_log(LogEntry::new(
-                        entry_info.level,
-                        entry_info.source,
-                        entry_info.message,
-                    ));
+                    // Create log entry with parsed stack trace if present
+                    let log_entry = if let Some(trace_str) = entry_info.stack_trace {
+                        let parsed_trace = ParsedStackTrace::parse(&trace_str);
+                        LogEntry::with_stack_trace(
+                            entry_info.level,
+                            entry_info.source,
+                            entry_info.message,
+                            parsed_trace,
+                        )
+                    } else {
+                        LogEntry::new(entry_info.level, entry_info.source, entry_info.message)
+                    };
 
-                    // Add stack trace as separate entries if present
-                    if let Some(trace) = entry_info.stack_trace {
-                        for trace_line in trace.lines().take(10) {
-                            handle.session.add_log(LogEntry::new(
-                                LogLevel::Debug,
-                                LogSource::FlutterError,
-                                format!("    {}", trace_line),
-                            ));
-                        }
-                    }
+                    handle.session.add_log(log_entry);
                 }
             } else {
                 // Unknown event type, log at debug level

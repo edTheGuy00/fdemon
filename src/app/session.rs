@@ -1,14 +1,76 @@
 //! Per-instance session state for a running Flutter app
 
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Instant;
 
 use chrono::{DateTime, Local};
 
+use crate::app::handler::helpers::{is_block_end, is_block_start};
 use crate::config::LaunchConfig;
-use crate::core::{AppPhase, FilterState, LogEntry, LogSource, SearchState};
+use crate::core::{AppPhase, FilterState, LogEntry, LogLevel, LogSource, SearchState};
 use crate::daemon::{CommandSender, FlutterProcess, RequestTracker};
 use crate::tui::widgets::LogViewState;
+
+// ─────────────────────────────────────────────────────────
+// Collapse State for Stack Traces (Phase 2 Task 6)
+// ─────────────────────────────────────────────────────────
+
+/// Tracks which log entries have expanded/collapsed stack traces
+#[derive(Debug, Clone, Default)]
+pub struct CollapseState {
+    /// Set of log entry IDs that are currently expanded
+    /// (by default, entries are collapsed based on config)
+    expanded_entries: HashSet<u64>,
+
+    /// Set of log entry IDs that are explicitly collapsed
+    /// (overrides default when default is expanded)
+    collapsed_entries: HashSet<u64>,
+}
+
+impl CollapseState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Check if an entry's stack trace should be shown expanded
+    pub fn is_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
+        if default_collapsed {
+            // Default is collapsed, check if user expanded it
+            self.expanded_entries.contains(&entry_id)
+        } else {
+            // Default is expanded, check if user collapsed it
+            !self.collapsed_entries.contains(&entry_id)
+        }
+    }
+
+    /// Toggle the collapse state of an entry
+    pub fn toggle(&mut self, entry_id: u64, default_collapsed: bool) {
+        if default_collapsed {
+            if self.expanded_entries.contains(&entry_id) {
+                self.expanded_entries.remove(&entry_id);
+            } else {
+                self.expanded_entries.insert(entry_id);
+            }
+        } else if self.collapsed_entries.contains(&entry_id) {
+            self.collapsed_entries.remove(&entry_id);
+        } else {
+            self.collapsed_entries.insert(entry_id);
+        }
+    }
+
+    /// Collapse all stack traces
+    pub fn collapse_all(&mut self) {
+        self.expanded_entries.clear();
+        self.collapsed_entries.clear(); // Let default take over
+    }
+
+    /// Expand all stack traces for the given entry IDs
+    pub fn expand_all(&mut self, entry_ids: impl Iterator<Item = u64>) {
+        self.collapsed_entries.clear();
+        self.expanded_entries.extend(entry_ids);
+    }
+}
 
 /// Unique identifier for a session
 pub type SessionId = u64;
@@ -50,6 +112,9 @@ pub struct Session {
     /// Search state for this session
     pub search_state: SearchState,
 
+    /// Collapse state for stack traces
+    pub collapse_state: CollapseState,
+
     // ─────────────────────────────────────────────────────────
     // Device & App Tracking
     // ─────────────────────────────────────────────────────────
@@ -88,6 +153,9 @@ pub struct Session {
 
     /// Total reload count this session
     pub reload_count: u32,
+
+    /// Cached count of error-level log entries (for status bar display)
+    error_count: usize,
 }
 
 impl Session {
@@ -107,6 +175,7 @@ impl Session {
             max_logs: 10_000,
             filter_state: FilterState::default(),
             search_state: SearchState::default(),
+            collapse_state: CollapseState::new(),
             device_id,
             device_name,
             platform,
@@ -118,6 +187,7 @@ impl Session {
             reload_start_time: None,
             last_reload_time: None,
             reload_count: 0,
+            error_count: 0,
         }
     }
 
@@ -129,16 +199,103 @@ impl Session {
     }
 
     /// Add a log entry
+    ///
+    /// Automatically detects Logger package blocks (from ┌ to └) and propagates
+    /// the highest severity level found in the block to all lines within it.
     pub fn add_log(&mut self, entry: LogEntry) {
+        // Track error count before adding
+        if entry.is_error() {
+            self.error_count += 1;
+        }
+
+        // Check if this entry completes a Logger block before pushing
+        let is_end_of_block = is_block_end(&entry.message);
+
         self.logs.push(entry);
+
+        // If this completes a Logger block, propagate the highest level
+        if is_end_of_block {
+            self.propagate_block_level();
+        }
 
         // Trim if over max size
         if self.logs.len() > self.max_logs {
             let drain_count = self.logs.len() - self.max_logs;
+
+            // Count errors being removed
+            let errors_removed = self.logs[..drain_count]
+                .iter()
+                .filter(|e| e.is_error())
+                .count();
+            self.error_count = self.error_count.saturating_sub(errors_removed);
+
             self.logs.drain(0..drain_count);
 
             // Adjust scroll offset
             self.log_view_state.offset = self.log_view_state.offset.saturating_sub(drain_count);
+        }
+    }
+
+    /// Propagate the highest log level across a Logger package block
+    ///
+    /// When a block end (└) is detected, this scans backwards to find the
+    /// block start (┌), determines the highest severity level in the block,
+    /// and applies it to all lines. This ensures entire error/warning blocks
+    /// are styled consistently.
+    ///
+    /// Maximum scan depth: 50 lines (to prevent performance issues)
+    fn propagate_block_level(&mut self) {
+        if self.logs.is_empty() {
+            return;
+        }
+
+        let block_end = self.logs.len() - 1;
+        let mut block_start = block_end;
+        let mut highest_level = LogLevel::Info;
+
+        // Scan backwards to find block start (┌)
+        // Also track the highest severity level in the block
+        for i in (0..=block_end).rev() {
+            let entry = &self.logs[i];
+
+            // Track highest severity in block
+            highest_level = highest_level.max_severity(entry.level);
+
+            // Found block start
+            if is_block_start(&entry.message) {
+                block_start = i;
+                break;
+            }
+
+            // Safety: don't scan more than 50 lines back
+            if block_end - i >= 50 {
+                return; // No block start found within limit, don't propagate
+            }
+        }
+
+        // Only propagate if we found a valid block and highest level is > Info
+        if block_start < block_end && highest_level.is_more_severe_than(&LogLevel::Info) {
+            // Count new errors being promoted (for error_count tracking)
+            let mut new_errors = 0;
+            let mut removed_errors = 0;
+
+            for i in block_start..=block_end {
+                let old_level = self.logs[i].level;
+                if old_level != highest_level {
+                    // Track error count changes
+                    if old_level == LogLevel::Error {
+                        removed_errors += 1;
+                    }
+                    if highest_level == LogLevel::Error {
+                        new_errors += 1;
+                    }
+                    self.logs[i].level = highest_level;
+                }
+            }
+
+            // Update error count
+            self.error_count = self.error_count.saturating_sub(removed_errors);
+            self.error_count += new_errors;
         }
     }
 
@@ -152,10 +309,11 @@ impl Session {
         self.add_log(LogEntry::error(source, message));
     }
 
-    /// Clear all logs
+    /// Clear all logs and reset error count
     pub fn clear_logs(&mut self) {
         self.logs.clear();
         self.log_view_state.offset = 0;
+        self.error_count = 0;
         // Clear search matches since logs are gone
         self.search_state.matches.clear();
         self.search_state.current_match = None;
@@ -338,9 +496,14 @@ impl Session {
             .collect()
     }
 
-    /// Count total errors in log
+    /// Get the current error count (cached for performance)
     pub fn error_count(&self) -> usize {
-        self.logs.iter().filter(|e| e.is_error()).count()
+        self.error_count
+    }
+
+    /// Recalculate error count from logs (for consistency/debugging)
+    pub fn recalculate_error_count(&mut self) {
+        self.error_count = self.logs.iter().filter(|e| e.is_error()).count();
     }
 
     /// Find next error after current scroll position
@@ -398,6 +561,31 @@ impl Session {
         } else {
             self.log_view_state.offset
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Stack Trace Collapse Methods (Phase 2 Task 6)
+    // ─────────────────────────────────────────────────────────
+
+    /// Get the currently focused log entry (at scroll position)
+    pub fn focused_entry(&self) -> Option<&LogEntry> {
+        let pos = self.current_log_position();
+        self.logs.get(pos)
+    }
+
+    /// Get the focused entry's ID
+    pub fn focused_entry_id(&self) -> Option<u64> {
+        self.focused_entry().map(|e| e.id)
+    }
+
+    /// Toggle stack trace collapse for a specific entry
+    pub fn toggle_stack_trace(&mut self, entry_id: u64, default_collapsed: bool) {
+        self.collapse_state.toggle(entry_id, default_collapsed);
+    }
+
+    /// Check if a specific entry's stack trace should be shown expanded
+    pub fn is_stack_trace_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
+        self.collapse_state.is_expanded(entry_id, default_collapsed)
     }
 }
 
@@ -874,5 +1062,449 @@ mod tests {
     fn test_error_count_empty() {
         let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
         assert_eq!(session.error_count(), 0);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Collapse State Tests (Phase 2 Task 6)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_collapse_state_default() {
+        let state = CollapseState::new();
+
+        // With default collapsed=true, entries should show as collapsed
+        assert!(!state.is_expanded(1, true));
+
+        // With default collapsed=false, entries should show as expanded
+        assert!(state.is_expanded(1, false));
+    }
+
+    #[test]
+    fn test_collapse_state_toggle() {
+        let mut state = CollapseState::new();
+
+        // Toggle from collapsed (default) to expanded
+        state.toggle(42, true);
+        assert!(state.is_expanded(42, true));
+
+        // Toggle back to collapsed
+        state.toggle(42, true);
+        assert!(!state.is_expanded(42, true));
+    }
+
+    #[test]
+    fn test_collapse_state_toggle_default_expanded() {
+        let mut state = CollapseState::new();
+
+        // With default_collapsed=false, entries start expanded
+        assert!(state.is_expanded(42, false));
+
+        // Toggle to collapsed
+        state.toggle(42, false);
+        assert!(!state.is_expanded(42, false));
+
+        // Toggle back to expanded
+        state.toggle(42, false);
+        assert!(state.is_expanded(42, false));
+    }
+
+    #[test]
+    fn test_collapse_state_multiple_entries() {
+        let mut state = CollapseState::new();
+
+        state.toggle(1, true); // Expand entry 1
+        state.toggle(3, true); // Expand entry 3
+
+        assert!(state.is_expanded(1, true));
+        assert!(!state.is_expanded(2, true)); // Not toggled
+        assert!(state.is_expanded(3, true));
+    }
+
+    #[test]
+    fn test_collapse_all() {
+        let mut state = CollapseState::new();
+
+        state.toggle(1, true);
+        state.toggle(2, true);
+        state.toggle(3, true);
+
+        state.collapse_all();
+
+        assert!(!state.is_expanded(1, true));
+        assert!(!state.is_expanded(2, true));
+        assert!(!state.is_expanded(3, true));
+    }
+
+    #[test]
+    fn test_expand_all() {
+        let mut state = CollapseState::new();
+
+        // With default collapsed, expand all should mark entries as expanded
+        state.expand_all([1, 2, 3].into_iter());
+
+        assert!(state.is_expanded(1, true));
+        assert!(state.is_expanded(2, true));
+        assert!(state.is_expanded(3, true));
+    }
+
+    #[test]
+    fn test_session_has_collapse_state() {
+        let session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        assert!(!session.collapse_state.is_expanded(1, true));
+    }
+
+    #[test]
+    fn test_session_toggle_stack_trace() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Toggle stack trace for entry ID 42
+        session.toggle_stack_trace(42, true);
+        assert!(session.is_stack_trace_expanded(42, true));
+
+        // Toggle again
+        session.toggle_stack_trace(42, true);
+        assert!(!session.is_stack_trace_expanded(42, true));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Cached Error Count Tests (Phase 2 Task 7)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_error_count_increments_on_error() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        session.add_log(LogEntry::info(LogSource::App, "info message"));
+        assert_eq!(session.error_count(), 0);
+
+        session.add_log(LogEntry::error(LogSource::App, "error 1"));
+        assert_eq!(session.error_count(), 1);
+
+        session.add_log(LogEntry::error(LogSource::App, "error 2"));
+        assert_eq!(session.error_count(), 2);
+
+        // Warnings don't count as errors
+        session.add_log(LogEntry::warn(LogSource::App, "warning"));
+        assert_eq!(session.error_count(), 2);
+    }
+
+    #[test]
+    fn test_error_count_resets_on_clear() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        session.add_log(LogEntry::error(LogSource::App, "error 1"));
+        session.add_log(LogEntry::error(LogSource::App, "error 2"));
+        assert_eq!(session.error_count(), 2);
+
+        session.clear_logs();
+        assert_eq!(session.error_count(), 0);
+    }
+
+    #[test]
+    fn test_error_count_adjusts_on_log_trim() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+        session.max_logs = 5;
+
+        // Add 3 errors at the start
+        session.add_log(LogEntry::error(LogSource::App, "error 0"));
+        session.add_log(LogEntry::error(LogSource::App, "error 1"));
+        session.add_log(LogEntry::error(LogSource::App, "error 2"));
+        session.add_log(LogEntry::info(LogSource::App, "info 3"));
+        session.add_log(LogEntry::info(LogSource::App, "info 4"));
+        assert_eq!(session.error_count(), 3);
+        assert_eq!(session.logs.len(), 5);
+
+        // Add 2 more non-error logs, which should trim the first 2 errors
+        session.add_log(LogEntry::info(LogSource::App, "info 5"));
+        session.add_log(LogEntry::info(LogSource::App, "info 6"));
+        assert_eq!(session.logs.len(), 5);
+        // First 2 errors trimmed, 1 error remains
+        assert_eq!(session.error_count(), 1);
+    }
+
+    #[test]
+    fn test_recalculate_error_count() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        session.add_log(LogEntry::error(LogSource::App, "error 1"));
+        session.add_log(LogEntry::error(LogSource::App, "error 2"));
+        session.add_log(LogEntry::info(LogSource::App, "info"));
+
+        // Manually set wrong count (simulating a bug scenario)
+        session.error_count = 999;
+        assert_eq!(session.error_count(), 999);
+
+        // Recalculate should fix it
+        session.recalculate_error_count();
+        assert_eq!(session.error_count(), 2);
+    }
+
+    #[test]
+    fn test_error_count_with_log_helpers() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        session.log_info(LogSource::App, "info");
+        assert_eq!(session.error_count(), 0);
+
+        session.log_error(LogSource::App, "error");
+        assert_eq!(session.error_count(), 1);
+    }
+
+    #[test]
+    fn test_error_count_matches_actual_errors() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Add various log types
+        session.add_log(LogEntry::info(LogSource::App, "info"));
+        session.add_log(LogEntry::error(LogSource::Flutter, "flutter error"));
+        session.add_log(LogEntry::warn(LogSource::Daemon, "warning"));
+        session.add_log(LogEntry::error(
+            LogSource::FlutterError,
+            "flutter stderr error",
+        ));
+        session.add_log(LogEntry::new(LogLevel::Debug, LogSource::Watcher, "debug"));
+
+        // Cached count should match actual count
+        let actual_errors = session.logs.iter().filter(|e| e.is_error()).count();
+        assert_eq!(session.error_count(), actual_errors);
+        assert_eq!(session.error_count(), 2);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Logger Block Level Propagation Tests (Phase 2 Task 11)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_error_block_propagation() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Simulate Logger error block - only one line has error level
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error: failed"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ #0 stack trace line"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ #1 more stack trace"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // All lines should now be Error level
+        assert!(
+            session.logs.iter().all(|e| e.level == LogLevel::Error),
+            "All block lines should be Error level after propagation"
+        );
+    }
+
+    #[test]
+    fn test_warning_block_propagation() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Simulate Logger warning block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::warn(
+            LogSource::Flutter,
+            "│ ⚠ Warning: deprecated",
+        ));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Additional info"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // All lines should now be Warning level
+        assert!(
+            session.logs.iter().all(|e| e.level == LogLevel::Warning),
+            "All block lines should be Warning level after propagation"
+        );
+    }
+
+    #[test]
+    fn test_non_block_lines_unchanged() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Regular logs (not Logger blocks)
+        session.add_log(LogEntry::info(LogSource::Flutter, "Regular info"));
+        session.add_log(LogEntry::error(LogSource::Flutter, "Standalone error"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "Another info"));
+
+        // Levels should remain as originally set
+        assert_eq!(session.logs[0].level, LogLevel::Info);
+        assert_eq!(session.logs[1].level, LogLevel::Error);
+        assert_eq!(session.logs[2].level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_block_propagation_error_count() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Before block: 0 errors
+        assert_eq!(session.error_count(), 0);
+
+        // Add error block - only one line marked error initially
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error: failed"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Stack trace"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // After propagation: 4 errors (all lines promoted to Error)
+        assert_eq!(session.error_count(), 4);
+    }
+
+    #[test]
+    fn test_info_only_block_not_propagated() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Logger block with only Info level (e.g., debug output)
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ 💡 Info: message"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Some details"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // All lines should stay Info (no propagation needed)
+        assert!(session.logs.iter().all(|e| e.level == LogLevel::Info));
+        assert_eq!(session.error_count(), 0);
+    }
+
+    #[test]
+    fn test_incomplete_block_not_propagated() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Block without ending (e.g., truncated output)
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error: failed"));
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Stack trace"));
+        // No closing └
+
+        // Error propagation shouldn't happen (block not complete)
+        assert_eq!(session.logs[0].level, LogLevel::Info); // Block start still Info
+        assert_eq!(session.logs[1].level, LogLevel::Error); // Error line
+        assert_eq!(session.logs[2].level, LogLevel::Info); // Stack trace still Info
+    }
+
+    #[test]
+    fn test_block_end_without_start_not_propagated() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Block end without matching start (orphaned end)
+        session.add_log(LogEntry::info(LogSource::Flutter, "│ Some content"));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error: failed"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Should not propagate (scan will hit 50-line limit without finding start)
+        // Actually, with only 3 lines it won't hit limit, but no ┌ means block_start == block_end
+        assert_eq!(session.logs[0].level, LogLevel::Info);
+        assert_eq!(session.logs[1].level, LogLevel::Error);
+        assert_eq!(session.logs[2].level, LogLevel::Info); // The └ line stays Info
+    }
+
+    #[test]
+    fn test_multiple_blocks_independent() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // First block - warning
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::warn(LogSource::Flutter, "│ ⚠ Warning"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Second block - error
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // First block should be Warning
+        assert_eq!(session.logs[0].level, LogLevel::Warning);
+        assert_eq!(session.logs[1].level, LogLevel::Warning);
+        assert_eq!(session.logs[2].level, LogLevel::Warning);
+
+        // Second block should be Error
+        assert_eq!(session.logs[3].level, LogLevel::Error);
+        assert_eq!(session.logs[4].level, LogLevel::Error);
+        assert_eq!(session.logs[5].level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_mixed_content_between_blocks() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Regular log
+        session.add_log(LogEntry::info(LogSource::Flutter, "Regular message"));
+
+        // Block
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "│ ⛔ Error"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "└───────────────────────",
+        ));
+
+        // Another regular log
+        session.add_log(LogEntry::info(LogSource::Flutter, "Another regular"));
+
+        // Regular logs should stay Info
+        assert_eq!(session.logs[0].level, LogLevel::Info);
+        assert_eq!(session.logs[4].level, LogLevel::Info);
+
+        // Block should be Error
+        assert_eq!(session.logs[1].level, LogLevel::Error);
+        assert_eq!(session.logs[2].level, LogLevel::Error);
+        assert_eq!(session.logs[3].level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_block_with_leading_whitespace() {
+        let mut session = Session::new("device".into(), "Device".into(), "ios".into(), false);
+
+        // Block with leading whitespace (common in Flutter output)
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "   ┌───────────────────────",
+        ));
+        session.add_log(LogEntry::error(LogSource::Flutter, "   │ ⛔ Error"));
+        session.add_log(LogEntry::info(
+            LogSource::Flutter,
+            "   └───────────────────────",
+        ));
+
+        // Should still propagate correctly
+        assert!(session.logs.iter().all(|e| e.level == LogLevel::Error));
     }
 }

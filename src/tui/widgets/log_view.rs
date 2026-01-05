@@ -2,6 +2,7 @@
 
 use crate::core::{
     FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter, SearchState,
+    StackFrame,
 };
 use ratatui::{
     buffer::Buffer,
@@ -10,30 +11,78 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
-        Widget, Wrap,
+        Widget,
     },
 };
+
+/// Stack trace styling constants
+mod stack_trace_styles {
+    use ratatui::style::{Color, Modifier, Style};
+
+    /// Frame number (#0, #1, etc.)
+    pub const FRAME_NUMBER: Style = Style::new().fg(Color::DarkGray);
+
+    /// Function name for project frames
+    pub const FUNCTION_PROJECT: Style = Style::new().fg(Color::White);
+
+    /// Function name for package frames
+    pub const FUNCTION_PACKAGE: Style = Style::new().fg(Color::DarkGray);
+
+    /// File path for project frames (clickable in Phase 3)
+    pub const FILE_PROJECT: Style = Style::new()
+        .fg(Color::Blue)
+        .add_modifier(Modifier::UNDERLINED);
+
+    /// File path for package frames
+    pub const FILE_PACKAGE: Style = Style::new().fg(Color::DarkGray);
+
+    /// Line/column numbers for project frames
+    pub const LOCATION_PROJECT: Style = Style::new().fg(Color::Cyan);
+
+    /// Line/column numbers for package frames
+    pub const LOCATION_PACKAGE: Style = Style::new().fg(Color::DarkGray);
+
+    /// Async suspension marker
+    pub const ASYNC_GAP: Style = Style::new()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+
+    /// Punctuation (parentheses, colons)
+    pub const PUNCTUATION: Style = Style::new().fg(Color::DarkGray);
+
+    /// Indentation for stack frames
+    pub const INDENT: &str = "    ";
+}
 
 /// State for log view scrolling
 #[derive(Debug, Default)]
 pub struct LogViewState {
-    /// Current scroll offset from top
+    /// Current vertical scroll offset from top
     pub offset: usize,
+    /// Current horizontal scroll offset from left
+    pub h_offset: usize,
     /// Whether auto-scroll is enabled (follow new content)
     pub auto_scroll: bool,
     /// Total number of lines (set during render)
     pub total_lines: usize,
     /// Visible lines (set during render)
     pub visible_lines: usize,
+    /// Maximum line width in current view (for h-scroll bounds)
+    pub max_line_width: usize,
+    /// Visible width (set during render)
+    pub visible_width: usize,
 }
 
 impl LogViewState {
     pub fn new() -> Self {
         Self {
             offset: 0,
+            h_offset: 0,
             auto_scroll: true,
             total_lines: 0,
             visible_lines: 0,
+            max_line_width: 0,
+            visible_width: 0,
         }
     }
 
@@ -88,6 +137,55 @@ impl LogViewState {
             self.offset = total.saturating_sub(visible);
         }
     }
+
+    /// Scroll left by n columns
+    pub fn scroll_left(&mut self, n: usize) {
+        self.h_offset = self.h_offset.saturating_sub(n);
+    }
+
+    /// Scroll right by n columns
+    pub fn scroll_right(&mut self, n: usize) {
+        let max_h_offset = self.max_line_width.saturating_sub(self.visible_width);
+        self.h_offset = (self.h_offset + n).min(max_h_offset);
+    }
+
+    /// Scroll to start of line (column 0)
+    pub fn scroll_to_line_start(&mut self) {
+        self.h_offset = 0;
+    }
+
+    /// Scroll to end of line
+    pub fn scroll_to_line_end(&mut self) {
+        let max_h_offset = self.max_line_width.saturating_sub(self.visible_width);
+        self.h_offset = max_h_offset;
+    }
+
+    /// Update horizontal content dimensions
+    pub fn update_horizontal_size(&mut self, max_width: usize, visible_width: usize) {
+        self.max_line_width = max_width;
+        self.visible_width = visible_width;
+
+        // Clamp h_offset if content shrank
+        let max_h_offset = max_width.saturating_sub(visible_width);
+        if self.h_offset > max_h_offset {
+            self.h_offset = max_h_offset;
+        }
+    }
+
+    /// Calculate total lines including expanded stack traces
+    pub fn calculate_total_lines(logs: &[LogEntry]) -> usize {
+        logs.iter()
+            .map(|entry| 1 + entry.stack_trace_frame_count()) // 1 for message + frames
+            .sum()
+    }
+
+    /// Calculate total lines for filtered entries (by index)
+    pub fn calculate_total_lines_filtered(logs: &[LogEntry], indices: &[usize]) -> usize {
+        indices
+            .iter()
+            .map(|&idx| 1 + logs[idx].stack_trace_frame_count())
+            .sum()
+    }
 }
 
 /// Log view widget with rich formatting
@@ -100,6 +198,12 @@ pub struct LogView<'a> {
     filter_state: Option<&'a FilterState>,
     /// Search state for highlighting matches
     search_state: Option<&'a SearchState>,
+    /// Collapse state for stack traces (Phase 2 Task 6)
+    collapse_state: Option<&'a crate::app::session::CollapseState>,
+    /// Whether stack traces are collapsed by default
+    default_collapsed: bool,
+    /// Maximum frames to show when collapsed
+    max_collapsed_frames: usize,
 }
 
 impl<'a> LogView<'a> {
@@ -111,6 +215,9 @@ impl<'a> LogView<'a> {
             show_source: true,
             filter_state: None,
             search_state: None,
+            collapse_state: None,
+            default_collapsed: true,
+            max_collapsed_frames: 3,
         }
     }
 
@@ -138,6 +245,24 @@ impl<'a> LogView<'a> {
     /// Set the search state for match highlighting
     pub fn search_state(mut self, state: &'a SearchState) -> Self {
         self.search_state = Some(state);
+        self
+    }
+
+    /// Set the collapse state for stack traces
+    pub fn collapse_state(mut self, state: &'a crate::app::session::CollapseState) -> Self {
+        self.collapse_state = Some(state);
+        self
+    }
+
+    /// Set whether stack traces are collapsed by default
+    pub fn default_collapsed(mut self, collapsed: bool) -> Self {
+        self.default_collapsed = collapsed;
+        self
+    }
+
+    /// Set maximum frames to show when collapsed
+    pub fn max_collapsed_frames(mut self, max: usize) -> Self {
+        self.max_collapsed_frames = max;
         self
     }
 
@@ -304,6 +429,123 @@ impl<'a> LogView<'a> {
         spans
     }
 
+    /// Format a single stack frame into styled spans
+    fn format_stack_frame(frame: &StackFrame) -> Vec<Span<'static>> {
+        use stack_trace_styles::*;
+
+        // Handle async gap specially
+        if frame.is_async_gap {
+            return vec![
+                Span::styled(INDENT.to_string(), Style::default()),
+                Span::styled("<asynchronous suspension>".to_string(), ASYNC_GAP),
+            ];
+        }
+
+        // Determine styles based on frame type (package vs project)
+        let (func_style, file_style, loc_style) = if frame.is_package_frame {
+            // Package frame - all dimmed
+            (FUNCTION_PACKAGE, FILE_PACKAGE, LOCATION_PACKAGE)
+        } else {
+            // Project frame - highlighted
+            (FUNCTION_PROJECT, FILE_PROJECT, LOCATION_PROJECT)
+        };
+
+        let mut spans = Vec::with_capacity(10);
+
+        // Indentation
+        spans.push(Span::styled(INDENT.to_string(), Style::default()));
+
+        // Frame number: #0, #1, etc.
+        spans.push(Span::styled(
+            format!("#{:<3}", frame.frame_number),
+            FRAME_NUMBER,
+        ));
+
+        // Function name
+        spans.push(Span::styled(
+            format!("{} ", frame.function_name.clone()),
+            func_style,
+        ));
+
+        // Opening paren
+        spans.push(Span::styled("(".to_string(), PUNCTUATION));
+
+        // File path (short version)
+        spans.push(Span::styled(frame.short_path().to_string(), file_style));
+
+        // Colon separator
+        spans.push(Span::styled(":".to_string(), PUNCTUATION));
+
+        // Line number
+        spans.push(Span::styled(frame.line.to_string(), loc_style));
+
+        // Column (if present)
+        if frame.column > 0 {
+            spans.push(Span::styled(format!(":{}", frame.column), loc_style));
+        }
+
+        // Closing paren
+        spans.push(Span::styled(")".to_string(), PUNCTUATION));
+
+        spans
+    }
+
+    /// Format a stack frame as a Line for rendering
+    fn format_stack_frame_line(frame: &StackFrame) -> Line<'static> {
+        Line::from(Self::format_stack_frame(frame))
+    }
+
+    /// Format collapsed indicator: "▶ N more frames..."
+    fn format_collapsed_indicator(hidden_count: usize) -> Line<'static> {
+        use stack_trace_styles::*;
+
+        let text = if hidden_count == 1 {
+            "1 more frame...".to_string()
+        } else {
+            format!("{} more frames...", hidden_count)
+        };
+
+        Line::from(vec![
+            Span::styled(INDENT.to_string(), Style::default()),
+            Span::styled("▶ ".to_string(), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                text,
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ])
+    }
+
+    /// Check if an entry's stack trace should be expanded
+    fn is_entry_expanded(&self, entry: &LogEntry) -> bool {
+        if let Some(collapse_state) = self.collapse_state {
+            collapse_state.is_expanded(entry.id, self.default_collapsed)
+        } else {
+            // No collapse state means always expanded (legacy behavior)
+            !self.default_collapsed
+        }
+    }
+
+    /// Calculate lines for a single entry accounting for collapse state
+    fn calculate_entry_lines(&self, entry: &LogEntry) -> usize {
+        let frame_count = entry.stack_trace_frame_count();
+        if frame_count == 0 {
+            return 1; // Just the message line
+        }
+
+        let is_expanded = self.is_entry_expanded(entry);
+        if is_expanded {
+            // Expanded: message + all frames
+            1 + frame_count
+        } else {
+            // Collapsed: message + visible frames + indicator (if more)
+            let visible = self.max_collapsed_frames.min(frame_count);
+            let has_more = frame_count > self.max_collapsed_frames;
+            1 + visible + if has_more { 1 } else { 0 }
+        }
+    }
+
     /// Render empty state with centered message
     fn render_empty(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
@@ -403,6 +645,98 @@ impl<'a> LogView<'a> {
             .alignment(ratatui::layout::Alignment::Center)
             .render(inner, buf);
     }
+
+    /// Calculate the display width of a Line (sum of span content widths)
+    fn line_width(line: &Line) -> usize {
+        line.spans.iter().map(|s| s.content.chars().count()).sum()
+    }
+
+    /// Apply horizontal scroll offset to a line, truncating and adding indicators
+    fn apply_horizontal_scroll(
+        line: Line<'static>,
+        h_offset: usize,
+        visible_width: usize,
+    ) -> Line<'static> {
+        let line_width = Self::line_width(&line);
+
+        // No scrolling needed if line fits
+        if h_offset == 0 && line_width <= visible_width {
+            return line;
+        }
+
+        // Build a flat list of (char, style) pairs
+        let mut chars: Vec<(char, Style)> = Vec::with_capacity(line_width);
+        for span in &line.spans {
+            let style = span.style;
+            for c in span.content.chars() {
+                chars.push((c, style));
+            }
+        }
+
+        // If offset is beyond content, return empty line
+        if h_offset >= chars.len() {
+            return Line::from("");
+        }
+
+        // Determine visible range
+        let visible_start = h_offset;
+        let visible_end = (h_offset + visible_width).min(chars.len());
+        let has_more_left = h_offset > 0;
+        let has_more_right = visible_end < chars.len();
+
+        // Reserve space for indicators
+        let indicator_left_space = if has_more_left { 1 } else { 0 };
+        let indicator_right_space = if has_more_right { 1 } else { 0 };
+        let content_width = visible_width
+            .saturating_sub(indicator_left_space)
+            .saturating_sub(indicator_right_space);
+
+        // Adjust the visible range for content (leave room for indicators)
+        let content_start = visible_start + indicator_left_space;
+        let content_end = (content_start + content_width).min(chars.len());
+
+        // Build spans from visible characters
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // Add left indicator if needed
+        if has_more_left {
+            spans.push(Span::styled(
+                "←".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        // Group consecutive chars with same style into spans
+        if content_start < content_end {
+            let mut current_style = chars[content_start].1;
+            let mut current_text = String::new();
+
+            for &(c, style) in &chars[content_start..content_end] {
+                if style == current_style {
+                    current_text.push(c);
+                } else {
+                    if !current_text.is_empty() {
+                        spans.push(Span::styled(current_text, current_style));
+                    }
+                    current_text = String::from(c);
+                    current_style = style;
+                }
+            }
+            if !current_text.is_empty() {
+                spans.push(Span::styled(current_text, current_style));
+            }
+        }
+
+        // Add right indicator if needed
+        if has_more_right {
+            spans.push(Span::styled(
+                "→".to_string(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+
+        Line::from(spans)
+    }
 }
 
 impl<'a> StatefulWidget for LogView<'a> {
@@ -443,35 +777,130 @@ impl<'a> StatefulWidget for LogView<'a> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Update state with filtered content dimensions
-        let visible_lines = inner.height as usize;
-        state.update_content_size(filtered_indices.len(), visible_lines);
-
-        // Get visible slice of filtered logs
-        let start = state.offset;
-        let end = (start + visible_lines).min(filtered_indices.len());
-
-        // Format visible entries using original log indices
-        let lines: Vec<Line> = filtered_indices[start..end]
+        // Calculate total lines including stack traces (accounting for collapse state)
+        let total_lines: usize = filtered_indices
             .iter()
-            .map(|&idx| self.format_entry(&self.logs[idx], idx))
+            .map(|&idx| self.calculate_entry_lines(&self.logs[idx]))
+            .sum();
+        let visible_lines = inner.height as usize;
+
+        // Update state with content dimensions (now using total lines, not entry count)
+        state.update_content_size(total_lines, visible_lines);
+
+        // Build a flat list of all lines (entry messages + stack frames)
+        // We need to skip `offset` lines and take `visible_lines` lines
+        let mut all_lines: Vec<Line> = Vec::new();
+        let mut lines_added = 0;
+        let mut lines_skipped = 0;
+
+        for &idx in &filtered_indices {
+            let entry = &self.logs[idx];
+            let entry_line_count = self.calculate_entry_lines(entry);
+
+            // Skip entries that are entirely before the offset
+            if lines_skipped + entry_line_count <= state.offset {
+                lines_skipped += entry_line_count;
+                continue;
+            }
+
+            // Check if we've added enough lines
+            if lines_added >= visible_lines {
+                break;
+            }
+
+            // Determine how many lines of this entry to skip (partial entry at start)
+            let skip_in_entry = state.offset.saturating_sub(lines_skipped);
+
+            // Add the main log line if not skipped
+            if skip_in_entry == 0 {
+                all_lines.push(self.format_entry(entry, idx));
+                lines_added += 1;
+            }
+
+            // Add stack trace frames (respecting collapse state)
+            if let Some(trace) = &entry.stack_trace {
+                let is_expanded = self.is_entry_expanded(entry);
+                let frame_count = trace.frames.len();
+
+                if is_expanded {
+                    // Expanded: show all frames
+                    for (frame_idx, frame) in trace.frames.iter().enumerate() {
+                        if lines_added >= visible_lines {
+                            break;
+                        }
+
+                        // Skip frames if we're starting mid-entry
+                        let frame_position = 1 + frame_idx; // +1 for the message line
+                        if frame_position <= skip_in_entry {
+                            continue;
+                        }
+
+                        all_lines.push(Self::format_stack_frame_line(frame));
+                        lines_added += 1;
+                    }
+                } else {
+                    // Collapsed: show max_collapsed_frames + indicator if more
+                    let visible_count = self.max_collapsed_frames.min(frame_count);
+                    let hidden_count = frame_count.saturating_sub(self.max_collapsed_frames);
+
+                    for (frame_idx, frame) in trace.frames.iter().take(visible_count).enumerate() {
+                        if lines_added >= visible_lines {
+                            break;
+                        }
+
+                        // Skip frames if we're starting mid-entry
+                        let frame_position = 1 + frame_idx; // +1 for the message line
+                        if frame_position <= skip_in_entry {
+                            continue;
+                        }
+
+                        all_lines.push(Self::format_stack_frame_line(frame));
+                        lines_added += 1;
+                    }
+
+                    // Add collapsed indicator if there are hidden frames
+                    if hidden_count > 0 && lines_added < visible_lines {
+                        let indicator_position = 1 + visible_count;
+                        if indicator_position > skip_in_entry {
+                            all_lines.push(Self::format_collapsed_indicator(hidden_count));
+                            lines_added += 1;
+                        }
+                    }
+                }
+            }
+
+            lines_skipped += entry_line_count;
+        }
+
+        // Calculate max line width for horizontal scroll bounds
+        let max_line_width = all_lines
+            .iter()
+            .map(|l| Self::line_width(l))
+            .max()
+            .unwrap_or(0);
+        let visible_width = inner.width as usize;
+
+        // Update horizontal dimensions in state
+        state.update_horizontal_size(max_line_width, visible_width);
+
+        // Apply horizontal scroll to each line
+        let scrolled_lines: Vec<Line> = all_lines
+            .into_iter()
+            .map(|line| Self::apply_horizontal_scroll(line, state.h_offset, visible_width))
             .collect();
 
-        // Render log content
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .render(inner, buf);
+        // Render log content WITHOUT wrapping (lines are truncated/scrolled)
+        Paragraph::new(scrolled_lines).render(inner, buf);
 
         // Render scrollbar if content exceeds visible area
-        if filtered_indices.len() > visible_lines {
+        if total_lines > visible_lines {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("▲"))
                 .end_symbol(Some("▼"))
                 .track_symbol(Some("│"))
                 .thumb_symbol("█");
 
-            let mut scrollbar_state =
-                ScrollbarState::new(filtered_indices.len()).position(state.offset);
+            let mut scrollbar_state = ScrollbarState::new(total_lines).position(state.offset);
 
             scrollbar.render(area, buf, &mut scrollbar_state);
         }
@@ -489,15 +918,9 @@ impl Widget for LogView<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Local;
 
     fn make_entry(level: LogLevel, source: LogSource, msg: &str) -> LogEntry {
-        LogEntry {
-            timestamp: Local::now(),
-            level,
-            source,
-            message: msg.to_string(),
-        }
+        LogEntry::new(level, source, msg)
     }
 
     #[test]
@@ -899,5 +1322,513 @@ mod tests {
         // Should have at least 2 spans for message: "error" (highlighted) + " occurred"
         // Plus the level indicator span
         assert!(line.spans.len() >= 3, "Got {} spans", line.spans.len());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Stack Trace Rendering Tests (Phase 2 - Task 5)
+    // ─────────────────────────────────────────────────────────
+
+    use crate::core::stack_trace::ParsedStackTrace;
+
+    #[test]
+    fn test_format_stack_frame_project_frame() {
+        let frame = StackFrame::new(0, "main", "package:app/main.dart", 15, 3);
+
+        let spans = LogView::format_stack_frame(&frame);
+
+        // Should have multiple spans: indent, frame#, function, (, file, :, line, :col, )
+        assert!(spans.len() >= 7, "Got {} spans", spans.len());
+
+        // First span should be indentation
+        assert!(spans[0].content.starts_with("    "), "Expected indentation");
+
+        // Check that function name is included
+        let content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("main"), "Should contain function name");
+        assert!(
+            content.contains("main.dart"),
+            "Should contain short file path"
+        );
+        assert!(content.contains("15"), "Should contain line number");
+    }
+
+    #[test]
+    fn test_format_stack_frame_package_frame() {
+        let frame = StackFrame::new(
+            1,
+            "State.setState",
+            "package:flutter/src/widgets/framework.dart",
+            1187,
+            9,
+        );
+
+        let spans = LogView::format_stack_frame(&frame);
+
+        // Package frame should have all dimmed styling
+        // Just verify it produces spans
+        assert!(!spans.is_empty());
+
+        let content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("State.setState"));
+        assert!(content.contains("framework.dart"));
+    }
+
+    #[test]
+    fn test_format_stack_frame_async_gap() {
+        let frame = StackFrame::async_gap(2);
+
+        let spans = LogView::format_stack_frame(&frame);
+
+        // Async gap should have 2 spans: indent + message
+        assert_eq!(spans.len(), 2);
+
+        let content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            content.contains("<asynchronous suspension>"),
+            "Got: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_format_stack_frame_no_column() {
+        let mut frame = StackFrame::new(0, "test", "package:app/test.dart", 10, 0);
+        frame.column = 0;
+
+        let spans = LogView::format_stack_frame(&frame);
+
+        let content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        // Should contain line number but not ":0" for column
+        assert!(content.contains(":10"), "Should have line number");
+        // Column 0 means no column should be shown
+        assert!(
+            !content.contains(":0)"),
+            "Should not show :0 column, got: {}",
+            content
+        );
+    }
+
+    #[test]
+    fn test_calculate_total_lines_no_traces() {
+        let logs = vec![
+            make_entry(LogLevel::Info, LogSource::App, "Hello"),
+            make_entry(LogLevel::Error, LogSource::App, "Error"),
+        ];
+
+        let total = LogViewState::calculate_total_lines(&logs);
+        assert_eq!(total, 2); // No stack traces, just 2 entries
+    }
+
+    #[test]
+    fn test_calculate_total_lines_with_traces() {
+        let mut entry1 = make_entry(LogLevel::Info, LogSource::App, "Hello");
+        // entry1 has no stack trace
+
+        let mut entry2 = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse(
+            r#"
+#0      main (package:app/main.dart:15:3)
+#1      runApp (package:flutter/src/widgets/binding.dart:100:5)
+#2      _startIsolate (dart:isolate-patch/isolate_patch.dart:307:19)
+"#,
+        );
+        entry2.stack_trace = Some(trace);
+
+        let logs = vec![entry1, entry2];
+
+        let total = LogViewState::calculate_total_lines(&logs);
+        // entry1: 1 line, entry2: 1 line + 3 frames = 4 lines, total = 5
+        assert_eq!(total, 5);
+    }
+
+    #[test]
+    fn test_calculate_total_lines_filtered() {
+        let mut entry1 = make_entry(LogLevel::Info, LogSource::App, "Hello");
+        let mut entry2 = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
+        entry2.stack_trace = Some(trace);
+
+        let logs = vec![entry1, entry2];
+
+        // Only include entry2 (index 1)
+        let indices = vec![1];
+        let total = LogViewState::calculate_total_lines_filtered(&logs, &indices);
+        assert_eq!(total, 2); // 1 message + 1 frame
+    }
+
+    #[test]
+    fn test_format_stack_frame_line() {
+        let frame = StackFrame::new(0, "test", "package:app/test.dart", 5, 1);
+
+        let line = LogView::format_stack_frame_line(&frame);
+
+        // Should produce a Line with spans
+        assert!(!line.spans.is_empty());
+    }
+
+    #[test]
+    fn test_stack_frame_with_long_function_name() {
+        let frame = StackFrame::new(
+            0,
+            "_SomeVeryLongPrivateClassName.someEvenLongerMethodName",
+            "package:app/file.dart",
+            100,
+            5,
+        );
+
+        let spans = LogView::format_stack_frame(&frame);
+
+        let content: String = spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("_SomeVeryLongPrivateClassName.someEvenLongerMethodName"));
+    }
+
+    #[test]
+    fn test_stack_frame_styles_module_constants() {
+        // Verify style constants are accessible and have expected properties
+        use stack_trace_styles::*;
+
+        assert_eq!(INDENT, "    ");
+        assert_eq!(FRAME_NUMBER.fg, Some(Color::DarkGray));
+        assert_eq!(FUNCTION_PROJECT.fg, Some(Color::White));
+        assert_eq!(FUNCTION_PACKAGE.fg, Some(Color::DarkGray));
+        assert_eq!(FILE_PROJECT.fg, Some(Color::Blue));
+        assert!(FILE_PROJECT.add_modifier.contains(Modifier::UNDERLINED));
+        assert_eq!(LOCATION_PROJECT.fg, Some(Color::Cyan));
+        assert!(ASYNC_GAP.add_modifier.contains(Modifier::ITALIC));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Collapsible Stack Traces Tests (Phase 2 Task 6)
+    // ─────────────────────────────────────────────────────────
+
+    use crate::app::session::CollapseState;
+
+    #[test]
+    fn test_format_collapsed_indicator_singular() {
+        let line = LogView::format_collapsed_indicator(1);
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("1 more frame..."), "Got: {}", content);
+    }
+
+    #[test]
+    fn test_format_collapsed_indicator_plural() {
+        let line = LogView::format_collapsed_indicator(5);
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("5 more frames..."), "Got: {}", content);
+    }
+
+    #[test]
+    fn test_format_collapsed_indicator_has_arrow() {
+        let line = LogView::format_collapsed_indicator(3);
+        let content: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(content.contains("▶"), "Should have arrow indicator");
+    }
+
+    #[test]
+    fn test_calculate_entry_lines_no_trace() {
+        let entry = make_entry(LogLevel::Info, LogSource::App, "Hello");
+        let logs = vec![entry];
+        let view = LogView::new(&logs)
+            .default_collapsed(true)
+            .max_collapsed_frames(3);
+
+        assert_eq!(view.calculate_entry_lines(&logs[0]), 1); // Just message
+    }
+
+    #[test]
+    fn test_calculate_entry_lines_collapsed() {
+        let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse(
+            r#"
+#0      main (package:app/main.dart:15:3)
+#1      runApp (package:flutter/src/widgets/binding.dart:100:5)
+#2      _startIsolate (dart:isolate-patch/isolate_patch.dart:307:19)
+#3      frame4 (package:app/other.dart:50:1)
+#4      frame5 (package:app/other.dart:60:1)
+"#,
+        );
+        entry.stack_trace = Some(trace);
+
+        let logs = vec![entry];
+        let view = LogView::new(&logs)
+            .default_collapsed(true)
+            .max_collapsed_frames(3);
+
+        // Collapsed: 1 message + 3 visible frames + 1 indicator = 5
+        assert_eq!(view.calculate_entry_lines(&logs[0]), 5);
+    }
+
+    #[test]
+    fn test_calculate_entry_lines_expanded() {
+        let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse(
+            r#"
+#0      main (package:app/main.dart:15:3)
+#1      runApp (package:flutter/src/widgets/binding.dart:100:5)
+#2      _startIsolate (dart:isolate-patch/isolate_patch.dart:307:19)
+#3      frame4 (package:app/other.dart:50:1)
+#4      frame5 (package:app/other.dart:60:1)
+"#,
+        );
+        entry.stack_trace = Some(trace);
+
+        let logs = vec![entry];
+        let mut collapse_state = CollapseState::new();
+        collapse_state.toggle(logs[0].id, true); // Expand it
+
+        let view = LogView::new(&logs)
+            .default_collapsed(true)
+            .max_collapsed_frames(3)
+            .collapse_state(&collapse_state);
+
+        // Expanded: 1 message + 5 frames = 6
+        assert_eq!(view.calculate_entry_lines(&logs[0]), 6);
+    }
+
+    #[test]
+    fn test_calculate_entry_lines_few_frames() {
+        // When there are fewer frames than max, no indicator needed
+        let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
+        entry.stack_trace = Some(trace);
+
+        let logs = vec![entry];
+        let view = LogView::new(&logs)
+            .default_collapsed(true)
+            .max_collapsed_frames(3);
+
+        // Only 1 frame, no indicator needed: 1 message + 1 frame = 2
+        assert_eq!(view.calculate_entry_lines(&logs[0]), 2);
+    }
+
+    #[test]
+    fn test_is_entry_expanded_no_collapse_state() {
+        let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
+        entry.stack_trace = Some(trace);
+
+        let logs = vec![entry];
+
+        // Without collapse state, use default_collapsed setting
+        let view = LogView::new(&logs).default_collapsed(true);
+        assert!(!view.is_entry_expanded(&logs[0])); // Collapsed by default
+
+        let view = LogView::new(&logs).default_collapsed(false);
+        assert!(view.is_entry_expanded(&logs[0])); // Expanded by default
+    }
+
+    #[test]
+    fn test_is_entry_expanded_with_collapse_state() {
+        let mut entry = make_entry(LogLevel::Error, LogSource::App, "Error");
+        let trace = ParsedStackTrace::parse("#0 main (package:app/main.dart:15:3)");
+        entry.stack_trace = Some(trace);
+
+        let logs = vec![entry];
+        let mut collapse_state = CollapseState::new();
+
+        // Toggle to expanded
+        collapse_state.toggle(logs[0].id, true);
+
+        let view = LogView::new(&logs)
+            .default_collapsed(true)
+            .collapse_state(&collapse_state);
+
+        assert!(view.is_entry_expanded(&logs[0]));
+    }
+
+    #[test]
+    fn test_collapse_state_builder() {
+        let logs: Vec<LogEntry> = vec![];
+        let collapse_state = CollapseState::new();
+
+        let view = LogView::new(&logs).collapse_state(&collapse_state);
+
+        assert!(view.collapse_state.is_some());
+    }
+
+    #[test]
+    fn test_max_collapsed_frames_builder() {
+        let logs: Vec<LogEntry> = vec![];
+
+        let view = LogView::new(&logs).max_collapsed_frames(5);
+
+        assert_eq!(view.max_collapsed_frames, 5);
+    }
+
+    #[test]
+    fn test_default_collapsed_builder() {
+        let logs: Vec<LogEntry> = vec![];
+
+        let view = LogView::new(&logs).default_collapsed(false);
+
+        assert!(!view.default_collapsed);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Horizontal Scroll Tests (Phase 2 Task 12)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_horizontal_scroll_state_default() {
+        let state = LogViewState::new();
+        assert_eq!(state.h_offset, 0);
+        assert_eq!(state.max_line_width, 0);
+        assert_eq!(state.visible_width, 0);
+    }
+
+    #[test]
+    fn test_scroll_left() {
+        let mut state = LogViewState::new();
+        state.h_offset = 20;
+        state.max_line_width = 200;
+        state.visible_width = 80;
+
+        state.scroll_left(10);
+        assert_eq!(state.h_offset, 10);
+
+        state.scroll_left(20);
+        assert_eq!(state.h_offset, 0); // Clamped at 0
+    }
+
+    #[test]
+    fn test_scroll_right() {
+        let mut state = LogViewState::new();
+        state.h_offset = 0;
+        state.max_line_width = 200;
+        state.visible_width = 80;
+
+        state.scroll_right(10);
+        assert_eq!(state.h_offset, 10);
+
+        state.scroll_right(200);
+        assert_eq!(state.h_offset, 120); // Clamped at max - visible
+    }
+
+    #[test]
+    fn test_scroll_to_line_start() {
+        let mut state = LogViewState::new();
+        state.h_offset = 50;
+
+        state.scroll_to_line_start();
+        assert_eq!(state.h_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_to_line_end() {
+        let mut state = LogViewState::new();
+        state.h_offset = 0;
+        state.max_line_width = 200;
+        state.visible_width = 80;
+
+        state.scroll_to_line_end();
+        assert_eq!(state.h_offset, 120); // max - visible
+    }
+
+    #[test]
+    fn test_no_horizontal_scroll_needed() {
+        let mut state = LogViewState::new();
+        state.max_line_width = 50;
+        state.visible_width = 80;
+
+        state.scroll_right(10);
+        assert_eq!(state.h_offset, 0); // No scroll when content fits
+    }
+
+    #[test]
+    fn test_update_horizontal_size() {
+        let mut state = LogViewState::new();
+        state.h_offset = 50;
+
+        // Update with smaller content
+        state.update_horizontal_size(60, 80);
+
+        // h_offset should be clamped to 0 since content now fits
+        assert_eq!(state.h_offset, 0);
+        assert_eq!(state.max_line_width, 60);
+        assert_eq!(state.visible_width, 80);
+    }
+
+    #[test]
+    fn test_update_horizontal_size_clamps_offset() {
+        let mut state = LogViewState::new();
+        state.h_offset = 100;
+        state.max_line_width = 200;
+        state.visible_width = 80;
+
+        // Shrink the content
+        state.update_horizontal_size(150, 80);
+
+        // h_offset should be clamped to max_h_offset = 150 - 80 = 70
+        assert_eq!(state.h_offset, 70);
+    }
+
+    #[test]
+    fn test_line_width() {
+        let line = Line::from(vec![Span::raw("Hello"), Span::raw(" "), Span::raw("World")]);
+        assert_eq!(LogView::line_width(&line), 11);
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_no_scroll_needed() {
+        let line = Line::from("Short line");
+        let result = LogView::apply_horizontal_scroll(line, 0, 80);
+        let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(content, "Short line");
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_truncate_right() {
+        let line = Line::from("A very long line that exceeds visible width");
+        let result = LogView::apply_horizontal_scroll(line, 0, 20);
+        let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // Should have truncated content + right arrow
+        assert!(content.ends_with('→'), "Got: {}", content);
+        assert_eq!(content.chars().count(), 20);
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_with_offset() {
+        let line = Line::from("A very long line that exceeds visible width");
+        let result = LogView::apply_horizontal_scroll(line, 10, 20);
+        let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // Should have left arrow, content, and right arrow
+        assert!(content.starts_with('←'), "Got: {}", content);
+        assert!(content.ends_with('→'), "Got: {}", content);
+        assert_eq!(content.chars().count(), 20);
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_at_end() {
+        let line = Line::from("A very long line");
+        // Scroll to the end
+        let result = LogView::apply_horizontal_scroll(line, 6, 20);
+        let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+
+        // Should have left arrow but no right arrow (at end of line)
+        assert!(content.starts_with('←'), "Got: {}", content);
+        assert!(!content.ends_with('→'), "Got: {}", content);
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_preserves_styles() {
+        let line = Line::from(vec![
+            Span::styled("Red", Style::default().fg(Color::Red)),
+            Span::styled("Blue", Style::default().fg(Color::Blue)),
+        ]);
+        // Scroll so we see part of both spans
+        let result = LogView::apply_horizontal_scroll(line, 0, 20);
+
+        // Should still have styled spans
+        assert!(result.spans.len() >= 2);
+    }
+
+    #[test]
+    fn test_apply_horizontal_scroll_offset_beyond_content() {
+        let line = Line::from("Short");
+        let result = LogView::apply_horizontal_scroll(line, 100, 20);
+        let content: String = result.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(content, "");
     }
 }

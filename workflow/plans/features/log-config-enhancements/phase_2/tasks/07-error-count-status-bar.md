@@ -347,3 +347,69 @@ Without errors:
 - The `e`/`E` navigation (from Phase 1) complements this feature - users can quickly jump to errors after seeing the count
 - Consider adding a "click" action (via mouse or Enter) on the error count to jump to first error
 - Future enhancement: Show warning count as well ("3 errors, 5 warnings")
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/session.rs` | Added cached `error_count` field, updated `add_log()` to increment count (and decrement on log trimming), updated `clear_logs()` to reset count, changed `error_count()` to return cached value, added `recalculate_error_count()` method |
+| `src/tui/widgets/status_bar.rs` | Added `error_count()` method for rendering, integrated into `build_segments()`, added compact error indicator to `StatusBarCompact` |
+
+### Implementation Details
+
+1. **Cached Error Count (`session.rs`)**:
+   - Added private `error_count: usize` field to `Session` struct
+   - `add_log()` increments count when adding error-level entries
+   - `add_log()` also decrements count when logs are trimmed (to maintain consistency)
+   - `clear_logs()` resets count to 0
+   - `error_count()` returns the cached value (O(1) instead of O(n))
+   - Added `recalculate_error_count()` for debugging/consistency checks
+
+2. **Status Bar Display (`status_bar.rs`)**:
+   - Full status bar: "✓ No errors" (dim gray) or "✗ N error(s)" (bold red)
+   - Compact status bar: "✗N" (bold red) only when errors > 0, hidden otherwise
+   - Singular/plural handling ("1 error" vs "3 errors")
+
+3. **render.rs**: No changes needed - StatusBar already has access to AppState
+
+### Notable Decisions/Tradeoffs
+
+- Used cached count rather than recalculating on every render for performance
+- Log trimming properly decrements error count to maintain consistency
+- Compact status bar only shows error indicator when there are errors (to save space)
+- Error count displays in the status bar even with 0 errors in full mode (for visibility)
+
+### Testing Performed
+
+```bash
+cargo check   # Passed
+cargo fmt     # Applied
+cargo clippy  # Passed
+cargo test error_count  # 13 tests passed
+```
+
+**Tests Added:**
+- `test_error_count_increments_on_error` - verifies count increments correctly
+- `test_error_count_resets_on_clear` - verifies count resets on clear_logs()
+- `test_error_count_adjusts_on_log_trim` - verifies count adjusts when old logs are removed
+- `test_recalculate_error_count` - verifies recalculation works correctly
+- `test_error_count_with_log_helpers` - verifies log_info/log_error helpers work
+- `test_error_count_matches_actual_errors` - verifies cached count matches actual count
+- `test_error_count_zero` - status bar shows "No errors" with 0 errors
+- `test_error_count_singular` - status bar shows "1 error" singular
+- `test_error_count_plural` - status bar shows "N errors" plural
+- `test_error_count_no_session` - handles no session case
+- `test_error_count_in_segments` - verifies error count appears in status bar segments
+- `test_compact_status_bar_with_errors` - compact bar shows error indicator
+- `test_compact_status_bar_no_errors` - compact bar hides error indicator when 0
+
+### Risks/Limitations
+
+- If logs are added without using `add_log()` (direct push to `logs` vec), the count will be incorrect. Mitigated by keeping `error_count` private and providing `recalculate_error_count()`.
+- The cached count could theoretically drift from actual count in edge cases, but tests verify consistency.

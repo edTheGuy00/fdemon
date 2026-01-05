@@ -208,6 +208,14 @@ pub struct UiSettings {
     /// Theme name
     #[serde(default = "default_theme")]
     pub theme: String,
+
+    /// Whether stack traces start collapsed (default: true)
+    #[serde(default = "default_true")]
+    pub stack_trace_collapsed: bool,
+
+    /// Maximum frames to show when collapsed (default: 3)
+    #[serde(default = "default_stack_trace_max_frames")]
+    pub stack_trace_max_frames: usize,
 }
 
 impl Default for UiSettings {
@@ -217,8 +225,14 @@ impl Default for UiSettings {
             show_timestamps: true,
             compact_logs: false,
             theme: default_theme(),
+            stack_trace_collapsed: true,
+            stack_trace_max_frames: default_stack_trace_max_frames(),
         }
     }
+}
+
+fn default_stack_trace_max_frames() -> usize {
+    3
 }
 
 fn default_log_buffer_size() -> usize {
