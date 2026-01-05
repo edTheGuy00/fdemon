@@ -37,7 +37,9 @@ Not all terminals support OSC 8 hyperlinks. Before emitting hyperlink escape seq
 
 ### Implementation Details
 
-#### 1. Detection Function
+#### 3. Detection Function (Terminal Only)
+
+> **Note**: IDE detection is handled by `detect_parent_ide()` in Task 02. This function focuses on terminal type detection.
 
 ```rust
 // In src/tui/hyperlinks.rs
@@ -326,6 +328,7 @@ impl std::fmt::Display for TerminalInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ParentIde;
     use std::env;
 
     // Note: These tests modify environment variables and should be run serially

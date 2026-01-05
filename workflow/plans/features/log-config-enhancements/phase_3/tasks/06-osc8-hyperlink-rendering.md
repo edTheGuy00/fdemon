@@ -1,20 +1,47 @@
 ## Task: OSC 8 Hyperlink Rendering
 
-**Objective**: Integrate OSC 8 hyperlink escape sequences into terminal output so that file:line references in stack traces become clickable in supported terminals.
+**Objective**: Integrate OSC 8 hyperlink escape sequences into terminal output so that file:line references in stack traces become clickable in supported terminals. When running in an IDE's integrated terminal, use IDE-specific URL schemes so Ctrl+click (or Cmd+click on macOS) opens files in that IDE.
 
 **Depends on**: 
 - [01-hyperlink-module-url-generation](01-hyperlink-module-url-generation.md) - OSC 8 sequence generation
-- [02-editor-configuration](02-editor-configuration.md) - Configuration settings
+- [02-editor-configuration](02-editor-configuration.md) - Configuration settings and parent IDE detection
 - [05-terminal-capability-detection](05-terminal-capability-detection.md) - Terminal support detection
 
 **Status**: Experimental - May require custom rendering approach
 
+### Performance Benefits from Bug Fix Work
+
+The logger block propagation bug fix implemented virtualization that significantly simplifies this task:
+
+| Optimization | Impact on Hyperlinks |
+|--------------|---------------------|
+| **Virtualization** | Only ~30-50 entries rendered per frame → HyperlinkMap contains ~30-50 regions max |
+| **visible_range()** | Efficient bounds for hyperlink region tracking |
+| **VecDeque storage** | Indexing unchanged; no code modifications needed |
+| **Buffer lines** | Pre-rendered entries above/below viewport included in hyperlink tracking |
+
+**Key Implication**: `HyperlinkMap` is rebuilt each frame with only visible entries. No need to track hyperlinks for all 10,000+ logs in the buffer.
+
 ### Scope
 
-- `src/tui/hyperlinks.rs`: Hyperlink rendering helpers
+- `src/tui/hyperlinks.rs`: Hyperlink rendering helpers, `HyperlinkMap` struct, IDE-specific URL generation
 - `src/tui/render.rs`: Integration with frame rendering
-- `src/tui/terminal.rs`: Terminal output handling
-- `src/tui/widgets/log_view.rs`: Mark hyperlink regions during render
+- `src/tui/terminal.rs`: Terminal output handling (if needed)
+- `src/tui/widgets/log_view.rs`: Mark hyperlink regions during render (leverages existing virtualization)
+
+### Ctrl+Click / Cmd+Click Support
+
+The key to making hyperlinks work well is using the **correct URL scheme**:
+
+| Scenario | URL Scheme | Example | Ctrl+Click Behavior |
+|----------|------------|---------|---------------------|
+| Running in VS Code terminal | `vscode://` | `vscode://file/path/file.dart:42:10` | Opens in current VS Code instance |
+| Running in Cursor terminal | `cursor://` | `cursor://file/path/file.dart:42:10` | Opens in current Cursor instance |
+| Running in Zed terminal | `zed://` | `zed://file/path/file.dart:42` | Opens in current Zed instance |
+| Running in IntelliJ terminal | `idea://` | `idea://open?file=/path/file.dart&line=42` | Opens in current IntelliJ instance |
+| Running in plain terminal | `file://` | `file:///path/file.dart` | Opens with default handler (may not work well) |
+
+**Key Insight**: `file://` URLs often just reveal files in Finder/Explorer. IDE-specific URL schemes actually open the file in the editor at the correct line!
 
 ### Background
 
@@ -32,6 +59,8 @@ Where:
 - `ESC ] 8 ; ; ST` closes the hyperlink
 
 The challenge is that Ratatui's cell-based rendering doesn't natively support OSC 8. We need to inject these sequences at the right point in the rendering pipeline.
+
+Additionally, we need to generate the **right URL scheme** based on the detected parent IDE (from Task 02) so that Ctrl+click opens files in the current IDE instance.
 
 ### Approach Options
 
@@ -69,11 +98,54 @@ Write OSC 8 sequences directly to stdout at specific moments, bypassing Ratatui 
 
 ```rust
 use std::io::Write;
+use crate::config::{detect_parent_ide, ParentIde};
 
 fn write_hyperlink(stdout: &mut impl Write, text: &str, url: &str) -> io::Result<()> {
     write!(stdout, "\x1b]8;;{}\x1b\\{}\x1b]8;;\x1b\\", url, text)
 }
+
+/// Generate a URL using the appropriate scheme for the detected parent IDE
+/// This enables Ctrl+click to open files in the current IDE instance
+fn ide_aware_file_url(file_ref: &FileReference, project_root: &Path) -> String {
+    // Resolve the absolute path first
+    let abs_path = file_ref.resolve_path(project_root);
+    let path_str = abs_path.display().to_string();
+    
+    if let Some(ide) = detect_parent_ide() {
+        match ide {
+            ParentIde::VSCode => {
+                // vscode://file/path:line:column
+                format!("vscode://file{}:{}:{}", path_str, file_ref.line, file_ref.column.max(1))
+            }
+            ParentIde::VSCodeInsiders => {
+                format!("vscode-insiders://file{}:{}:{}", path_str, file_ref.line, file_ref.column.max(1))
+            }
+            ParentIde::Cursor => {
+                format!("cursor://file{}:{}:{}", path_str, file_ref.line, file_ref.column.max(1))
+            }
+            ParentIde::Zed => {
+                // Zed uses zed://file/path:line (no column)
+                format!("zed://file{}:{}", path_str, file_ref.line)
+            }
+            ParentIde::IntelliJ | ParentIde::AndroidStudio => {
+                // JetBrains uses idea://open?file=path&line=N
+                format!("idea://open?file={}&line={}", 
+                    urlencoding::encode(&path_str), 
+                    file_ref.line)
+            }
+            ParentIde::Neovim => {
+                // Neovim doesn't have a URL scheme, fall back to file://
+                file_url_with_position(file_ref)
+            }
+        }
+    } else {
+        // No parent IDE detected, use standard file:// URL
+        file_url_with_position(file_ref)
+    }
+}
 ```
+
+**Note**: Add `urlencoding` to Cargo.toml dependencies for JetBrains URL encoding, or use a simple percent-encoding function.
 
 **Pros:**
 - Simple and direct
@@ -152,12 +224,17 @@ impl HyperlinkMap {
 
 impl<'a> StatefulWidget for LogView<'a> {
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut LogViewState) {
-        // Clear previous hyperlink regions
+        // Clear previous hyperlink regions (rebuilt each frame)
         state.hyperlink_map.clear();
         
         // ... existing rendering logic ...
         
+        // PERFORMANCE: Thanks to virtualization, we only process visible entries
+        // visible_range() returns ~30-50 entries max (visible + buffer_lines)
+        let (visible_start, visible_end) = state.visible_range();
+        
         // When rendering a stack frame with file:line
+        // Note: Only visible frames are iterated - not all 10,000+ logs
         for frame in visible_frames {
             if !frame.is_async_gap && hyperlinks_enabled {
                 // Calculate the screen position of the file:line text
@@ -165,11 +242,12 @@ impl<'a> StatefulWidget for LogView<'a> {
                 let x_end = /* calculated end position */;
                 let y = /* current line */;
                 
-                // Create file URL
-                let file_ref = FileReference::from_stack_frame(frame)?;
-                let url = file_url_with_position(&file_ref);
+                /// Create file URL with appropriate scheme for parent IDE
+                                let file_ref = FileReference::from_stack_frame(frame)?;
+                                let url = ide_aware_file_url(&file_ref, project_root);
                 
                 // Register hyperlink region
+                // HyperlinkMap typically contains ~30-50 regions (not thousands)
                 state.hyperlink_map.add_region(y, x_start, x_end, url);
             }
         }
@@ -340,11 +418,18 @@ hyperlinks = "auto"
 ### LogViewState Update
 
 ```rust
-// Add to LogViewState
+// Add to LogViewState (note: existing fields from bug fix work)
 pub struct LogViewState {
-    // ... existing fields ...
+    // ... existing fields (offset, h_offset, auto_scroll, etc.) ...
     
-    /// Map of hyperlink regions for OSC 8 rendering
+    /// Buffer lines above/below viewport (added in Task 05)
+    pub buffer_lines: usize,
+    
+    /// Focus info for file opening (added in Task 03)
+    pub focus_info: FocusInfo,
+    
+    /// Map of hyperlink regions for OSC 8 rendering (NEW)
+    /// Rebuilt each frame with only visible entries (~30-50 max)
     pub hyperlink_map: HyperlinkMap,
 }
 ```
@@ -355,11 +440,14 @@ pub struct LogViewState {
 2. [ ] Stack frame file references marked as hyperlink regions during render
 3. [ ] OSC 8 sequences injected after Ratatui flush (or inline)
 4. [ ] Hyperlinks only enabled when `hyperlinks != disabled` AND terminal supports
-5. [ ] Clicking hyperlink in iTerm2/Kitty opens file URL
-6. [ ] No visual artifacts in unsupported terminals
-7. [ ] Hyperlinks don't interfere with Ratatui's screen diffing
-8. [ ] Configuration option to force enable/disable
-9. [ ] Graceful degradation when detection fails
+5. [ ] **IDE-specific URL schemes used when parent IDE detected**
+6. [ ] **Ctrl+click in VS Code terminal opens file in that VS Code instance**
+7. [ ] **Ctrl+click in Cursor/Zed/IntelliJ terminals opens in those IDEs**
+8. [ ] Clicking hyperlink in iTerm2/Kitty opens file URL
+9. [ ] No visual artifacts in unsupported terminals
+10. [ ] Hyperlinks don't interfere with Ratatui's screen diffing
+11. [ ] Configuration option to force enable/disable
+12. [ ] Graceful degradation when detection fails
 
 ### Testing
 
@@ -404,24 +492,41 @@ mod tests {
 
 #### Manual Testing
 
+**In VS Code Terminal:**
+1. Run Flutter Demon from VS Code's integrated terminal
+2. Trigger an error with stack trace
+3. Hover over file:line reference - cursor should change
+4. Ctrl+click (or Cmd+click on macOS) on hyperlink
+5. Verify file opens **in the same VS Code window** at the correct line
+
+**In Cursor/Zed Terminal:**
+1. Run Flutter Demon from Cursor's or Zed's integrated terminal
+2. Trigger an error with stack trace
+3. Ctrl+click on file reference
+4. Verify file opens **in that IDE instance**
+
+**In Plain Terminal (iTerm2, Kitty, etc.):**
 1. Configure `hyperlinks = "enabled"` in config
 2. Run in iTerm2 (known to support OSC 8)
 3. Trigger an error with stack trace
 4. Hover over file:line reference - cursor should change
 5. Cmd+click on hyperlink
-6. Verify file opens (may open in Finder/browser for file:// URLs)
+6. Verify file opens (may open in default handler for file:// URLs)
 
 #### Compatibility Testing Matrix
 
-| Terminal | Test Status | Notes |
-|----------|-------------|-------|
-| iTerm2 | | Cmd+click should work |
-| Kitty | | Click should work |
-| WezTerm | | Click should work |
-| macOS Terminal | | Should not show garbage |
-| VS Code Terminal | | Ctrl+click should work |
-| Alacritty | | Click should work |
-| tmux | | May require passthrough config |
+| Terminal | Test Status | URL Scheme | Notes |
+|----------|-------------|------------|-------|
+| VS Code Terminal | | `vscode://` | Ctrl+click opens in same VS Code instance |
+| Cursor Terminal | | `cursor://` | Ctrl+click opens in same Cursor instance |
+| Zed Terminal | | `zed://` | Ctrl+click opens in same Zed instance |
+| IntelliJ Terminal | | `idea://` | Ctrl+click opens in same IntelliJ instance |
+| iTerm2 | | `file://` | Cmd+click should work |
+| Kitty | | `file://` | Click should work |
+| WezTerm | | `file://` | Click should work |
+| macOS Terminal | | N/A | Should not show garbage (OSC 8 unsupported) |
+| Alacritty | | `file://` | Click should work |
+| tmux | | Passthrough | May require passthrough config |
 
 ### Known Issues & Limitations
 
@@ -430,6 +535,8 @@ mod tests {
 3. **Screen Refresh**: Full redraws may be needed to maintain hyperlinks
 4. **URL Length**: Very long file paths may cause issues in some terminals
 5. **file:// Protocol**: Some terminals may not handle file:// URLs, only http(s)://
+6. **IDE URL Scheme Registration**: IDE URL schemes require the IDE to be properly installed and registered with the OS
+7. **Nested Terminals**: Running in tmux inside VS Code terminal may not detect the parent IDE correctly
 
 ### Fallback Plan
 
@@ -446,6 +553,11 @@ If OSC 8 integration proves too complex or unreliable:
 - Success depends on terminal behavior and Ratatui's handling of escape sequences
 - The `o` key (Task 04) provides fallback functionality regardless of OSC 8 success
 - Consider adding `--hyperlinks=on|off|auto` CLI flag for quick testing
+- **Performance**: With virtualization from bug fix work, HyperlinkMap operations are O(visible_entries) not O(total_logs)
+- **VecDeque Compatibility**: Log storage is now `VecDeque<LogEntry>` but indexing works identically to `Vec`
+- **IDE URL Schemes are Key**: Using `vscode://`, `cursor://`, `zed://`, `idea://` schemes makes Ctrl+click work properly
+- **Parent IDE Detection**: Leverages `detect_parent_ide()` from Task 02 to choose the right URL scheme
+- **Fallback**: If no parent IDE detected, falls back to `file://` URLs (which may not open in an editor)
 
 ### References
 
@@ -455,14 +567,15 @@ If OSC 8 integration proves too complex or unreliable:
 
 ### Estimated Time
 
-4-5 hours (may require additional iteration)
+3-4 hours (reduced due to virtualization limiting hyperlink scope; may require additional iteration)
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `src/tui/hyperlinks.rs` | Add `HyperlinkMap`, `HyperlinkRegion` |
+| `src/tui/hyperlinks.rs` | Add `HyperlinkMap`, `HyperlinkRegion`, `ide_aware_file_url()` |
 | `src/tui/widgets/log_view.rs` | Track hyperlink regions during render |
 | `src/tui/render.rs` or `runner.rs` | Inject OSC 8 after frame flush |
 | `src/config/types.rs` | Add `hyperlinks` field to `UiSettings` |
 | `src/tui/terminal.rs` | Potentially add custom writer |
+| `Cargo.toml` | Add `urlencoding` dependency (for JetBrains URL encoding) |

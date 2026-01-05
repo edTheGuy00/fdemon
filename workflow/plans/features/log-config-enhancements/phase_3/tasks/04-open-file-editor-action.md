@@ -1,10 +1,23 @@
 ## Task: Open File in Editor Action
 
-**Objective**: Implement the `o` key action to open the currently focused file reference in the user's configured editor at the correct line and column.
+**Objective**: Implement the `o` key action to open the currently focused file reference in the user's configured editor at the correct line and column. When running inside an IDE's integrated terminal, open files in the **current IDE instance** rather than spawning a new window.
 
 **Depends on**: 
-- [02-editor-configuration](02-editor-configuration.md) - Editor settings and pattern resolution
+- [02-editor-configuration](02-editor-configuration.md) - Editor settings, pattern resolution, and parent IDE detection
 - [03-cursor-file-reference-tracking](03-cursor-file-reference-tracking.md) - Focused file reference tracking
+
+### Prerequisites: Existing Infrastructure
+
+The bug fix work and Phase 2 provide useful infrastructure:
+
+| Component | Location | Purpose |
+|-----------|----------|---------|
+| `Session::focused_entry()` | `session.rs:757-760` | Get currently focused LogEntry |
+| `LogViewState::focus_info` | `log_view.rs` (Task 03) | Extracted FileReference from focused entry |
+| `LogViewState::focused_file_ref()` | `log_view.rs` (Task 03) | Convenience accessor for file reference |
+| `detect_parent_ide()` | `config/settings.rs` (Task 02) | Detect if running in an IDE terminal |
+| `editor_config_for_ide()` | `config/settings.rs` (Task 02) | Get editor config for detected IDE |
+| `ParentIde` enum | `config/types.rs` (Task 02) | Represents detected parent IDE |
 
 ### Scope
 
@@ -17,11 +30,29 @@
 ### Background
 
 With file reference tracking (Task 03) and editor configuration (Task 02) in place, we can now implement the action that opens a file in the editor. When the user presses `o`:
-1. Get the currently focused file reference from log view state
-2. Resolve the file path (convert package: to absolute path)
-3. Substitute variables in the editor pattern
-4. Execute the editor command
-5. Show feedback (success or error)
+1. **Detect parent IDE** - Check if running in VS Code, Cursor, Zed, IntelliJ, etc.
+2. Get the currently focused file reference from `LogViewState::focus_info` (set during render)
+3. Resolve the file path (convert package: to absolute path)
+4. **Use IDE-specific command with reuse flags** if parent IDE detected
+5. Otherwise, use configured editor pattern
+6. Execute the editor command
+7. Show feedback (success or error)
+
+> **Note**: The focused file reference is stored in `LogViewState::focus_info.file_ref`, updated during each render pass by Task 03. This leverages the existing virtualization - only visible entries are processed.
+
+### Instance Reuse Priority
+
+When running inside an IDE's terminal, we want to open files in **that IDE instance**:
+
+| Scenario | Behavior |
+|----------|----------|
+| Running in VS Code terminal | Use `code --reuse-window --goto file:line:col` |
+| Running in Cursor terminal | Use `cursor --reuse-window --goto file:line:col` |
+| Running in Zed terminal | Use `zed file:line` (reuses by default) |
+| Running in IntelliJ terminal | Use `idea --line N file` |
+| Running in plain terminal | Use configured editor or auto-detect |
+
+This ensures a seamless experience where `o` opens the file exactly where the user expects it.
 
 ### Implementation Details
 
@@ -34,12 +65,15 @@ pub enum Message {
     // ... existing variants ...
     
     /// Open the currently focused file in the configured editor
+    /// If running in an IDE terminal, opens in that IDE instance
     OpenFileAtCursor,
     
     /// Result of attempting to open a file
     OpenFileResult {
         success: bool,
         message: String,
+        /// Which editor/IDE was used (for status display)
+        editor_name: Option<String>,
     },
 }
 ```
@@ -49,7 +83,7 @@ pub enum Message {
 ```rust
 // src/tui/editor.rs
 
-use crate::config::EditorSettings;
+use crate::config::{EditorSettings, ParentIde, detect_parent_ide, editor_config_for_ide};
 use crate::tui::hyperlinks::FileReference;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -74,20 +108,39 @@ pub enum EditorError {
 pub struct OpenResult {
     pub success: bool,
     pub editor: String,
+    pub editor_display_name: String,
     pub file: String,
     pub line: u32,
+    /// Whether we used the parent IDE (running in its terminal)
+    pub used_parent_ide: bool,
 }
 
 /// Open a file reference in the configured editor
+/// 
+/// Priority order:
+/// 1. Parent IDE (if running in an IDE's integrated terminal)
+/// 2. Configured editor from settings
+/// 3. Auto-detected editor ($VISUAL, $EDITOR, PATH search)
 pub fn open_in_editor(
     file_ref: &FileReference,
     settings: &EditorSettings,
     project_root: &Path,
 ) -> Result<OpenResult, EditorError> {
-    // 1. Resolve editor command and pattern
-    let (editor, pattern) = settings
-        .resolve()
-        .ok_or(EditorError::NoEditor)?;
+    // 1. Check for parent IDE first (instance reuse)
+    let (editor, pattern, display_name, used_parent_ide) = if let Some(ide) = detect_parent_ide() {
+        let config = editor_config_for_ide(ide);
+        (
+            config.command.to_string(),
+            config.pattern.to_string(),
+            config.display_name.to_string(),
+            true,
+        )
+    } else {
+        // Fall back to configured/detected editor
+        let (cmd, pat) = settings.resolve().ok_or(EditorError::NoEditor)?;
+        let name = settings.editor_display_name();
+        (cmd, pat, name, false)
+    };
     
     // 2. Resolve file path
     let resolved_path = resolve_file_path(&file_ref.path, project_root)?;
@@ -112,8 +165,10 @@ pub fn open_in_editor(
     Ok(OpenResult {
         success: true,
         editor,
+        editor_display_name: display_name,
         file: resolved_path.display().to_string(),
         line: file_ref.line,
+        used_parent_ide,
     })
 }
 
@@ -272,15 +327,18 @@ impl AppState {
     }
     
     fn open_file_at_cursor(&mut self) -> UpdateResult {
-        // Get focused file reference from current session
-        let file_ref = if let Some(handle) = self.session_manager.selected() {
-            handle.session.log_view_state.focused_file_ref().cloned()
+        // Get focused file reference from current session's LogViewState
+        // This was set during render by Task 03's focus tracking
+        let file_ref = if let Some(handle) = self.session_manager.selected_mut() {
+            // focus_info is updated during each render pass
+            handle.session.log_view_state.focus_info.file_ref.clone()
         } else {
             None
         };
         
         let Some(file_ref) = file_ref else {
             // No file reference at cursor
+            tracing::debug!("No file reference at cursor position");
             return UpdateResult::default();
         };
         
@@ -290,18 +348,31 @@ impl AppState {
             return UpdateResult::default();
         }
         
-        // Open in editor
+        // Open in editor (parent IDE detection happens inside open_in_editor)
         match open_in_editor(&file_ref, &self.settings.editor, &self.project_path) {
             Ok(result) => {
-                tracing::info!(
-                    "Opened {}:{} in {}",
-                    result.file,
-                    result.line,
-                    result.editor
-                );
+                if result.used_parent_ide {
+                    tracing::info!(
+                        "Opened {}:{} in {} (current instance)",
+                        result.file,
+                        result.line,
+                        result.editor_display_name
+                    );
+                } else {
+                    tracing::info!(
+                        "Opened {}:{} in {}",
+                        result.file,
+                        result.line,
+                        result.editor_display_name
+                    );
+                }
+                
+                // Could show a brief status message in the UI
+                // e.g., "Opened main.dart:42 in VS Code"
             }
             Err(e) => {
                 tracing::warn!("Failed to open file: {}", e);
+                // Could show error in status bar
             }
         }
         
@@ -362,13 +433,27 @@ mod tests {
     #[test]
     fn test_substitute_pattern_vscode() {
         let result = substitute_pattern(
-            "code --goto $FILE:$LINE:$COLUMN",
+            "code --reuse-window --goto $FILE:$LINE:$COLUMN",
             "code",
             Path::new("/path/to/file.dart"),
             42,
             10,
         );
-        assert_eq!(result, "code --goto /path/to/file.dart:42:10");
+        assert_eq!(result, "code --reuse-window --goto /path/to/file.dart:42:10");
+    }
+    
+    #[test]
+    fn test_open_result_tracks_parent_ide() {
+        // When parent IDE is detected, used_parent_ide should be true
+        let result = OpenResult {
+            success: true,
+            editor: "code".to_string(),
+            editor_display_name: "Visual Studio Code".to_string(),
+            file: "/path/to/file.dart".to_string(),
+            line: 42,
+            used_parent_ide: true,
+        };
+        assert!(result.used_parent_ide);
     }
 
     #[test]
@@ -491,6 +576,9 @@ mod tests {
 | Path with spaces | Correctly quoted/escaped |
 | Very long file paths | Handle without truncation |
 | Non-existent editor command | Log spawn error |
+| Running in VS Code terminal | Opens in current VS Code instance |
+| Running in Zed terminal | Opens in current Zed instance |
+| Running in IntelliJ terminal | Opens in current IntelliJ instance |
 
 ### Security Considerations
 
@@ -503,9 +591,14 @@ mod tests {
 ### Notes
 
 - The editor is spawned as a child process but we don't wait for it (non-blocking)
-- Some editors (VS Code) may reuse existing window, others open new window
+- **Parent IDE detection is checked first** - if running in VS Code terminal, opens in that VS Code instance
+- `--reuse-window` flag is used for VS Code/Cursor to ensure instance reuse
+- Zed and JetBrains IDEs reuse by default without special flags
+- Neovim uses RPC (`--server $NVIM --remote-send`) when running inside `:terminal`
 - Consider adding a config option to specify whether to wait for editor to close
 - Future enhancement: Show editor name in status bar when file is opened
+- **Existing Infrastructure**: `Session::focused_entry()` provides basic focus tracking; Task 03 extends this with file reference extraction in `LogViewState::focus_info`
+- **VecDeque Compatibility**: Log storage is `VecDeque<LogEntry>` (from bug fix) but this doesn't affect file opening logic
 
 ### Estimated Time
 

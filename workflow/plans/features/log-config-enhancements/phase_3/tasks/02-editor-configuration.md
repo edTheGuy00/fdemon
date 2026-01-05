@@ -1,28 +1,32 @@
 ## Task: Editor Configuration Settings
 
-**Objective**: Add configuration settings for editor integration, allowing users to specify their preferred editor and customize the command pattern used to open files at specific lines.
+**Objective**: Add configuration settings for editor integration, allowing users to specify their preferred editor and customize the command pattern used to open files at specific lines. Includes parent IDE detection to reuse the current IDE instance when running in an integrated terminal.
 
 **Depends on**: None
 
 ### Scope
 
 - `src/config/types.rs`: Add `EditorSettings` struct with command and pattern fields
-- `src/config/settings.rs`: Add default editor detection logic
+- `src/config/settings.rs`: Add default editor detection logic and parent IDE detection
 
 ### Background
 
 To open files from stack traces in the user's editor, we need configurable settings:
 1. Which editor to use (VS Code, Zed, Neovim, etc.)
 2. The command pattern for opening at a specific line/column
+3. **Parent IDE detection** to reuse the current IDE instance
+
+**Key Insight**: Flutter Demon will often run from within an IDE's integrated terminal. When the user presses `o` to open a file, we should open it in the **running IDE instance**, not spawn a new window.
 
 Different editors have different command-line syntax:
-- VS Code: `code --goto file:line:column`
-- Zed: `zed file:line`
+- VS Code: `code --reuse-window --goto file:line:column`
+- Zed: `zed file:line` (reuses by default)
 - Neovim: `nvim +line file`
 - Vim: `vim +line file`
 - Emacs: `emacs +line:column file`
 - Sublime Text: `subl file:line:column`
 - JetBrains IDEs: `idea --line line file`
+- Cursor: `cursor --reuse-window --goto file:line:column`
 
 ### Implementation Details
 
@@ -57,6 +61,55 @@ impl Default for EditorSettings {
 
 fn default_open_pattern() -> String {
     "$EDITOR $FILE:$LINE".to_string()
+}
+
+/// Detected parent IDE when running in an integrated terminal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParentIde {
+    VSCode,
+    VSCodeInsiders,
+    Cursor,
+    Zed,
+    IntelliJ,
+    AndroidStudio,
+    Neovim,
+}
+
+impl ParentIde {
+    /// URL scheme for OSC 8 hyperlinks (Ctrl+click support)
+    pub fn url_scheme(&self) -> &'static str {
+        match self {
+            ParentIde::VSCode => "vscode",
+            ParentIde::VSCodeInsiders => "vscode-insiders",
+            ParentIde::Cursor => "cursor",
+            ParentIde::Zed => "zed",
+            ParentIde::IntelliJ | ParentIde::AndroidStudio => "idea",
+            ParentIde::Neovim => "file", // Neovim doesn't have URL scheme
+        }
+    }
+    
+    /// Command-line flag to reuse existing window
+    pub fn reuse_flag(&self) -> Option<&'static str> {
+        match self {
+            ParentIde::VSCode | ParentIde::VSCodeInsiders | ParentIde::Cursor => {
+                Some("--reuse-window")
+            }
+            _ => None,
+        }
+    }
+    
+    /// Display name for the IDE
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            ParentIde::VSCode => "VS Code",
+            ParentIde::VSCodeInsiders => "VS Code Insiders",
+            ParentIde::Cursor => "Cursor",
+            ParentIde::Zed => "Zed",
+            ParentIde::IntelliJ => "IntelliJ IDEA",
+            ParentIde::AndroidStudio => "Android Studio",
+            ParentIde::Neovim => "Neovim",
+        }
+    }
 }
 ```
 
@@ -101,10 +154,11 @@ pub struct EditorConfig {
 }
 
 /// List of known editors with their file:line patterns
+/// Note: Patterns include --reuse-window where applicable for IDE instance reuse
 pub const KNOWN_EDITORS: &[EditorConfig] = &[
     EditorConfig {
         command: "code",
-        pattern: "code --goto $FILE:$LINE:$COLUMN",
+        pattern: "code --reuse-window --goto $FILE:$LINE:$COLUMN",
         display_name: "Visual Studio Code",
     },
     EditorConfig {
@@ -139,18 +193,118 @@ pub const KNOWN_EDITORS: &[EditorConfig] = &[
     },
     EditorConfig {
         command: "cursor",
-        pattern: "cursor --goto $FILE:$LINE:$COLUMN",
+        pattern: "cursor --reuse-window --goto $FILE:$LINE:$COLUMN",
         display_name: "Cursor",
     },
 ];
 
+/// Detect if running inside an IDE's integrated terminal
+/// 
+/// This is crucial for opening files in the CURRENT IDE instance
+/// rather than spawning a new window.
+pub fn detect_parent_ide() -> Option<ParentIde> {
+    use std::env;
+    
+    // Check TERM_PROGRAM first (most reliable)
+    if let Ok(term_program) = env::var("TERM_PROGRAM") {
+        match term_program.as_str() {
+            "vscode" => return Some(ParentIde::VSCode),
+            "vscode-insiders" => return Some(ParentIde::VSCodeInsiders),
+            "cursor" => return Some(ParentIde::Cursor),
+            "Zed" => return Some(ParentIde::Zed),
+            _ => {}
+        }
+    }
+    
+    // Check for Zed's terminal marker
+    if env::var("ZED_TERM").is_ok() {
+        return Some(ParentIde::Zed);
+    }
+    
+    // Check for VS Code's IPC hook (backup detection)
+    if env::var("VSCODE_IPC_HOOK_CLI").is_ok() {
+        // Could be VS Code or a fork - check more specifically
+        if env::var("TERM_PROGRAM").map(|v| v == "cursor").unwrap_or(false) {
+            return Some(ParentIde::Cursor);
+        }
+        return Some(ParentIde::VSCode);
+    }
+    
+    // Check for JetBrains terminal
+    if let Ok(terminal_emulator) = env::var("TERMINAL_EMULATOR") {
+        if terminal_emulator.starts_with("JetBrains") {
+            // Try to distinguish between IntelliJ and Android Studio
+            if let Ok(idea_dir) = env::var("IDEA_INITIAL_DIRECTORY") {
+                if idea_dir.contains("AndroidStudio") {
+                    return Some(ParentIde::AndroidStudio);
+                }
+            }
+            return Some(ParentIde::IntelliJ);
+        }
+    }
+    
+    // Check for Neovim's socket (running inside :terminal)
+    if env::var("NVIM").is_ok() {
+        return Some(ParentIde::Neovim);
+    }
+    
+    None
+}
+
+/// Get the editor config for a detected parent IDE
+pub fn editor_config_for_ide(ide: ParentIde) -> EditorConfig {
+    match ide {
+        ParentIde::VSCode => EditorConfig {
+            command: "code",
+            pattern: "code --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "Visual Studio Code",
+        },
+        ParentIde::VSCodeInsiders => EditorConfig {
+            command: "code-insiders",
+            pattern: "code-insiders --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "VS Code Insiders",
+        },
+        ParentIde::Cursor => EditorConfig {
+            command: "cursor",
+            pattern: "cursor --reuse-window --goto $FILE:$LINE:$COLUMN",
+            display_name: "Cursor",
+        },
+        ParentIde::Zed => EditorConfig {
+            command: "zed",
+            pattern: "zed $FILE:$LINE",
+            display_name: "Zed",
+        },
+        ParentIde::IntelliJ => EditorConfig {
+            command: "idea",
+            pattern: "idea --line $LINE $FILE",
+            display_name: "IntelliJ IDEA",
+        },
+        ParentIde::AndroidStudio => EditorConfig {
+            command: "studio",
+            pattern: "studio --line $LINE $FILE",
+            display_name: "Android Studio",
+        },
+        ParentIde::Neovim => EditorConfig {
+            command: "nvim",
+            pattern: "nvim --server $NVIM --remote-send '<Esc>:e +$LINE $FILE<CR>'",
+            display_name: "Neovim",
+        },
+    }
+}
+
 /// Detect the user's preferred editor
 /// 
 /// Detection order:
-/// 1. $VISUAL environment variable
-/// 2. $EDITOR environment variable  
-/// 3. Check for common editors in PATH
+/// 1. **Parent IDE** - If running in an IDE's terminal, use that IDE
+/// 2. $VISUAL environment variable
+/// 3. $EDITOR environment variable  
+/// 4. Check for common editors in PATH
 pub fn detect_editor() -> Option<EditorConfig> {
+    // Priority 1: Parent IDE (most important for instance reuse)
+    if let Some(ide) = detect_parent_ide() {
+        return Some(editor_config_for_ide(ide));
+    }
+    
     // Check environment variables first
     for var in ["VISUAL", "EDITOR"] {
         if let Ok(editor) = env::var(var) {
@@ -210,6 +364,12 @@ fn is_command_available(cmd: &str) -> bool {
 impl EditorSettings {
     /// Resolve the effective editor command and pattern
     /// Uses configured values or falls back to auto-detection
+    /// 
+    /// Priority order:
+    /// 1. Explicitly configured command (if set)
+    /// 2. Parent IDE detection (if running in an IDE terminal)
+    /// 3. $VISUAL / $EDITOR environment variables
+    /// 4. Common editors in PATH
     pub fn resolve(&self) -> Option<(String, String)> {
         let command = if self.command.is_empty() {
             detect_editor().map(|e| e.command.to_string())?
@@ -240,6 +400,11 @@ impl EditorSettings {
                 .map(|e| e.display_name.to_string())
                 .unwrap_or_else(|| self.command.clone())
         }
+    }
+    
+    /// Check if we detected a parent IDE
+    pub fn detected_parent_ide(&self) -> Option<ParentIde> {
+        detect_parent_ide()
     }
 }
 ```
@@ -336,6 +501,33 @@ open_pattern = "nvim +$LINE $FILE"
             );
         }
     }
+    
+    #[test]
+    fn test_parent_ide_url_schemes() {
+        assert_eq!(ParentIde::VSCode.url_scheme(), "vscode");
+        assert_eq!(ParentIde::VSCodeInsiders.url_scheme(), "vscode-insiders");
+        assert_eq!(ParentIde::Cursor.url_scheme(), "cursor");
+        assert_eq!(ParentIde::Zed.url_scheme(), "zed");
+        assert_eq!(ParentIde::IntelliJ.url_scheme(), "idea");
+    }
+    
+    #[test]
+    fn test_parent_ide_reuse_flags() {
+        assert_eq!(ParentIde::VSCode.reuse_flag(), Some("--reuse-window"));
+        assert_eq!(ParentIde::Cursor.reuse_flag(), Some("--reuse-window"));
+        assert_eq!(ParentIde::Zed.reuse_flag(), None); // Zed reuses by default
+        assert_eq!(ParentIde::IntelliJ.reuse_flag(), None);
+    }
+    
+    #[test]
+    fn test_editor_config_for_ide() {
+        let config = editor_config_for_ide(ParentIde::VSCode);
+        assert_eq!(config.command, "code");
+        assert!(config.pattern.contains("--reuse-window"));
+        
+        let config = editor_config_for_ide(ParentIde::Zed);
+        assert_eq!(config.command, "zed");
+    }
 
     #[test]
     fn test_editor_display_name() {
@@ -352,3 +544,7 @@ open_pattern = "nvim +$LINE $FILE"
 - Editor detection happens at runtime, not at config load time
 - Caching detection results could improve performance if called frequently
 - The pattern substitution is implemented in Task 04 (Open File Action)
+- **Parent IDE detection is critical** for instance reuse when running in IDE terminals
+- VS Code, Cursor use `--reuse-window` flag; Zed and JetBrains IDEs reuse by default
+- Neovim when running inside `:terminal` can use `--server $NVIM --remote-send` for RPC
+- The `ParentIde` enum provides URL schemes for OSC 8 hyperlinks (Task 06 Ctrl+click support)
