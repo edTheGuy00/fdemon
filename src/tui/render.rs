@@ -17,15 +17,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let session_count = state.session_manager.len();
     let areas = layout::create_with_sessions(area, session_count);
 
-    // Main header with project name
-    let header = widgets::MainHeader::new(state.project_name.as_deref());
+    // Main header with project name and session tabs inside
+    let header = widgets::MainHeader::new(state.project_name.as_deref())
+        .with_sessions(&state.session_manager);
     frame.render_widget(header, areas.header);
-
-    // Tab subheader (only if multiple sessions)
-    if let Some(tabs_area) = areas.tabs {
-        let tabs = widgets::SessionTabs::new(&state.session_manager);
-        frame.render_widget(tabs, tabs_area);
-    }
 
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {

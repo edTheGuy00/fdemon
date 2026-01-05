@@ -10,14 +10,29 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use crate::app::session_manager::SessionManager;
+
+use super::SessionTabs;
+
 /// Main header showing app title, project name, and keybindings
+/// with optional session tabs rendered inside the bordered area
 pub struct MainHeader<'a> {
     project_name: Option<&'a str>,
+    session_manager: Option<&'a SessionManager>,
 }
 
 impl<'a> MainHeader<'a> {
     pub fn new(project_name: Option<&'a str>) -> Self {
-        Self { project_name }
+        Self {
+            project_name,
+            session_manager: None,
+        }
+    }
+
+    /// Add session manager to render tabs inside the header
+    pub fn with_sessions(mut self, session_manager: &'a SessionManager) -> Self {
+        self.session_manager = Some(session_manager);
+        self
     }
 }
 
@@ -25,13 +40,6 @@ impl Widget for MainHeader<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Render border
         Block::default().borders(Borders::ALL).render(area, buf);
-
-        let content_area = Rect {
-            x: area.x,
-            y: area.y,
-            width: area.width,
-            height: area.height.saturating_sub(1),
-        };
 
         let title = Style::default()
             .fg(Color::Cyan)
@@ -67,26 +75,39 @@ impl Widget for MainHeader<'_> {
 
         let keybindings_width: u16 = 23; // "[r] [R] [x] [d] [q]"
 
-        // Build left content
+        // Build left content (title + project name)
         let left_content = Line::from(vec![
             Span::styled(" Flutter Demon", title),
             Span::styled("  │  ", dim),
             Span::styled(project_name, project),
         ]);
 
-        // Render left-aligned content
-        buf.set_line(
-            content_area.x,
-            content_area.y,
-            &left_content,
-            content_area.width,
-        );
+        // Render title/project on the top border line (y = area.y)
+        buf.set_line(area.x, area.y, &left_content, area.width);
 
-        // Render right-aligned keybindings
-        if content_area.width > keybindings_width + 2 {
-            let x = content_area.x + content_area.width - keybindings_width - 1;
+        // Render right-aligned keybindings on the top border line
+        if area.width > keybindings_width + 2 {
+            let x = area.x + area.width - keybindings_width - 1;
             let right_content = Line::from(keybindings);
-            buf.set_line(x, content_area.y, &right_content, keybindings_width);
+            buf.set_line(x, area.y, &right_content, keybindings_width);
+        }
+
+        // Render session tabs inside the bordered area (if we have sessions)
+        if let Some(session_manager) = self.session_manager {
+            if !session_manager.is_empty() {
+                // Content area is inside the border (y + 1, with padding)
+                let tabs_area = Rect {
+                    x: area.x + 1,
+                    y: area.y + 1,
+                    width: area.width.saturating_sub(2),
+                    height: area.height.saturating_sub(2),
+                };
+
+                if tabs_area.height > 0 && tabs_area.width > 0 {
+                    let tabs = SessionTabs::new(session_manager);
+                    tabs.render(tabs_area, buf);
+                }
+            }
         }
     }
 }

@@ -62,45 +62,27 @@ pub fn create(area: Rect) -> ScreenAreas {
 ///
 /// # Arguments
 /// * `area` - Total screen area
-/// * `session_count` - Number of active sessions (determines if tabs are shown)
+/// * `session_count` - Number of active sessions (determines header height for tabs)
 pub fn create_with_sessions(area: Rect, session_count: usize) -> ScreenAreas {
-    let show_tabs = session_count >= 1;
-
-    let header_height = 3; // 2 for content + 1 for border
-    let tabs_height = if show_tabs { 1 } else { 0 };
+    // Header: 3 rows (top border + 1 content row + bottom border)
+    // Tabs render in the single content row when sessions exist
+    let header_height = 3;
     let status_height = 2; // 1 for border + 1 for content
+    let _ = session_count; // Used by header widget to decide whether to show tabs
 
-    let constraints = if show_tabs {
-        vec![
-            Constraint::Length(header_height),
-            Constraint::Length(tabs_height),
-            Constraint::Min(3), // Content area
-            Constraint::Length(status_height),
-        ]
-    } else {
-        vec![
-            Constraint::Length(header_height),
-            Constraint::Min(3), // Content area
-            Constraint::Length(status_height),
-        ]
-    };
+    let constraints = vec![
+        Constraint::Length(header_height),
+        Constraint::Min(3), // Content area
+        Constraint::Length(status_height),
+    ];
 
     let chunks = Layout::vertical(constraints).split(area);
 
-    if show_tabs {
-        ScreenAreas {
-            header: chunks[0],
-            tabs: Some(chunks[1]),
-            logs: chunks[2],
-            status: chunks[3],
-        }
-    } else {
-        ScreenAreas {
-            header: chunks[0],
-            tabs: None,
-            logs: chunks[1],
-            status: chunks[2],
-        }
+    ScreenAreas {
+        header: chunks[0],
+        tabs: None, // Tabs are now rendered inside the header
+        logs: chunks[1],
+        status: chunks[2],
     }
 }
 
@@ -114,13 +96,9 @@ pub fn use_compact_header(area: Rect) -> bool {
     area.width < MIN_FULL_STATUS_WIDTH
 }
 
-/// Get header height based on session count
-pub fn header_height(session_count: usize) -> u16 {
-    if session_count >= 1 {
-        4 // Main header + border + tabs/device row
-    } else {
-        3 // Main header + border
-    }
+/// Get header height (constant regardless of session count)
+pub fn header_height(_session_count: usize) -> u16 {
+    3 // Top border + content row + bottom border
 }
 
 /// Get timestamp format for log entries based on width
@@ -172,10 +150,10 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 1);
 
-        // Single session now shows tabs/subheader row
-        assert!(layout.tabs.is_some());
-        assert_eq!(layout.tabs.unwrap().height, 1);
-        assert!(layout.header.height > 0);
+        // Tabs are rendered inside the header, not as a separate area
+        assert!(layout.tabs.is_none());
+        // Header is always 3 rows (top border + content + bottom border)
+        assert_eq!(layout.header.height, 3);
         assert!(layout.logs.height > 0);
         assert!(layout.status.height > 0);
     }
@@ -185,8 +163,9 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 3);
 
-        assert!(layout.tabs.is_some());
-        assert_eq!(layout.tabs.unwrap().height, 1);
+        // Tabs are rendered inside header
+        assert!(layout.tabs.is_none());
+        assert_eq!(layout.header.height, 3);
     }
 
     #[test]
@@ -195,6 +174,7 @@ mod tests {
         let layout = create_with_sessions(area, 0);
 
         assert!(layout.tabs.is_none());
+        assert_eq!(layout.header.height, 3);
     }
 
     #[test]
@@ -221,11 +201,11 @@ mod tests {
 
     #[test]
     fn test_header_height() {
+        // Header is always 3 rows regardless of session count
         assert_eq!(header_height(0), 3);
-        // Single session now gets subheader row too
-        assert_eq!(header_height(1), 4);
-        assert_eq!(header_height(2), 4);
-        assert_eq!(header_height(5), 4);
+        assert_eq!(header_height(1), 3);
+        assert_eq!(header_height(2), 3);
+        assert_eq!(header_height(5), 3);
     }
 
     #[test]
@@ -245,20 +225,14 @@ mod tests {
         let total = layout.header.height + layout.logs.height + layout.status.height;
         assert_eq!(total, area.height);
 
-        // Single session (now includes tabs/subheader)
+        // Single session (tabs are inside header now)
         let layout = create_with_sessions(area, 1);
-        let total = layout.header.height
-            + layout.tabs.unwrap().height
-            + layout.logs.height
-            + layout.status.height;
+        let total = layout.header.height + layout.logs.height + layout.status.height;
         assert_eq!(total, area.height);
 
-        // Multiple sessions
+        // Multiple sessions (tabs are inside header now)
         let layout = create_with_sessions(area, 3);
-        let total = layout.header.height
-            + layout.tabs.unwrap().height
-            + layout.logs.height
-            + layout.status.height;
+        let total = layout.header.height + layout.logs.height + layout.status.height;
         assert_eq!(total, area.height);
     }
 }
