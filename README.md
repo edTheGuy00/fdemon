@@ -227,6 +227,32 @@ cargo clippy
 - **Flutter SDK** in your PATH
 - A terminal with Unicode support
 
+## Development Process
+
+Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured agent-based workflow.
+
+### AI-Assisted Development
+
+This project showcases a modern development approach using AI agents for planning, implementation, and research:
+
+- **[Agents](.claude/agents/)** - Specialized AI agents for different development tasks:
+  - `planner` - Feature design and task breakdown
+  - `implementor` - Code implementation and testing
+  - `researcher` - External API and documentation research
+  - `task-dispatcher` - Workflow orchestration
+
+- **[Skills](.claude/skills/)** - Agent capabilities and constraints:
+  - Planning guidelines and templates
+  - Implementation patterns and best practices
+  - Documentation requirements
+
+- **[Workflow History](workflow/plans/)** - Complete development history:
+  - Feature plans with architecture decisions
+  - Task breakdowns and progress tracking
+  - Bug reports and resolutions
+
+This transparent development process demonstrates how AI can augment software development while maintaining high code quality, comprehensive testing, and thorough documentation.
+
 ## License
 
 Licensed under the [MIT License](LICENSE).
