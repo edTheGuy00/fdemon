@@ -1,5 +1,5 @@
 <p align="center">
-    <img src="assets/logo.png" width="200">
+    <img src="docs/images/logo.png" width="400">
     <br>
     <br>
     <strong>Flutter Demon</strong>
@@ -19,6 +19,8 @@
 
 <h4 align="center">
   <a href="docs/ARCHITECTURE.md">Architecture</a> |
+  <a href="docs/KEYBINDINGS.md">Keybindings</a> |
+  <a href="docs/CONFIGURATION.md">Configuration</a> |
   <a href="#installation">Installation</a> |
   <a href="#usage">Usage</a>
 </h4>
@@ -27,21 +29,10 @@
 
 😈🔥 **Flutter Demon** is a high-performance terminal user interface for Flutter development. Run your Flutter apps, view logs in real-time, hot reload on file changes, and manage multiple device sessions — all from the comfort of your terminal!
 
-## Quickstart
+## Installation
 
-Install with `cargo`:
+Coming soon: pre-built binaries for Windows, macOS, and Linux!
 
-```bash
-cargo install flutter-demon
-```
-
-Then run it from your Flutter project directory:
-
-```bash
-fdemon
-```
-
-That's it! Flutter Demon will automatically detect your Flutter project and start the app. 🚀
 
 ## Features
 
@@ -83,28 +74,6 @@ Clean, responsive terminal interface built with [ratatui](https://github.com/rat
 - Status bar with reload count and timing
 - Device/emulator selection modal
 
-## Installation
-
-### From crates.io
-
-```bash
-cargo install flutter-demon
-```
-
-### From source
-
-```bash
-git clone https://github.com/nickmeinhold/flutter-demon
-cd flutter-demon
-cargo install --path .
-```
-
-### Run directly
-
-```bash
-cargo run -- /path/to/flutter/project
-```
-
 ## Usage
 
 ### Basic Usage
@@ -133,15 +102,9 @@ If multiple runnable projects are found, you'll see a selection menu:
 Flutter Demon
 
 Multiple Flutter projects found in:
-/path/to/workspace
 
-Select a project:
+![Screenshot of Flutter Demon project selection menu](docs/images/img1.png)
 
-  [1] app_one
-  [2] app_two
-  [3] my_plugin/example
-
-Enter number (1-3) or 'q' to quit:
 ```
 
 ### Working with Plugins
@@ -161,61 +124,23 @@ fdemon
 
 ## Keyboard Controls
 
-### General
+Flutter Demon provides extensive keyboard controls for efficient terminal-based development. For a complete reference of all keyboard bindings organized by mode and functionality, see **[KEYBINDINGS.md](docs/KEYBINDINGS.md)**.
+
+### Quick Reference
 
 | Key | Action |
 |-----|--------|
 | `q` / `Esc` | Quit |
-| `r` | Hot reload |
-| `R` | Hot restart |
-| `d` / `n` | Open device selector |
+| `r` / `R` | Hot reload / Hot restart |
+| `d` | Open device selector |
 | `c` | Clear logs |
-
-### Session Management
-
-| Key | Action |
-|-----|--------|
-| `1-9` | Switch to session |
-| `Tab` / `Shift+Tab` | Next/previous session |
-| `x` / `Ctrl+W` | Close current session |
-
-### Log Navigation
-
-| Key | Action |
-|-----|--------|
-| `j` / `↓` | Scroll down |
-| `k` / `↑` | Scroll up |
-| `g` | Go to top |
-| `G` | Go to bottom |
-| `Page Up/Down` | Page scroll |
-
-### Log Filtering
-
-| Key | Action |
-|-----|--------|
-| `f` | Cycle level filter (All → Errors → Warnings → Info → Debug) |
-| `F` | Cycle source filter (All → App → Daemon → Flutter → Watcher) |
-| `Ctrl+F` | Reset all filters |
-
-### Log Search
-
-| Key | Action |
-|-----|--------|
-| `/` | Start search (vim-style) |
-| `n` | Next search match |
-| `N` | Previous search match |
-| `Esc` | Cancel search |
-| `e` | Jump to next error |
-| `E` | Jump to previous error |
-
-### Link Navigation
-
-| Key | Action |
-|-----|--------|
+| `1-9` | Switch to session 1-9 |
+| `Tab` | Next/previous session |
+| `j` / `k` | Scroll down/up (vim-style) |
+| `f` / `F` | Cycle level/source filters |
+| `/` | Search logs (vim-style) |
+| `e` / `E` | Jump to next/previous error |
 | `L` | Enter link highlight mode |
-| `1-9` | Open link 1-9 (in link mode) |
-| `a-z` | Open link 10-35 (in link mode) |
-| `Esc` | Exit link mode |
 
 ## Opening Files from Logs
 
@@ -229,35 +154,33 @@ terminal (VS Code, Cursor, Zed, IntelliJ), files open in that IDE instance autom
 
 ## Configuration
 
-Flutter Demon supports configuration via `.fdemon/config.toml`:
+Flutter Demon is highly configurable to fit your development workflow. For complete documentation of all configuration options, see **[CONFIGURATION.md](docs/CONFIGURATION.md)**.
+
+### Quick Start
+
+Flutter Demon supports three configuration files:
+
+- **`.fdemon/config.toml`** - Global settings (behavior, watcher, UI, editor)
+- **`.fdemon/launch.toml`** - Launch configurations for different environments
+- **`.vscode/launch.json`** - Automatic VSCode compatibility (read-only)
+
+### Example: Global Settings
 
 ```toml
 [behavior]
-auto_start = false      # Show device selector on startup
-confirm_quit = true     # Confirm before quitting with running apps
+auto_start = false
+confirm_quit = true
 
 [watcher]
-paths = ["lib"]         # Directories to watch
-debounce_ms = 500       # Debounce delay for file changes
-auto_reload = true      # Trigger hot reload on file change
-extensions = ["dart"]   # File extensions to watch
-
-[ui]
-log_buffer_size = 10000
-show_timestamps = true
+paths = ["lib"]
+debounce_ms = 500
+auto_reload = true
 
 [editor]
-# Editor command (leave empty for auto-detection)
-# Auto-detected from: $VISUAL, $EDITOR, or common editors in PATH
-command = ""
-# Pattern for opening file at line/column
-# Variables: $EDITOR, $FILE, $LINE, $COLUMN
-open_pattern = "$EDITOR $FILE:$LINE"
+command = ""  # Auto-detect from environment
 ```
 
-### Launch Configurations
-
-Define launch configurations in `.fdemon/launch.toml`:
+### Example: Launch Configurations
 
 ```toml
 [[configurations]]
@@ -268,36 +191,17 @@ auto_start = true
 
 [configurations.dart_defines]
 API_URL = "https://dev.api.example.com"
-
-[[configurations]]
-name = "Production"
-device = "android"
-mode = "release"
-flavor = "production"
 ```
 
 > [!TIP]
-> Flutter Demon also reads `.vscode/launch.json` for compatibility with existing VSCode configurations!
+> Flutter Demon automatically imports existing `.vscode/launch.json` configurations - no migration needed!
+
+See the full [Configuration Reference](docs/CONFIGURATION.md) for all available options and examples.
 
 ## Architecture
 
 For developers interested in contributing or understanding the internals, see the [Architecture Documentation](docs/ARCHITECTURE.md).
 
-**TL;DR:** Flutter Demon follows the **Elm Architecture (TEA)** pattern with a layered design:
-
-```
-src/
-├── main.rs        # Binary entry point
-├── lib.rs         # Library public API
-├── common/        # Shared utilities (errors, logging, signals)
-├── core/          # Domain types (log entries, discovery)
-├── config/        # Configuration parsing (.fdemon/, .vscode/)
-├── daemon/        # Flutter process + JSON-RPC protocol
-├── watcher/       # File system watching for auto-reload
-├── services/      # Reusable service layer
-├── app/           # Application state (TEA pattern)
-└── tui/           # Terminal UI (ratatui widgets)
-```
 
 ## Contributing
 
