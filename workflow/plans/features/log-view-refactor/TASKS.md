@@ -62,30 +62,30 @@ This document tracks all tasks for refactoring the `log_view.rs` widget (2262 li
 
 | # | Task | Status | Depends On | Modules | Est. Time |
 |---|------|--------|------------|---------|-----------|
-| 1 | [01-create-module-directory](tasks/01-create-module-directory.md) | Not Started | - | `tui/widgets/` | 15 min |
-| 2 | [02-extract-styles-module](tasks/02-extract-styles-module.md) | Not Started | 01 | `log_view/styles.rs` | 20 min |
-| 3 | [03-extract-state-module](tasks/03-extract-state-module.md) | Not Started | 01 | `log_view/state.rs` | 45 min |
-| 4 | [04-migrate-widget-implementation](tasks/04-migrate-widget-implementation.md) | Not Started | 01, 02, 03 | `log_view/mod.rs` | 1.5 hr |
-| 5 | [05-extract-tests-module](tasks/05-extract-tests-module.md) | Not Started | 01-04 | `log_view/tests.rs` | 1 hr |
-| 6 | [06-cleanup-and-verify](tasks/06-cleanup-and-verify.md) | Not Started | 01-05 | All | 30 min |
-| 7 | [07-document-test-organization](tasks/07-document-test-organization.md) | Not Started | - | `docs/ARCHITECTURE.md` | 30 min |
+| 1 | [01-create-module-directory](tasks/01-create-module-directory.md) | Done | - | `tui/widgets/` | 15 min |
+| 2 | [02-extract-styles-module](tasks/02-extract-styles-module.md) | Done | 01 | `log_view/styles.rs` | 20 min |
+| 3 | [03-extract-state-module](tasks/03-extract-state-module.md) | Done | 01 | `log_view/state.rs` | 45 min |
+| 4 | [04-migrate-widget-implementation](tasks/04-migrate-widget-implementation.md) | Done | 01, 02, 03 | `log_view/mod.rs` | 1.5 hr |
+| 5 | [05-extract-tests-module](tasks/05-extract-tests-module.md) | Done | 01-04 | `log_view/tests.rs` | 1 hr |
+| 6 | [06-cleanup-and-verify](tasks/06-cleanup-and-verify.md) | Done | 01-05 | All | 30 min |
+| 7 | [07-document-test-organization](tasks/07-document-test-organization.md) | Done | - | `docs/ARCHITECTURE.md` | 30 min |
 
 ## Success Metrics
 
 ### Code Organization
-- [ ] No single file exceeds 1100 lines
-- [ ] Test code is isolated in dedicated `tests.rs` file
-- [ ] Module structure is clear and navigable
+- [x] No single file exceeds 1100 lines (max: tests.rs at 1050)
+- [x] Test code is isolated in dedicated `tests.rs` file
+- [x] Module structure is clear and navigable
 
 ### Functionality
-- [ ] All 68+ existing tests pass
-- [ ] `cargo check` passes with no new warnings
-- [ ] `cargo build --release` succeeds
-- [ ] Public API unchanged (`LogView`, `LogViewState` accessible)
+- [x] All 77 tests pass (originally estimated 68+)
+- [x] `cargo check` passes with no new warnings
+- [x] `cargo build --release` succeeds
+- [x] Public API unchanged (`LogView`, `LogViewState` accessible)
 
 ### Documentation
-- [ ] ARCHITECTURE.md contains testing guidelines
-- [ ] Test organization is documented for contributors
+- [x] ARCHITECTURE.md contains testing guidelines
+- [x] Test organization is documented for contributors
 
 ## File Structure (Before → After)
 

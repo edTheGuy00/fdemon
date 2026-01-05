@@ -177,3 +177,33 @@ cargo test horizontal_scroll
 - `calculate_total_lines` and `calculate_total_lines_filtered` are static methods that take `&VecDeque<LogEntry>` - they need the `crate::core::LogEntry` import
 - `FocusInfo` is a simple data struct with no complex logic
 - The constant `DEFAULT_BUFFER_LINES` should remain private to the module
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+**Files modified:**
+- Created: `src/tui/widgets/log_view/state.rs` (199 lines)
+  - Contains `FocusInfo` struct and impl
+  - Contains `LogViewState` struct and all methods
+  - Contains private `DEFAULT_BUFFER_LINES` constant
+- Modified: `src/tui/widgets/log_view/mod.rs` (2036 lines, down from 2226)
+  - Added `mod state;` declaration
+  - Added `pub use state::{FocusInfo, LogViewState};` re-exports
+  - Removed ~190 lines of state-related code
+  - Updated test to use literal `10` instead of `DEFAULT_BUFFER_LINES` constant
+
+**Notable decisions/tradeoffs:**
+- `DEFAULT_BUFFER_LINES` remains private to the state module (per task requirements)
+- Test `test_buffer_lines_default` updated to use literal value `10` with a comment explaining it's the DEFAULT_BUFFER_LINES value
+- `FocusInfo` and `LogViewState` are re-exported from mod.rs for public API compatibility
+
+**Testing performed:**
+- `cargo check` - PASSED (no errors)
+- `cargo test log_view` - PASSED (77/77 tests)
+  - All state-related tests pass including scroll, visible_range, and buffer_lines tests
+
+**Risks/limitations:**
+- None. The extraction was straightforward with minimal test adjustment needed.

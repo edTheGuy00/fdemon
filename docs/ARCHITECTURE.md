@@ -11,6 +11,7 @@ This document describes the internal architecture of Flutter Demon, a high-perfo
 - [Key Patterns](#key-patterns)
 - [Data Flow](#data-flow)
 - [Key Types](#key-types)
+- [Testing Strategy](#testing-strategy)
 
 ---
 
@@ -146,7 +147,11 @@ src/
     └── widgets/         # Reusable UI components
         ├── header.rs       # App header bar
         ├── tabs.rs         # Session tab bar
-        ├── log_view.rs     # Scrollable log display
+        ├── log_view/       # Scrollable log display (module)
+        │   ├── mod.rs         # Widget implementation
+        │   ├── state.rs       # LogViewState, FocusInfo
+        │   ├── styles.rs      # Stack trace styling
+        │   └── tests.rs       # Unit tests
         ├── status_bar.rs   # Bottom status bar
         └── device_selector.rs  # Device selection modal
 ```
@@ -529,10 +534,115 @@ pub enum UpdateAction {
 
 ---
 
+## Testing Strategy
+
+Flutter Demon follows Rust's conventional test organization with unit tests alongside source code and integration tests in a separate directory.
+
+### Unit Tests
+
+Unit tests live in `src/` alongside the code they test. There are two patterns:
+
+**Inline module (for small test suites):**
+```rust
+// src/some_module.rs
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_add() {
+        assert_eq!(add(2, 2), 4);
+    }
+}
+```
+
+**Separate file (for large test suites, 100+ lines):**
+```rust
+// src/some_module/mod.rs
+pub fn add(a: i32, b: i32) -> i32 { a + b }
+
+#[cfg(test)]
+mod tests;
+
+// src/some_module/tests.rs
+use super::*;
+
+#[test]
+fn test_add() {
+    assert_eq!(add(2, 2), 4);
+}
+```
+
+**Key points:**
+- Unit tests can access private items via `use super::*`
+- Use `#[cfg(test)]` to exclude test code from release builds
+- Prefer separate `tests.rs` file when tests exceed ~100 lines
+
+**Examples in this project:**
+| File | Tests | Description |
+|------|-------|-------------|
+| `src/app/handler/tests.rs` | 150+ | Handler unit tests |
+| `src/app/session/tests.rs` | 80+ | Session state tests |
+| `src/tui/widgets/log_view/tests.rs` | 77 | Log view widget tests |
+
+### Integration Tests
+
+Integration tests live in the `tests/` directory at the project root:
+
+```
+tests/
+└── discovery_integration.rs   # Flutter project discovery tests
+```
+
+**Key points:**
+- Integration tests can only access the public API
+- Each file in `tests/` is compiled as a separate crate
+- Use `tests/common/mod.rs` for shared helpers (not `tests/common.rs`)
+- Run with `cargo test --test <name>` for specific test files
+
+### Running Tests
+
+```bash
+# Run all tests
+cargo test
+
+# Run unit tests only
+cargo test --lib
+
+# Run integration tests only
+cargo test --test '*'
+
+# Run specific test file
+cargo test --test discovery_integration
+
+# Run tests matching a pattern
+cargo test log_view
+
+# Run with output visible
+cargo test -- --nocapture
+
+# Run specific test
+cargo test test_hot_reload_flow
+```
+
+### Test Coverage by Module
+
+| Module | Test File | Coverage |
+|--------|-----------|----------|
+| `app/handler` | `tests.rs` | Message handling, state transitions |
+| `app/session` | `tests.rs` | Session lifecycle, log management |
+| `core/discovery` | inline | Project detection logic |
+| `core/ansi` | inline | ANSI escape handling |
+| `daemon/protocol` | inline | JSON-RPC parsing |
+| `tui/widgets/log_view` | `tests.rs` | Widget rendering, scrolling |
+
+---
+
 ## Future Considerations
 
 1. **MCP Server** — Services layer designed for MCP (Model Context Protocol) integration
-2. **Multiple Projects** — Session architecture supports running apps from different projects
-3. **Plugin System** — Core/service separation enables plugin extensions
-4. **Remote Devices** — Device abstraction supports remote device connections
-5. **Themes** — UI settings include theme configuration placeholder
+2. **Plugin System** — Core/service separation enables plugin extensions
+3. **Remote Devices** — Device abstraction supports remote device connections
+4. **Themes** — UI settings include theme configuration placeholder

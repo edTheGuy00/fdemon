@@ -160,3 +160,30 @@ Consider also updating:
 - Use actual file paths from the project as examples
 - Keep the documentation concise but complete
 - This fulfills Phase 2 of the refactoring plan
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+**Files modified:**
+- `docs/ARCHITECTURE.md`:
+  - Added "Testing Strategy" to Table of Contents
+  - Updated Project Structure to reflect `log_view/` directory module
+  - Added new "Testing Strategy" section with:
+    - Unit test patterns (inline vs separate file)
+    - Integration test organization
+    - Running tests commands
+    - Test coverage by module table
+
+**Documentation includes:**
+- ✓ Unit test placement explanation (inline vs `tests.rs`)
+- ✓ Integration test placement (`tests/` directory)
+- ✓ Practical examples from this project
+- ✓ Common `cargo test` commands
+- ✓ Test coverage table by module
+
+**Verification:**
+- Testing section accessible via Table of Contents link
+- Project structure updated to show `log_view/` module

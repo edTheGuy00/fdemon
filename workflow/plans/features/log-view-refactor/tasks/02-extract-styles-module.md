@@ -91,3 +91,27 @@ src/tui/widgets/log_view/
 - The module is renamed from `stack_trace_styles` to just `styles` for brevity
 - If other code references `stack_trace_styles`, add a re-export: `pub use styles as stack_trace_styles;`
 - The constants are `pub` so they can be accessed from the widget implementation
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+**Files modified:**
+- Created: `src/tui/widgets/log_view/styles.rs` (37 lines)
+- Modified: `src/tui/widgets/log_view/mod.rs` (2226 lines, down from 2263)
+  - Added `pub mod styles;` declaration
+  - Removed inline `mod stack_trace_styles` block (~37 lines)
+  - Updated 4 occurrences of `use stack_trace_styles::*;` to `use styles::*;`
+
+**Notable decisions/tradeoffs:**
+- Used `use styles::*;` instead of a re-export alias since all usages were internal to the module
+- Made the styles module `pub` so it can be accessed externally via `log_view::styles::`
+
+**Testing performed:**
+- `cargo check` - PASSED (no errors)
+- `cargo test log_view` - PASSED (77/77 tests, including `test_stack_frame_styles_module_constants`)
+
+**Risks/limitations:**
+- None. The extraction was straightforward with no behavioral changes.
