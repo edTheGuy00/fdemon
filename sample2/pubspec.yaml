@@ -35,6 +35,11 @@ dependencies:
   # Use with the CupertinoIcons class for iOS style icons.
   cupertino_icons: ^1.0.8
 
+  # Logging libraries for testing Flutter Demon's log viewing
+  logger: ^2.5.0
+  talker: ^4.5.0
+  talker_flutter: ^4.5.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
