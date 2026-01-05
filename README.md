@@ -98,14 +98,7 @@ fdemon
 
 If multiple runnable projects are found, you'll see a selection menu:
 
-```
-Flutter Demon
-
-Multiple Flutter projects found in:
-
 ![Screenshot of Flutter Demon project selection menu](docs/images/img1.png)
-
-```
 
 ### Working with Plugins
 
