@@ -228,16 +228,13 @@ Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a s
 
 This project showcases a modern development approach using AI agents for planning, implementation, and research:
 
-- **[Agents](.claude/agents/)** - Specialized AI agents for different development tasks:
-  - `planner` - Feature design and task breakdown
-  - `implementor` - Code implementation and testing
+- **[Agents](.claude/agents/)** - Specialized AI subagents for isolated task execution:
+  - `task-dispatcher` - Orchestrates parallel task execution, manages TASKS.md status
+  - `implementor` - Executes implementation tasks, writes completion summaries
   - `researcher` - External API and documentation research
-  - `task-dispatcher` - Workflow orchestration
 
-- **[Skills](.claude/skills/)** - Agent capabilities and constraints:
-  - Planning guidelines and templates
-  - Implementation patterns and best practices
-  - Documentation requirements
+- **[Skills](.claude/skills/)** - Knowledge and guidance for the main conversation:
+  - `planner` - Feature design templates and planning guidelines
 
 - **[Workflow History](workflow/plans/)** - Complete development history:
   - Feature plans with architecture decisions
