@@ -19,8 +19,13 @@ use crate::core::{strip_ansi_codes, LogLevel};
 /// | `─`       | U+2500  | Box Drawings Light Horizontal       | Horizontal line |
 
 /// Check if a line is part of a Logger package structured block
+///
+/// Strips ANSI codes before checking for box-drawing characters to ensure
+/// reliable detection even if ANSI codes weren't stripped earlier in the pipeline.
 pub fn is_logger_block_line(message: &str) -> bool {
-    let trimmed = message.trim_start();
+    // Strip ANSI codes first for reliable detection
+    let cleaned = strip_ansi_codes(message);
+    let trimmed = cleaned.trim_start();
     trimmed.starts_with('┌')
         || trimmed.starts_with('│')
         || trimmed.starts_with('├')
@@ -30,13 +35,19 @@ pub fn is_logger_block_line(message: &str) -> bool {
 }
 
 /// Check if a line is the start of a Logger block (┌)
+///
+/// Strips ANSI codes before checking for box-drawing characters.
 pub fn is_block_start(message: &str) -> bool {
-    message.trim_start().starts_with('┌')
+    let cleaned = strip_ansi_codes(message);
+    cleaned.trim_start().starts_with('┌')
 }
 
 /// Check if a line is the end of a Logger block (└)
+///
+/// Strips ANSI codes before checking for box-drawing characters.
 pub fn is_block_end(message: &str) -> bool {
-    message.trim_start().starts_with('└')
+    let cleaned = strip_ansi_codes(message);
+    cleaned.trim_start().starts_with('└')
 }
 
 // ─────────────────────────────────────────────────────────
@@ -77,13 +88,36 @@ pub fn detect_raw_line_level(line: &str) -> (LogLevel, String) {
     (level, message.to_string())
 }
 
+/// Check if a line is a stack trace frame
+///
+/// Stack trace lines have patterns like:
+/// - `#0   ClassName.methodName (file:line)`
+/// - `│ #0   ClassName.methodName (file:line)`
+/// - `#1   _functionName (file:line)`
+///
+/// These should not trigger keyword-based error detection because they
+/// often contain class names like "ErrorTestingPage" or "ExceptionHandler".
+fn is_stack_trace_line(message: &str) -> bool {
+    // Strip leading box-drawing characters and whitespace
+    let trimmed = message
+        .trim_start_matches(|c: char| c.is_whitespace() || "│├└┌─┄".contains(c));
+
+    // Check for stack frame pattern: #<digit>
+    if let Some(rest) = trimmed.strip_prefix('#') {
+        // Must be followed by a digit
+        rest.starts_with(|c: char| c.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
 /// Content-based log level detection
 ///
 /// Supports:
 /// - Logger package: emoji indicators (🔥⛔⚠️💡🐛) and prefixes (Trace:, Debug:, etc.)
 /// - Talker package: bracketed prefixes ([verbose], [debug], [info], etc.)
 /// - Gradle/Xcode build errors
-/// - General keywords
+/// - General keywords (but NOT for stack trace lines to avoid false positives)
 fn detect_log_level_from_content(message: &str) -> LogLevel {
     // ─────────────────────────────────────────────────────────
     // Emoji-based detection (Logger package uses these)
@@ -113,6 +147,15 @@ fn detect_log_level_from_content(message: &str) -> LogLevel {
     // Debug indicators
     if message.contains('🐛') || message.contains('🔍') {
         return LogLevel::Debug;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Stack trace lines - default to Info, skip keyword detection
+    // This prevents false positives from class names like "ErrorHandler"
+    // ─────────────────────────────────────────────────────────
+
+    if is_stack_trace_line(message) {
+        return LogLevel::Info;
     }
 
     let lower = message.to_lowercase();
@@ -657,5 +700,170 @@ mod tests {
             assert!(!is_block_end(line));
         }
         assert!(is_block_end(lines[lines.len() - 1]));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Block Detection with ANSI Codes (Regression test for Phase 2 fix)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_block_start_with_ansi_codes() {
+        // Logger package output with 256-color ANSI codes
+        assert!(is_block_start("\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_start("\x1b[38;5;196m┌───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_start("\x1b[38;5;208m┌───────────────────────────────────────\x1b[0m"));
+        // With RGB colors
+        assert!(is_block_start("\x1b[38;2;255;100;50m┌───────────────────────────────────────\x1b[0m"));
+    }
+
+    #[test]
+    fn test_block_end_with_ansi_codes() {
+        // Logger package output with 256-color ANSI codes
+        assert!(is_block_end("\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_end("\x1b[38;5;196m└───────────────────────────────────────\x1b[0m"));
+        assert!(is_block_end("\x1b[38;5;208m└───────────────────────────────────────\x1b[0m"));
+    }
+
+    #[test]
+    fn test_is_logger_block_line_with_ansi_codes() {
+        // All box-drawing characters with ANSI codes
+        assert!(is_logger_block_line("\x1b[38;5;12m┌───────────────────────────────────────\x1b[0m"));
+        assert!(is_logger_block_line("\x1b[38;5;12m│ Message content\x1b[0m"));
+        assert!(is_logger_block_line("\x1b[38;5;12m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m"));
+        assert!(is_logger_block_line("\x1b[38;5;12m└───────────────────────────────────────\x1b[0m"));
+        assert!(is_logger_block_line("\x1b[38;5;12m┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m"));
+        assert!(is_logger_block_line("\x1b[38;5;12m───────────────────\x1b[0m"));
+    }
+
+    #[test]
+    fn test_block_detection_with_ansi_prefixed_logger_output() {
+        // Simulate actual Logger package output with ANSI codes (as Flutter daemon sends it)
+        let lines = vec![
+            "\x1b[38;5;196m┌───────────────────────────────────────────────────────────────\x1b[0m",
+            "\x1b[38;5;196m│ RangeError (length): Invalid value: Not in inclusive range 0..2: 10\x1b[0m",
+            "\x1b[38;5;196m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m",
+            "\x1b[38;5;196m│ #0   List.[] (dart:core-patch/growable_array.dart)\x1b[0m",
+            "\x1b[38;5;196m│ #1   triggerRangeError (package:flutter_deamon/errors/...)\x1b[0m",
+            "\x1b[38;5;196m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m",
+            "\x1b[38;5;196m│ ⛔┄ Error triggered: Range Error\x1b[0m",
+            "\x1b[38;5;196m└───────────────────────────────────────────────────────────────\x1b[0m",
+        ];
+
+        assert!(is_block_start(lines[0]));
+        for line in &lines[1..lines.len() - 1] {
+            assert!(is_logger_block_line(line));
+            assert!(!is_block_start(line));
+            assert!(!is_block_end(line));
+        }
+        assert!(is_block_end(lines[lines.len() - 1]));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Block Detection with Backslash Escapes (Flutter --machine mode)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_block_start_with_backslash_escape() {
+        // Flutter --machine mode escapes box-drawing with backslashes
+        assert!(is_block_start(r"\┌───────────────────────────────────────\"));
+        assert!(is_block_start(r"\┌───────────────────────────────────────"));
+    }
+
+    #[test]
+    fn test_block_end_with_backslash_escape() {
+        assert!(is_block_end(r"\└───────────────────────────────────────\"));
+        assert!(is_block_end(r"\└───────────────────────────────────────"));
+    }
+
+    #[test]
+    fn test_is_logger_block_line_with_backslash_escape() {
+        assert!(is_logger_block_line(r"\┌───────────────────────────────────────\"));
+        assert!(is_logger_block_line(r"\│ Message content\"));
+        assert!(is_logger_block_line(r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\"));
+        assert!(is_logger_block_line(r"\└───────────────────────────────────────\"));
+    }
+
+    #[test]
+    fn test_block_detection_with_flutter_machine_mode_output() {
+        // Full Logger block as Flutter --machine mode outputs it (with backslash escapes)
+        let lines = vec![
+            r"\┌───────────────────────────────────────\",
+            r"\│ Null check operator used on a null value\",
+            r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\",
+            r"\│ #0   triggerNullError (package:...)\",
+            r"\│ ⛔ Error triggered: Null Error\",
+            r"\└───────────────────────────────────────\",
+        ];
+
+        assert!(is_block_start(lines[0]));
+        for line in &lines[1..lines.len() - 1] {
+            assert!(is_logger_block_line(line), "Line should be block line: {}", line);
+            assert!(!is_block_start(line));
+            assert!(!is_block_end(line));
+        }
+        assert!(is_block_end(lines[lines.len() - 1]));
+    }
+
+    #[test]
+    fn test_block_detection_with_combined_escapes() {
+        // Combined caret notation ANSI and backslash escapes
+        assert!(is_block_start(r"^[[38;5;196m\┌───────────^[[0m\"));
+        assert!(is_block_end(r"^[[38;5;196m\└───────────^[[0m\"));
+        assert!(is_logger_block_line(r"^[[38;5;196m\│ Message^[[0m\"));
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Stack Trace Detection Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_is_stack_trace_line() {
+        // Standard Dart stack trace formats
+        assert!(is_stack_trace_line("#0   main (file:///path/main.dart:10:5)"));
+        assert!(is_stack_trace_line("#1   _runMain (dart:ui/hooks.dart:159:15)"));
+        assert!(is_stack_trace_line("#10  SomeClass.method (package:app/file.dart:42:10)"));
+
+        // With box-drawing prefix (Logger package output)
+        assert!(is_stack_trace_line("│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)"));
+        assert!(is_stack_trace_line("│ #1   ErrorTestingPage.build.<anonymous closure> (package:flutter_deamon/main.dart:113:45)"));
+        assert!(is_stack_trace_line("├ #2   SomeWidget.build (file.dart:10:5)"));
+
+        // With whitespace
+        assert!(is_stack_trace_line("  #0   main (file.dart:1:1)"));
+        assert!(is_stack_trace_line("    │ #5   ClassName.methodName (file.dart:1:1)"));
+
+        // Not stack traces
+        assert!(!is_stack_trace_line("Regular message"));
+        assert!(!is_stack_trace_line("Error: something failed"));
+        assert!(!is_stack_trace_line("│ Error message"));
+        assert!(!is_stack_trace_line("│ 🐛 Debug message"));
+        assert!(!is_stack_trace_line("# Not a stack trace"));
+        assert!(!is_stack_trace_line("#NotAStackTrace"));
+    }
+
+    #[test]
+    fn test_stack_trace_does_not_trigger_error_detection() {
+        // Stack traces with "Error" in class names should NOT be detected as errors
+        let (level, _) = detect_raw_line_level("│ #0   ErrorTestingPage._spamLoggerLogs (package:flutter_deamon/main.dart:208:18)");
+        assert_eq!(level, LogLevel::Info);
+
+        let (level, _) = detect_raw_line_level("#0   ExceptionHandler.handle (file.dart:10:5)");
+        assert_eq!(level, LogLevel::Info);
+
+        let (level, _) = detect_raw_line_level("│ #1   triggerNullError (package:flutter_deamon/errors/sync_errors.dart:14:23)");
+        assert_eq!(level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_real_error_messages_still_detected() {
+        // Real error messages (not stack traces) should still be detected
+        let (level, _) = detect_raw_line_level("Error: Null check operator used on a null value");
+        assert_eq!(level, LogLevel::Error);
+
+        let (level, _) = detect_raw_line_level("│ ⛔ Error triggered: Null Error");
+        assert_eq!(level, LogLevel::Error);
+
+        let (level, _) = detect_raw_line_level("RangeError (length): Invalid value");
+        assert_eq!(level, LogLevel::Error);
     }
 }

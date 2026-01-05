@@ -3,6 +3,10 @@
 //! Provides functions to strip ANSI escape sequences from log messages.
 //! The Flutter `logger` package and other logging libraries output ANSI codes
 //! for terminal coloring that appear as garbage in the TUI.
+//!
+//! Flutter's `--machine` mode also escapes:
+//! - Control characters using caret notation: ^[ for ESC
+//! - Unicode box-drawing characters with backslashes: \┌ \│ \└ \├ \┄ \─
 
 use regex::Regex;
 use std::sync::LazyLock;
@@ -13,16 +17,56 @@ use std::sync::LazyLock;
 /// - CSI sequences: ESC [ ... letter (colors, cursor, etc.)
 /// - OSC sequences: ESC ] ... BEL or ST (hyperlinks, titles)
 /// - Simple escapes: ESC letter
+/// - Caret notation: ^[ ... (used by some terminals/tools instead of actual ESC byte)
 static ANSI_ESCAPE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     // Comprehensive pattern covering:
     // - CSI sequences: \x1b[ followed by params and command letter
     // - OSC sequences: \x1b] followed by content and terminator (BEL or ST)
     // - Simple escapes: \x1b followed by single letter
-    Regex::new(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[A-Za-z]")
-        .expect("ANSI regex pattern is valid")
+    // - Caret notation CSI: ^[[ followed by params and command letter (Flutter --machine mode)
+    // - Caret notation simple: ^[ followed by single letter
+    Regex::new(
+        r"(?x)
+        # Standard ANSI with ESC byte (0x1B)
+        \x1b\[[0-9;?]*[A-Za-z]           # CSI sequences
+        | \x1b\][^\x07\x1b]*(?:\x07|\x1b\\)  # OSC sequences
+        | \x1b[A-Za-z]                   # Simple escapes
+
+        # Caret notation (^[ = ESC) - Flutter --machine mode escapes control chars
+        | \^[\[]\[[0-9;?]*[A-Za-z]       # ^[[ CSI sequences (note: ^[ then [ then params)
+        | \^\[[0-9;?]*[A-Za-z]           # ^[ CSI sequences (^[ followed by params)
+        ",
+    )
+    .expect("ANSI regex pattern is valid")
 });
 
-/// Strip all ANSI escape sequences from a string.
+/// Regex pattern for backslash-escaped box-drawing characters.
+///
+/// Flutter's --machine mode escapes Unicode box-drawing characters with backslashes:
+/// \┌ \│ \└ \├ \┄ \─
+///
+/// This pattern captures the backslash so we can remove it while keeping the character.
+static BACKSLASH_BOX_DRAWING_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    // Match backslash before box-drawing characters
+    // The box-drawing characters are: ┌ │ └ ├ ┄ ─
+    Regex::new(r"\\([┌│└├┄─])").expect("Backslash box-drawing regex pattern is valid")
+});
+
+/// Regex pattern for trailing backslashes at end of content.
+///
+/// Flutter's --machine mode adds trailing backslashes that should be removed.
+static TRAILING_BACKSLASH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    // Match trailing backslash(es) optionally followed by whitespace at end of string
+    Regex::new(r"\\+\s*$").expect("Trailing backslash regex pattern is valid")
+});
+
+/// Strip all ANSI escape sequences and Flutter escape patterns from a string.
+///
+/// Handles:
+/// - Standard ANSI escape sequences (CSI, OSC, simple escapes)
+/// - Caret notation (^[ = ESC) from Flutter --machine mode
+/// - Backslash-escaped box-drawing characters (\┌ \│ \└ \├ \┄ \─)
+/// - Trailing backslashes
 ///
 /// Preserves:
 /// - Unicode box-drawing characters: ┌ │ └ ├ ┄ ─
@@ -40,9 +84,22 @@ static ANSI_ESCAPE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
 /// // Box-drawing and emojis preserved
 /// let input = "│ 🐛 Debug message";
 /// assert_eq!(strip_ansi_codes(input), input);
+///
+/// // Backslash escapes removed
+/// let input = r"\┌───────────\";
+/// assert_eq!(strip_ansi_codes(input), "┌───────────");
 /// ```
 pub fn strip_ansi_codes(input: &str) -> String {
-    ANSI_ESCAPE_PATTERN.replace_all(input, "").into_owned()
+    // Step 1: Strip ANSI escape sequences (including caret notation)
+    let without_ansi = ANSI_ESCAPE_PATTERN.replace_all(input, "");
+
+    // Step 2: Remove backslashes before box-drawing characters (\┌ → ┌)
+    let without_backslash_box = BACKSLASH_BOX_DRAWING_PATTERN.replace_all(&without_ansi, "$1");
+
+    // Step 3: Remove trailing backslashes
+    let result = TRAILING_BACKSLASH_PATTERN.replace_all(&without_backslash_box, "");
+
+    result.into_owned()
 }
 
 /// Check if a string contains ANSI escape sequences.
@@ -208,5 +265,167 @@ mod tests {
         let input = "\x1b]0;Window Title\x07Normal text";
         let result = strip_ansi_codes(input);
         assert_eq!(result, "Normal text");
+    }
+
+    // Caret notation tests - Flutter --machine mode escapes ESC as ^[
+    #[test]
+    fn test_strip_caret_notation_color() {
+        // Flutter --machine mode output with caret notation
+        let input = "^[[38;5;196mError message^[[0m";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "Error message");
+    }
+
+    #[test]
+    fn test_strip_caret_notation_256_color() {
+        // 256-color with caret notation (from user's log output)
+        let input = "^[[38;5;12m│ Info^[[0m";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "│ Info");
+    }
+
+    #[test]
+    fn test_strip_caret_notation_mixed() {
+        // Mixed caret notation and box drawing
+        let input = "^[[38;5;244m┌───────────^[[0m";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────");
+    }
+
+    #[test]
+    fn test_strip_caret_notation_multiline() {
+        // Logger package output with caret notation
+        let input = "^[[38;5;196m┌───────────^[[0m\n^[[38;5;196m│ ⛔ Error^[[0m\n^[[38;5;196m└───────────^[[0m";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────\n│ ⛔ Error\n└───────────");
+    }
+
+    #[test]
+    fn test_contains_caret_notation() {
+        assert!(contains_ansi_codes("^[[38;5;196mred^[[0m"));
+        assert!(contains_ansi_codes("^[[31mtext^[[0m"));
+    }
+
+    #[test]
+    fn test_caret_notation_simple_codes() {
+        // Simple color codes with caret notation
+        let input = "^[[31mRed^[[0m ^[[32mGreen^[[0m";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "Red Green");
+    }
+
+    // Backslash escape tests - Flutter --machine mode escapes box-drawing chars
+    #[test]
+    fn test_strip_backslash_box_drawing_start() {
+        // Flutter escapes ┌ as \┌
+        let input = r"\┌───────────────────────────────────────";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────────────────────────────────");
+    }
+
+    #[test]
+    fn test_strip_backslash_box_drawing_end() {
+        // Flutter escapes └ as \└
+        let input = r"\└───────────────────────────────────────";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "└───────────────────────────────────────");
+    }
+
+    #[test]
+    fn test_strip_backslash_box_drawing_pipe() {
+        // Flutter escapes │ as \│
+        let input = r"\│ Message content";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "│ Message content");
+    }
+
+    #[test]
+    fn test_strip_backslash_box_drawing_divider() {
+        // Flutter escapes ├ as \├
+        let input = r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄");
+    }
+
+    #[test]
+    fn test_strip_trailing_backslash() {
+        // Flutter adds trailing backslashes
+        let input = r"┌───────────────────────────────────────\";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────────────────────────────────");
+    }
+
+    #[test]
+    fn test_strip_trailing_backslash_with_spaces() {
+        // Trailing backslash with spaces
+        let input = "┌───────────────────────────────────────\\     ";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────────────────────────────────");
+    }
+
+    #[test]
+    fn test_strip_both_backslash_escapes() {
+        // Both leading \┌ and trailing \
+        let input = r"\┌───────────────────────────────────────\";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────────────────────────────────");
+    }
+
+    #[test]
+    fn test_strip_flutter_machine_mode_full_block() {
+        // Full Logger block as Flutter --machine mode outputs it
+        let lines = vec![
+            r"\┌───────────────────────────────────────\",
+            r"\│ Null check operator used on a null value\",
+            r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\",
+            r"\│ #0   triggerNullError (package:...)\",
+            r"\│ ⛔ Error triggered: Null Error\",
+            r"\└───────────────────────────────────────\",
+        ];
+
+        let expected = vec![
+            "┌───────────────────────────────────────",
+            "│ Null check operator used on a null value",
+            "├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",
+            "│ #0   triggerNullError (package:...)",
+            "│ ⛔ Error triggered: Null Error",
+            "└───────────────────────────────────────",
+        ];
+
+        for (input, exp) in lines.iter().zip(expected.iter()) {
+            assert_eq!(strip_ansi_codes(input), *exp);
+        }
+    }
+
+    #[test]
+    fn test_strip_combined_caret_and_backslash() {
+        // Combined caret notation ANSI and backslash escapes
+        let input = r"^[[38;5;196m\┌───────────^[[0m\";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, "┌───────────");
+    }
+
+    #[test]
+    fn test_preserve_normal_backslashes() {
+        // Regular backslashes in paths should be preserved
+        let input = r"C:\Users\name\project";
+        let result = strip_ansi_codes(input);
+        assert_eq!(result, r"C:\Users\name\project");
+    }
+
+    #[test]
+    fn test_block_detection_after_strip() {
+        // Verify block detection works after stripping
+        let input = r"\┌───────────────────────────────────────\";
+        let result = strip_ansi_codes(input);
+        assert!(result.trim_start().starts_with('┌'));
+    }
+
+    #[test]
+    fn test_block_end_detection_after_strip() {
+        // Verify block end detection works after stripping
+        let input = r"\└───────────────────────────────────────\";
+        let result = strip_ansi_codes(input);
+        assert!(result.trim_start().starts_with('└'));
     }
 }

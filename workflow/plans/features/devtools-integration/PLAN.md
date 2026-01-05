@@ -62,6 +62,88 @@ Called via `callServiceExtension(method, isolateId, args)`:
 6. Call Flutter service extensions as needed
 ```
 
+### VM Service Logging Stream (Hybrid Logging)
+
+The VM Service provides a `Logging` stream that emits structured [LogRecord](https://api.flutter.dev/flutter/vm_service/LogRecord-class.html) events for logs created via `dart:developer log()`:
+
+```json
+{
+  "kind": "Logging",
+  "logRecord": {
+    "message": {"valueAsString": "User logged in"},
+    "level": 800,
+    "loggerName": {"valueAsString": "AuthService"},
+    "time": 1704067200000,
+    "sequenceNumber": 42,
+    "error": null,
+    "stackTrace": null
+  }
+}
+```
+
+#### Log Level Mapping
+
+| dart:developer Level | Value | Maps To |
+|---------------------|-------|---------|
+| FINEST | 300 | Debug |
+| FINER | 400 | Debug |
+| FINE | 500 | Debug |
+| CONFIG | 700 | Debug |
+| INFO | 800 | Info |
+| WARNING | 900 | Warning |
+| SEVERE | 1000 | Error |
+| SHOUT | 1200 | Error |
+
+#### Critical: What Goes Where
+
+| Log Method | VM Service `Logging` Stream | Daemon `app.log` (stdout) |
+|------------|----------------------------|---------------------------|
+| `dart:developer log()` | ✅ Structured with level | ❌ No |
+| `logging` package | ✅ Uses dart:developer | ❌ No |
+| **Logger package** | ❌ Uses print() | ✅ Raw text |
+| **Talker package** | ❌ Uses print() | ✅ Raw text |
+| `print()` / `debugPrint()` | ❌ No | ✅ Raw text |
+
+#### Hybrid Logging Strategy
+
+Since popular packages like Logger and Talker use `print()` internally, we must support **both** sources:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     HYBRID LOG ARCHITECTURE                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  ┌──────────────────┐         ┌──────────────────┐             │
+│  │ VM Service       │         │ Flutter Daemon   │             │
+│  │ Logging Stream   │         │ app.log events   │             │
+│  └────────┬─────────┘         └────────┬─────────┘             │
+│           │                            │                        │
+│           │ LogRecord with             │ Raw text               │
+│           │ level, logger,             │ error: bool flag       │
+│           │ timestamp                  │                        │
+│           │                            │                        │
+│           ▼                            ▼                        │
+│  ┌──────────────────┐         ┌──────────────────┐             │
+│  │ Trust VM level   │         │ Content-based    │             │
+│  │ (no parsing)     │         │ detection        │             │
+│  └────────┬─────────┘         └────────┬─────────┘             │
+│           │                            │                        │
+│           └──────────┬─────────────────┘                       │
+│                      ▼                                          │
+│           ┌──────────────────┐                                 │
+│           │ Unified Log List │                                 │
+│           │ (merged by time) │                                 │
+│           └──────────────────┘                                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Benefits:**
+- Apps using `dart:developer log()` or `logging` package get **perfect** level detection
+- Apps using Logger/Talker/print still work via existing stdout parsing
+- No breaking changes for existing users
+- Foundation for richer DevTools features (filter by logger name, etc.)
+
 ### Crate Dependencies
 
 | Crate | Purpose |
@@ -74,14 +156,24 @@ Called via `callServiceExtension(method, isolateId, args)`:
 
 ## Affected Modules
 
+### VM Service & Logging (Phase 1)
 - `src/daemon/events.rs` - Already has `AppDebugPort` with `ws_uri`
 - `src/services/state_service.rs` - Already stores `devtools_uri`
 - **NEW** `src/vmservice/mod.rs` - VM Service client module
 - **NEW** `src/vmservice/client.rs` - WebSocket client implementation
 - **NEW** `src/vmservice/protocol.rs` - VM Service JSON-RPC types
+- **NEW** `src/vmservice/logging.rs` - Logging stream handler & LogRecord parsing
+- `src/app/session.rs` - Integrate VM Service logs with existing log list
+- `src/core/types.rs` - Add `LogSource::VmService` variant
+
+### Service Extensions (Phase 2)
 - **NEW** `src/vmservice/extensions.rs` - Flutter service extension wrappers
 - **NEW** `src/core/widget_tree.rs` - Widget tree data models
+
+### Performance & Memory (Phase 3)
 - **NEW** `src/core/performance.rs` - Performance/memory data models
+
+### TUI Panels (Phase 4)
 - **NEW** `src/tui/widgets/widget_inspector.rs` - Widget inspector TUI widget
 - **NEW** `src/tui/widgets/layout_explorer.rs` - Layout explorer TUI widget
 - **NEW** `src/tui/widgets/performance_panel.rs` - Performance panel TUI widget
@@ -89,17 +181,19 @@ Called via `callServiceExtension(method, isolateId, args)`:
 - `src/app/message.rs` - Add DevTools-related messages
 - `src/tui/render.rs` - Add DevTools panel rendering
 - `src/tui/actions.rs` - Add DevTools keyboard actions
+
+### Configuration
 - `Cargo.toml` - Add WebSocket dependencies
 
 ---
 
 ## Development Phases
 
-### Phase 1: VM Service Client Foundation
+### Phase 1: VM Service Client Foundation + Hybrid Logging
 
-**Goal**: Establish WebSocket connection and basic VM Service communication.
+**Goal**: Establish WebSocket connection, basic VM Service communication, and **hybrid logging** with the `Logging` stream.
 
-**Duration**: 1-2 weeks
+**Duration**: 2-3 weeks
 
 #### Steps
 
@@ -126,13 +220,50 @@ Called via `callServiceExtension(method, isolateId, args)`:
    - Implement `stream_listen(stream)` → subscribe to events
    - Store main isolate ID for service extension calls
 
-5. **Integration with Session**
+5. **Logging Stream Integration (Hybrid Logging)**
+   - `src/vmservice/logging.rs` - Logging stream handler
+   - Subscribe to `Logging` stream on connect
+   - Parse `LogRecord` events:
+     ```rust
+     pub struct VmLogRecord {
+         pub message: String,
+         pub level: i32,           // 300-1200 range
+         pub logger_name: Option<String>,
+         pub time: i64,            // milliseconds since epoch
+         pub sequence_number: i32,
+         pub error: Option<String>,
+         pub stack_trace: Option<String>,
+     }
+     ```
+   - Map VM level to `LogLevel`:
+     ```rust
+     fn vm_level_to_log_level(level: i32) -> LogLevel {
+         match level {
+             0..=799 => LogLevel::Debug,    // FINEST..CONFIG
+             800..=899 => LogLevel::Info,   // INFO
+             900..=999 => LogLevel::Warning, // WARNING
+             1000.. => LogLevel::Error,     // SEVERE, SHOUT
+             _ => LogLevel::Info,
+         }
+     }
+     ```
+   - Add `LogSource::VmService` to distinguish from daemon logs
+   - Convert `VmLogRecord` to `LogEntry` and merge with session logs
+
+6. **Unified Log Merging**
+   - Logs from VM Service `Logging` stream: trust level, use timestamp for ordering
+   - Logs from daemon `app.log`: use existing content-based detection
+   - Merge both into single `Session.logs` list, ordered by timestamp
+   - Dedupe if same message appears in both (rare edge case)
+
+7. **Integration with Session**
    - Auto-connect when `app.debugPort` event received
    - Store `VmServiceClient` in session state
    - Disconnect on session stop
    - Handle connection errors gracefully
+   - Continue using daemon logs if VM Service unavailable (graceful fallback)
 
-**Milestone**: Flutter Demon connects to VM Service and can query basic VM/isolate info.
+**Milestone**: Flutter Demon connects to VM Service, receives structured logs via `Logging` stream with accurate levels, and merges them with existing daemon logs.
 
 ---
 
@@ -332,6 +463,19 @@ Called via `callServiceExtension(method, isolateId, args)`:
 - **Risk**: WebSocket library behavior differences across platforms
 - **Mitigation**: Test on macOS, Linux, Windows; use well-maintained crate
 
+### Hybrid Logging Challenges
+- **Risk**: Duplicate logs if app uses both `dart:developer log()` and `print()`
+- **Mitigation**: Dedupe by message content + timestamp proximity; mark source in UI
+
+- **Risk**: Log ordering confusion when merging two streams with different timestamps
+- **Mitigation**: Use VM Service timestamp as authoritative; daemon logs use receive time
+
+- **Risk**: VM Service not available (profile/release mode, connection failure)
+- **Mitigation**: Graceful fallback to daemon-only logging; show connection status indicator
+
+- **Risk**: Logger package blocks span multiple daemon events but VM Service is silent
+- **Mitigation**: Block propagation logic (Task 01) still applies to daemon logs only
+
 ---
 
 ## Configuration
@@ -358,6 +502,19 @@ tree_max_depth = 0
 # Auto-enable debug overlays on connect
 auto_repaint_rainbow = false
 auto_performance_overlay = false
+
+[devtools.logging]
+# Enable hybrid logging (VM Service + daemon)
+hybrid_enabled = true
+
+# Prefer VM Service level when available (vs content detection)
+prefer_vm_level = true
+
+# Show log source indicator in UI ([VM] vs [daemon])
+show_source_indicator = false
+
+# Dedupe threshold: logs within N ms with same message are considered duplicates
+dedupe_threshold_ms = 100
 ```
 
 ---
@@ -384,6 +541,11 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 - [ ] `getVM` and `getIsolate` calls return valid data
 - [ ] Connection handles gracefully with session lifecycle
 - [ ] Reconnection works after brief disconnects
+- [ ] **Logging stream subscribed and receiving events**
+- [ ] **VM LogRecords converted to LogEntry with correct level**
+- [ ] **VM logs merged with daemon logs in unified list**
+- [ ] **Apps using `dart:developer log()` show accurate log levels**
+- [ ] **Apps using Logger/Talker still work via daemon fallback**
 
 ### Phase 2 Complete When:
 - [ ] All debug overlay toggles work from Flutter Demon
@@ -421,7 +583,9 @@ After core DevTools integration is complete, consider:
 2. **Hot UI Editing** - Modify widget properties from Flutter Demon (experimental)
 3. **Timeline Recording** - Record and analyze performance over time
 4. **Network Inspector** - View HTTP requests (requires additional hooks)
-5. **Logging Integration** - Enhanced log filtering based on widget hierarchy
+5. **Advanced Log Filtering** - Filter logs by logger name (from VM Service), widget hierarchy
+6. **Log Source Indicators** - Show which logs came from VM Service vs daemon in UI
+7. **Structured Error Display** - Use `ext.flutter.inspector.structuredErrors` for rich error formatting
 
 ---
 
