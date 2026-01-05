@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::config::Settings;
+use crate::config::{Settings, SettingsTab, UserPreferences};
 use crate::core::AppPhase;
 use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState};
 
@@ -33,6 +33,125 @@ pub enum UiMode {
     /// Link highlight mode - showing clickable file references
     /// User can press 1-9 or a-z to open a file in their editor
     LinkHighlight,
+
+    /// Settings panel - full-screen settings UI
+    Settings,
+}
+
+/// State for the settings panel view
+#[derive(Debug, Clone)]
+pub struct SettingsViewState {
+    /// Currently active tab
+    pub active_tab: SettingsTab,
+
+    /// Currently selected item index within the active tab
+    pub selected_index: usize,
+
+    /// Whether we're in edit mode for the current item
+    pub editing: bool,
+
+    /// Text buffer for string editing
+    pub edit_buffer: String,
+
+    /// Dirty flag - have settings been modified?
+    pub dirty: bool,
+
+    /// Loaded user preferences (for User tab)
+    pub user_prefs: UserPreferences,
+
+    /// Error message to display (if any)
+    pub error: Option<String>,
+}
+
+impl Default for SettingsViewState {
+    fn default() -> Self {
+        Self {
+            active_tab: SettingsTab::Project,
+            selected_index: 0,
+            editing: false,
+            edit_buffer: String::new(),
+            dirty: false,
+            user_prefs: UserPreferences::default(),
+            error: None,
+        }
+    }
+}
+
+impl SettingsViewState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Load user preferences from disk
+    pub fn load_user_prefs(&mut self, project_path: &std::path::Path) {
+        if let Some(prefs) = crate::config::load_user_preferences(project_path) {
+            self.user_prefs = prefs;
+        }
+    }
+
+    /// Switch to next tab
+    pub fn next_tab(&mut self) {
+        self.active_tab = self.active_tab.next();
+        self.selected_index = 0;
+        self.editing = false;
+        self.edit_buffer.clear();
+    }
+
+    /// Switch to previous tab
+    pub fn prev_tab(&mut self) {
+        self.active_tab = self.active_tab.prev();
+        self.selected_index = 0;
+        self.editing = false;
+        self.edit_buffer.clear();
+    }
+
+    /// Jump to specific tab
+    pub fn goto_tab(&mut self, tab: SettingsTab) {
+        self.active_tab = tab;
+        self.selected_index = 0;
+        self.editing = false;
+        self.edit_buffer.clear();
+    }
+
+    /// Select next item
+    pub fn select_next(&mut self, item_count: usize) {
+        if item_count > 0 {
+            self.selected_index = (self.selected_index + 1) % item_count;
+        }
+    }
+
+    /// Select previous item
+    pub fn select_previous(&mut self, item_count: usize) {
+        if item_count > 0 {
+            self.selected_index = if self.selected_index == 0 {
+                item_count - 1
+            } else {
+                self.selected_index - 1
+            };
+        }
+    }
+
+    /// Enter edit mode
+    pub fn start_editing(&mut self, initial_value: &str) {
+        self.editing = true;
+        self.edit_buffer = initial_value.to_string();
+    }
+
+    /// Exit edit mode
+    pub fn stop_editing(&mut self) {
+        self.editing = false;
+        self.edit_buffer.clear();
+    }
+
+    /// Mark settings as modified
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Clear dirty flag (after save)
+    pub fn clear_dirty(&mut self) {
+        self.dirty = false;
+    }
 }
 
 /// Complete application state (the Model in TEA)
@@ -61,6 +180,9 @@ pub struct AppState {
 
     /// Current application phase (used for app-level quitting state)
     pub phase: AppPhase,
+
+    /// Settings view state (for Settings UI mode)
+    pub settings_view_state: SettingsViewState,
 }
 
 impl Default for AppState {
@@ -89,6 +211,7 @@ impl AppState {
             project_path,
             project_name,
             phase: AppPhase::Initializing,
+            settings_view_state: SettingsViewState::new(),
         }
     }
 
@@ -105,6 +228,18 @@ impl AppState {
     /// Hide device selector modal
     pub fn hide_device_selector(&mut self) {
         self.device_selector.hide();
+        self.ui_mode = UiMode::Normal;
+    }
+
+    /// Show settings panel
+    pub fn show_settings(&mut self) {
+        self.settings_view_state = SettingsViewState::new();
+        self.settings_view_state.load_user_prefs(&self.project_path);
+        self.ui_mode = UiMode::Settings;
+    }
+
+    /// Hide settings panel
+    pub fn hide_settings(&mut self) {
         self.ui_mode = UiMode::Normal;
     }
 

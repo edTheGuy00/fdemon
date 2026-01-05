@@ -2,6 +2,7 @@
 name: implementor
 description: Hands-on implementation agent for flutter-demon. Dispatch for implementing tasks from workflow/plans/**. Use when you need to execute a specific task file in parallel with other tasks.
 tools: Read, Glob, Grep, Edit, Write, Bash
+permissionMode: acceptEdits
 model: sonnet
 ---
 

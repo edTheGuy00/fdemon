@@ -1,7 +1,7 @@
 ---
 name: planner
 description: Planning agent for flutter-demon. Use when creating plans, designing features, breaking down tasks, or drafting architecture docs. Triggers on "plan", "design", "break down", "architecture", or when the user wants to strategize before implementation. Does NOT write code.
-allowed-tools: Read, Glob, Grep, Write
+allowed-tools: Read, Glob, Grep, Write, Task
 ---
 
 # Planner Agent

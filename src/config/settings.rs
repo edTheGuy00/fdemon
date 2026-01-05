@@ -384,6 +384,98 @@ open_pattern = "$EDITOR $FILE:$LINE"
     Ok(())
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Local Settings (User Preferences)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const LOCAL_SETTINGS_FILENAME: &str = "settings.local.toml";
+
+/// Load user preferences from .fdemon/settings.local.toml
+///
+/// Returns None if file doesn't exist (not an error - first run)
+pub fn load_user_preferences(project_path: &Path) -> Option<super::types::UserPreferences> {
+    let prefs_path = project_path.join(FDEMON_DIR).join(LOCAL_SETTINGS_FILENAME);
+
+    if !prefs_path.exists() {
+        debug!("No local settings file at {:?}", prefs_path);
+        return None;
+    }
+
+    match std::fs::read_to_string(&prefs_path) {
+        Ok(content) => match toml::from_str(&content) {
+            Ok(prefs) => {
+                debug!("Loaded user preferences from {:?}", prefs_path);
+                Some(prefs)
+            }
+            Err(e) => {
+                warn!("Failed to parse {:?}: {}", prefs_path, e);
+                None
+            }
+        },
+        Err(e) => {
+            warn!("Failed to read {:?}: {}", prefs_path, e);
+            None
+        }
+    }
+}
+
+/// Save user preferences to .fdemon/settings.local.toml
+///
+/// Creates the file if it doesn't exist.
+/// Uses atomic write (temp file + rename) for safety.
+pub fn save_user_preferences(
+    project_path: &Path,
+    prefs: &super::types::UserPreferences,
+) -> Result<()> {
+    let fdemon_dir = project_path.join(FDEMON_DIR);
+
+    // Ensure directory exists
+    if !fdemon_dir.exists() {
+        std::fs::create_dir_all(&fdemon_dir)
+            .map_err(|e| Error::config(format!("Failed to create .fdemon dir: {}", e)))?;
+    }
+
+    let prefs_path = fdemon_dir.join(LOCAL_SETTINGS_FILENAME);
+    let temp_path = fdemon_dir.join(".settings.local.toml.tmp");
+
+    // Serialize to TOML with header comment
+    let header = "# User-specific preferences (not tracked in git)\n\
+                  # These override values from config.toml\n\n";
+
+    let content = toml::to_string_pretty(prefs)
+        .map_err(|e| Error::config(format!("Failed to serialize preferences: {}", e)))?;
+
+    let full_content = format!("{}{}", header, content);
+
+    // Atomic write: write to temp, then rename
+    std::fs::write(&temp_path, full_content)
+        .map_err(|e| Error::config(format!("Failed to write temp file: {}", e)))?;
+
+    std::fs::rename(&temp_path, &prefs_path)
+        .map_err(|e| Error::config(format!("Failed to rename temp file: {}", e)))?;
+
+    debug!("Saved user preferences to {:?}", prefs_path);
+    Ok(())
+}
+
+/// Merge user preferences into settings (user prefs override project settings)
+pub fn merge_preferences(settings: &mut Settings, prefs: &super::types::UserPreferences) {
+    // Override editor settings
+    if let Some(ref editor) = prefs.editor {
+        if !editor.command.is_empty() {
+            settings.editor.command = editor.command.clone();
+        }
+        if editor.open_pattern != "$EDITOR $FILE:$LINE" {
+            settings.editor.open_pattern = editor.open_pattern.clone();
+        }
+    }
+
+    // Override theme
+    if let Some(ref theme) = prefs.theme {
+        settings.ui.theme = theme.clone();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -643,5 +735,165 @@ open_pattern = "zed $FILE:$LINE"
 
         assert_eq!(settings.editor.command, "zed");
         assert_eq!(settings.editor.open_pattern, "zed $FILE:$LINE");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Local Settings (User Preferences) Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_load_user_preferences_missing_file() {
+        let temp = tempdir().unwrap();
+        let prefs = load_user_preferences(temp.path());
+        assert!(prefs.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_user_preferences() {
+        use super::super::types::{UserPreferences, WindowPrefs};
+
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        let prefs = UserPreferences {
+            theme: Some("dark".to_string()),
+            last_device: Some("iPhone 15".to_string()),
+            last_config: Some("Development".to_string()),
+            window: Some(WindowPrefs {
+                width: Some(120),
+                height: Some(40),
+            }),
+            ..Default::default()
+        };
+
+        save_user_preferences(temp.path(), &prefs).unwrap();
+
+        let loaded = load_user_preferences(temp.path()).unwrap();
+        assert_eq!(loaded.theme, Some("dark".to_string()));
+        assert_eq!(loaded.last_device, Some("iPhone 15".to_string()));
+        assert_eq!(loaded.last_config, Some("Development".to_string()));
+        assert!(loaded.window.is_some());
+        let window = loaded.window.unwrap();
+        assert_eq!(window.width, Some(120));
+        assert_eq!(window.height, Some(40));
+    }
+
+    #[test]
+    fn test_save_creates_directory() {
+        use super::super::types::UserPreferences;
+
+        let temp = tempdir().unwrap();
+        // Don't create .fdemon dir - save should create it
+
+        let prefs = UserPreferences::default();
+        save_user_preferences(temp.path(), &prefs).unwrap();
+
+        assert!(temp.path().join(".fdemon/settings.local.toml").exists());
+    }
+
+    #[test]
+    fn test_merge_preferences_overrides() {
+        use super::super::types::UserPreferences;
+
+        let mut settings = Settings::default();
+        settings.editor.command = "code".to_string();
+        settings.ui.theme = "default".to_string();
+
+        let prefs = UserPreferences {
+            editor: Some(EditorSettings {
+                command: "nvim".to_string(),
+                open_pattern: "nvim +$LINE $FILE".to_string(),
+            }),
+            theme: Some("monokai".to_string()),
+            ..Default::default()
+        };
+
+        merge_preferences(&mut settings, &prefs);
+
+        assert_eq!(settings.editor.command, "nvim");
+        assert_eq!(settings.editor.open_pattern, "nvim +$LINE $FILE");
+        assert_eq!(settings.ui.theme, "monokai");
+    }
+
+    #[test]
+    fn test_merge_preferences_partial() {
+        use super::super::types::UserPreferences;
+
+        let mut settings = Settings::default();
+        settings.editor.command = "code".to_string();
+        settings.ui.theme = "default".to_string();
+
+        // Only override theme, not editor
+        let prefs = UserPreferences {
+            editor: None,
+            theme: Some("nord".to_string()),
+            ..Default::default()
+        };
+
+        merge_preferences(&mut settings, &prefs);
+
+        assert_eq!(settings.editor.command, "code"); // Unchanged
+        assert_eq!(settings.ui.theme, "nord"); // Changed
+    }
+
+    #[test]
+    fn test_local_settings_file_has_header() {
+        use super::super::types::UserPreferences;
+
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        let prefs = UserPreferences::default();
+        save_user_preferences(temp.path(), &prefs).unwrap();
+
+        let content =
+            std::fs::read_to_string(temp.path().join(".fdemon/settings.local.toml")).unwrap();
+
+        assert!(content.contains("User-specific preferences"));
+        assert!(content.contains("not tracked in git"));
+    }
+
+    #[test]
+    fn test_merge_preferences_empty_editor_command() {
+        use super::super::types::UserPreferences;
+
+        let mut settings = Settings::default();
+        settings.editor.command = "code".to_string();
+
+        // Empty command should not override
+        let prefs = UserPreferences {
+            editor: Some(EditorSettings {
+                command: "".to_string(),
+                open_pattern: "custom $FILE:$LINE".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        merge_preferences(&mut settings, &prefs);
+
+        assert_eq!(settings.editor.command, "code"); // Not overridden
+        assert_eq!(settings.editor.open_pattern, "custom $FILE:$LINE"); // Overridden
+    }
+
+    #[test]
+    fn test_merge_preferences_default_pattern() {
+        use super::super::types::UserPreferences;
+
+        let mut settings = Settings::default();
+        settings.editor.open_pattern = "code --goto $FILE:$LINE".to_string();
+
+        // Default pattern should not override
+        let prefs = UserPreferences {
+            editor: Some(EditorSettings {
+                command: "nvim".to_string(),
+                open_pattern: "$EDITOR $FILE:$LINE".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        merge_preferences(&mut settings, &prefs);
+
+        assert_eq!(settings.editor.command, "nvim"); // Overridden
+        assert_eq!(settings.editor.open_pattern, "code --goto $FILE:$LINE"); // Not overridden (default pattern)
     }
 }

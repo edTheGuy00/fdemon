@@ -234,4 +234,37 @@ pub enum Message {
     /// Select a link by its shortcut key ('1'-'9' or 'a'-'z')
     /// The char identifies which link shortcut was pressed
     SelectLink(char),
+
+    // ─────────────────────────────────────────────────────────
+    // Settings Messages (Phase 4)
+    // ─────────────────────────────────────────────────────────
+    /// Open settings panel
+    ShowSettings,
+
+    /// Close settings panel
+    HideSettings,
+
+    /// Switch to next settings tab
+    SettingsNextTab,
+
+    /// Switch to previous settings tab
+    SettingsPrevTab,
+
+    /// Jump to specific settings tab (0-3)
+    SettingsGotoTab(usize),
+
+    /// Select next setting item
+    SettingsNextItem,
+
+    /// Select previous setting item
+    SettingsPrevItem,
+
+    /// Toggle or edit the selected setting
+    SettingsToggleEdit,
+
+    /// Save settings to disk
+    SettingsSave,
+
+    /// Reset current setting to default
+    SettingsResetItem,
 }

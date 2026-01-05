@@ -373,6 +373,204 @@ pub struct ResolvedLaunchConfig {
     pub source: ConfigSource,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings UI Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Tab in the settings panel
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    Project, // config.toml - shared settings
+    UserPrefs,    // settings.local.toml - user-specific
+    LaunchConfig, // launch.toml - shared launch configs
+    VSCodeConfig, // launch.json - read-only display
+}
+
+impl SettingsTab {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Project => "Project",
+            Self::UserPrefs => "User",
+            Self::LaunchConfig => "Launch",
+            Self::VSCodeConfig => "VSCode",
+        }
+    }
+
+    pub fn index(&self) -> usize {
+        match self {
+            Self::Project => 0,
+            Self::UserPrefs => 1,
+            Self::LaunchConfig => 2,
+            Self::VSCodeConfig => 3,
+        }
+    }
+
+    pub fn from_index(idx: usize) -> Option<Self> {
+        match idx {
+            0 => Some(Self::Project),
+            1 => Some(Self::UserPrefs),
+            2 => Some(Self::LaunchConfig),
+            3 => Some(Self::VSCodeConfig),
+            _ => None,
+        }
+    }
+
+    pub fn next(&self) -> Self {
+        Self::from_index((self.index() + 1) % 4).unwrap()
+    }
+
+    pub fn prev(&self) -> Self {
+        Self::from_index((self.index() + 3) % 4).unwrap()
+    }
+
+    /// Icon for tab (optional visual enhancement)
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Project => "⚙",       // Gear for project settings
+            Self::UserPrefs => "👤",    // Person for user prefs
+            Self::LaunchConfig => "▶",  // Play for launch
+            Self::VSCodeConfig => "📁", // Folder for VSCode
+        }
+    }
+
+    /// Whether this tab is read-only
+    pub fn is_readonly(&self) -> bool {
+        matches!(self, Self::VSCodeConfig)
+    }
+}
+
+/// A setting value that can be edited
+#[derive(Debug, Clone, PartialEq)]
+pub enum SettingValue {
+    Bool(bool),
+    Number(i64),
+    Float(f64),
+    String(String),
+    Enum { value: String, options: Vec<String> },
+    List(Vec<String>),
+}
+
+impl SettingValue {
+    pub fn type_name(&self) -> &'static str {
+        match self {
+            Self::Bool(_) => "boolean",
+            Self::Number(_) => "number",
+            Self::Float(_) => "float",
+            Self::String(_) => "string",
+            Self::Enum { .. } => "enum",
+            Self::List(_) => "list",
+        }
+    }
+
+    pub fn display(&self) -> String {
+        match self {
+            Self::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+            Self::Number(n) => n.to_string(),
+            Self::Float(f) => format!("{:.2}", f),
+            Self::String(s) => s.clone(),
+            Self::Enum { value, .. } => value.clone(),
+            Self::List(items) => items.join(", "),
+        }
+    }
+}
+
+/// A single setting item for display/editing
+#[derive(Debug, Clone)]
+pub struct SettingItem {
+    /// Unique identifier (e.g., "behavior.auto_start")
+    pub id: String,
+    /// Display label (e.g., "Auto Start")
+    pub label: String,
+    /// Help text / description
+    pub description: String,
+    /// Current value
+    pub value: SettingValue,
+    /// Default value (for reset functionality)
+    pub default: SettingValue,
+    /// Whether this setting is read-only
+    pub readonly: bool,
+    /// Category/section for grouping
+    pub section: String,
+}
+
+impl SettingItem {
+    pub fn new(id: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            label: label.into(),
+            description: String::new(),
+            value: SettingValue::Bool(false),
+            default: SettingValue::Bool(false),
+            readonly: false,
+            section: String::new(),
+        }
+    }
+
+    pub fn description(mut self, desc: impl Into<String>) -> Self {
+        self.description = desc.into();
+        self
+    }
+
+    pub fn value(mut self, val: SettingValue) -> Self {
+        self.value = val.clone();
+        if matches!(self.default, SettingValue::Bool(false)) {
+            self.default = val;
+        }
+        self
+    }
+
+    pub fn default(mut self, val: SettingValue) -> Self {
+        self.default = val;
+        self
+    }
+
+    pub fn readonly(mut self) -> Self {
+        self.readonly = true;
+        self
+    }
+
+    pub fn section(mut self, sec: impl Into<String>) -> Self {
+        self.section = sec.into();
+        self
+    }
+
+    pub fn is_modified(&self) -> bool {
+        self.value != self.default
+    }
+}
+
+/// User-specific preferences (stored in settings.local.toml)
+/// These override corresponding values in config.toml
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct UserPreferences {
+    /// Override editor settings
+    #[serde(default)]
+    pub editor: Option<EditorSettings>,
+
+    /// Override UI theme
+    #[serde(default)]
+    pub theme: Option<String>,
+
+    /// Last selected device (for quick re-launch)
+    #[serde(default)]
+    pub last_device: Option<String>,
+
+    /// Last selected launch config name
+    #[serde(default)]
+    pub last_config: Option<String>,
+
+    /// Window size preference (if supported)
+    #[serde(default)]
+    pub window: Option<WindowPrefs>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct WindowPrefs {
+    pub width: Option<u16>,
+    pub height: Option<u16>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -531,5 +729,157 @@ debounce_ms = 1000
         let cloned = settings.clone();
         assert_eq!(settings.command, cloned.command);
         assert_eq!(settings.open_pattern, cloned.open_pattern);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Settings UI Types Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_settings_tab_navigation() {
+        assert_eq!(SettingsTab::Project.next(), SettingsTab::UserPrefs);
+        assert_eq!(SettingsTab::UserPrefs.next(), SettingsTab::LaunchConfig);
+        assert_eq!(SettingsTab::LaunchConfig.next(), SettingsTab::VSCodeConfig);
+        assert_eq!(SettingsTab::VSCodeConfig.next(), SettingsTab::Project);
+        assert_eq!(SettingsTab::Project.prev(), SettingsTab::VSCodeConfig);
+        assert_eq!(SettingsTab::VSCodeConfig.prev(), SettingsTab::LaunchConfig);
+    }
+
+    #[test]
+    fn test_settings_tab_from_index() {
+        assert_eq!(SettingsTab::from_index(0), Some(SettingsTab::Project));
+        assert_eq!(SettingsTab::from_index(1), Some(SettingsTab::UserPrefs));
+        assert_eq!(SettingsTab::from_index(2), Some(SettingsTab::LaunchConfig));
+        assert_eq!(SettingsTab::from_index(3), Some(SettingsTab::VSCodeConfig));
+        assert_eq!(SettingsTab::from_index(4), None);
+    }
+
+    #[test]
+    fn test_settings_tab_label() {
+        assert_eq!(SettingsTab::Project.label(), "Project");
+        assert_eq!(SettingsTab::UserPrefs.label(), "User");
+        assert_eq!(SettingsTab::LaunchConfig.label(), "Launch");
+        assert_eq!(SettingsTab::VSCodeConfig.label(), "VSCode");
+    }
+
+    #[test]
+    fn test_settings_tab_index() {
+        assert_eq!(SettingsTab::Project.index(), 0);
+        assert_eq!(SettingsTab::UserPrefs.index(), 1);
+        assert_eq!(SettingsTab::LaunchConfig.index(), 2);
+        assert_eq!(SettingsTab::VSCodeConfig.index(), 3);
+    }
+
+    #[test]
+    fn test_setting_value_display() {
+        assert_eq!(SettingValue::Bool(true).display(), "true");
+        assert_eq!(SettingValue::Bool(false).display(), "false");
+        assert_eq!(SettingValue::Number(42).display(), "42");
+        assert_eq!(SettingValue::Float(2.5).display(), "2.50");
+        assert_eq!(SettingValue::String("hello".into()).display(), "hello");
+        assert_eq!(
+            SettingValue::Enum {
+                value: "option1".into(),
+                options: vec!["option1".into(), "option2".into()]
+            }
+            .display(),
+            "option1"
+        );
+        assert_eq!(
+            SettingValue::List(vec!["a".into(), "b".into(), "c".into()]).display(),
+            "a, b, c"
+        );
+    }
+
+    #[test]
+    fn test_setting_value_type_name() {
+        assert_eq!(SettingValue::Bool(true).type_name(), "boolean");
+        assert_eq!(SettingValue::Number(42).type_name(), "number");
+        assert_eq!(SettingValue::Float(2.5).type_name(), "float");
+        assert_eq!(SettingValue::String("test".into()).type_name(), "string");
+        assert_eq!(
+            SettingValue::Enum {
+                value: "opt".into(),
+                options: vec![]
+            }
+            .type_name(),
+            "enum"
+        );
+        assert_eq!(SettingValue::List(vec![]).type_name(), "list");
+    }
+
+    #[test]
+    fn test_setting_item_builder() {
+        let item = SettingItem::new("test.id", "Test Label")
+            .description("A test setting")
+            .value(SettingValue::Bool(true))
+            .section("Test");
+
+        assert_eq!(item.id, "test.id");
+        assert_eq!(item.label, "Test Label");
+        assert_eq!(item.description, "A test setting");
+        assert_eq!(item.value, SettingValue::Bool(true));
+        assert_eq!(item.section, "Test");
+        assert!(!item.readonly);
+        assert!(!item.is_modified()); // value == default
+    }
+
+    #[test]
+    fn test_setting_item_is_modified() {
+        let item = SettingItem::new("test", "Test")
+            .value(SettingValue::Bool(true))
+            .default(SettingValue::Bool(false));
+
+        assert!(item.is_modified());
+
+        let item2 = SettingItem::new("test2", "Test2")
+            .value(SettingValue::Number(42))
+            .default(SettingValue::Number(42));
+
+        assert!(!item2.is_modified());
+    }
+
+    #[test]
+    fn test_setting_item_readonly() {
+        let item = SettingItem::new("test", "Test").readonly();
+        assert!(item.readonly);
+    }
+
+    #[test]
+    fn test_user_preferences_default() {
+        let prefs = UserPreferences::default();
+        assert!(prefs.editor.is_none());
+        assert!(prefs.theme.is_none());
+        assert!(prefs.last_device.is_none());
+        assert!(prefs.last_config.is_none());
+        assert!(prefs.window.is_none());
+    }
+
+    #[test]
+    fn test_window_prefs_default() {
+        let window = WindowPrefs::default();
+        assert!(window.width.is_none());
+        assert!(window.height.is_none());
+    }
+
+    #[test]
+    fn test_user_preferences_deserialize() {
+        let toml_content = r#"
+theme = "dark"
+last_device = "iphone-15"
+last_config = "development"
+
+[window]
+width = 1920
+height = 1080
+"#;
+
+        let prefs: UserPreferences = toml::from_str(toml_content).unwrap();
+        assert_eq!(prefs.theme, Some("dark".to_string()));
+        assert_eq!(prefs.last_device, Some("iphone-15".to_string()));
+        assert_eq!(prefs.last_config, Some("development".to_string()));
+        assert!(prefs.window.is_some());
+        assert_eq!(prefs.window.as_ref().unwrap().width, Some(1920));
+        assert_eq!(prefs.window.as_ref().unwrap().height, Some(1080));
     }
 }

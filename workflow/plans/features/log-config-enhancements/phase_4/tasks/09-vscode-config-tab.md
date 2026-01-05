@@ -433,20 +433,33 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** (Not Started)
+**Status:** Done
 
 **Files Modified:**
-- (To be filled after implementation)
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/settings_panel.rs` | Added VSCode tab rendering with read-only info banner, config display, and lock icon indicators |
 
 **Implementation Details:**
 
-(To be filled after implementation)
+1. ✅ Implemented `render_vscode_tab()` - full tab renderer with info banner and conditional states
+2. ✅ Added `render_vscode_info()` - blue-bordered info box explaining read-only nature
+3. ✅ Implemented `render_vscode_not_found()` - message when .vscode/launch.json doesn't exist
+4. ✅ Implemented `render_vscode_empty()` - message when file exists but has no Dart configs
+5. ✅ Created `render_vscode_config_header()` - blue-styled section headers
+6. ✅ Implemented `render_readonly_row()` - dimmed row styling with lock icon
+7. ✅ Created `vscode_config_items()` function - generates 6 readonly items per config
 
 **Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy -- -D warnings` -
-- `cargo test settings_panel` -
+- `cargo fmt` - PASS
+- `cargo check` - PASS
+- `cargo clippy -- -D warnings` - PASS
+- `cargo test settings_panel` - PASS (18 tests)
 
 **Notable Decisions:**
-- (To be filled after implementation)
+1. Used existing `load_vscode_configs()` from config/vscode.rs which already filters for Dart configs only
+2. Detects if launch.json file exists to show appropriate empty state message
+3. VSCode configs are read-only with dimmed styling and lock icon (🔒) when selected
+4. Uses different selection indicator (`›` vs `▶`) for read-only items
+5. Blue color scheme for VSCode tab to differentiate from other tabs

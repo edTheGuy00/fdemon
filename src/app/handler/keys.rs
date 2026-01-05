@@ -14,6 +14,7 @@ pub fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
         UiMode::Loading => handle_key_loading(key),
         UiMode::Normal => handle_key_normal(state, key),
         UiMode::LinkHighlight => handle_key_link_highlight(key),
+        UiMode::Settings => handle_key_settings(state, key),
     }
 }
 
@@ -294,6 +295,12 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         (KeyCode::Char('L'), KeyModifiers::NONE) => Some(Message::EnterLinkMode),
         (KeyCode::Char('L'), m) if m.contains(KeyModifiers::SHIFT) => Some(Message::EnterLinkMode),
 
+        // ─────────────────────────────────────────────────────────
+        // Settings (Phase 4)
+        // ─────────────────────────────────────────────────────────
+        // ',' - Open settings panel
+        (KeyCode::Char(','), KeyModifiers::NONE) => Some(Message::ShowSettings),
+
         _ => None,
     }
 }
@@ -325,6 +332,61 @@ fn handle_key_link_highlight(key: KeyEvent) -> Option<Message> {
         // Letter keys a-z select links 10-35 (excluding j, k which are for scrolling)
         (KeyCode::Char(c @ 'a'..='z'), KeyModifiers::NONE) => Some(Message::SelectLink(c)),
 
+        _ => None,
+    }
+}
+
+/// Handle key events in settings mode (Phase 4)
+fn handle_key_settings(state: &AppState, key: KeyEvent) -> Option<Message> {
+    // If editing, handle text input
+    if state.settings_view_state.editing {
+        return handle_key_settings_edit(state, key);
+    }
+
+    match key.code {
+        // Close settings
+        KeyCode::Esc | KeyCode::Char('q') => Some(Message::HideSettings),
+
+        // Tab navigation
+        KeyCode::Tab => {
+            if key.modifiers.contains(KeyModifiers::SHIFT) {
+                Some(Message::SettingsPrevTab)
+            } else {
+                Some(Message::SettingsNextTab)
+            }
+        }
+
+        // Number keys for direct tab access
+        KeyCode::Char('1') => Some(Message::SettingsGotoTab(0)),
+        KeyCode::Char('2') => Some(Message::SettingsGotoTab(1)),
+        KeyCode::Char('3') => Some(Message::SettingsGotoTab(2)),
+        KeyCode::Char('4') => Some(Message::SettingsGotoTab(3)),
+
+        // Item navigation
+        KeyCode::Char('j') | KeyCode::Down => Some(Message::SettingsNextItem),
+        KeyCode::Char('k') | KeyCode::Up => Some(Message::SettingsPrevItem),
+
+        // Toggle/edit
+        KeyCode::Enter | KeyCode::Char(' ') => Some(Message::SettingsToggleEdit),
+
+        // Save
+        KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Some(Message::SettingsSave)
+        }
+
+        // Force quit with Ctrl+C
+        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+
+        _ => None,
+    }
+}
+
+/// Handle key events while editing a setting value
+fn handle_key_settings_edit(_state: &AppState, key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Esc => Some(Message::SettingsToggleEdit), // Cancel edit
+        KeyCode::Enter => Some(Message::SettingsToggleEdit), // Confirm edit
+        // Text editing handled in update.rs
         _ => None,
     }
 }
@@ -434,5 +496,270 @@ mod link_mode_key_tests {
             matches!(msg, Some(Message::ScrollUp)),
             "k should scroll up, not select link"
         );
+    }
+}
+
+#[cfg(test)]
+mod settings_key_tests {
+    use super::*;
+    use crate::app::state::SettingsViewState;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn key_with_mod(code: KeyCode, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent::new(code, mods)
+    }
+
+    #[test]
+    fn test_comma_opens_settings() {
+        let state = AppState::new();
+        let msg = handle_key_normal(&state, key(KeyCode::Char(',')));
+        assert!(matches!(msg, Some(Message::ShowSettings)));
+    }
+
+    #[test]
+    fn test_escape_closes_settings() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Esc));
+        assert!(matches!(msg, Some(Message::HideSettings)));
+    }
+
+    #[test]
+    fn test_q_closes_settings() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Char('q')));
+        assert!(matches!(msg, Some(Message::HideSettings)));
+    }
+
+    #[test]
+    fn test_tab_navigation() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Tab));
+        assert!(matches!(msg, Some(Message::SettingsNextTab)));
+
+        let msg = handle_key_settings(&state, key_with_mod(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert!(matches!(msg, Some(Message::SettingsPrevTab)));
+    }
+
+    #[test]
+    fn test_number_keys_jump_to_tab() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Char('1')));
+        assert!(matches!(msg, Some(Message::SettingsGotoTab(0))));
+
+        let msg = handle_key_settings(&state, key(KeyCode::Char('2')));
+        assert!(matches!(msg, Some(Message::SettingsGotoTab(1))));
+
+        let msg = handle_key_settings(&state, key(KeyCode::Char('3')));
+        assert!(matches!(msg, Some(Message::SettingsGotoTab(2))));
+
+        let msg = handle_key_settings(&state, key(KeyCode::Char('4')));
+        assert!(matches!(msg, Some(Message::SettingsGotoTab(3))));
+    }
+
+    #[test]
+    fn test_item_navigation() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        // j/Down for next
+        let msg = handle_key_settings(&state, key(KeyCode::Char('j')));
+        assert!(matches!(msg, Some(Message::SettingsNextItem)));
+
+        let msg = handle_key_settings(&state, key(KeyCode::Down));
+        assert!(matches!(msg, Some(Message::SettingsNextItem)));
+
+        // k/Up for previous
+        let msg = handle_key_settings(&state, key(KeyCode::Char('k')));
+        assert!(matches!(msg, Some(Message::SettingsPrevItem)));
+
+        let msg = handle_key_settings(&state, key(KeyCode::Up));
+        assert!(matches!(msg, Some(Message::SettingsPrevItem)));
+    }
+
+    #[test]
+    fn test_toggle_edit() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        // Enter toggles edit
+        let msg = handle_key_settings(&state, key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+
+        // Space toggles edit
+        let msg = handle_key_settings(&state, key(KeyCode::Char(' ')));
+        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+    }
+
+    #[test]
+    fn test_ctrl_s_saves() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(
+            &state,
+            key_with_mod(KeyCode::Char('s'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(msg, Some(Message::SettingsSave)));
+    }
+
+    #[test]
+    fn test_ctrl_c_quits_in_settings() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+
+        let msg = handle_key_settings(
+            &state,
+            key_with_mod(KeyCode::Char('c'), KeyModifiers::CONTROL),
+        );
+        assert!(matches!(msg, Some(Message::Quit)));
+    }
+
+    #[test]
+    fn test_edit_mode_escape_exits() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.editing = true;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Esc));
+        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+    }
+
+    #[test]
+    fn test_edit_mode_enter_confirms() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.editing = true;
+
+        let msg = handle_key_settings(&state, key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+    }
+}
+
+#[cfg(test)]
+mod settings_view_state_tests {
+    use super::*;
+    use crate::app::state::SettingsViewState;
+    use crate::config::SettingsTab;
+
+    #[test]
+    fn test_settings_view_state_default() {
+        let state = SettingsViewState::default();
+        assert_eq!(state.active_tab, SettingsTab::Project);
+        assert_eq!(state.selected_index, 0);
+        assert!(!state.editing);
+        assert!(state.edit_buffer.is_empty());
+        assert!(!state.dirty);
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn test_settings_view_state_tab_navigation() {
+        let mut state = SettingsViewState::new();
+        assert_eq!(state.active_tab, SettingsTab::Project);
+
+        state.next_tab();
+        assert_eq!(state.active_tab, SettingsTab::UserPrefs);
+
+        state.next_tab();
+        assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
+
+        state.next_tab();
+        assert_eq!(state.active_tab, SettingsTab::VSCodeConfig);
+
+        state.next_tab();
+        assert_eq!(state.active_tab, SettingsTab::Project); // Wraps around
+
+        state.prev_tab();
+        assert_eq!(state.active_tab, SettingsTab::VSCodeConfig);
+
+        state.prev_tab();
+        assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
+    }
+
+    #[test]
+    fn test_settings_view_state_goto_tab() {
+        let mut state = SettingsViewState::new();
+
+        state.goto_tab(SettingsTab::LaunchConfig);
+        assert_eq!(state.active_tab, SettingsTab::LaunchConfig);
+        assert_eq!(state.selected_index, 0); // Reset on tab change
+
+        state.goto_tab(SettingsTab::UserPrefs);
+        assert_eq!(state.active_tab, SettingsTab::UserPrefs);
+    }
+
+    #[test]
+    fn test_settings_view_state_item_selection() {
+        let mut state = SettingsViewState::new();
+        assert_eq!(state.selected_index, 0);
+
+        state.select_next(5);
+        assert_eq!(state.selected_index, 1);
+
+        state.select_next(5);
+        assert_eq!(state.selected_index, 2);
+
+        state.select_previous(5);
+        assert_eq!(state.selected_index, 1);
+
+        state.select_previous(5);
+        assert_eq!(state.selected_index, 0);
+
+        // Wrap around
+        state.select_previous(5);
+        assert_eq!(state.selected_index, 4);
+
+        state.select_next(5);
+        assert_eq!(state.selected_index, 0);
+    }
+
+    #[test]
+    fn test_settings_view_state_editing() {
+        let mut state = SettingsViewState::new();
+        assert!(!state.editing);
+
+        state.start_editing("test value");
+        assert!(state.editing);
+        assert_eq!(state.edit_buffer, "test value");
+
+        state.stop_editing();
+        assert!(!state.editing);
+        assert!(state.edit_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_settings_view_state_dirty_flag() {
+        let mut state = SettingsViewState::new();
+        assert!(!state.dirty);
+
+        state.mark_dirty();
+        assert!(state.dirty);
+
+        state.clear_dirty();
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn test_tab_change_resets_selection_and_editing() {
+        let mut state = SettingsViewState::new();
+        state.selected_index = 5;
+        state.editing = true;
+        state.edit_buffer = "test".to_string();
+
+        state.next_tab();
+        assert_eq!(state.selected_index, 0);
+        assert!(!state.editing);
+        assert!(state.edit_buffer.is_empty());
     }
 }

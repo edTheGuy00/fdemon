@@ -902,6 +902,105 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Settings Messages (Phase 4)
+        // ─────────────────────────────────────────────────────────
+        Message::ShowSettings => {
+            state.show_settings();
+            UpdateResult::none()
+        }
+
+        Message::HideSettings => {
+            // Check for unsaved changes (future enhancement: show confirmation)
+            if state.settings_view_state.dirty {
+                // Could show confirmation dialog here
+            }
+            state.hide_settings();
+            UpdateResult::none()
+        }
+
+        Message::SettingsNextTab => {
+            state.settings_view_state.next_tab();
+            UpdateResult::none()
+        }
+
+        Message::SettingsPrevTab => {
+            state.settings_view_state.prev_tab();
+            UpdateResult::none()
+        }
+
+        Message::SettingsGotoTab(idx) => {
+            use crate::config::SettingsTab;
+            if let Some(tab) = SettingsTab::from_index(idx) {
+                state.settings_view_state.goto_tab(tab);
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsNextItem => {
+            let item_count =
+                get_item_count_for_tab(&state.settings, state.settings_view_state.active_tab);
+            state.settings_view_state.select_next(item_count);
+            UpdateResult::none()
+        }
+
+        Message::SettingsPrevItem => {
+            let item_count =
+                get_item_count_for_tab(&state.settings, state.settings_view_state.active_tab);
+            state.settings_view_state.select_previous(item_count);
+            UpdateResult::none()
+        }
+
+        Message::SettingsToggleEdit => {
+            // Toggle edit mode - actual editing logic will be in widget
+            if state.settings_view_state.editing {
+                state.settings_view_state.stop_editing();
+            } else {
+                // Start editing with empty buffer for now
+                state.settings_view_state.start_editing("");
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsSave => {
+            // Save settings - actual save logic will be implemented when widget is ready
+            state.settings_view_state.clear_dirty();
+            UpdateResult::none()
+        }
+
+        Message::SettingsResetItem => {
+            // Reset setting to default - actual logic will be implemented with widget
+            UpdateResult::none()
+        }
+    }
+}
+
+/// Get the number of items in a settings tab
+fn get_item_count_for_tab(
+    _settings: &crate::config::Settings,
+    tab: crate::config::SettingsTab,
+) -> usize {
+    use crate::config::SettingsTab;
+
+    match tab {
+        SettingsTab::Project => {
+            // behavior (2) + watcher (4) + ui (6) + devtools (2) + editor (2) = 16
+            16
+        }
+        SettingsTab::UserPrefs => {
+            // editor (2) + theme (1) + last_device (1) + last_config (1) = 5
+            5
+        }
+        SettingsTab::LaunchConfig => {
+            // Dynamic based on loaded configs
+            // For now, estimate
+            10
+        }
+        SettingsTab::VSCodeConfig => {
+            // Dynamic based on loaded configs
+            5
+        }
     }
 }
 

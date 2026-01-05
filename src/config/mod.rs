@@ -15,7 +15,8 @@ pub use launch::{
 };
 pub use settings::{
     detect_editor, detect_parent_ide, editor_config_for_ide, find_editor_config, init_config_dir,
-    load_settings, EditorConfig, KNOWN_EDITORS,
+    load_settings, load_user_preferences, merge_preferences, save_user_preferences, EditorConfig,
+    KNOWN_EDITORS,
 };
 pub use types::*;
 pub use vscode::load_vscode_configs;

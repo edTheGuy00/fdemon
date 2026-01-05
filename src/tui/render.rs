@@ -185,5 +185,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 frame.render_widget(bar, bar_area);
             }
         }
+        UiMode::Settings => {
+            // Full-screen settings panel
+            let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
+            frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
+        }
     }
 }
