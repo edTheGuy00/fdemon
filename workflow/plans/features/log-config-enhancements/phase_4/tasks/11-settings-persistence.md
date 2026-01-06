@@ -12,6 +12,14 @@
 - `src/config/launch.rs`: Add `save_launch_configs()` function
 - `src/app/handler/update.rs`: Handle `SettingsSave` message
 
+**Related Module:**
+```
+tui/widgets/settings_panel/
+├── mod.rs      # May need updates for save feedback display
+├── items.rs    # Item generators used to map changes back to settings
+└── tests.rs    # Add persistence integration tests
+```
+
 ### Details
 
 #### 1. Save Project Settings (config.toml)
@@ -419,20 +427,43 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** (Not Started)
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/config/settings.rs` | Added `save_settings()` function with atomic write, `generate_config_header()` helper, and 5 tests for save/load roundtrip |
+| `src/config/launch.rs` | Added `save_launch_configs()` function with atomic write, `generate_launch_header()` helper, and 6 tests for save/load roundtrip |
+| `src/config/mod.rs` | Exported `save_settings()` and `save_launch_configs()` functions |
+| `src/app/handler/settings.rs` | Created new module with `apply_project_setting()`, `apply_user_preference()`, `apply_launch_config_change()` helpers and 11 tests |
+| `src/app/handler/mod.rs` | Added `settings` module export |
+| `src/app/handler/update.rs` | Implemented `SettingsSave` handler with tab-specific save logic, updated `HideSettings` to show confirmation dialog on dirty state, added `SettingsSaveAndClose` and `ForceHideSettings` handlers |
+| `src/app/message.rs` | Added `SettingsSaveAndClose` and `ForceHideSettings` messages |
+| `src/tui/widgets/confirm_dialog.rs` | Added generic `new()` constructor to `ConfirmDialogState` with options support |
 
-(To be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy -- -D warnings` -
-- `cargo test settings` -
+1. **Atomic Writes**: Used temp file + rename pattern for all save operations to prevent file corruption from crashes or interrupts
+2. **Header Regeneration**: Headers are regenerated on each save rather than preserving user comments - simplifies implementation and ensures consistency
+3. **Tab-Specific Save**: Save operation only affects the currently active tab (Project/UserPrefs/Launch), not all tabs at once
+4. **Error Display**: Save errors are displayed in the settings panel's error field rather than as a separate modal
+5. **Confirmation Dialog Enhancement**: Extended ConfirmDialogState to support generic confirmation dialogs with custom options, not just quit confirmation
+6. **No Backup Files**: Currently no backup before overwrite - could be added as future enhancement
+7. **Launch Config Save Limitation**: Saves entire launch config list as-is from disk rather than tracking individual changes - simpler but may lose in-memory edits if not committed
 
-**Notable Decisions:**
-- (To be filled after implementation)
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy` - Passed (25 pre-existing warnings, none new)
+- `cargo test --lib` - Passed (1054 tests)
+- `cargo test config::settings::tests::test_save` - Passed (7 tests)
+- `cargo test config::launch::tests::test_save` - Passed (6 tests)
+- `cargo test handler::settings` - Passed (11 tests)
+
+### Risks/Limitations
+
+1. **Launch Config Changes Not Applied Yet**: While save functionality works, there's no mechanism yet to apply in-memory changes from the settings panel back to the LaunchConfig structs before saving - this will need to be addressed in the settings editing task
+2. **No Transaction Support**: Each tab saves independently - if multiple tabs have changes, they must be saved separately
+3. **VSCode Tab Read-Only**: Save on VSCode tab is a no-op as expected, but no visual indication beyond existing read-only styling

@@ -11,6 +11,7 @@ pub mod daemon;
 pub mod helpers;
 pub mod keys;
 pub mod session;
+pub mod settings;
 pub mod update;
 
 #[cfg(test)]

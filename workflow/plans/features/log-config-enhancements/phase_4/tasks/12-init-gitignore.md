@@ -10,6 +10,11 @@
 
 - `src/config/settings.rs`: Enhance `init_config_dir()` to handle gitignore
 
+**Related Module:**
+```
+tui/widgets/settings_panel/  # No changes needed, but uses config loaded by init
+```
+
 ### Details
 
 #### 1. Enhanced Init Function
@@ -338,20 +343,54 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** (Not Started)
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/config/settings.rs` | Added `init_fdemon_directory()`, `ensure_gitignore_entry()`, `gitignore_contains_entry()`, and `generate_default_config()` functions; added 11 comprehensive unit tests |
+| `src/config/mod.rs` | Exported `init_fdemon_directory` function |
+| `src/tui/runner.rs` | Called `init_fdemon_directory()` at app startup (line 30-33) |
 
-(To be filled after implementation)
+### Implementation Details
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy -- -D warnings` -
-- `cargo test settings` -
+**Core Functionality:**
+- `init_fdemon_directory()`: Main entry point that ensures `.fdemon/` directory exists, creates default `config.toml` if missing, and calls gitignore helper
+- `ensure_gitignore_entry()`: Appends `.fdemon/settings.local.toml` to `.gitignore` with explanatory comment if not already present
+- `gitignore_contains_entry()`: Intelligent detection that handles exact matches, trailing spaces/comments, and glob patterns (`.fdemon/`, `.fdemon/*`, `.fdemon/**`)
+- `generate_default_config()`: Creates sensible default configuration with all settings including new `stack_trace_collapsed` and `stack_trace_max_frames` UI options
 
-**Notable Decisions:**
-- (To be filled after implementation)
+**Startup Integration:**
+- Called in `tui/runner.rs::run_with_project()` before loading settings
+- Wrapped in non-fatal error handling - logs warning but doesn't crash app
+- Ensures directory exists before any config operations
+
+**Testing Coverage:**
+- 11 new unit tests covering all acceptance criteria
+- Tests idempotency, preserving existing content, no duplicates, various gitignore formats
+- Tests empty file creation, missing directory creation, config preservation
+- All 1064 tests pass including new tests
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib settings::tests` - Passed (55 tests)
+- `cargo test --lib` - Passed (1064 tests, 0 failed, 3 ignored)
+
+### Notable Decisions/Tradeoffs
+
+1. **Non-fatal initialization**: Init errors are logged but don't crash the app. This ensures fdemon works even in read-only filesystems or when git isn't initialized
+2. **Smart gitignore detection**: Handles various edge cases (trailing spaces, comments, glob patterns) to avoid duplicate entries
+3. **Idempotent design**: Function can be called multiple times safely - won't overwrite existing config or duplicate gitignore entries
+4. **Explanatory comments**: Gitignore entry includes comment explaining it's for user preferences
+5. **Reused existing `init_config_dir()`**: The new function supersedes but doesn't replace the existing `init_config_dir()` - both remain for backward compatibility
+6. **Default config includes all settings**: Generated default includes stack trace settings from Phase 3
+
+### Risks/Limitations
+
+1. **Gitignore pattern detection**: The glob pattern detection (`.fdemon/`, `.fdemon/*`) might not work in all git versions, but this is a safe fallback that prevents duplicates in common cases
+2. **File system permissions**: If `.fdemon/` can't be created or `.gitignore` can't be written, function returns error (logged as warning)
+3. **No git validation**: Doesn't check if directory is a git repo before modifying `.gitignore` - creates the file regardless

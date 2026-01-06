@@ -382,12 +382,78 @@ fn handle_key_settings(state: &AppState, key: KeyEvent) -> Option<Message> {
 }
 
 /// Handle key events while editing a setting value
-fn handle_key_settings_edit(_state: &AppState, key: KeyEvent) -> Option<Message> {
-    match key.code {
-        KeyCode::Esc => Some(Message::SettingsToggleEdit), // Cancel edit
-        KeyCode::Enter => Some(Message::SettingsToggleEdit), // Confirm edit
-        // Text editing handled in update.rs
-        _ => None,
+fn handle_key_settings_edit(state: &AppState, key: KeyEvent) -> Option<Message> {
+    // Get the current item type to determine appropriate key handling
+    use crate::config::SettingValue;
+    use crate::tui::widgets::SettingsPanel;
+
+    let panel = SettingsPanel::new(&state.settings, &state.project_path);
+    let item = panel.get_selected_item(&state.settings_view_state)?;
+
+    match &item.value {
+        SettingValue::Bool(_) => {
+            // Booleans don't use traditional edit mode - toggle directly
+            match key.code {
+                KeyCode::Enter | KeyCode::Char(' ') => Some(Message::SettingsToggleBool),
+                KeyCode::Esc => Some(Message::SettingsCancelEdit),
+                _ => None,
+            }
+        }
+        SettingValue::Number(_) => match key.code {
+            KeyCode::Esc => Some(Message::SettingsCancelEdit),
+            KeyCode::Enter => Some(Message::SettingsCommitEdit),
+            KeyCode::Char('+') | KeyCode::Char('=') => Some(Message::SettingsIncrement(1)),
+            KeyCode::Char('-') if key.modifiers.is_empty() => Some(Message::SettingsIncrement(-1)),
+            KeyCode::Char(c) if c.is_ascii_digit() => Some(Message::SettingsCharInput(c)),
+            KeyCode::Char('-') if state.settings_view_state.edit_buffer.is_empty() => {
+                Some(Message::SettingsCharInput('-'))
+            }
+            KeyCode::Backspace => Some(Message::SettingsBackspace),
+            _ => None,
+        },
+        SettingValue::Float(_) => match key.code {
+            KeyCode::Esc => Some(Message::SettingsCancelEdit),
+            KeyCode::Enter => Some(Message::SettingsCommitEdit),
+            KeyCode::Char(c) if c.is_ascii_digit() || c == '.' => {
+                Some(Message::SettingsCharInput(c))
+            }
+            KeyCode::Char('-') if state.settings_view_state.edit_buffer.is_empty() => {
+                Some(Message::SettingsCharInput('-'))
+            }
+            KeyCode::Backspace => Some(Message::SettingsBackspace),
+            _ => None,
+        },
+        SettingValue::String(_) => match key.code {
+            KeyCode::Esc => Some(Message::SettingsCancelEdit),
+            KeyCode::Enter => Some(Message::SettingsCommitEdit),
+            KeyCode::Char(c) => Some(Message::SettingsCharInput(c)),
+            KeyCode::Backspace => Some(Message::SettingsBackspace),
+            KeyCode::Delete => Some(Message::SettingsClearBuffer),
+            _ => None,
+        },
+        SettingValue::Enum { .. } => {
+            // Enums don't use traditional edit mode - cycle directly
+            match key.code {
+                KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right => {
+                    Some(Message::SettingsCycleEnumNext)
+                }
+                KeyCode::Left => Some(Message::SettingsCycleEnumPrev),
+                KeyCode::Esc => Some(Message::SettingsCancelEdit),
+                _ => None,
+            }
+        }
+        SettingValue::List(_) => {
+            match key.code {
+                KeyCode::Esc => Some(Message::SettingsCancelEdit),
+                KeyCode::Enter => Some(Message::SettingsCommitEdit), // Add item
+                KeyCode::Char('d') if !state.settings_view_state.editing => {
+                    Some(Message::SettingsRemoveListItem)
+                }
+                KeyCode::Char(c) => Some(Message::SettingsCharInput(c)),
+                KeyCode::Backspace => Some(Message::SettingsBackspace),
+                _ => None,
+            }
+        }
     }
 }
 
@@ -632,7 +698,8 @@ mod settings_key_tests {
         state.settings_view_state.editing = true;
 
         let msg = handle_key_settings(&state, key(KeyCode::Esc));
-        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+        // Now returns SettingsCancelEdit in edit mode
+        assert!(matches!(msg, Some(Message::SettingsCancelEdit)));
     }
 
     #[test]
@@ -642,13 +709,14 @@ mod settings_key_tests {
         state.settings_view_state.editing = true;
 
         let msg = handle_key_settings(&state, key(KeyCode::Enter));
-        assert!(matches!(msg, Some(Message::SettingsToggleEdit)));
+        // Now returns SettingsCommitEdit or value-specific message
+        // This depends on the value type, so just verify it returns something
+        assert!(msg.is_some());
     }
 }
 
 #[cfg(test)]
 mod settings_view_state_tests {
-    use super::*;
     use crate::app::state::SettingsViewState;
     use crate::config::SettingsTab;
 

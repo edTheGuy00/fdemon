@@ -10,6 +10,7 @@ This document provides a complete reference for all configuration options availa
 - [Configuration Files](#configuration-files)
   - [`.fdemon/config.toml`](#fdemonconfig.toml) - Global settings
   - [`.fdemon/launch.toml`](#fdemonlaunch.toml) - Launch configurations
+  - [`.fdemon/settings.local.toml`](#fdemonsettingslocal.toml) - User preferences
   - [`.vscode/launch.json`](#vscodelaunch.json) - VSCode compatibility
 - [Global Settings Reference](#global-settings-reference)
   - [Behavior Settings](#behavior-settings)
@@ -25,6 +26,13 @@ This document provides a complete reference for all configuration options availa
 - [VSCode Integration](#vscode-integration)
 - [Editor Detection](#editor-detection)
 - [Examples](#examples)
+- [Settings Panel](#settings-panel)
+  - [Overview](#overview-1)
+  - [Tab Navigation](#tab-navigation)
+  - [Editing Settings](#editing-settings)
+  - [Saving Changes](#saving-changes)
+  - [User Preferences vs Project Settings](#user-preferences-vs-project-settings)
+- [Best Practices](#best-practices)
 
 ---
 
@@ -42,6 +50,17 @@ All configuration files are optional. Flutter Demon works out-of-the-box with se
 
 ## Configuration Files
 
+Flutter Demon uses three configuration files in the `.fdemon/` directory:
+
+### File Overview
+
+| File | Purpose | Tracked in Git? | Editable in Settings Panel? |
+|------|---------|-----------------|------------------------------|
+| `.fdemon/config.toml` | Project settings (shared with team) | Yes | Yes (Project tab) |
+| `.fdemon/launch.toml` | Launch configurations | Yes | Yes (Launch Config tab) |
+| `.fdemon/settings.local.toml` | User preferences (local overrides) | No (gitignored) | Yes (User Preferences tab) |
+| `.vscode/launch.json` | VSCode launch configurations | Yes | No (read-only view) |
+
 ### `.fdemon/config.toml`
 
 Global settings file for Flutter Demon. Create this file in your project root to customize behavior:
@@ -53,6 +72,8 @@ touch .fdemon/config.toml
 ```
 
 **Location:** `<project_root>/.fdemon/config.toml`
+
+**Team Sharing:** This file should be committed to version control and shared across the team for consistent behavior.
 
 ### `.fdemon/launch.toml`
 
@@ -66,13 +87,37 @@ touch .fdemon/launch.toml
 
 **Location:** `<project_root>/.fdemon/launch.toml`
 
+**Team Sharing:** This file should be committed to version control to share launch configurations across the team.
+
+### `.fdemon/settings.local.toml`
+
+User-specific preferences that override project settings. This file is automatically added to `.gitignore` when created.
+
+**Location:** `<project_root>/.fdemon/settings.local.toml`
+
+**Privacy:** This file is gitignored and should NOT be committed. It's for your personal preferences only.
+
+**Example:**
+```toml
+# User-specific preferences (not tracked in git)
+
+[editor]
+command = "nvim"
+open_pattern = "nvim +$LINE $FILE"
+
+# Theme override
+theme = "dark"
+```
+
+> **Note:** Only specific settings can be overridden locally. Not all project settings are available in user preferences. The settings panel (User Preferences tab) shows which settings can be overridden.
+
 ### `.vscode/launch.json`
 
 Flutter Demon automatically reads VSCode launch configurations for seamless integration. No migration needed!
 
 **Location:** `<project_root>/.vscode/launch.json`
 
-> **Note:** Only configurations with `"type": "dart"` are imported.
+> **Note:** Only configurations with `"type": "dart"` are imported. View these in the settings panel's VSCode Config tab (read-only).
 
 ---
 
@@ -633,6 +678,104 @@ For IntelliJ IDEA with custom project:
 command = "idea"
 open_pattern = "idea --line $LINE /path/to/project/$FILE"
 ```
+
+---
+
+## Settings Panel
+
+Flutter Demon provides a built-in settings panel for managing all configuration options without editing TOML files directly. Access it by pressing `,` (comma) from normal mode.
+
+### Overview
+
+The settings panel provides four tabs:
+
+1. **Project Settings** - Edit `.fdemon/config.toml` (shared with team)
+2. **User Preferences** - Edit `.fdemon/settings.local.toml` (personal overrides)
+3. **Launch Config** - Manage `.fdemon/launch.toml` configurations
+4. **VSCode Config** - View `.vscode/launch.json` (read-only)
+
+### Tab Navigation
+
+- **Tab / Shift+Tab**: Cycle through tabs
+- **1-4**: Jump directly to a specific tab
+- **j/k or arrow keys**: Navigate settings within a tab
+- **Enter/Space**: Edit the selected setting
+
+### Editing Settings
+
+Different setting types have different editing behaviors:
+
+#### Booleans
+- **Enter/Space**: Toggle between `true` and `false`
+- Example: `auto_start`, `confirm_quit`, `show_timestamps`
+
+#### Numbers
+- **+/=**: Increment by 1
+- **-**: Decrement by 1
+- **0-9**: Type a number directly
+- **Backspace**: Delete last digit
+- Example: `debounce_ms`, `log_buffer_size`
+
+#### Strings
+- **Type normally**: Add characters to the string
+- **Backspace**: Delete the last character
+- **Delete**: Clear the entire buffer
+- Example: `editor.command`, `editor.open_pattern`
+
+#### Enums
+- **Enter/Space** or **→**: Cycle to next option
+- **←**: Cycle to previous option
+- Example: `mode` (debug/profile/release), `theme`
+
+#### Lists
+- **Enter**: Add a new item (after typing)
+- **d**: Remove the last item
+- Example: `watcher.paths`, `watcher.extensions`
+
+### Saving Changes
+
+- **Ctrl+S**: Save changes to the current tab's configuration file
+- **Esc**: Close settings panel (prompts if unsaved changes)
+- Changes are written to the appropriate file:
+  - Project tab → `.fdemon/config.toml`
+  - User Preferences tab → `.fdemon/settings.local.toml`
+  - Launch Config tab → `.fdemon/launch.toml`
+
+### User Preferences vs Project Settings
+
+The **User Preferences** tab allows you to override specific project settings locally:
+
+**Available Overrides:**
+- **Editor command**: Your preferred editor (e.g., `nvim`, `code`)
+- **Editor open pattern**: Custom file opening pattern
+- **Theme**: UI color theme override
+
+**How Overrides Work:**
+- Overrides are stored in `.fdemon/settings.local.toml`
+- This file is automatically gitignored
+- Overridden settings are marked with a ⚡ indicator
+- Project defaults are shown as dimmed fallbacks
+
+**Example:**
+If the project sets `editor.command = ""` (auto-detect), but you prefer Neovim, set it in User Preferences. Your local override takes precedence without affecting the team's configuration.
+
+### Launch Configuration Management
+
+The **Launch Config** tab displays all launch configurations with their properties:
+
+- **name**: Configuration display name
+- **device**: Target device or platform
+- **mode**: Build mode (debug/profile/release)
+- **flavor**: Optional build flavor
+- **auto_start**: Whether to start automatically
+
+Each configuration is visually separated with a header. Navigate between configurations using j/k.
+
+### VSCode Config (Read-Only)
+
+The **VSCode Config** tab shows Dart configurations from `.vscode/launch.json`. This is a read-only view for reference.
+
+To edit VSCode configurations, modify `.vscode/launch.json` directly in your editor. Changes will be reflected when you reopen the settings panel.
 
 ---
 

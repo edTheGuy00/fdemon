@@ -90,16 +90,16 @@ Build a full-screen settings panel with tabbed navigation for managing project s
 | 1 | [01-settings-types](tasks/01-settings-types.md) | ✅ Done | - | 1.5-2h | `config/types.rs` |
 | 2 | [02-local-settings-file](tasks/02-local-settings-file.md) | ✅ Done | - | 1-1.5h | `config/settings.rs` |
 | 3 | [03-ui-mode-settings](tasks/03-ui-mode-settings.md) | ✅ Done | 1, 2 | 1-1.5h | `app/state.rs`, `app/message.rs`, `app/handler/keys.rs` |
-| 4 | [04-settings-widget](tasks/04-settings-widget.md) | ✅ Done | 3 | 2-3h | `tui/widgets/settings_panel.rs` **NEW** |
-| 5 | [05-tab-navigation](tasks/05-tab-navigation.md) | ✅ Done | 4 | 1.5-2h | `tui/widgets/settings_panel.rs` |
-| 6 | [06-project-settings-tab](tasks/06-project-settings-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel.rs` |
-| 7 | [07-user-preferences-tab](tasks/07-user-preferences-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel.rs` |
-| 8 | [08-launch-config-tab](tasks/08-launch-config-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel.rs` |
-| 9 | [09-vscode-config-tab](tasks/09-vscode-config-tab.md) | ✅ Done | 5 | 1-1.5h | `tui/widgets/settings_panel.rs` |
-| 10 | [10-setting-editors](tasks/10-setting-editors.md) | Not Started | 6, 7, 8 | 2-3h | `tui/widgets/settings_panel.rs` |
-| 11 | [11-settings-persistence](tasks/11-settings-persistence.md) | Not Started | 10 | 2-2.5h | `config/settings.rs` |
-| 12 | [12-init-gitignore](tasks/12-init-gitignore.md) | Not Started | 11 | 0.5-1h | `config/settings.rs` |
-| 13 | [13-documentation](tasks/13-documentation.md) | Not Started | 12 | 0.5-1h | `docs/` |
+| 4 | [04-settings-widget](tasks/04-settings-widget.md) | ✅ Done | 3 | 2-3h | `tui/widgets/settings_panel/` |
+| 5 | [05-tab-navigation](tasks/05-tab-navigation.md) | ✅ Done | 4 | 1.5-2h | `tui/widgets/settings_panel/` |
+| 6 | [06-project-settings-tab](tasks/06-project-settings-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel/` |
+| 7 | [07-user-preferences-tab](tasks/07-user-preferences-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel/` |
+| 8 | [08-launch-config-tab](tasks/08-launch-config-tab.md) | ✅ Done | 5 | 1.5-2h | `tui/widgets/settings_panel/` |
+| 9 | [09-vscode-config-tab](tasks/09-vscode-config-tab.md) | ✅ Done | 5 | 1-1.5h | `tui/widgets/settings_panel/` |
+| 10 | [10-setting-editors](tasks/10-setting-editors.md) | ✅ Done | 6, 7, 8 | 2-3h | `tui/widgets/settings_panel/` |
+| 11 | [11-settings-persistence](tasks/11-settings-persistence.md) | ✅ Done | 10 | 2-2.5h | `config/settings.rs` |
+| 12 | [12-init-gitignore](tasks/12-init-gitignore.md) | ✅ Done | 11 | 0.5-1h | `config/settings.rs` |
+| 13 | [13-documentation](tasks/13-documentation.md) | ✅ Done | 12 | 0.5-1h | `docs/` |
 
 ## Success Criteria
 
@@ -193,3 +193,20 @@ This allows new sections to be added without modifying the core widget logic.
 - **Local settings priority**: `settings.local.toml` overrides values in `config.toml` for user-specific preferences.
 - **Atomic saves**: Settings are saved atomically (write to temp, rename) to prevent corruption.
 - **Debounced auto-save**: Consider adding optional auto-save with debouncing (future enhancement).
+
+## Module Structure
+
+The settings panel is organized as a modular directory (similar to `log_view/`):
+
+```
+tui/widgets/settings_panel/
+├── mod.rs      # Main widget struct and StatefulWidget impl
+├── styles.rs   # Styling helpers and layout constants
+├── items.rs    # Setting item generation functions per tab
+└── tests.rs    # Unit tests for the widget
+```
+
+- **mod.rs**: Contains `SettingsPanel` struct, tab rendering, and content dispatch
+- **styles.rs**: Value styling, layout constants, truncation utility
+- **items.rs**: `project_settings_items()`, `user_prefs_items()`, `launch_config_items()`, `vscode_config_items()`
+- **tests.rs**: 31 unit tests covering rendering, navigation, and item generation

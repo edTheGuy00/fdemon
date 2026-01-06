@@ -267,4 +267,46 @@ pub enum Message {
 
     /// Reset current setting to default
     SettingsResetItem,
+
+    // ─────────────────────────────────────────────────────────
+    // Settings Editing Messages (Phase 4, Task 10)
+    // ─────────────────────────────────────────────────────────
+    /// Toggle boolean value
+    SettingsToggleBool,
+
+    /// Cycle enum to next value
+    SettingsCycleEnumNext,
+
+    /// Cycle enum to previous value
+    SettingsCycleEnumPrev,
+
+    /// Increment/decrement number value
+    SettingsIncrement(i64),
+
+    /// Character input for string/number editing
+    SettingsCharInput(char),
+
+    /// Backspace in edit buffer
+    SettingsBackspace,
+
+    /// Clear edit buffer (Delete key)
+    SettingsClearBuffer,
+
+    /// Commit current edit
+    SettingsCommitEdit,
+
+    /// Cancel current edit (Escape)
+    SettingsCancelEdit,
+
+    /// Remove last item from list
+    SettingsRemoveListItem,
+
+    // ─────────────────────────────────────────────────────────────
+    // Settings Persistence Messages (Phase 4, Task 11)
+    // ─────────────────────────────────────────────────────────────
+    /// Save settings and close panel
+    SettingsSaveAndClose,
+
+    /// Force close settings panel without saving
+    ForceHideSettings,
 }

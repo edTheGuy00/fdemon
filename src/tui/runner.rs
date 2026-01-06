@@ -26,6 +26,12 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Install panic hook for terminal restoration
     terminal::install_panic_hook();
 
+    // Initialize .fdemon directory and gitignore
+    if let Err(e) = config::init_fdemon_directory(project_path) {
+        warn!("Failed to initialize .fdemon directory: {}", e);
+        // Non-fatal - continue with defaults
+    }
+
     // Load configuration
     let settings = config::load_settings(project_path);
     info!(

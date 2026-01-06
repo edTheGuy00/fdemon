@@ -9,6 +9,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
+use crate::app::message::Message;
+
 /// State for the confirmation dialog
 #[derive(Debug, Clone)]
 pub struct ConfirmDialogState {
@@ -18,9 +20,28 @@ pub struct ConfirmDialogState {
     pub message: String,
     /// Number of running sessions (for display)
     pub session_count: usize,
+    /// Available options (label, message)
+    pub options: Vec<(String, Message)>,
 }
 
 impl ConfirmDialogState {
+    /// Create a generic confirmation dialog
+    pub fn new(
+        title: impl Into<String>,
+        message: impl Into<String>,
+        options: Vec<(&str, Message)>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            message: message.into(),
+            session_count: 0,
+            options: options
+                .into_iter()
+                .map(|(label, msg)| (label.to_string(), msg))
+                .collect(),
+        }
+    }
+
     /// Create a quit confirmation dialog state
     pub fn quit_confirmation(session_count: usize) -> Self {
         Self {
@@ -31,6 +52,10 @@ impl ConfirmDialogState {
                 format!("You have {} running sessions.", session_count)
             },
             session_count,
+            options: vec![
+                ("Quit".to_string(), Message::ConfirmQuit),
+                ("Cancel".to_string(), Message::CancelQuit),
+            ],
         }
     }
 }

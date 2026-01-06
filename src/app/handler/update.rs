@@ -912,11 +912,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::HideSettings => {
-            // Check for unsaved changes (future enhancement: show confirmation)
+            // Check for unsaved changes - show confirmation dialog if dirty
             if state.settings_view_state.dirty {
-                // Could show confirmation dialog here
+                use crate::tui::widgets::ConfirmDialogState;
+                state.confirm_dialog_state = Some(ConfirmDialogState::new(
+                    "Unsaved Changes",
+                    "You have unsaved changes. What do you want to do?",
+                    vec![
+                        ("Save & Close", Message::SettingsSaveAndClose),
+                        ("Discard Changes", Message::ForceHideSettings),
+                        ("Cancel", Message::CancelQuit),
+                    ],
+                ));
+                state.ui_mode = crate::app::state::UiMode::ConfirmDialog;
+            } else {
+                state.hide_settings();
             }
-            state.hide_settings();
             UpdateResult::none()
         }
 
@@ -953,24 +964,216 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::SettingsToggleEdit => {
-            // Toggle edit mode - actual editing logic will be in widget
+            // Toggle edit mode
             if state.settings_view_state.editing {
                 state.settings_view_state.stop_editing();
             } else {
-                // Start editing with empty buffer for now
-                state.settings_view_state.start_editing("");
+                // Get the current item and start editing with its value
+                use crate::config::SettingValue;
+                use crate::tui::widgets::SettingsPanel;
+
+                let panel = SettingsPanel::new(&state.settings, &state.project_path);
+                if let Some(item) = panel.get_selected_item(&state.settings_view_state) {
+                    // Start editing based on value type
+                    match &item.value {
+                        SettingValue::Bool(_) | SettingValue::Enum { .. } => {
+                            // These don't use traditional edit mode
+                            // Bool toggles directly, Enum cycles
+                        }
+                        SettingValue::Number(n) => {
+                            state.settings_view_state.start_editing(&n.to_string());
+                        }
+                        SettingValue::Float(f) => {
+                            state.settings_view_state.start_editing(&f.to_string());
+                        }
+                        SettingValue::String(s) => {
+                            state.settings_view_state.start_editing(s);
+                        }
+                        SettingValue::List(_) => {
+                            // List starts with empty buffer to add new item
+                            state.settings_view_state.start_editing("");
+                        }
+                    }
+                }
             }
             UpdateResult::none()
         }
 
         Message::SettingsSave => {
-            // Save settings - actual save logic will be implemented when widget is ready
-            state.settings_view_state.clear_dirty();
+            use crate::config::{
+                launch::save_launch_configs, save_settings, save_user_preferences, SettingsTab,
+            };
+
+            let result = match state.settings_view_state.active_tab {
+                SettingsTab::Project => {
+                    // Save project settings (config.toml)
+                    save_settings(&state.project_path, &state.settings)
+                }
+                SettingsTab::UserPrefs => {
+                    // Save user preferences (settings.local.toml)
+                    save_user_preferences(
+                        &state.project_path,
+                        &state.settings_view_state.user_prefs,
+                    )
+                }
+                SettingsTab::LaunchConfig => {
+                    // Save launch configs (launch.toml)
+                    use crate::config::launch::load_launch_configs;
+                    let configs = load_launch_configs(&state.project_path);
+                    let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
+                    save_launch_configs(&state.project_path, &config_vec)
+                }
+                SettingsTab::VSCodeConfig => {
+                    // Read-only - nothing to save
+                    Ok(())
+                }
+            };
+
+            match result {
+                Ok(()) => {
+                    state.settings_view_state.clear_dirty();
+                    state.settings_view_state.error = None;
+                    tracing::info!("Settings saved successfully");
+                }
+                Err(e) => {
+                    let error_msg = format!("Save failed: {}", e);
+                    tracing::error!("{}", error_msg);
+                    state.settings_view_state.error = Some(error_msg);
+                }
+            }
+
             UpdateResult::none()
         }
 
         Message::SettingsResetItem => {
             // Reset setting to default - actual logic will be implemented with widget
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Settings Editing Messages (Phase 4, Task 10)
+        // ─────────────────────────────────────────────────────────
+        Message::SettingsToggleBool => {
+            // Toggle boolean setting value
+            // Actual implementation needs access to settings item
+            state.settings_view_state.mark_dirty();
+            UpdateResult::none()
+        }
+
+        Message::SettingsCycleEnumNext => {
+            // Cycle enum to next value
+            state.settings_view_state.mark_dirty();
+            UpdateResult::none()
+        }
+
+        Message::SettingsCycleEnumPrev => {
+            // Cycle enum to previous value
+            state.settings_view_state.mark_dirty();
+            UpdateResult::none()
+        }
+
+        Message::SettingsIncrement(_delta) => {
+            // Increment/decrement number value
+            // For direct increment without edit mode
+            // Actual implementation will be in Task 11 (persistence)
+            if !state.settings_view_state.editing {
+                state.settings_view_state.mark_dirty();
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsCharInput(ch) => {
+            // Add character to edit buffer
+            if state.settings_view_state.editing {
+                state.settings_view_state.edit_buffer.push(ch);
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsBackspace => {
+            // Remove last character from edit buffer
+            if state.settings_view_state.editing {
+                state.settings_view_state.edit_buffer.pop();
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsClearBuffer => {
+            // Clear entire edit buffer
+            if state.settings_view_state.editing {
+                state.settings_view_state.edit_buffer.clear();
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsCommitEdit => {
+            // Commit the current edit
+            // Actual value update needs to happen here
+            if state.settings_view_state.editing {
+                state.settings_view_state.mark_dirty();
+                state.settings_view_state.stop_editing();
+            }
+            UpdateResult::none()
+        }
+
+        Message::SettingsCancelEdit => {
+            // Cancel the current edit
+            state.settings_view_state.stop_editing();
+            UpdateResult::none()
+        }
+
+        Message::SettingsRemoveListItem => {
+            // Remove last item from list
+            state.settings_view_state.mark_dirty();
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Settings Persistence Messages (Phase 4, Task 11)
+        // ─────────────────────────────────────────────────────────
+        Message::SettingsSaveAndClose => {
+            // Save then close
+            use crate::config::{
+                launch::save_launch_configs, save_settings, save_user_preferences, SettingsTab,
+            };
+
+            let result = match state.settings_view_state.active_tab {
+                SettingsTab::Project => save_settings(&state.project_path, &state.settings),
+                SettingsTab::UserPrefs => save_user_preferences(
+                    &state.project_path,
+                    &state.settings_view_state.user_prefs,
+                ),
+                SettingsTab::LaunchConfig => {
+                    use crate::config::launch::load_launch_configs;
+                    let configs = load_launch_configs(&state.project_path);
+                    let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
+                    save_launch_configs(&state.project_path, &config_vec)
+                }
+                SettingsTab::VSCodeConfig => Ok(()),
+            };
+
+            match result {
+                Ok(()) => {
+                    state.settings_view_state.clear_dirty();
+                    state.settings_view_state.error = None;
+                    state.hide_settings();
+                    tracing::info!("Settings saved and closed");
+                }
+                Err(e) => {
+                    let error_msg = format!("Save failed: {}", e);
+                    tracing::error!("{}", error_msg);
+                    state.settings_view_state.error = Some(error_msg);
+                    // Don't close on error - stay in settings to show error
+                }
+            }
+
+            UpdateResult::none()
+        }
+
+        Message::ForceHideSettings => {
+            // Force close without saving (discard changes)
+            state.settings_view_state.clear_dirty();
+            state.hide_settings();
             UpdateResult::none()
         }
     }

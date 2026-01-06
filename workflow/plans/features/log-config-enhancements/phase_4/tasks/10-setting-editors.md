@@ -8,14 +8,25 @@
 
 ### Scope
 
-- `src/tui/widgets/settings_panel.rs`: Add editing logic for each value type
+- `src/tui/widgets/settings_panel/mod.rs`: Add editing logic for each value type
+- `src/tui/widgets/settings_panel/styles.rs`: Add editing-related styles if needed
 - `src/app/handler/update.rs`: Handle edit messages
+
+**Module Structure:**
+```
+tui/widgets/settings_panel/
+├── mod.rs      # Main widget - add editor rendering methods here
+├── styles.rs   # Styling helpers (editing_style() already exists)
+├── items.rs    # Item generators (no changes needed)
+└── tests.rs    # Add editor tests here
+```
 
 ### Details
 
 #### 1. Boolean Editor (Toggle)
 
 ```rust
+// In src/tui/widgets/settings_panel/mod.rs
 impl SettingsPanel<'_> {
     /// Toggle boolean value
     fn toggle_bool(&self, item: &mut SettingItem) {
@@ -430,12 +441,12 @@ pub enum Message {
 ### Testing
 
 ```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
+// In src/tui/widgets/settings_panel/tests.rs
+use super::*;
+use crate::config::SettingValue;
 
-    #[test]
-    fn test_toggle_bool() {
+#[test]
+fn test_toggle_bool() {
         let mut item = SettingItem::new("test", "Test")
             .value(SettingValue::Bool(false));
 
@@ -519,20 +530,79 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** (Not Started)
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Added 10 new messages for settings editing (SettingsToggleBool, SettingsCycleEnumNext, SettingsCycleEnumPrev, SettingsIncrement, SettingsCharInput, SettingsBackspace, SettingsClearBuffer, SettingsCommitEdit, SettingsCancelEdit, SettingsRemoveListItem) |
+| `src/app/handler/keys.rs` | Updated handle_key_settings_edit() to dispatch key events based on value type (Bool, Number, Float, String, Enum, List) with type-specific key handling |
+| `src/app/handler/update.rs` | Added message handlers for all editing operations, updated SettingsToggleEdit to start edit mode with current value based on type |
+| `src/tui/widgets/settings_panel/mod.rs` | Added get_selected_item() helper method to retrieve current item for editing |
+| `src/tui/widgets/settings_panel/tests.rs` | Added 16 new tests covering bool toggle, enum cycling, list add/remove, number increment/decrement, string editing, edit buffer state transitions, and dirty flag behavior |
 
-(To be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy -- -D warnings` -
-- `cargo test settings` -
+1. **Type-specific edit modes**: Boolean and Enum types don't use traditional edit mode with a buffer. Instead:
+   - Booleans toggle directly on Enter/Space
+   - Enums cycle through options with Enter/Space/Arrow keys
+   - This provides a more intuitive UX than text input for these types
 
-**Notable Decisions:**
-- (To be filled after implementation)
+2. **Edit buffer initialization**: When entering edit mode, the buffer is pre-filled with:
+   - Number/Float: Current value as string
+   - String: Current value
+   - List: Empty (to add new item)
+   - This allows users to see and modify existing values inline
+
+3. **Input validation**: Key handler filters inputs by type:
+   - Numbers: Only digits, minus sign (if buffer empty), +/- for increment
+   - Floats: Digits, decimal point, minus sign
+   - Strings: All characters accepted
+   - This prevents invalid input at the keyboard level
+
+4. **Actual value updates deferred**: The message handlers mark state as dirty but don't actually update setting values yet. This is intentional - the persistence logic (writing to actual SettingItem values and saving to disk) will be implemented in Task 11 (settings-persistence).
+
+5. **Saturating arithmetic**: Number increment/decrement uses saturating_add() to prevent integer overflow/underflow.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo clippy --lib` - Passed (no warnings)
+- `cargo test --lib` - Passed (1032 tests, 0 failures)
+- `cargo test settings_panel --lib` - Passed (47 tests for settings panel)
+
+### Test Coverage
+
+New tests added (16 total):
+- `test_toggle_bool` - Boolean toggle logic
+- `test_toggle_bool_twice` - Toggle returns to original value
+- `test_cycle_enum_next` - Enum cycling forward
+- `test_cycle_enum_prev` - Enum cycling backward
+- `test_cycle_enum_wraps_around` - Enum cycles from end to start
+- `test_add_list_item` - Adding items to list
+- `test_remove_list_item` - Removing items from list
+- `test_list_no_duplicates` - Duplicate prevention
+- `test_number_edit_buffer` - Number editing with buffer
+- `test_number_edit_parse` - Parsing number strings
+- `test_string_edit` - String editing operations
+- `test_increment_number` - Number increment
+- `test_decrement_number` - Number decrement
+- `test_number_saturating` - Overflow protection
+- `test_edit_mode_state_transitions` - Edit mode lifecycle
+- `test_dirty_flag_on_edit` - Dirty state tracking
+
+### Risks/Limitations
+
+1. **Actual persistence not implemented**: This task provides the editing UI and message flow, but doesn't actually save values to settings structures or disk. Task 11 will implement the persistence layer.
+
+2. **No undo support**: Once a value is changed and committed, there's no built-in undo (though the dirty flag allows canceling unsaved changes by closing without saving).
+
+3. **Limited validation**: Input is filtered at keyboard level, but there's no validation for:
+   - Number ranges (min/max)
+   - String patterns (regex)
+   - Required vs optional fields
+   These could be added in future enhancements.
+
+4. **List editing is simplified**: The current implementation only supports adding to end and removing from end. A more sophisticated list editor (reorder, edit individual items, insert at position) would require a separate modal UI.

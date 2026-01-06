@@ -19,6 +19,7 @@ This document provides a comprehensive reference of all keyboard controls availa
 - [Device Selector Mode](#device-selector-mode)
 - [Search Input Mode](#search-input-mode)
 - [Link Highlight Mode](#link-highlight-mode)
+- [Settings Panel Mode](#settings-panel-mode)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -138,6 +139,16 @@ Open file references from logs in your configured editor.
 
 Once in link highlight mode, see [Link Highlight Mode](#link-highlight-mode) for selection controls.
 
+### Settings
+
+Access the settings panel to configure Flutter Demon and manage launch configurations.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `,` | Open Settings Panel | Open the full-screen settings panel |
+
+Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for detailed controls.
+
 ---
 
 ## Device Selector Mode
@@ -188,6 +199,84 @@ When you press `L` in normal mode, all file references in the visible viewport a
 | `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
 
 > **Note:** The `j` and `k` keys are used for scrolling, not for selecting links.
+
+---
+
+## Settings Panel Mode
+
+The settings panel provides a tabbed interface for managing project settings, user preferences, launch configurations, and viewing VSCode configurations.
+
+### General Controls
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Close Settings | Close the settings panel and return to normal mode |
+| `q` | Close Settings | Same as `Esc` |
+| `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
+| `Ctrl+S` | Save Settings | Save changes to the current tab's configuration file |
+
+### Tab Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Next Tab | Move to the next settings tab |
+| `Shift+Tab` | Previous Tab | Move to the previous settings tab |
+| `1` | Jump to Project | Jump to Project Settings tab (config.toml) |
+| `2` | Jump to User | Jump to User Preferences tab (settings.local.toml) |
+| `3` | Jump to Launch | Jump to Launch Config tab (launch.toml) |
+| `4` | Jump to VSCode | Jump to VSCode Config tab (launch.json, read-only) |
+
+### Item Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `j` / `↓` | Next Setting | Move to the next setting in the current tab |
+| `k` / `↑` | Previous Setting | Move to the previous setting in the current tab |
+
+### Editing Values
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` | Edit / Toggle | Edit the selected setting (or toggle for booleans/enums) |
+| `Space` | Edit / Toggle | Same as `Enter` |
+| `Esc` | Cancel Edit | Cancel editing and discard changes (when editing) |
+| `Enter` | Commit Edit | Save the edited value (when editing strings/numbers) |
+
+### Value-Specific Controls
+
+#### Boolean Values
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` / `Space` | Toggle | Toggle between true and false |
+
+#### Number Values
+| Key | Action | Description |
+|-----|--------|-------------|
+| `+` / `=` | Increment | Increase the number by 1 |
+| `-` | Decrement | Decrease the number by 1 |
+| `0`-`9` | Type Digit | Type a number directly |
+| `Backspace` | Delete Character | Remove the last digit |
+
+#### String Values
+| Key | Action | Description |
+|-----|--------|-------------|
+| `a`-`z`, etc. | Type Character | Add character to the string |
+| `Backspace` | Delete Character | Remove the last character |
+| `Delete` | Clear Buffer | Clear the entire edit buffer |
+
+#### Enum Values
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` / `Space` | Cycle Next | Move to the next enum option |
+| `→` | Cycle Next | Same as `Enter` |
+| `←` | Cycle Previous | Move to the previous enum option |
+
+#### List Values
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Enter` | Add Item | Add a new item to the list (after typing) |
+| `d` | Remove Item | Remove the last item from the list |
+| `Backspace` | Delete Character | Remove the last character while typing |
 
 ---
 
