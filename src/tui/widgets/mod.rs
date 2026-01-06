@@ -6,6 +6,7 @@ mod header;
 mod log_view;
 mod search_input;
 mod settings_panel;
+mod startup_dialog;
 mod status_bar;
 mod tabs;
 
@@ -15,5 +16,6 @@ pub use header::MainHeader;
 pub use log_view::{LogView, LogViewState};
 pub use search_input::SearchInput;
 pub use settings_panel::SettingsPanel;
+pub use startup_dialog::StartupDialog;
 pub use status_bar::{StatusBar, StatusBarCompact};
 pub use tabs::{HeaderWithTabs, SessionTabs};

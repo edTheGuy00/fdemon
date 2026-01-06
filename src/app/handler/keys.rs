@@ -15,6 +15,7 @@ pub fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
         UiMode::Normal => handle_key_normal(state, key),
         UiMode::LinkHighlight => handle_key_link_highlight(key),
         UiMode::Settings => handle_key_settings(state, key),
+        UiMode::StartupDialog => handle_key_startup_dialog(state, key),
     }
 }
 
@@ -191,9 +192,16 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // Stop app (lowercase 's') - only when not busy
         (KeyCode::Char('s'), KeyModifiers::NONE) if !is_busy => Some(Message::StopApp),
 
-        // 'd' for device selector (as shown in header)
-        // Note: 'n' also triggers device selector but is overloaded with search navigation
-        (KeyCode::Char('d'), KeyModifiers::NONE) => Some(Message::ShowDeviceSelector),
+        // 'd' for adding device/session
+        // If sessions are running: show quick device selector
+        // If no sessions: show full startup dialog
+        (KeyCode::Char('d'), KeyModifiers::NONE) => {
+            if state.has_running_sessions() {
+                Some(Message::ShowDeviceSelector)
+            } else {
+                Some(Message::ShowStartupDialog)
+            }
+        }
 
         // ─────────────────────────────────────────────────────────
         // Log Filtering (Phase 1 - Task 4)
@@ -219,13 +227,18 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // 'n' - Next search match (only when search has query)
         // Note: 'n' is overloaded - it's also used for "New session"
         // If there's an active search query, use it for next match
+        // Otherwise: show StartupDialog if no sessions, DeviceSelector if sessions running
         (KeyCode::Char('n'), KeyModifiers::NONE) => {
             if let Some(handle) = state.session_manager.selected() {
                 if !handle.session.search_state.query.is_empty() {
                     return Some(Message::NextSearchMatch);
                 }
             }
-            Some(Message::ShowDeviceSelector)
+            if state.has_running_sessions() {
+                Some(Message::ShowDeviceSelector)
+            } else {
+                Some(Message::ShowStartupDialog)
+            }
         }
 
         // 'N' - Previous search match
@@ -457,6 +470,164 @@ fn handle_key_settings_edit(state: &AppState, key: KeyEvent) -> Option<Message> 
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Startup Dialog Key Handling (Phase 5)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Handle key events in startup dialog mode
+fn handle_key_startup_dialog(state: &AppState, key: KeyEvent) -> Option<Message> {
+    let dialog = &state.startup_dialog_state;
+
+    // If editing text field, handle text input
+    if dialog.editing {
+        return handle_key_startup_dialog_text_input(key);
+    }
+
+    match (key.code, key.modifiers) {
+        // ─────────────────────────────────────────────────────────
+        // Navigation within section (j/k and arrow keys)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('j'), KeyModifiers::NONE) | (KeyCode::Down, _) => {
+            Some(Message::StartupDialogDown)
+        }
+        (KeyCode::Char('k'), KeyModifiers::NONE) | (KeyCode::Up, _) => {
+            Some(Message::StartupDialogUp)
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Section navigation (Tab/Shift+Tab/BackTab)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => {
+            Some(Message::StartupDialogPrevSection)
+        }
+        (KeyCode::BackTab, _) => Some(Message::StartupDialogPrevSection),
+        (KeyCode::Tab, KeyModifiers::NONE) => Some(Message::StartupDialogNextSection),
+
+        // ─────────────────────────────────────────────────────────
+        // Enter - context sensitive (confirm or start editing)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Enter, KeyModifiers::NONE) => {
+            // Context-sensitive Enter:
+            // - On Flavor/DartDefines: enter edit mode (or confirm if already editing)
+            // - On other sections with device selected: launch
+            use crate::app::state::DialogSection;
+            match dialog.active_section {
+                DialogSection::Flavor | DialogSection::DartDefines => {
+                    if dialog.editing {
+                        // Already editing, exit edit mode
+                        Some(Message::StartupDialogExitEdit)
+                    } else {
+                        // Enter edit mode
+                        Some(Message::StartupDialogEnterEdit)
+                    }
+                }
+                _ => {
+                    // Other sections: launch if device selected
+                    if dialog.can_launch() {
+                        Some(Message::StartupDialogConfirm)
+                    } else {
+                        None
+                    }
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Space key to toggle edit mode on text sections
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char(' '), KeyModifiers::NONE) => {
+            if dialog.is_text_section() && !dialog.editing {
+                Some(Message::StartupDialogEnterEdit)
+            } else {
+                None
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Cancel/Escape
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Esc, _) => Some(Message::HideStartupDialog),
+
+        // ─────────────────────────────────────────────────────────
+        // Refresh devices (r key)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('r'), KeyModifiers::NONE) => Some(Message::StartupDialogRefreshDevices),
+
+        // ─────────────────────────────────────────────────────────
+        // Quick section jumps (1-5)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('1'), KeyModifiers::NONE) => Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Configs,
+        )),
+        (KeyCode::Char('2'), KeyModifiers::NONE) => Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Mode,
+        )),
+        (KeyCode::Char('3'), KeyModifiers::NONE) => Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Flavor,
+        )),
+        (KeyCode::Char('4'), KeyModifiers::NONE) => Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::DartDefines,
+        )),
+        (KeyCode::Char('5'), KeyModifiers::NONE) => Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Devices,
+        )),
+
+        // ─────────────────────────────────────────────────────────
+        // Force quit with Ctrl+C
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+
+        _ => None,
+    }
+}
+
+/// Handle text input for Flavor/DartDefines fields when editing
+fn handle_key_startup_dialog_text_input(key: KeyEvent) -> Option<Message> {
+    match (key.code, key.modifiers) {
+        // ─────────────────────────────────────────────────────────
+        // Exit edit mode (Esc or Enter)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Esc, _) => Some(Message::StartupDialogExitEdit),
+        (KeyCode::Enter, _) => Some(Message::StartupDialogExitEdit),
+
+        // ─────────────────────────────────────────────────────────
+        // Tab switches sections (automatically exits edit mode)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => {
+            Some(Message::StartupDialogPrevSection)
+        }
+        (KeyCode::BackTab, _) => Some(Message::StartupDialogPrevSection),
+        (KeyCode::Tab, KeyModifiers::NONE) => Some(Message::StartupDialogNextSection),
+
+        // ─────────────────────────────────────────────────────────
+        // Character input
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char(c), KeyModifiers::NONE) | (KeyCode::Char(c), KeyModifiers::SHIFT) => {
+            Some(Message::StartupDialogCharInput(c))
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Backspace - delete last character
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Backspace, _) => Some(Message::StartupDialogBackspace),
+
+        // ─────────────────────────────────────────────────────────
+        // Clear field - Delete or Ctrl+U
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Delete, _) => Some(Message::StartupDialogClearInput),
+        (KeyCode::Char('u'), m) if m.contains(KeyModifiers::CONTROL) => {
+            Some(Message::StartupDialogClearInput)
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Force quit with Ctrl+C
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod link_mode_key_tests {
     use super::*;
@@ -566,9 +737,105 @@ mod link_mode_key_tests {
 }
 
 #[cfg(test)]
+mod device_selector_key_tests {
+    use super::*;
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    fn test_device() -> crate::daemon::Device {
+        crate::daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[test]
+    fn test_d_key_with_running_sessions() {
+        use crate::core::AppPhase;
+
+        let mut state = AppState::new();
+        // Simulate running session
+        let device = test_device();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        // Mark session as running (newly created sessions aren't in Running phase)
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.phase = AppPhase::Running;
+        }
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('d')));
+
+        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+    }
+
+    #[test]
+    fn test_d_key_without_sessions() {
+        let state = AppState::new();
+        // No running sessions
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('d')));
+
+        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+    }
+
+    #[test]
+    fn test_n_key_with_running_sessions_no_search() {
+        use crate::core::AppPhase;
+
+        let mut state = AppState::new();
+        let device = test_device();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        // Mark session as running
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.phase = AppPhase::Running;
+        }
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
+
+        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+    }
+
+    #[test]
+    fn test_n_key_without_sessions() {
+        let state = AppState::new();
+        // No running sessions
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
+
+        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+    }
+
+    #[test]
+    fn test_n_key_with_search_query() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Set search query
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.search_state.query = "test query".to_string();
+        }
+
+        // Select the session
+        state.session_manager.select_by_id(session_id);
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
+
+        // Should prioritize search over session check
+        assert!(matches!(msg, Some(Message::NextSearchMatch)));
+    }
+}
+
+#[cfg(test)]
 mod settings_key_tests {
     use super::*;
-    use crate::app::state::SettingsViewState;
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
@@ -829,5 +1096,160 @@ mod settings_view_state_tests {
         assert_eq!(state.selected_index, 0);
         assert!(!state.editing);
         assert!(state.edit_buffer.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod startup_dialog_edit_tests {
+    use super::*;
+    use crate::app::state::{AppState, DialogSection, StartupDialogState, UiMode};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn test_enter_on_flavor_enters_edit_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::StartupDialog;
+        state.startup_dialog_state.active_section = DialogSection::Flavor;
+        state.startup_dialog_state.editing = false;
+
+        let msg = handle_key_startup_dialog(&state, key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::StartupDialogEnterEdit)));
+    }
+
+    #[test]
+    fn test_enter_on_flavor_while_editing_exits() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::StartupDialog;
+        state.startup_dialog_state.active_section = DialogSection::Flavor;
+        state.startup_dialog_state.editing = true;
+
+        let msg = handle_key_startup_dialog(&state, key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::StartupDialogExitEdit)));
+    }
+
+    #[test]
+    fn test_enter_on_dart_defines_enters_edit_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::StartupDialog;
+        state.startup_dialog_state.active_section = DialogSection::DartDefines;
+        state.startup_dialog_state.editing = false;
+
+        let msg = handle_key_startup_dialog(&state, key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::StartupDialogEnterEdit)));
+    }
+
+    #[test]
+    fn test_space_on_flavor_enters_edit_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::StartupDialog;
+        state.startup_dialog_state.active_section = DialogSection::Flavor;
+        state.startup_dialog_state.editing = false;
+
+        let msg = handle_key_startup_dialog(&state, key(KeyCode::Char(' ')));
+        assert!(matches!(msg, Some(Message::StartupDialogEnterEdit)));
+    }
+
+    #[test]
+    fn test_space_on_non_text_section_does_nothing() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::StartupDialog;
+        state.startup_dialog_state.active_section = DialogSection::Mode;
+        state.startup_dialog_state.editing = false;
+
+        let msg = handle_key_startup_dialog(&state, key(KeyCode::Char(' ')));
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_esc_in_edit_mode_exits_edit_not_dialog() {
+        let msg = handle_key_startup_dialog_text_input(key(KeyCode::Esc));
+        assert!(matches!(msg, Some(Message::StartupDialogExitEdit)));
+    }
+
+    #[test]
+    fn test_enter_in_edit_mode_exits_edit() {
+        let msg = handle_key_startup_dialog_text_input(key(KeyCode::Enter));
+        assert!(matches!(msg, Some(Message::StartupDialogExitEdit)));
+    }
+
+    #[test]
+    fn test_char_input_while_editing() {
+        let msg = handle_key_startup_dialog_text_input(key(KeyCode::Char('a')));
+        assert!(matches!(msg, Some(Message::StartupDialogCharInput('a'))));
+    }
+
+    #[test]
+    fn test_backspace_while_editing() {
+        let msg = handle_key_startup_dialog_text_input(key(KeyCode::Backspace));
+        assert!(matches!(msg, Some(Message::StartupDialogBackspace)));
+    }
+
+    #[test]
+    fn test_is_text_section() {
+        let mut state = StartupDialogState::new();
+
+        state.active_section = DialogSection::Flavor;
+        assert!(state.is_text_section());
+
+        state.active_section = DialogSection::DartDefines;
+        assert!(state.is_text_section());
+
+        state.active_section = DialogSection::Configs;
+        assert!(!state.is_text_section());
+
+        state.active_section = DialogSection::Mode;
+        assert!(!state.is_text_section());
+
+        state.active_section = DialogSection::Devices;
+        assert!(!state.is_text_section());
+    }
+
+    #[test]
+    fn test_enter_edit_only_for_text_sections() {
+        let mut state = StartupDialogState::new();
+
+        // Should work for Flavor
+        state.active_section = DialogSection::Flavor;
+        state.editing = false;
+        state.enter_edit();
+        assert!(state.editing);
+
+        // Should work for DartDefines
+        state.active_section = DialogSection::DartDefines;
+        state.editing = false;
+        state.enter_edit();
+        assert!(state.editing);
+
+        // Should not work for Mode
+        state.active_section = DialogSection::Mode;
+        state.editing = false;
+        state.enter_edit();
+        assert!(!state.editing);
+    }
+
+    #[test]
+    fn test_exit_edit() {
+        let mut state = StartupDialogState::new();
+        state.active_section = DialogSection::Flavor;
+        state.editing = true;
+
+        state.exit_edit();
+        assert!(!state.editing);
+    }
+
+    #[test]
+    fn test_tab_in_edit_mode_switches_section() {
+        let msg = handle_key_startup_dialog_text_input(key(KeyCode::Tab));
+        assert!(matches!(msg, Some(Message::StartupDialogNextSection)));
+    }
+
+    #[test]
+    fn test_shift_tab_in_edit_mode_switches_section() {
+        let msg =
+            handle_key_startup_dialog_text_input(KeyEvent::new(KeyCode::Tab, KeyModifiers::SHIFT));
+        assert!(matches!(msg, Some(Message::StartupDialogPrevSection)));
     }
 }

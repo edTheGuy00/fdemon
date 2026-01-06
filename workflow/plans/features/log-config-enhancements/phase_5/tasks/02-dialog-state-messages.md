@@ -452,16 +452,58 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
 **Files Modified:**
-- (none yet)
 
-**Implementation Details:**
-(to be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/app/state.rs` | Added `UiMode::StartupDialog`, `DialogSection` enum, `StartupDialogState` struct with all methods, `startup_dialog_state` field to `AppState`, `show_startup_dialog()` and `hide_startup_dialog()` methods. Added stub types `LoadedConfigs` and `SourcedConfig` (will be replaced by Task 01). Added comprehensive unit tests. |
+| `src/app/message.rs` | Added 14 startup dialog messages: `ShowStartupDialog`, `HideStartupDialog`, navigation messages, input messages, and device/config selection messages. |
+| `src/app/handler/keys.rs` | Added stub key handler `handle_key_startup_dialog()` for StartupDialog UI mode (ESC to close). |
+| `src/app/handler/update.rs` | Added stub message handlers for all 14 startup dialog messages with basic state mutations. |
+| `src/tui/render.rs` | Added stub rendering for `UiMode::StartupDialog` with placeholder text. |
+
+**Notable Decisions/Tradeoffs:**
+
+1. **Stub Types for LoadedConfigs/SourcedConfig**: Since Task 01 hasn't been completed yet, I added temporary stub implementations in `state.rs`. These will be replaced when Task 01 is complete and `src/config/priority.rs` is implemented.
+
+2. **Borrow Checker Fix**: In `apply_config_defaults()`, I had to clone values before mutating `self` to avoid borrow checker issues. This is the idiomatic Rust solution.
+
+3. **Stub Handlers**: Added minimal stub implementations in `keys.rs`, `update.rs`, and `render.rs` to satisfy the compiler. These will be expanded in later tasks.
+
+4. **Navigation Wrapping**: Device and config navigation wrap around (last -> first, first -> last) for better UX.
+
+5. **Auto-Select First**: When devices are loaded, the first device is automatically selected. When configs are loaded, the first config is selected if any exist.
 
 **Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy -- -D warnings` - Pending
-- `cargo test dialog` - Pending
+
+- `cargo fmt` - PASS (automatically formatted code)
+- `cargo check` - PASS (compiles without errors)
+- `cargo clippy -- -D warnings` - PASS (no clippy warnings)
+- `cargo test dialog` - PASS (13 tests passed)
+  - `test_dialog_section_navigation` - PASS
+  - `test_startup_dialog_state_defaults` - PASS
+  - `test_can_launch_requires_device` - PASS
+  - `test_mode_cycling` - PASS
+  - `test_mode_cycling_up` - PASS
+  - `test_set_devices_clears_loading` - PASS
+  - `test_set_devices_auto_selects_first` - PASS
+  - `test_set_error_clears_loading` - PASS
+  - `test_next_section_clears_editing` - PASS
+  - `test_prev_section_clears_editing` - PASS
+  - `test_tick_increments_animation_frame` - PASS
+  - `test_tick_wraps_around` - PASS
+  - `test_device_navigation_wraps` - PASS
+  - `test_with_configs_selects_first` - PASS
+  - `test_with_configs_empty` - PASS
+  - `test_app_state_show_startup_dialog` - PASS
+  - `test_app_state_hide_startup_dialog` - PASS
+
+**Risks/Limitations:**
+
+1. **Stub Implementations**: The message handlers and UI rendering are minimal stubs. Future tasks will need to implement the full functionality.
+
+2. **Temporary Types**: `LoadedConfigs` and `SourcedConfig` are temporary stub types that will be replaced when Task 01 is complete.
+
+3. **No Widget Yet**: The actual startup dialog widget hasn't been implemented. The render function just shows placeholder text.

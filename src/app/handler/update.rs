@@ -132,6 +132,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             {
                 state.device_selector.tick();
             }
+
+            // Also tick startup dialog when visible and loading/refreshing
+            if state.ui_mode == UiMode::StartupDialog
+                && (state.startup_dialog_state.loading || state.startup_dialog_state.refreshing)
+            {
+                state.startup_dialog_state.tick();
+            }
+
+            // Tick loading screen animation (Task 08d)
+            if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
+                state.tick_loading_animation();
+            }
+
             UpdateResult::none()
         }
 
@@ -334,9 +347,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ShowDeviceSelector => {
             state.ui_mode = UiMode::DeviceSelector;
 
-            // Use cache if available for instant display, otherwise show loading
-            if state.device_selector.has_cache() {
-                state.device_selector.show_refreshing();
+            // Use global cache if available for instant display (Task 08e)
+            let cached_devices = state.get_cached_devices().cloned();
+            if let Some(cached) = cached_devices {
+                // Manually set devices and refreshing state to avoid clearing refreshing flag
+                let cached_len = cached.len();
+                state.device_selector.devices = cached;
+                state.device_selector.visible = true;
+                state.device_selector.loading = false;
+                state.device_selector.refreshing = true;
+                state.device_selector.error = None;
+                state.device_selector.animation_frame = 0;
+                if state.device_selector.selected_index >= cached_len {
+                    state.device_selector.selected_index = 0;
+                }
             } else {
                 state.device_selector.show_loading();
             }
@@ -425,7 +449,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::DevicesDiscovered { devices } => {
             let device_count = devices.len();
-            state.device_selector.set_devices(devices);
+
+            // Update global cache FIRST (Task 08e)
+            state.set_device_cache(devices.clone());
+
+            // Update device_selector (for add-session use case)
+            state.device_selector.set_devices(devices.clone());
+
+            // ALSO update startup_dialog_state (for initial startup)
+            if state.ui_mode == UiMode::StartupDialog {
+                state.startup_dialog_state.set_devices(devices);
+            }
 
             // If we were in Loading mode, transition to DeviceSelector
             if state.ui_mode == UiMode::Loading {
@@ -442,7 +476,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::DeviceDiscoveryFailed { error } => {
+            // Update device_selector
             state.device_selector.set_error(error.clone());
+
+            // ALSO update startup_dialog_state
+            if state.ui_mode == UiMode::StartupDialog {
+                state.startup_dialog_state.set_error(error.clone());
+            }
 
             // If we were in Loading mode, transition to DeviceSelector to show error
             if state.ui_mode == UiMode::Loading {
@@ -1176,6 +1216,217 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             state.hide_settings();
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Startup Dialog Messages (Phase 5)
+        // ─────────────────────────────────────────────────────────
+        // TODO: These are stub implementations for Task 02.
+        // Full implementations will be added in later tasks.
+        Message::ShowStartupDialog => {
+            // Load all configs (launch.toml + launch.json)
+            let configs = crate::config::load_all_configs(&state.project_path);
+
+            // Show the dialog with configs (will use cache if available - Task 08e)
+            state.show_startup_dialog(configs);
+
+            // Trigger device discovery (background refresh if cache exists)
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        Message::HideStartupDialog => {
+            state.hide_startup_dialog();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogUp => {
+            state.startup_dialog_state.navigate_up();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogDown => {
+            state.startup_dialog_state.navigate_down();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogNextSection => {
+            state.startup_dialog_state.next_section();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogPrevSection => {
+            state.startup_dialog_state.prev_section();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogSelectConfig(idx) => {
+            state.startup_dialog_state.selected_config = Some(idx);
+            state.startup_dialog_state.apply_config_defaults();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogSelectDevice(idx) => {
+            state.startup_dialog_state.selected_device = Some(idx);
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogSetMode(mode) => {
+            state.startup_dialog_state.mode = mode;
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogCharInput(c) => {
+            // TODO: Handle character input for flavor/dart-defines
+            if state.startup_dialog_state.editing {
+                match state.startup_dialog_state.active_section {
+                    crate::app::state::DialogSection::Flavor => {
+                        state.startup_dialog_state.flavor.push(c);
+                    }
+                    crate::app::state::DialogSection::DartDefines => {
+                        state.startup_dialog_state.dart_defines.push(c);
+                    }
+                    _ => {}
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogBackspace => {
+            if state.startup_dialog_state.editing {
+                match state.startup_dialog_state.active_section {
+                    crate::app::state::DialogSection::Flavor => {
+                        state.startup_dialog_state.flavor.pop();
+                    }
+                    crate::app::state::DialogSection::DartDefines => {
+                        state.startup_dialog_state.dart_defines.pop();
+                    }
+                    _ => {}
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogClearInput => {
+            match state.startup_dialog_state.active_section {
+                crate::app::state::DialogSection::Flavor => {
+                    state.startup_dialog_state.flavor.clear();
+                }
+                crate::app::state::DialogSection::DartDefines => {
+                    state.startup_dialog_state.dart_defines.clear();
+                }
+                _ => {}
+            }
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogConfirm => handle_startup_dialog_confirm(state),
+
+        Message::StartupDialogRefreshDevices => {
+            // Mark as refreshing (shows loading indicator but keeps existing devices)
+            state.startup_dialog_state.refreshing = true;
+
+            // Trigger device discovery
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        Message::StartupDialogJumpToSection(section) => {
+            state.startup_dialog_state.jump_to_section(section);
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogEnterEdit => {
+            state.startup_dialog_state.enter_edit();
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogExitEdit => {
+            state.startup_dialog_state.exit_edit();
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Launch Config Editing Messages (Phase 5, Task 07)
+        // ─────────────────────────────────────────────────────────
+        Message::LaunchConfigCreate => {
+            use crate::config::{add_launch_config, create_default_launch_config};
+
+            let new_config = create_default_launch_config();
+            match add_launch_config(&state.project_path, new_config) {
+                Ok(()) => {
+                    state.settings_view_state.mark_dirty();
+                    state.settings_view_state.error = None;
+                    tracing::info!("Created new launch configuration");
+                }
+                Err(e) => {
+                    let error_msg = format!("Failed to create config: {}", e);
+                    tracing::error!("{}", error_msg);
+                    state.settings_view_state.error = Some(error_msg);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::LaunchConfigDelete(idx) => {
+            use crate::config::{delete_launch_config, load_launch_configs};
+
+            // Get config name at index
+            let configs = load_launch_configs(&state.project_path);
+            if let Some(resolved) = configs.get(idx) {
+                match delete_launch_config(&state.project_path, &resolved.config.name) {
+                    Ok(()) => {
+                        state.settings_view_state.mark_dirty();
+                        state.settings_view_state.error = None;
+                        tracing::info!("Deleted launch configuration: {}", resolved.config.name);
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to delete: {}", e);
+                        tracing::error!("{}", error_msg);
+                        state.settings_view_state.error = Some(error_msg);
+                    }
+                }
+            } else {
+                state.settings_view_state.error =
+                    Some(format!("Config at index {} not found", idx));
+            }
+            UpdateResult::none()
+        }
+
+        Message::LaunchConfigUpdate {
+            config_idx,
+            field,
+            value,
+        } => {
+            use crate::config::{load_launch_configs, update_launch_config_field};
+
+            let configs = load_launch_configs(&state.project_path);
+            if let Some(resolved) = configs.get(config_idx) {
+                match update_launch_config_field(
+                    &state.project_path,
+                    &resolved.config.name,
+                    &field,
+                    &value,
+                ) {
+                    Ok(()) => {
+                        state.settings_view_state.mark_dirty();
+                        state.settings_view_state.error = None;
+                        tracing::info!(
+                            "Updated config '{}' field '{}' to '{}'",
+                            resolved.config.name,
+                            field,
+                            value
+                        );
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Failed to update: {}", e);
+                        tracing::error!("{}", error_msg);
+                        state.settings_view_state.error = Some(error_msg);
+                    }
+                }
+            } else {
+                state.settings_view_state.error =
+                    Some(format!("Config at index {} not found", config_idx));
+            }
+            UpdateResult::none()
+        }
     }
 }
 
@@ -1257,5 +1508,160 @@ fn rescan_links_if_active(state: &mut AppState) {
             "Re-scanned links after scroll: {} links found",
             handle.session.link_highlight_state.link_count()
         );
+    }
+}
+
+/// Handle startup dialog confirm (launch session with selected config and device)
+fn handle_startup_dialog_confirm(state: &mut AppState) -> UpdateResult {
+    let dialog = &state.startup_dialog_state;
+
+    // Get selected device (required)
+    let device = match dialog.selected_device() {
+        Some(d) => d.clone(),
+        None => {
+            // No device selected - show error
+            state.startup_dialog_state.error = Some("Please select a device".to_string());
+            return UpdateResult::none();
+        }
+    };
+
+    // Build config: start from selected config OR create ad-hoc if user entered values
+    let config: Option<crate::config::LaunchConfig> = {
+        // Check if user entered any custom values
+        let has_custom_flavor = !dialog.flavor.is_empty();
+        let has_custom_defines = !dialog.dart_defines.is_empty();
+        let has_custom_mode = dialog.mode != crate::config::FlutterMode::Debug;
+
+        if let Some(sourced) = dialog.selected_config() {
+            // User selected a config - clone and override
+            let mut cfg = sourced.config.clone();
+
+            // Override mode
+            cfg.mode = dialog.mode;
+
+            // Override flavor if user entered one
+            if has_custom_flavor {
+                cfg.flavor = Some(dialog.flavor.clone());
+            }
+
+            // Override dart-defines if user entered any
+            if has_custom_defines {
+                cfg.dart_defines = parse_dart_defines(&dialog.dart_defines);
+            }
+
+            Some(cfg)
+        } else if has_custom_flavor || has_custom_defines || has_custom_mode {
+            // No config selected but user entered custom values
+            // Create an ad-hoc config with the entered values
+            Some(crate::config::LaunchConfig {
+                name: "Ad-hoc Launch".to_string(),
+                device: device.id.clone(),
+                mode: dialog.mode,
+                flavor: if has_custom_flavor {
+                    Some(dialog.flavor.clone())
+                } else {
+                    None
+                },
+                dart_defines: if has_custom_defines {
+                    parse_dart_defines(&dialog.dart_defines)
+                } else {
+                    std::collections::HashMap::new()
+                },
+                entry_point: None,
+                extra_args: Vec::new(),
+                auto_start: false,
+            })
+        } else {
+            // No config, no custom values - bare run
+            None
+        }
+    };
+
+    // Save selection (only if a named config was selected)
+    let _ = crate::config::save_last_selection(
+        &state.project_path,
+        dialog.selected_config().map(|c| c.config.name.as_str()),
+        Some(&device.id),
+    );
+
+    // Create session
+    let result = if let Some(ref cfg) = config {
+        state
+            .session_manager
+            .create_session_with_config(&device, cfg.clone())
+    } else {
+        state.session_manager.create_session(&device)
+    };
+
+    match result {
+        Ok(session_id) => {
+            state.ui_mode = UiMode::Normal;
+            UpdateResult::action(UpdateAction::SpawnSession {
+                session_id,
+                device,
+                config: config.map(Box::new),
+            })
+        }
+        Err(e) => {
+            state.startup_dialog_state.error = Some(format!("Failed to create session: {}", e));
+            UpdateResult::none()
+        }
+    }
+}
+
+/// Parse dart-defines string into HashMap
+///
+/// Format: "KEY=VALUE,KEY2=VALUE2"
+fn parse_dart_defines(input: &str) -> std::collections::HashMap<String, String> {
+    input
+        .split(',')
+        .filter_map(|pair| {
+            let mut parts = pair.splitn(2, '=');
+            let key = parts.next()?.trim().to_string();
+            let value = parts.next()?.trim().to_string();
+            if key.is_empty() {
+                None
+            } else {
+                Some((key, value))
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_dart_defines() {
+        let input = "API_URL=https://api.com,DEBUG=true";
+        let result = parse_dart_defines(input);
+
+        assert_eq!(result.get("API_URL"), Some(&"https://api.com".to_string()));
+        assert_eq!(result.get("DEBUG"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_empty() {
+        let result = parse_dart_defines("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dart_defines_single() {
+        let input = "KEY=VALUE";
+        let result = parse_dart_defines(input);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("KEY"), Some(&"VALUE".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_with_spaces() {
+        let input = " KEY = VALUE , KEY2 = VALUE2 ";
+        let result = parse_dart_defines(input);
+
+        assert_eq!(result.get("KEY"), Some(&"VALUE".to_string()));
+        assert_eq!(result.get("KEY2"), Some(&"VALUE2".to_string()));
     }
 }

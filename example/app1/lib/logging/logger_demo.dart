@@ -20,20 +20,16 @@ final logger = Logger(
 );
 
 /// Logger without stack traces - cleaner output.
-final loggerNoStack = Logger(
-  printer: PrettyPrinter(methodCount: 0),
-);
+final loggerNoStack = Logger(printer: PrettyPrinter(methodCount: 0));
 
 /// Simple one-line logger.
-final simpleLogger = Logger(
-  printer: SimplePrinter(colors: true),
-);
+final simpleLogger = Logger(printer: SimplePrinter(colors: true));
 
 /// Demonstrates all Logger log levels.
 void demonstrateLoggerPackage() {
   logger.t('Trace: Very detailed debugging info');
   logger.d('Debug: Debugging information');
-  logger.i('Info: General information');
+  logger.i('Info: General informationkuhkhu');
   logger.w('Warning: Something might be wrong');
   logger.e('Error: Something went wrong!');
   logger.f('Fatal: Critical failure!');

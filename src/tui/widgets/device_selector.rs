@@ -1,5 +1,16 @@
 //! Device selector modal widget
 //!
+//! **Note**: For initial app startup, prefer using `StartupDialog` which provides
+//! a more comprehensive launch experience with config selection. DeviceSelector
+//! is retained for the "add session" use case when sessions are already running.
+//!
+//! ## Use cases
+//! - Adding additional device session to running app ('d' key when sessions exist)
+//!
+//! ## Do NOT use for
+//! - Initial app startup (use StartupDialog instead)
+//!
+//! ## Legacy usage
 //! Displays available Flutter devices in a centered modal overlay,
 //! with support for keyboard navigation and device selection.
 

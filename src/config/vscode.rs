@@ -52,8 +52,8 @@ struct VSCodeConfiguration {
     tool_args: Vec<String>,
 
     /// Arguments passed to the app's main()
+    /// Note: Some users put --flavor here, so we parse it too
     #[serde(default)]
-    #[allow(dead_code)]
     args: Vec<String>,
 
     /// Working directory
@@ -90,8 +90,8 @@ pub fn load_vscode_configs(project_path: &Path) -> Vec<ResolvedLaunchConfig> {
 
 /// Parse the launch.json content
 fn parse_launch_json(content: &str, path: &Path) -> Vec<ResolvedLaunchConfig> {
-    // VSCode allows comments in JSON (JSONC), so we need to strip them
-    let cleaned = strip_json_comments(content);
+    // VSCode allows comments AND trailing commas in JSON (JSONC)
+    let cleaned = clean_jsonc(content);
 
     match serde_json::from_str::<VSCodeLaunchFile>(&cleaned) {
         Ok(launch_file) => {
@@ -130,8 +130,30 @@ fn convert_vscode_config(vscode: VSCodeConfiguration) -> Option<ResolvedLaunchCo
         .map(parse_flutter_mode)
         .unwrap_or(FlutterMode::Debug);
 
-    // Extract dart-defines and flavor from toolArgs
-    let (dart_defines, flavor, extra_args) = parse_tool_args(&vscode.tool_args);
+    // Extract dart-defines and flavor from toolArgs (primary)
+    let (mut dart_defines, mut flavor, extra_args) = parse_tool_args(&vscode.tool_args);
+
+    // Also parse args field for --flavor (fallback for misconfigured projects)
+    // This handles users who put --flavor in args instead of toolArgs
+    if flavor.is_none() {
+        let (args_defines, args_flavor, _args_extra) = parse_tool_args(&vscode.args);
+
+        // Only use args flavor if toolArgs didn't have one
+        if args_flavor.is_some() {
+            flavor = args_flavor;
+            debug!(
+                "Found --flavor in 'args' field for config '{}' (recommend moving to 'toolArgs')",
+                vscode.name
+            );
+        }
+
+        // Merge dart-defines from args (lower priority)
+        for (key, value) in args_defines {
+            dart_defines.entry(key).or_insert(value);
+        }
+
+        // Note: We don't merge extra_args from 'args' as those are meant for Dart VM
+    }
 
     // Build entry point from program field
     let entry_point = vscode
@@ -218,6 +240,76 @@ fn parse_tool_args(
     }
 
     (dart_defines, flavor, extra_args)
+}
+
+/// Strip comments AND trailing commas from JSON (JSONC support)
+///
+/// VSCode uses JSONC which allows:
+/// - // line comments
+/// - /* block comments */
+/// - Trailing commas in arrays and objects
+fn clean_jsonc(content: &str) -> String {
+    let without_comments = strip_json_comments(content);
+    strip_trailing_commas(&without_comments)
+}
+
+/// Strip trailing commas before ] and }
+///
+/// Trailing commas are valid in JSONC but not in standard JSON.
+/// This function removes commas that appear before closing brackets/braces,
+/// while preserving commas inside strings.
+fn strip_trailing_commas(content: &str) -> String {
+    let mut result = String::with_capacity(content.len());
+    let mut chars = content.chars().peekable();
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    while let Some(c) = chars.next() {
+        if escape_next {
+            result.push(c);
+            escape_next = false;
+            continue;
+        }
+
+        if c == '\\' && in_string {
+            result.push(c);
+            escape_next = true;
+            continue;
+        }
+
+        if c == '"' {
+            in_string = !in_string;
+            result.push(c);
+            continue;
+        }
+
+        if !in_string && c == ',' {
+            // Look ahead to see if this comma is trailing
+            let mut is_trailing = false;
+            let mut peek_chars = chars.clone();
+
+            // Skip whitespace to see what comes after the comma
+            while let Some(&next) = peek_chars.peek() {
+                if next.is_whitespace() {
+                    peek_chars.next();
+                } else {
+                    // If we find ] or }, this is a trailing comma
+                    is_trailing = next == ']' || next == '}';
+                    break;
+                }
+            }
+
+            if !is_trailing {
+                result.push(c);
+            }
+            // If trailing, skip the comma (don't push it)
+            continue;
+        }
+
+        result.push(c);
+    }
+
+    result
 }
 
 /// Strip comments from JSON (JSONC support)
@@ -668,5 +760,260 @@ mod tests {
         // Should preserve the comment-like content inside the string
         assert!(result.contains("// in it"));
         assert!(result.contains("/* too */"));
+    }
+
+    #[test]
+    fn test_vscode_config_flavor_from_args() {
+        let temp = tempdir().unwrap();
+        let vscode_dir = temp.path().join(".vscode");
+        std::fs::create_dir_all(&vscode_dir).unwrap();
+
+        // This is the user's actual launch.json format
+        let content = r#"{
+            "version": "0.2.0",
+            "configurations": [
+                {
+                    "name": "DEV",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "develop"
+                    ]
+                },
+                {
+                    "name": "STG",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "staging"
+                    ]
+                },
+                {
+                    "name": "PROD",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "production"
+                    ]
+                }
+            ]
+        }"#;
+        std::fs::write(vscode_dir.join("launch.json"), content).unwrap();
+
+        let configs = load_vscode_configs(temp.path());
+
+        assert_eq!(configs.len(), 3);
+
+        assert_eq!(configs[0].config.name, "DEV");
+        assert_eq!(configs[0].config.flavor, Some("develop".to_string()));
+
+        assert_eq!(configs[1].config.name, "STG");
+        assert_eq!(configs[1].config.flavor, Some("staging".to_string()));
+
+        assert_eq!(configs[2].config.name, "PROD");
+        assert_eq!(configs[2].config.flavor, Some("production".to_string()));
+    }
+
+    #[test]
+    fn test_vscode_config_toolargs_takes_precedence() {
+        let temp = tempdir().unwrap();
+        let vscode_dir = temp.path().join(".vscode");
+        std::fs::create_dir_all(&vscode_dir).unwrap();
+
+        // Both toolArgs and args have --flavor, toolArgs should win
+        let content = r#"{
+            "configurations": [
+                {
+                    "name": "Test",
+                    "type": "dart",
+                    "request": "launch",
+                    "toolArgs": ["--flavor", "from-toolargs"],
+                    "args": ["--flavor", "from-args"]
+                }
+            ]
+        }"#;
+        std::fs::write(vscode_dir.join("launch.json"), content).unwrap();
+
+        let configs = load_vscode_configs(temp.path());
+
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].config.flavor, Some("from-toolargs".to_string()));
+    }
+
+    // Trailing comma tests
+
+    #[test]
+    fn test_strip_trailing_commas_in_array() {
+        let input = r#"{"arr": [1, 2, 3,]}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, r#"{"arr": [1, 2, 3]}"#);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_in_object() {
+        let input = r#"{"key": "value",}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, r#"{"key": "value"}"#);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_with_whitespace() {
+        let input = r#"{
+        "arr": [
+            "a",
+            "b",
+        ]
+    }"#;
+        let result = strip_trailing_commas(input);
+        // Should not contain trailing comma before ]
+        assert!(!result.contains(",\n        ]"));
+        assert!(result.contains(r#""b""#));
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_preserves_strings() {
+        let input = r#"{"text": "hello, world", "arr": ["a,b,c",]}"#;
+        let result = strip_trailing_commas(input);
+        // Commas in strings should be preserved
+        assert!(result.contains("hello, world"));
+        assert!(result.contains("a,b,c"));
+        // But trailing comma should be removed
+        assert_eq!(result, r#"{"text": "hello, world", "arr": ["a,b,c"]}"#);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_nested_structures() {
+        let input = r#"{
+            "outer": {
+                "inner": [1, 2,],
+                "key": "val",
+            }
+        }"#;
+        let result = strip_trailing_commas(input);
+        // Should remove both trailing commas
+        assert!(!result.contains("2,]"));
+        assert!(!result.contains("\"val\","));
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_valid_json_unchanged() {
+        let input = r#"{"arr": [1, 2, 3], "key": "value"}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_trailing_commas_empty_structures() {
+        let input = r#"{"arr": [], "obj": {}}"#;
+        let result = strip_trailing_commas(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_clean_jsonc_combines_both() {
+        let input = r#"{
+            // Comment
+            "arr": [
+                "value",
+            ]
+        }"#;
+        let result = clean_jsonc(input);
+        // Comments should be stripped
+        assert!(!result.contains("// Comment"));
+        // Trailing comma should be removed
+        assert!(!result.contains("\"value\","));
+    }
+
+    #[test]
+    fn test_load_vscode_configs_with_trailing_commas() {
+        let temp = tempdir().unwrap();
+        let vscode_dir = temp.path().join(".vscode");
+        std::fs::create_dir_all(&vscode_dir).unwrap();
+
+        // User's exact format with trailing commas
+        let content = r#"{
+            "version": "0.2.0",
+            "configurations": [
+                {
+                    "name": "DEV",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "develop",
+                    ]
+                },
+                {
+                    "name": "STG",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "staging",
+                    ]
+                },
+                {
+                    "name": "PROD",
+                    "request": "launch",
+                    "type": "dart",
+                    "program": "lib/main.dart",
+                    "args": [
+                        "--flavor",
+                        "production",
+                    ]
+                },
+            ]
+        }"#;
+        std::fs::write(vscode_dir.join("launch.json"), content).unwrap();
+
+        let configs = load_vscode_configs(temp.path());
+
+        assert_eq!(configs.len(), 3);
+        assert_eq!(configs[0].config.name, "DEV");
+        assert_eq!(configs[0].config.flavor, Some("develop".to_string()));
+        assert_eq!(configs[1].config.name, "STG");
+        assert_eq!(configs[1].config.flavor, Some("staging".to_string()));
+        assert_eq!(configs[2].config.name, "PROD");
+        assert_eq!(configs[2].config.flavor, Some("production".to_string()));
+    }
+
+    #[test]
+    fn test_load_vscode_configs_trailing_commas_with_comments() {
+        let temp = tempdir().unwrap();
+        let vscode_dir = temp.path().join(".vscode");
+        std::fs::create_dir_all(&vscode_dir).unwrap();
+
+        // Real-world JSONC with both comments and trailing commas
+        let content = r#"{
+            // Development configuration
+            "version": "0.2.0",
+            "configurations": [
+                {
+                    "name": "DEV",
+                    "type": "dart",
+                    "request": "launch",
+                    /* This is the dev flavor */
+                    "args": [
+                        "--flavor",
+                        "develop", // trailing comma here!
+                    ],
+                },
+            ]
+        }"#;
+        std::fs::write(vscode_dir.join("launch.json"), content).unwrap();
+
+        let configs = load_vscode_configs(temp.path());
+
+        assert_eq!(configs.len(), 1);
+        assert_eq!(configs[0].config.name, "DEV");
+        assert_eq!(configs[0].config.flavor, Some("develop".to_string()));
     }
 }

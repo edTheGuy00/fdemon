@@ -57,10 +57,23 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // Task 08d: Set initial loading state before async operations (if auto_start)
+    if settings.behavior.auto_start {
+        state.set_loading_phase("Initializing...");
+        // Draw initial loading frame BEFORE async operations
+        let _ = term.draw(|frame| render::view(frame, &mut state));
+    }
+
     // Determine startup behavior based on settings
     // Returns an action to spawn a session if auto-start is configured
-    let startup_action =
-        startup::startup_flutter(&mut state, &settings, project_path, msg_tx.clone()).await;
+    let startup_action = startup::startup_flutter(
+        &mut state,
+        &settings,
+        project_path,
+        msg_tx.clone(),
+        &mut term,
+    )
+    .await;
 
     // If we have a startup action (auto-start session), execute it
     if let Some(action) = startup_action {

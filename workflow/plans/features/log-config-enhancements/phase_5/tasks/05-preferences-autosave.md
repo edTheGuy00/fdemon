@@ -281,16 +281,39 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
 **Files Modified:**
-- (none yet)
+
+| File | Changes |
+|------|---------|
+| `src/config/settings.rs` | Added `LastSelection`, `ValidatedSelection` structs and functions: `load_last_selection()`, `save_last_selection()`, `clear_last_selection()`, `validate_last_selection()` with comprehensive tests |
+| `src/config/mod.rs` | Exported new types and functions |
 
 **Implementation Details:**
-(to be filled after implementation)
+
+1. **LastSelection & ValidatedSelection structs** - Created types to represent user's last selection and validated selection with indices
+2. **load_last_selection()** - Returns `None` if file missing or both fields empty, otherwise returns last config/device names
+3. **save_last_selection()** - Preserves other preferences, creates file if missing, uses atomic write pattern
+4. **clear_last_selection()** - Removes selection fields while preserving other preferences, succeeds silently if no file exists
+5. **validate_last_selection()** - Cross-references selection with available configs/devices, returns indices only if device found (config optional)
+6. **Test coverage** - 11 comprehensive tests covering all functions and edge cases
+
+**Notable Decisions/Tradeoffs:**
+
+1. **Device Required, Config Optional** - `validate_last_selection()` returns `None` if device not found, but allows missing config since user can launch without a config
+2. **Seamless Integration** - Uses existing `load_user_preferences()` and `save_user_preferences()` functions for consistency
+3. **Safe Defaults** - All functions handle missing files gracefully without errors
 
 **Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy -- -D warnings` - Pending
-- `cargo test selection` - Pending
+
+- `cargo fmt` - PASS
+- `cargo check` - PASS (2.39s)
+- `cargo clippy -- -D warnings` - PASS (1.34s)
+- `cargo test selection` - PASS (15 tests passed)
+- `cargo test last` - PASS (7 tests passed)
+- `cargo test --lib config::` - PASS (132 tests passed)
+
+**Risks/Limitations:**
+
+1. **None** - Implementation is straightforward with no known risks or limitations

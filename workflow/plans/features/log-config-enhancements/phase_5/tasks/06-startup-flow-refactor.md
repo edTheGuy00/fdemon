@@ -383,16 +383,34 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
 **Files Modified:**
-- (none yet)
 
-**Implementation Details:**
-(to be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/tui/startup.rs` | Refactored `startup_flutter()` with new priority-based logic; added `auto_start_session()`, `try_auto_start_config()`, `launch_with_validated_selection()`, `launch_session()`, and `show_startup_dialog()` helper functions |
+| `src/app/handler/update.rs` | Added `handle_startup_dialog_confirm()` handler and `parse_dart_defines()` helper function with unit tests |
+| `src/config/priority.rs` | Added `Clone` derive to `LoadedConfigs` struct |
+| `src/app/state.rs` | Removed stub types, now imports real `LoadedConfigs` and `SourcedConfig` from config module |
+| `src/tui/widgets/startup_dialog/mod.rs` | Updated test imports to use config module types |
+
+**Notable Decisions/Tradeoffs:**
+
+1. **Priority-based startup logic**: Implemented the full decision tree: saved selection > auto_start config > first config > bare run with first device
+2. **Settings auto-save**: Selection is automatically saved to `settings.local.toml` on successful launch for faster subsequent startups
+3. **Error handling**: If saved selection is invalid, gracefully falls back to auto_start config rather than showing an error
+4. **Stub removal**: Removed temporary stub types from `app/state.rs` and consolidated on real implementations from `config/priority.rs`
 
 **Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy -- -D warnings` - Pending
-- `cargo test startup` - Pending
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test parse_dart_defines` - Passed (4 tests)
+- `cargo test` - Passed (1122 tests total)
+
+**Risks/Limitations:**
+
+1. **Async device discovery**: The auto-start flow performs device discovery which could fail if devices are disconnected between launches
+2. **Config matching**: Device matching uses string comparison and may not handle edge cases like renamed devices gracefully

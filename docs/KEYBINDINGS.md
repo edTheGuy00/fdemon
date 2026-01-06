@@ -16,6 +16,7 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Error Navigation](#error-navigation)
   - [Stack Trace Interaction](#stack-trace-interaction)
   - [Link Navigation](#link-navigation)
+- [Startup Dialog](#startup-dialog)
 - [Device Selector Mode](#device-selector-mode)
 - [Search Input Mode](#search-input-mode)
 - [Link Highlight Mode](#link-highlight-mode)
@@ -49,7 +50,7 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `Shift+Tab` | Previous Session | Cycle to the previous session |
 | `x` | Close Session | Close the current session |
 | `Ctrl+W` | Close Session | Alternative binding to close current session |
-| `d` | Device Selector | Open the device selector to start a new session |
+| `d` | Add Device Session | Add device session (shows Startup Dialog if no sessions, Device Selector if sessions running) |
 | `n` | Device Selector | Alternative binding (also used for search navigation) |
 
 ### App Control
@@ -148,6 +149,40 @@ Access the settings panel to configure Flutter Demon and manage launch configura
 | `,` | Open Settings Panel | Open the full-screen settings panel |
 
 Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for detailed controls.
+
+---
+
+## Startup Dialog
+
+The startup dialog appears when `auto_start = false` or when pressing `d` without running sessions.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `j` / `↓` | Navigate Down | Navigate down in current section |
+| `k` / `↑` | Navigate Up | Navigate up in current section |
+| `Tab` | Next Section | Move to next section |
+| `Shift+Tab` | Previous Section | Move to previous section |
+| `Enter` | Confirm | Confirm and launch session |
+| `Esc` | Cancel | Cancel dialog |
+| `r` | Refresh Devices | Refresh device list |
+| `1` | Jump to Config | Jump to Configuration section |
+| `2` | Jump to Mode | Jump to Mode section |
+| `3` | Jump to Flavor | Jump to Flavor input (edit mode) |
+| `4` | Jump to Dart Defines | Jump to Dart Defines input (edit mode) |
+| `5` | Jump to Device | Jump to Device section |
+
+### Text Input (Flavor / Dart Defines)
+
+When editing Flavor or Dart Defines fields:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Any character | Add to Input | Add character to the input field |
+| `Backspace` | Delete Character | Delete last character |
+| `Delete` / `Ctrl+U` | Clear Field | Clear entire field |
+| `Enter` | Exit Edit Mode | Exit edit mode and keep changes |
+| `Esc` | Exit Edit Mode | Exit edit mode and keep changes |
+| `Tab` | Next Section | Exit edit mode and move to next section |
 
 ---
 

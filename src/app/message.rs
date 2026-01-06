@@ -309,4 +309,74 @@ pub enum Message {
 
     /// Force close settings panel without saving
     ForceHideSettings,
+
+    // ─────────────────────────────────────────────────────────────
+    // Startup Dialog Messages (Phase 5)
+    // ─────────────────────────────────────────────────────────────
+    /// Show startup dialog
+    ShowStartupDialog,
+
+    /// Hide startup dialog (cancel)
+    HideStartupDialog,
+
+    /// Navigate up in current section
+    StartupDialogUp,
+
+    /// Navigate down in current section
+    StartupDialogDown,
+
+    /// Move to next section (Tab)
+    StartupDialogNextSection,
+
+    /// Move to previous section (Shift+Tab)
+    StartupDialogPrevSection,
+
+    /// Select specific config by index
+    StartupDialogSelectConfig(usize),
+
+    /// Select specific device by index
+    StartupDialogSelectDevice(usize),
+
+    /// Set build mode
+    StartupDialogSetMode(crate::config::FlutterMode),
+
+    /// Character input for flavor/dart-defines
+    StartupDialogCharInput(char),
+
+    /// Backspace in input field
+    StartupDialogBackspace,
+
+    /// Clear input field
+    StartupDialogClearInput,
+
+    /// Confirm and launch session
+    StartupDialogConfirm,
+
+    /// Refresh device list
+    StartupDialogRefreshDevices,
+
+    /// Jump directly to a dialog section (1=Configs, 2=Mode, 3=Flavor, 4=DartDefines, 5=Devices)
+    StartupDialogJumpToSection(crate::app::state::DialogSection),
+
+    /// Enter edit mode for current text field (Flavor or DartDefines)
+    StartupDialogEnterEdit,
+
+    /// Exit edit mode without changing section
+    StartupDialogExitEdit,
+
+    // ─────────────────────────────────────────────────────────────
+    // Launch Config Editing Messages (Phase 5, Task 07)
+    // ─────────────────────────────────────────────────────────────
+    /// Create a new launch configuration
+    LaunchConfigCreate,
+
+    /// Delete launch configuration at index
+    LaunchConfigDelete(usize),
+
+    /// Update a field of launch configuration
+    LaunchConfigUpdate {
+        config_idx: usize,
+        field: String,
+        value: String,
+    },
 }

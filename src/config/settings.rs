@@ -643,6 +643,100 @@ pub fn merge_preferences(settings: &mut Settings, prefs: &super::types::UserPref
     }
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Last Selection Auto-save
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Result of loading last selection
+#[derive(Debug, Clone)]
+pub struct LastSelection {
+    pub config_name: Option<String>,
+    pub device_id: Option<String>,
+}
+
+/// Validated selection with indices
+#[derive(Debug, Clone)]
+pub struct ValidatedSelection {
+    pub config_idx: Option<usize>,
+    pub device_idx: Option<usize>,
+}
+
+/// Load the user's last selection from settings.local.toml
+///
+/// Returns None if file doesn't exist or fields are not set.
+pub fn load_last_selection(project_path: &Path) -> Option<LastSelection> {
+    let prefs = load_user_preferences(project_path)?;
+
+    // Only return if at least one field is set
+    if prefs.last_config.is_none() && prefs.last_device.is_none() {
+        return None;
+    }
+
+    Some(LastSelection {
+        config_name: prefs.last_config,
+        device_id: prefs.last_device,
+    })
+}
+
+/// Save the user's selection to settings.local.toml
+///
+/// Preserves other preferences in the file.
+pub fn save_last_selection(
+    project_path: &Path,
+    config_name: Option<&str>,
+    device_id: Option<&str>,
+) -> Result<()> {
+    // Load existing preferences or create new
+    let mut prefs = load_user_preferences(project_path).unwrap_or_default();
+
+    // Update selection fields
+    prefs.last_config = config_name.map(|s| s.to_string());
+    prefs.last_device = device_id.map(|s| s.to_string());
+
+    // Save back
+    save_user_preferences(project_path, &prefs)
+}
+
+/// Clear the last selection (e.g., when user explicitly cancels)
+pub fn clear_last_selection(project_path: &Path) -> Result<()> {
+    if let Some(mut prefs) = load_user_preferences(project_path) {
+        prefs.last_config = None;
+        prefs.last_device = None;
+        save_user_preferences(project_path, &prefs)
+    } else {
+        Ok(()) // Nothing to clear
+    }
+}
+
+/// Check if last selection matches available configs and devices
+///
+/// Returns validated selection with indices, or None if not found.
+pub fn validate_last_selection(
+    selection: &LastSelection,
+    configs: &super::priority::LoadedConfigs,
+    devices: &[crate::daemon::Device],
+) -> Option<ValidatedSelection> {
+    let config_idx = selection
+        .config_name
+        .as_ref()
+        .and_then(|name| configs.configs.iter().position(|c| c.config.name == *name));
+
+    let device_idx = selection
+        .device_id
+        .as_ref()
+        .and_then(|id| devices.iter().position(|d| d.id == *id));
+
+    // Return only if device is valid (config is optional)
+    if device_idx.is_some() {
+        Some(ValidatedSelection {
+            config_idx,
+            device_idx,
+        })
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1347,5 +1441,183 @@ open_pattern = "zed $FILE:$LINE"
         // Should start with comment, not newline
         assert!(gitignore.starts_with("# Flutter Demon"));
         assert!(gitignore.contains(".fdemon/settings.local.toml"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Last Selection Tests (Task 05)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_load_last_selection_missing_file() {
+        let temp = tempdir().unwrap();
+        let result = load_last_selection(temp.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_save_and_load_last_selection() {
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        save_last_selection(temp.path(), Some("Debug"), Some("iPhone-15")).unwrap();
+
+        let selection = load_last_selection(temp.path()).unwrap();
+        assert_eq!(selection.config_name, Some("Debug".to_string()));
+        assert_eq!(selection.device_id, Some("iPhone-15".to_string()));
+    }
+
+    #[test]
+    fn test_save_preserves_other_prefs() {
+        use super::super::types::UserPreferences;
+
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        // Save initial prefs with theme
+        let mut prefs = UserPreferences::default();
+        prefs.theme = Some("dark".to_string());
+        save_user_preferences(temp.path(), &prefs).unwrap();
+
+        // Save selection
+        save_last_selection(temp.path(), Some("Debug"), None).unwrap();
+
+        // Verify theme preserved
+        let loaded = load_user_preferences(temp.path()).unwrap();
+        assert_eq!(loaded.theme, Some("dark".to_string()));
+        assert_eq!(loaded.last_config, Some("Debug".to_string()));
+    }
+
+    #[test]
+    fn test_clear_last_selection() {
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        // Save selection
+        save_last_selection(temp.path(), Some("Debug"), Some("device-1")).unwrap();
+
+        // Clear it
+        clear_last_selection(temp.path()).unwrap();
+
+        // Verify cleared
+        let selection = load_last_selection(temp.path());
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn test_validate_last_selection() {
+        use super::super::priority::{LoadedConfigs, SourcedConfig};
+        use super::super::types::{ConfigSource, LaunchConfig};
+        use crate::daemon::Device;
+
+        let selection = LastSelection {
+            config_name: Some("Debug".to_string()),
+            device_id: Some("iphone-15".to_string()),
+        };
+
+        let configs = LoadedConfigs {
+            configs: vec![SourcedConfig {
+                config: LaunchConfig {
+                    name: "Debug".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+                display_name: "Debug".to_string(),
+            }],
+            vscode_start_index: None,
+            is_empty: false,
+        };
+
+        let devices = vec![Device {
+            id: "iphone-15".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            emulator_id: None,
+            ephemeral: false,
+            category: None,
+            platform_type: None,
+        }];
+
+        let validated = validate_last_selection(&selection, &configs, &devices).unwrap();
+        assert_eq!(validated.config_idx, Some(0));
+        assert_eq!(validated.device_idx, Some(0));
+    }
+
+    #[test]
+    fn test_validate_requires_device() {
+        use super::super::priority::LoadedConfigs;
+        use crate::daemon::Device;
+
+        let selection = LastSelection {
+            config_name: Some("Debug".to_string()),
+            device_id: Some("missing-device".to_string()),
+        };
+
+        let configs = LoadedConfigs::default();
+        let devices: Vec<Device> = vec![];
+
+        let validated = validate_last_selection(&selection, &configs, &devices);
+        assert!(validated.is_none());
+    }
+
+    #[test]
+    fn test_load_returns_none_if_fields_empty() {
+        use super::super::types::UserPreferences;
+
+        let temp = tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
+
+        // Save prefs without selection
+        let prefs = UserPreferences::default();
+        save_user_preferences(temp.path(), &prefs).unwrap();
+
+        let selection = load_last_selection(temp.path());
+        assert!(selection.is_none());
+    }
+
+    #[test]
+    fn test_validate_selection_config_optional() {
+        use super::super::priority::LoadedConfigs;
+        use crate::daemon::Device;
+
+        // Selection with device but no config
+        let selection = LastSelection {
+            config_name: None,
+            device_id: Some("iphone-15".to_string()),
+        };
+
+        let configs = LoadedConfigs::default();
+        let devices = vec![Device {
+            id: "iphone-15".to_string(),
+            name: "iPhone 15".to_string(),
+            platform: "ios".to_string(),
+            emulator: false,
+            emulator_id: None,
+            ephemeral: false,
+            category: None,
+            platform_type: None,
+        }];
+
+        let validated = validate_last_selection(&selection, &configs, &devices).unwrap();
+        assert_eq!(validated.config_idx, None);
+        assert_eq!(validated.device_idx, Some(0));
+    }
+
+    #[test]
+    fn test_save_last_selection_creates_directory() {
+        let temp = tempdir().unwrap();
+        // Don't create .fdemon directory
+
+        save_last_selection(temp.path(), Some("Debug"), Some("device-1")).unwrap();
+
+        assert!(temp.path().join(".fdemon/settings.local.toml").exists());
+    }
+
+    #[test]
+    fn test_clear_last_selection_no_file() {
+        let temp = tempdir().unwrap();
+
+        // Clearing when no file exists should succeed silently
+        clear_last_selection(temp.path()).unwrap();
     }
 }

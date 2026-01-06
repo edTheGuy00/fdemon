@@ -1,6 +1,6 @@
 //! Launch configuration parser for .fdemon/launch.toml
 
-use super::types::{ConfigSource, LaunchConfig, LaunchFile, ResolvedLaunchConfig};
+use super::types::{ConfigSource, FlutterMode, LaunchConfig, LaunchFile, ResolvedLaunchConfig};
 use crate::common::prelude::*;
 use std::path::Path;
 
@@ -146,6 +146,106 @@ mode = "debug"          # debug | profile | release
     }
 
     Ok(())
+}
+
+/// Create a new launch configuration with sensible defaults
+pub fn create_default_launch_config() -> LaunchConfig {
+    LaunchConfig {
+        name: "New Configuration".to_string(),
+        device: "auto".to_string(),
+        mode: FlutterMode::Debug,
+        flavor: None,
+        entry_point: None,
+        dart_defines: std::collections::HashMap::new(),
+        extra_args: Vec::new(),
+        auto_start: false,
+    }
+}
+
+/// Add a new launch configuration
+///
+/// Ensures unique name by appending counter if needed.
+pub fn add_launch_config(project_path: &Path, config: LaunchConfig) -> Result<()> {
+    let mut configs: Vec<LaunchConfig> = load_launch_configs(project_path)
+        .into_iter()
+        .map(|r| r.config)
+        .collect();
+
+    // Ensure unique name
+    let base_name = config.name.clone();
+    let mut new_config = config;
+    let mut counter = 1;
+
+    while configs.iter().any(|c| c.name == new_config.name) {
+        new_config.name = format!("{} ({})", base_name, counter);
+        counter += 1;
+    }
+
+    configs.push(new_config);
+    save_launch_configs(project_path, &configs)
+}
+
+/// Delete a launch configuration by name
+///
+/// Reloads configs, removes matching one, saves back.
+pub fn delete_launch_config(project_path: &Path, config_name: &str) -> Result<()> {
+    let mut configs: Vec<LaunchConfig> = load_launch_configs(project_path)
+        .into_iter()
+        .map(|r| r.config)
+        .collect();
+
+    let initial_len = configs.len();
+    configs.retain(|c| c.name != config_name);
+
+    if configs.len() == initial_len {
+        return Err(Error::config(format!("Config '{}' not found", config_name)));
+    }
+
+    save_launch_configs(project_path, &configs)
+}
+
+/// Update a specific field of a launch configuration
+pub fn update_launch_config_field(
+    project_path: &Path,
+    config_name: &str,
+    field: &str,
+    value: &str,
+) -> Result<()> {
+    let mut configs: Vec<LaunchConfig> = load_launch_configs(project_path)
+        .into_iter()
+        .map(|r| r.config)
+        .collect();
+
+    let config = configs
+        .iter_mut()
+        .find(|c| c.name == config_name)
+        .ok_or_else(|| Error::config(format!("Config '{}' not found", config_name)))?;
+
+    match field {
+        "name" => config.name = value.to_string(),
+        "device" => config.device = value.to_string(),
+        "mode" => {
+            config.mode = match value.to_lowercase().as_str() {
+                "debug" => FlutterMode::Debug,
+                "profile" => FlutterMode::Profile,
+                "release" => FlutterMode::Release,
+                _ => return Err(Error::config(format!("Invalid mode: {}", value))),
+            };
+        }
+        "flavor" => {
+            config.flavor = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        "auto_start" => {
+            config.auto_start = value.to_lowercase() == "true";
+        }
+        _ => return Err(Error::config(format!("Unknown field: {}", field))),
+    }
+
+    save_launch_configs(project_path, &configs)
 }
 
 impl LaunchConfig {
@@ -480,6 +580,331 @@ EMPTY = ""
         );
         assert_eq!(config.dart_defines.get("DEBUG"), Some(&"true".to_string()));
         assert_eq!(config.dart_defines.get("EMPTY"), Some(&"".to_string()));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Launch Config Editing Tests (Task 07)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_default_launch_config() {
+        let config = create_default_launch_config();
+
+        assert_eq!(config.name, "New Configuration");
+        assert_eq!(config.device, "auto");
+        assert_eq!(config.mode, FlutterMode::Debug);
+        assert!(!config.auto_start);
+        assert!(config.dart_defines.is_empty());
+        assert!(config.extra_args.is_empty());
+    }
+
+    #[test]
+    fn test_add_launch_config() {
+        let temp = tempdir().unwrap();
+
+        // Add first config
+        let config1 = LaunchConfig {
+            name: "Debug".to_string(),
+            ..Default::default()
+        };
+        add_launch_config(temp.path(), config1).unwrap();
+
+        // Verify
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].config.name, "Debug");
+    }
+
+    #[test]
+    fn test_add_launch_config_unique_name() {
+        let temp = tempdir().unwrap();
+
+        // Add first config
+        let config1 = LaunchConfig {
+            name: "Debug".to_string(),
+            ..Default::default()
+        };
+        add_launch_config(temp.path(), config1).unwrap();
+
+        // Add second with same name
+        let config2 = LaunchConfig {
+            name: "Debug".to_string(),
+            ..Default::default()
+        };
+        add_launch_config(temp.path(), config2).unwrap();
+
+        // Should have unique names
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded.len(), 2);
+        assert_eq!(loaded[0].config.name, "Debug");
+        assert_eq!(loaded[1].config.name, "Debug (1)");
+    }
+
+    #[test]
+    fn test_add_launch_config_unique_name_multiple() {
+        let temp = tempdir().unwrap();
+
+        // Add three configs with same base name
+        for _ in 0..3 {
+            let config = LaunchConfig {
+                name: "Test".to_string(),
+                ..Default::default()
+            };
+            add_launch_config(temp.path(), config).unwrap();
+        }
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded.len(), 3);
+        assert_eq!(loaded[0].config.name, "Test");
+        assert_eq!(loaded[1].config.name, "Test (1)");
+        assert_eq!(loaded[2].config.name, "Test (2)");
+    }
+
+    #[test]
+    fn test_delete_launch_config() {
+        let temp = tempdir().unwrap();
+
+        // Add two configs
+        save_launch_configs(
+            temp.path(),
+            &[
+                LaunchConfig {
+                    name: "Debug".to_string(),
+                    ..Default::default()
+                },
+                LaunchConfig {
+                    name: "Release".to_string(),
+                    ..Default::default()
+                },
+            ],
+        )
+        .unwrap();
+
+        // Delete one
+        delete_launch_config(temp.path(), "Debug").unwrap();
+
+        // Verify
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].config.name, "Release");
+    }
+
+    #[test]
+    fn test_delete_launch_config_not_found() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Try to delete non-existent config
+        let result = delete_launch_config(temp.path(), "NonExistent");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Config 'NonExistent' not found"));
+    }
+
+    #[test]
+    fn test_update_launch_config_field_name() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Update name
+        update_launch_config_field(temp.path(), "Debug", "name", "Production").unwrap();
+
+        // Verify
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.name, "Production");
+    }
+
+    #[test]
+    fn test_update_launch_config_field_device() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Update device
+        update_launch_config_field(temp.path(), "Debug", "device", "iphone-15").unwrap();
+
+        // Verify
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.device, "iphone-15");
+    }
+
+    #[test]
+    fn test_update_launch_config_field_mode() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Update mode
+        update_launch_config_field(temp.path(), "Debug", "mode", "release").unwrap();
+
+        // Verify
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.mode, FlutterMode::Release);
+    }
+
+    #[test]
+    fn test_update_launch_config_field_mode_case_insensitive() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Test".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Update with different case
+        update_launch_config_field(temp.path(), "Test", "mode", "PROFILE").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.mode, FlutterMode::Profile);
+    }
+
+    #[test]
+    fn test_update_launch_config_field_flavor() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Set flavor
+        update_launch_config_field(temp.path(), "Debug", "flavor", "development").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.flavor, Some("development".to_string()));
+
+        // Clear flavor (empty string)
+        update_launch_config_field(temp.path(), "Debug", "flavor", "").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.flavor, None);
+    }
+
+    #[test]
+    fn test_update_launch_config_field_auto_start() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                auto_start: false,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Enable auto_start
+        update_launch_config_field(temp.path(), "Debug", "auto_start", "true").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert!(loaded[0].config.auto_start);
+
+        // Disable auto_start
+        update_launch_config_field(temp.path(), "Debug", "auto_start", "false").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert!(!loaded[0].config.auto_start);
+    }
+
+    #[test]
+    fn test_update_launch_config_field_invalid_mode() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Try invalid mode
+        let result = update_launch_config_field(temp.path(), "Debug", "mode", "invalid");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid mode"));
+    }
+
+    #[test]
+    fn test_update_launch_config_field_unknown_field() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Try unknown field
+        let result = update_launch_config_field(temp.path(), "Debug", "unknown", "value");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown field"));
+    }
+
+    #[test]
+    fn test_update_launch_config_field_not_found() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Debug".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Try to update non-existent config
+        let result = update_launch_config_field(temp.path(), "NonExistent", "name", "value");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Config 'NonExistent' not found"));
     }
 
     // ─────────────────────────────────────────────────────────────────────────

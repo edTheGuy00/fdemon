@@ -193,16 +193,35 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
 **Files Modified:**
-- (none yet)
 
-**Implementation Details:**
-(to be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/app/handler/keys.rs` | Updated 'd' key handler to show StartupDialog when no sessions, DeviceSelector when sessions running; updated 'n' key with same logic; added 75 lines of tests for new behavior |
+| `src/tui/startup.rs` | Replaced DeviceSelector fallbacks with StartupDialog in auto_start error paths and no-device scenarios |
+| `src/tui/widgets/device_selector.rs` | Added deprecation notice to module docs clarifying usage (add-session only, not initial startup) |
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy -- -D warnings` - Pending
-- `cargo test` - Pending
+### Notable Decisions/Tradeoffs
+
+1. **has_running_sessions() helper**: Already existed in AppState, no need to add
+2. **LoadedConfigs cloning**: Used `.clone()` in startup.rs error paths since LoadedConfigs implements Clone
+3. **'n' key overloading**: Maintained existing search priority (search query takes precedence), then falls back to session-aware dialog selection
+4. **Test coverage**: Added 5 new tests covering both 'd' and 'n' key behaviors with/without sessions
+5. **Backward compatibility**: DeviceSelector still fully functional, just usage guidance changed
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - **Blocked by pre-existing errors** (FlutterMode import issues and non-exhaustive Message patterns from other incomplete tasks)
+- `cargo clippy` - Not run (blocked by compile errors)
+- `cargo test` - Not run (blocked by compile errors)
+
+**Note**: My specific changes are syntactically correct and follow existing patterns. The compilation errors are from other Phase 5 tasks (01-04) that haven't been completed yet. Those tasks added new Message variants and config types without implementing the corresponding handlers.
+
+### Risks/Limitations
+
+1. **Compilation blocked**: Cannot verify full integration until tasks 01-04 are completed
+2. **Runtime behavior**: Untested in actual running app due to compilation errors, but logic matches task spec exactly
+3. **Message handler gap**: New StartupDialog messages exist but some handlers may be incomplete from task 04

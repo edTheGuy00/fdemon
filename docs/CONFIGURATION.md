@@ -12,6 +12,13 @@ This document provides a complete reference for all configuration options availa
   - [`.fdemon/launch.toml`](#fdemonlaunch.toml) - Launch configurations
   - [`.fdemon/settings.local.toml`](#fdemonsettingslocal.toml) - User preferences
   - [`.vscode/launch.json`](#vscodelaunch.json) - VSCode compatibility
+- [Launch Configuration](#launch-configuration)
+  - [Priority Order](#priority-order)
+  - [launch.toml Format](#launchtoml-format)
+  - [launch.json Compatibility](#launchjson-compatibility)
+  - [Auto-Start Behavior](#auto-start-behavior-1)
+  - [User Preferences](#user-preferences-settingslocaltoml)
+  - [Creating Configurations](#creating-configurations)
 - [Global Settings Reference](#global-settings-reference)
   - [Behavior Settings](#behavior-settings)
   - [Watcher Settings](#watcher-settings)
@@ -118,6 +125,94 @@ Flutter Demon automatically reads VSCode launch configurations for seamless inte
 **Location:** `<project_root>/.vscode/launch.json`
 
 > **Note:** Only configurations with `"type": "dart"` are imported. View these in the settings panel's VSCode Config tab (read-only).
+
+---
+
+## Launch Configuration
+
+Flutter Demon supports two sources for launch configurations:
+
+1. **`.fdemon/launch.toml`** - Flutter Demon native format (recommended)
+2. **`.vscode/launch.json`** - VSCode Dart/Flutter format (read-only)
+
+### Priority Order
+
+When both files exist, configurations are loaded in this order:
+1. `.fdemon/launch.toml` configurations (first)
+2. `.vscode/launch.json` configurations (second)
+
+The startup dialog displays them with a visual divider between sources.
+
+### launch.toml Format
+
+```toml
+# .fdemon/launch.toml
+
+[[configurations]]
+name = "Development"
+device = "auto"              # "auto" or specific device ID
+mode = "debug"               # debug, profile, or release
+flavor = "development"       # optional
+auto_start = true            # optional, default false
+
+[configurations.dart_defines]
+API_URL = "https://dev.api.com"
+DEBUG = "true"
+
+[[configurations]]
+name = "Production"
+device = "auto"
+mode = "release"
+flavor = "production"
+```
+
+### launch.json Compatibility
+
+Flutter Demon reads `.vscode/launch.json` for VSCode users who want to use their existing configurations. These configurations are **read-only** in Flutter Demon - edit them in VSCode.
+
+Supported launch.json fields:
+- `name` - Configuration name
+- `type` - Must be "dart"
+- `request` - Must be "launch"
+- `flutterMode` - Maps to mode (debug/profile/release)
+- `deviceId` - Target device
+- `args` - Additional flutter run arguments
+
+### Auto-Start Behavior
+
+When `behavior.auto_start = true` in `config.toml`:
+
+1. Check `settings.local.toml` for last used config/device
+2. If found and valid, use that selection
+3. If not found, look for first config with `auto_start = true`
+4. If no auto_start config, use first config from launch.toml
+5. If no launch.toml, use first config from launch.json
+6. If no configs at all, run bare `flutter run` with first available device
+
+### User Preferences (settings.local.toml)
+
+Your last selection is automatically saved to `.fdemon/settings.local.toml`:
+
+```toml
+# .fdemon/settings.local.toml (auto-generated, gitignored)
+
+last_config = "Development"
+last_device = "iPhone-15-Pro"
+```
+
+This file is automatically added to `.gitignore` as it contains user-specific preferences.
+
+### Creating Configurations
+
+In the Settings panel (`S` key), navigate to the "Launch Config" tab:
+
+| Key | Action |
+|-----|--------|
+| `n` | Create new configuration |
+| `d` | Delete selected configuration |
+| `Enter` | Edit selected field |
+
+Note: Only `.fdemon/launch.toml` configurations can be edited. VSCode configurations are read-only.
 
 ---
 

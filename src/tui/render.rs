@@ -3,13 +3,13 @@
 use std::collections::VecDeque;
 
 use super::{layout, widgets};
-use crate::app::state::{AppState, UiMode};
+use crate::app::state::{AppState, LoadingState, UiMode};
 use crate::core::LogEntry;
 use crate::tui::widgets::LogViewState;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Clear, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
 /// Render the complete UI (View function in TEA)
@@ -59,12 +59,18 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
     // Render modal overlays based on UI mode
     match state.ui_mode {
-        UiMode::DeviceSelector | UiMode::Loading => {
+        UiMode::DeviceSelector => {
             // Render device selector modal with session awareness
             let has_sessions = state.session_manager.has_running_sessions();
             let selector =
                 widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
             frame.render_widget(selector, area);
+        }
+        UiMode::Loading => {
+            // Render loading screen (Task 08d)
+            if let Some(ref loading) = state.loading_state {
+                render_loading_screen(frame, state, loading, area);
+            }
         }
         UiMode::ConfirmDialog => {
             // Render confirmation dialog
@@ -190,5 +196,97 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
             frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
         }
+        UiMode::StartupDialog => {
+            // Startup dialog widget with session awareness
+            let has_sessions = state.session_manager.has_running_sessions();
+            let dialog = widgets::StartupDialog::with_session_state(
+                &state.startup_dialog_state,
+                has_sessions,
+            );
+            frame.render_widget(dialog, area);
+        }
     }
+}
+
+/// Render loading screen during startup initialization (Task 08d)
+///
+/// Displays a centered loading screen with:
+/// - App name/logo
+/// - Animated spinner
+/// - Current loading message
+fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingState, area: Rect) {
+    // Clear the screen
+    frame.render_widget(Clear, area);
+
+    // Braille spinner characters for smooth animation
+    const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+    // Calculate spinner index (change every ~100ms assuming 60fps)
+    let spinner_idx = ((loading.animation_frame / 6) as usize) % SPINNER.len();
+    let spinner_char = SPINNER[spinner_idx];
+
+    // Create centered content box
+    let vertical_center = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Length(8),
+            Constraint::Percentage(40),
+        ])
+        .split(area);
+
+    let horizontal_center = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(25),
+            Constraint::Percentage(50),
+            Constraint::Percentage(25),
+        ])
+        .split(vertical_center[1]);
+
+    let center_area = horizontal_center[1];
+
+    // Build content lines
+    let mut lines = vec![];
+
+    // App name/logo
+    let app_name = if let Some(ref name) = state.project_name {
+        name.clone()
+    } else {
+        "Flutter Demon".to_string()
+    };
+
+    lines.push(Line::from(vec![Span::styled(
+        app_name,
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    )]));
+
+    lines.push(Line::from("")); // Spacing
+
+    // Spinner and message
+    lines.push(Line::from(vec![
+        Span::styled(
+            spinner_char,
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" ", Style::default()),
+        Span::styled(&loading.message, Style::default().fg(Color::Gray)),
+    ]));
+
+    // Create block with border
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .style(Style::default().bg(Color::Black));
+
+    // Create paragraph with centered content
+    let paragraph = Paragraph::new(lines)
+        .block(block)
+        .alignment(Alignment::Center);
+
+    frame.render_widget(paragraph, center_area);
 }

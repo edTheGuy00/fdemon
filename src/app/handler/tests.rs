@@ -299,23 +299,25 @@ fn test_ctrl_c_in_confirm_dialog_force_quits() {
 // ─────────────────────────────────────────────────────────
 
 #[test]
-fn test_d_shows_device_selector() {
+fn test_d_shows_startup_dialog_without_sessions() {
     let state = AppState::new();
     let key = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE);
 
     let result = handle_key(&state, key);
 
-    assert!(matches!(result, Some(Message::ShowDeviceSelector)));
+    // Without running sessions, should show StartupDialog instead of DeviceSelector
+    assert!(matches!(result, Some(Message::ShowStartupDialog)));
 }
 
 #[test]
-fn test_n_shows_device_selector() {
+fn test_n_shows_startup_dialog_without_sessions() {
     let state = AppState::new();
     let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
 
     let result = handle_key(&state, key);
 
-    assert!(matches!(result, Some(Message::ShowDeviceSelector)));
+    // Without running sessions, should show StartupDialog instead of DeviceSelector
+    assert!(matches!(result, Some(Message::ShowStartupDialog)));
 }
 
 #[test]
@@ -324,9 +326,9 @@ fn test_show_device_selector_uses_cache() {
 
     let mut state = AppState::new();
 
-    // Pre-populate cache
+    // Pre-populate global cache (Task 08e - Device Cache Sharing)
     let devices = vec![test_device("cached-device", "Cached Device")];
-    state.device_selector.set_devices(devices);
+    state.set_device_cache(devices);
 
     // Now show device selector
     let result = update(&mut state, Message::ShowDeviceSelector);
@@ -1639,14 +1641,14 @@ fn test_n_key_with_search_query_navigates() {
 }
 
 #[test]
-fn test_n_key_without_search_shows_device_selector() {
+fn test_n_key_without_search_shows_startup_dialog() {
     let state = AppState::new();
     let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
 
     let msg = handle_key(&state, key);
 
-    // Without an active search query, 'n' should show device selector
-    assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+    // Without running sessions and no active search query, 'n' should show startup dialog
+    assert!(matches!(msg, Some(Message::ShowStartupDialog)));
 }
 
 #[test]
@@ -1814,4 +1816,282 @@ fn test_prev_error_message() {
     // Should have scrolled to previous error
     let session = &state.session_manager.get(session_id).unwrap().session;
     assert!(!session.log_view_state.auto_scroll);
+}
+
+// ─────────────────────────────────────────────────────────
+// Startup Dialog Tests (Phase 5, Task 08a)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_number_keys_jump_to_section() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+
+    // Test key '1' -> Configs section
+    let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+    assert!(matches!(
+        msg,
+        Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Configs
+        ))
+    ));
+
+    // Test key '2' -> Mode section
+    let key = KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+    assert!(matches!(
+        msg,
+        Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Mode
+        ))
+    ));
+
+    // Test key '3' -> Flavor section
+    let key = KeyEvent::new(KeyCode::Char('3'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+    assert!(matches!(
+        msg,
+        Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Flavor
+        ))
+    ));
+
+    // Test key '4' -> DartDefines section
+    let key = KeyEvent::new(KeyCode::Char('4'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+    assert!(matches!(
+        msg,
+        Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::DartDefines
+        ))
+    ));
+
+    // Test key '5' -> Devices section
+    let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+    let msg = handle_key(&state, key);
+    assert!(matches!(
+        msg,
+        Some(Message::StartupDialogJumpToSection(
+            crate::app::state::DialogSection::Devices
+        ))
+    ));
+}
+
+#[test]
+fn test_jump_to_section_clears_editing() {
+    use crate::app::state::{DialogSection, StartupDialogState};
+
+    let mut state = StartupDialogState::new();
+    state.editing = true;
+    state.active_section = DialogSection::Flavor;
+
+    state.jump_to_section(DialogSection::Devices);
+
+    assert!(!state.editing);
+    assert_eq!(state.active_section, DialogSection::Devices);
+}
+
+#[test]
+fn test_jump_to_section_message_handler() {
+    use crate::app::state::DialogSection;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.editing = true;
+    state.startup_dialog_state.active_section = DialogSection::Flavor;
+
+    // Jump to Devices section
+    update(
+        &mut state,
+        Message::StartupDialogJumpToSection(DialogSection::Devices),
+    );
+
+    assert!(!state.startup_dialog_state.editing);
+    assert_eq!(
+        state.startup_dialog_state.active_section,
+        DialogSection::Devices
+    );
+}
+
+#[test]
+fn test_jump_to_section_changes_section() {
+    use crate::app::state::{DialogSection, StartupDialogState};
+
+    let mut state = StartupDialogState::new();
+    state.active_section = DialogSection::Configs;
+
+    state.jump_to_section(DialogSection::Mode);
+    assert_eq!(state.active_section, DialogSection::Mode);
+
+    state.jump_to_section(DialogSection::Flavor);
+    assert_eq!(state.active_section, DialogSection::Flavor);
+
+    state.jump_to_section(DialogSection::DartDefines);
+    assert_eq!(state.active_section, DialogSection::DartDefines);
+
+    state.jump_to_section(DialogSection::Devices);
+    assert_eq!(state.active_section, DialogSection::Devices);
+
+    state.jump_to_section(DialogSection::Configs);
+    assert_eq!(state.active_section, DialogSection::Configs);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Startup Dialog Device Discovery Tests (Phase 5, Task 08c)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_show_startup_dialog_triggers_discovery() {
+    let mut state = AppState::new();
+
+    let result = update(&mut state, Message::ShowStartupDialog);
+
+    assert_eq!(state.ui_mode, UiMode::StartupDialog);
+    assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+}
+
+#[test]
+fn test_devices_discovered_updates_startup_dialog() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.loading = true;
+
+    let devices = vec![test_device("dev1", "Device 1")];
+    update(
+        &mut state,
+        Message::DevicesDiscovered {
+            devices: devices.clone(),
+        },
+    );
+
+    assert!(!state.startup_dialog_state.loading);
+    assert_eq!(state.startup_dialog_state.devices.len(), 1);
+    assert_eq!(state.startup_dialog_state.selected_device, Some(0));
+}
+
+#[test]
+fn test_devices_discovered_updates_both_selectors() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+
+    let devices = vec![
+        test_device("dev1", "Device 1"),
+        test_device("dev2", "Device 2"),
+    ];
+    update(
+        &mut state,
+        Message::DevicesDiscovered {
+            devices: devices.clone(),
+        },
+    );
+
+    // Both device_selector and startup_dialog_state should be updated
+    assert_eq!(state.device_selector.devices.len(), 2);
+    assert_eq!(state.startup_dialog_state.devices.len(), 2);
+}
+
+#[test]
+fn test_device_discovery_failed_shows_error() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.loading = true;
+
+    update(
+        &mut state,
+        Message::DeviceDiscoveryFailed {
+            error: "No Flutter SDK found".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.startup_dialog_state.error,
+        Some("No Flutter SDK found".to_string())
+    );
+    assert!(!state.startup_dialog_state.loading);
+}
+
+#[test]
+fn test_device_discovery_failed_updates_both_selectors() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+
+    let error = "Test error".to_string();
+    update(
+        &mut state,
+        Message::DeviceDiscoveryFailed {
+            error: error.clone(),
+        },
+    );
+
+    // Both device_selector and startup_dialog_state should have the error
+    assert_eq!(state.device_selector.error, Some(error.clone()));
+    assert_eq!(state.startup_dialog_state.error, Some(error));
+}
+
+#[test]
+fn test_refresh_devices_triggers_discovery() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+
+    let result = update(&mut state, Message::StartupDialogRefreshDevices);
+
+    assert!(state.startup_dialog_state.refreshing);
+    assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+}
+
+#[test]
+fn test_tick_advances_startup_dialog_animation() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.loading = true;
+
+    assert_eq!(state.startup_dialog_state.animation_frame, 0);
+
+    update(&mut state, Message::Tick);
+
+    assert_eq!(state.startup_dialog_state.animation_frame, 1);
+}
+
+#[test]
+fn test_tick_does_not_advance_startup_dialog_when_not_loading() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.loading = false;
+    state.startup_dialog_state.refreshing = false;
+
+    update(&mut state, Message::Tick);
+
+    assert_eq!(state.startup_dialog_state.animation_frame, 0);
+}
+
+#[test]
+fn test_tick_advances_startup_dialog_when_refreshing() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::StartupDialog;
+    state.startup_dialog_state.loading = false;
+    state.startup_dialog_state.refreshing = true;
+
+    update(&mut state, Message::Tick);
+
+    assert_eq!(state.startup_dialog_state.animation_frame, 1);
+}
+
+#[test]
+fn test_devices_discovered_only_updates_startup_dialog_in_startup_mode() {
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::Normal; // Not in startup dialog mode
+
+    let devices = vec![test_device("dev1", "Device 1")];
+    update(
+        &mut state,
+        Message::DevicesDiscovered {
+            devices: devices.clone(),
+        },
+    );
+
+    // device_selector should be updated
+    assert_eq!(state.device_selector.devices.len(), 1);
+    // startup_dialog_state should NOT be updated (still empty)
+    assert_eq!(state.startup_dialog_state.devices.len(), 0);
 }
