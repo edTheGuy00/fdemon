@@ -1,0 +1,7 @@
+{
+  "event": "daemon.connected",
+  "params": {
+    "version": "0.6.1",
+    "pid": 12345
+  }
+}

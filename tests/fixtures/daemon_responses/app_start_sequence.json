@@ -1,0 +1,25 @@
+[
+  {
+    "event": "app.start",
+    "params": {
+      "appId": "test-app-id",
+      "deviceId": "emulator-5554",
+      "directory": "/path/to/project",
+      "supportsRestart": true
+    }
+  },
+  {
+    "event": "app.debugPort",
+    "params": {
+      "appId": "test-app-id",
+      "port": 8181,
+      "wsUri": "ws://127.0.0.1:8181/ws"
+    }
+  },
+  {
+    "event": "app.started",
+    "params": {
+      "appId": "test-app-id"
+    }
+  }
+]

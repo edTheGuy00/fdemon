@@ -1,0 +1,6 @@
+{
+  "event": "app.stop",
+  "params": {
+    "appId": "test-app-id"
+  }
+}

@@ -1,37 +1,13 @@
-## Task: Implement Hot Reload Integration Tests
-
-**Objective**: Write integration tests for hot reload and hot restart workflows, verifying the complete reload cycle from trigger to completion.
-
-**Depends on**: 04-mock-daemon
-
-### Scope
-
-- `tests/e2e/hot_reload.rs` - **NEW** Hot reload workflow tests
-
-### Details
-
-Create tests that verify the hot reload flow including:
-- Reload command sending
-- Progress event handling
-- Reload completion detection
-- Error scenarios
-
-**File: `tests/e2e/hot_reload.rs`**:
-
-```rust
 //! Hot reload integration tests
 //!
 //! Tests for hot reload and hot restart workflows.
 
-use super::*;
-use super::mock_daemon::{MockFlutterDaemon, MockScenarioBuilder};
-use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::{DaemonMessage, DaemonCommand};
+use crate::e2e::mock_daemon::MockFlutterDaemon;
+use crate::{android_emulator, test_app_state};
 use flutter_demon::app::handler::update;
 use flutter_demon::app::message::Message;
-use flutter_demon::app::state::AppState;
-use flutter_demon::core::AppPhase;
-use std::time::Duration;
+use flutter_demon::core::DaemonEvent;
+use flutter_demon::daemon::{DaemonCommand, DaemonMessage};
 
 // ─────────────────────────────────────────────────────────
 // Hot Reload Command Tests
@@ -46,9 +22,12 @@ async fn test_hot_reload_sends_correct_command() {
     handle.recv_event().await;
 
     // Send reload command
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Should receive progress events
     let event = handle.recv_event().await.expect("Should receive progress");
@@ -69,9 +48,12 @@ async fn test_hot_restart_sends_full_restart_flag() {
     handle.recv_event().await;
 
     // Send restart command
-    handle.send(DaemonCommand::Restart {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Restart {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Should receive progress events for restart
     let event = handle.recv_event().await.expect("Should receive progress");
@@ -91,9 +73,12 @@ async fn test_reload_completes_with_finished_true() {
     handle.recv_event().await;
 
     // Send reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Collect all events until we see finished=true
     let mut saw_started = false;
@@ -123,7 +108,7 @@ async fn test_reload_completes_with_finished_true() {
 async fn test_hot_reload_message_triggers_reload_task() {
     // Create app state with a running session
     let mut state = test_app_state();
-    let device = android_emulator("emu-1");
+    let _device = android_emulator("emu-1");
 
     // Add a session with app_id (simulating running app)
     // Note: This tests the handler logic, not the full flow
@@ -134,7 +119,7 @@ async fn test_hot_reload_message_triggers_reload_task() {
 
     // Without a running session, should return None action
     // This verifies the guard condition works
-    assert!(result.action.is_none() || result.next_message.is_some());
+    assert!(result.action.is_none() || result.message.is_some());
 }
 
 #[tokio::test]
@@ -145,7 +130,7 @@ async fn test_hot_restart_message_triggers_restart_task() {
     let result = update(&mut state, Message::HotRestart);
 
     // Similar to reload - without session, should be guarded
-    assert!(result.action.is_none() || result.next_message.is_some());
+    assert!(result.action.is_none() || result.message.is_some());
 }
 
 // ─────────────────────────────────────────────────────────
@@ -161,9 +146,12 @@ async fn test_progress_events_parsed_as_daemon_messages() {
     handle.recv_event().await;
 
     // Trigger reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Get progress event
     let event = handle.recv_event().await.expect("Should receive event");
@@ -190,9 +178,12 @@ async fn test_reload_response_has_success_code() {
     handle.recv_event().await;
 
     // Trigger reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Collect events until we find the response
     let mut found_response = false;
@@ -205,7 +196,8 @@ async fn test_reload_response_has_success_code() {
                     // This is a response
                     let result = &parsed["result"];
                     assert!(
-                        result["code"] == 0 || result == &serde_json::json!({"code": 0, "message": "ok"}),
+                        result["code"] == 0
+                            || result == &serde_json::json!({"code": 0, "message": "ok"}),
                         "Expected success response"
                     );
                     found_response = true;
@@ -231,9 +223,12 @@ async fn test_reload_events_arrive_in_correct_order() {
     handle.recv_event().await;
 
     // Trigger reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Expected order: progress(started) -> progress(finished) -> response
     let mut events = Vec::new();
@@ -250,12 +245,18 @@ async fn test_reload_events_arrive_in_correct_order() {
 
     // First should be progress with finished=false
     if let DaemonEvent::Stdout(ref line) = events[0] {
-        assert!(line.contains("\"finished\":false"), "First event should be progress start");
+        assert!(
+            line.contains("\"finished\":false"),
+            "First event should be progress start"
+        );
     }
 
     // Second should be progress with finished=true
     if let DaemonEvent::Stdout(ref line) = events[1] {
-        assert!(line.contains("\"finished\":true"), "Second event should be progress finish");
+        assert!(
+            line.contains("\"finished\":true"),
+            "Second event should be progress finish"
+        );
     }
 }
 
@@ -268,9 +269,12 @@ async fn test_multiple_reloads_in_sequence() {
     handle.recv_event().await;
 
     // First reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Drain events
     for _ in 0..5 {
@@ -278,9 +282,12 @@ async fn test_multiple_reloads_in_sequence() {
     }
 
     // Second reload
-    handle.send(DaemonCommand::Reload {
-        app_id: "test-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "test-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Should still work
     let event = handle.recv_event().await;
@@ -301,93 +308,14 @@ async fn test_reload_with_wrong_app_id() {
 
     // Send reload with different app_id
     // Mock doesn't validate app_id, so this tests the flow still works
-    handle.send(DaemonCommand::Reload {
-        app_id: "wrong-app".to_string()
-    }).await.unwrap();
+    handle
+        .send(DaemonCommand::Reload {
+            app_id: "wrong-app".to_string(),
+        })
+        .await
+        .unwrap();
 
     // Should still get progress events (mock doesn't enforce app_id)
     let event = handle.recv_event().await;
     assert!(event.is_some());
 }
-```
-
-### Acceptance Criteria
-
-1. All tests compile and pass
-2. Tests cover:
-   - Hot reload command format (1 test)
-   - Hot restart command format (1 test)
-   - Reload completion detection (1 test)
-   - Handler message processing (2 tests)
-   - Progress event parsing (1 test)
-   - Response success verification (1 test)
-   - Event ordering (1 test)
-   - Sequential reloads (1 test)
-   - Error scenarios (1 test)
-3. Tests run in <5 seconds total
-4. No timing-dependent flakiness
-
-### Testing
-
-```bash
-# Run hot reload tests
-cargo test --test e2e hot_reload
-
-# Run with output
-cargo test --test e2e hot_reload -- --nocapture
-```
-
-### Notes
-
-- Tests primarily verify mock protocol compliance
-- Handler integration tests are limited without full session setup
-- Real handler flow testing requires session infrastructure from Task 07
-- Mock uses minimal timing delays (50ms) for fast tests
-- Tests verify JSON-RPC protocol, not actual Flutter behavior
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `tests/e2e/hot_reload.rs` | Created new file with 10 hot reload integration tests (291 lines) |
-| `tests/e2e.rs` | Uncommented `mod hot_reload;` to enable the test module |
-
-### Notable Decisions/Tradeoffs
-
-1. **Import Strategy**: Used `crate::{test_app_state, android_emulator}` to access test helpers from parent module rather than `use super::*` to avoid unused import warnings and make dependencies explicit.
-
-2. **Handler Tests Simplified**: Handler integration tests (`test_hot_reload_message_triggers_reload_task` and `test_hot_restart_message_triggers_restart_task`) verify guard conditions work without full session setup. Full end-to-end handler flow testing requires session infrastructure that will be added in Task 07.
-
-3. **UpdateResult Field Name**: Used `result.message` instead of spec's `result.next_message` to match actual `UpdateResult` struct fields in the codebase.
-
-### Testing Performed
-
-- `cargo check --test e2e` - Passed
-- `cargo test --test e2e hot_reload` - Passed (10 tests in 2.06s)
-- `cargo fmt --check` - Passed (no formatting issues in hot_reload.rs)
-- `cargo clippy --test e2e --no-deps` - Passed (no clippy warnings in hot_reload.rs)
-
-### Test Coverage
-
-All 10 tests pass and cover:
-- Hot reload command format (test_hot_reload_sends_correct_command)
-- Hot restart command format (test_hot_restart_sends_full_restart_flag)
-- Reload completion detection (test_reload_completes_with_finished_true)
-- Handler message processing (2 tests: test_hot_reload_message_triggers_reload_task, test_hot_restart_message_triggers_restart_task)
-- Progress event parsing (test_progress_events_parsed_as_daemon_messages)
-- Response success verification (test_reload_response_has_success_code)
-- Event ordering (test_reload_events_arrive_in_correct_order)
-- Sequential reloads (test_multiple_reloads_in_sequence)
-- Error scenarios (test_reload_with_wrong_app_id)
-
-### Risks/Limitations
-
-1. **Handler Tests Limited**: Handler integration tests only verify guard conditions due to complexity of full session setup. More comprehensive handler flow tests should be added in Task 07 when session management infrastructure is complete.
-
-2. **Mock Simplification**: The mock daemon doesn't validate app_id matching, so error scenario testing is limited. This is acceptable for Phase 1 but may need enhancement for more realistic error testing in later phases.

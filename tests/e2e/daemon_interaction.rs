@@ -1,32 +1,10 @@
-## Task: Implement Daemon Interaction Tests
-
-**Objective**: Write integration tests for daemon connection, device discovery, and basic daemon communication flows.
-
-**Depends on**: 04-mock-daemon
-
-### Scope
-
-- `tests/e2e/daemon_interaction.rs` - **NEW** Daemon interaction tests
-
-### Details
-
-Create tests that verify the daemon connection lifecycle and device discovery using `MockFlutterDaemon`.
-
-**File: `tests/e2e/daemon_interaction.rs`**:
-
-```rust
 //! Daemon interaction integration tests
 //!
 //! Tests for daemon connection, disconnection, and device discovery.
 
-use super::*;
 use super::mock_daemon::{MockFlutterDaemon, MockScenarioBuilder};
 use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::{DaemonMessage, DaemonCommand};
-use flutter_demon::app::handler::update;
-use flutter_demon::app::message::Message;
-use flutter_demon::app::state::AppState;
-use flutter_demon::core::AppPhase;
+use flutter_demon::daemon::{DaemonCommand, DaemonMessage};
 
 // ─────────────────────────────────────────────────────────
 // Daemon Connection Tests
@@ -71,10 +49,7 @@ async fn test_daemon_shutdown_command() {
     assert!(response.is_some());
 
     // Task should complete
-    let result = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
-        daemon_task
-    ).await;
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), daemon_task).await;
     assert!(result.is_ok(), "Daemon should have shut down");
 }
 
@@ -232,12 +207,10 @@ async fn test_scenario_builder_with_app_started() {
 
 #[tokio::test]
 async fn test_scenario_builder_custom_response() {
-    let custom_devices = serde_json::json!([
-        {"id": "custom-device", "name": "Custom Device", "platform": "custom"}
-    ]);
+    let custom_response = serde_json::json!({"status": "custom", "value": 42});
 
     let (daemon, mut handle) = MockScenarioBuilder::new()
-        .with_response("device.getDevices", custom_devices)
+        .with_response("custom.method", custom_response)
         .build();
 
     tokio::spawn(daemon.run());
@@ -245,90 +218,15 @@ async fn test_scenario_builder_custom_response() {
     // Skip connected
     handle.recv_event().await;
 
-    // Get devices should return custom response
-    handle.send(DaemonCommand::GetDevices).await.unwrap();
+    // Send custom method should return custom response
+    let custom_cmd = r#"[{"id":1,"method":"custom.method","params":{}}]"#;
+    handle.send_command(custom_cmd).await.unwrap();
     let response = handle.recv_event().await;
 
     if let Some(DaemonEvent::Stdout(line)) = response {
-        assert!(line.contains("custom-device"));
+        assert!(line.contains("\"status\":\"custom\""));
+        assert!(line.contains("\"value\":42"));
     } else {
-        panic!("Expected device response");
+        panic!("Expected custom response");
     }
 }
-```
-
-### Acceptance Criteria
-
-1. All tests compile and pass
-2. Tests cover:
-   - Daemon connected event parsing (1 test)
-   - Daemon shutdown (1 test)
-   - Sequential commands (1 test)
-   - Device discovery response format (1 test)
-   - Device enable/get flow (1 test)
-   - Malformed command handling (1 test)
-   - Unknown method handling (1 test)
-   - Scenario builder usage (2 tests)
-3. Tests run in <5 seconds total
-4. No flaky tests (deterministic behavior)
-
-### Testing
-
-```bash
-# Run only daemon interaction tests
-cargo test --test e2e daemon_interaction
-
-# Run with output
-cargo test --test e2e daemon_interaction -- --nocapture
-```
-
-### Notes
-
-- Tests operate at the channel level, not through `AppState`
-- Each test creates its own mock daemon instance
-- Timeouts prevent tests from hanging on channel errors
-- Tests verify JSON-RPC protocol compliance
-- More comprehensive handler integration is in subsequent task files
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `tests/e2e/daemon_interaction.rs` | Implemented all 9 daemon interaction tests covering connection, device discovery, error handling, and scenario builder usage |
-
-### Notable Decisions/Tradeoffs
-
-1. **Custom response test adjustment**: Changed `test_scenario_builder_custom_response` to use a custom method name instead of `device.getDevices` because the mock daemon has hardcoded handlers for built-in methods that take precedence over custom responses. This matches the pattern used in the mock_daemon's own tests.
-
-2. **Removed unused imports**: Removed `use super::*;` from daemon_interaction.rs as none of the helper functions from the parent module are needed for these tests. Tests operate directly with the mock daemon API.
-
-### Testing Performed
-
-- `cargo test --test e2e daemon_interaction` - Passed (9/9 tests, <0.05s)
-- `cargo test --test e2e` - Passed (56/56 tests total, 2.06s)
-- `cargo fmt --check` - Passed (no formatting issues)
-- `cargo clippy --test e2e` - No warnings in daemon_interaction.rs (1 pre-existing warning in src/app/state.rs unrelated to this task)
-
-### Test Coverage
-
-All acceptance criteria met:
-- ✅ Daemon connected event parsing (1 test)
-- ✅ Daemon shutdown (1 test)
-- ✅ Sequential commands (1 test)
-- ✅ Device discovery response format (1 test)
-- ✅ Device enable/get flow (1 test)
-- ✅ Malformed command handling (1 test)
-- ✅ Unknown method handling (1 test)
-- ✅ Scenario builder usage (2 tests)
-
-### Risks/Limitations
-
-1. **Test isolation**: Tests are properly isolated with each creating its own mock daemon instance, ensuring no cross-test interference.
-
-2. **Deterministic behavior**: All tests complete quickly (<1 second timeout) and pass consistently with no flaky behavior observed.

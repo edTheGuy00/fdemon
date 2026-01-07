@@ -1,0 +1,20 @@
+[
+  {
+    "event": "app.progress",
+    "params": {
+      "appId": "test-app-id",
+      "id": "hot.reload",
+      "message": "Performing hot reload...",
+      "finished": false
+    }
+  },
+  {
+    "event": "app.log",
+    "params": {
+      "appId": "test-app-id",
+      "log": "Compiler message:\nlib/main.dart:10:5: Error: Expected ';' after this.",
+      "error": true,
+      "stackTrace": null
+    }
+  }
+]

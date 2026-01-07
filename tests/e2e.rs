@@ -1,53 +1,17 @@
-## Task: Create E2E Test Utilities Module
-
-**Objective**: Create the `tests/e2e/mod.rs` module with test helper functions, fixture loading, and common test setup utilities.
-
-**Depends on**: 01-add-dependencies
-
-### Scope
-
-- `tests/e2e/mod.rs` - **NEW** Main E2E test module with utilities
-- `tests/e2e.rs` - **NEW** Test entry point (required by Cargo)
-
-### Details
-
-Create the E2E test infrastructure module that will be used by all integration tests.
-
-**File: `tests/e2e.rs`** (entry point):
-```rust
 //! E2E Integration Tests for Flutter Demon
 //!
 //! Run with: cargo test --test e2e
 
-mod e2e;
+// Test submodules
+mod e2e {
+    mod daemon_interaction;
+    mod hot_reload;
+    pub mod mock_daemon;
+    mod session_management;
+}
 
-// Re-export for test files
-pub use e2e::*;
-```
-
-**File: `tests/e2e/mod.rs`**:
-```rust
-//! E2E test utilities and mock infrastructure
-//!
-//! This module provides:
-//! - Test helper functions for creating test data
-//! - Fixture loading utilities
-//! - Mock daemon infrastructure (in mock_daemon.rs)
-//! - Common test assertions
-
-pub mod mock_daemon;
-
-// Test modules
-mod daemon_interaction;
-mod hot_reload;
-mod session_management;
-
-use flutter_demon::daemon::Device;
 use flutter_demon::app::state::AppState;
-use flutter_demon::app::session::{Session, SessionHandle};
-use flutter_demon::daemon::RequestTracker;
-use std::sync::Arc;
-use uuid::Uuid;
+use flutter_demon::daemon::Device;
 
 // ─────────────────────────────────────────────────────────
 // Test Data Helpers
@@ -98,12 +62,14 @@ pub fn test_app_state_with_project(path: &str) -> AppState {
 
 /// Generate a unique app ID for testing
 pub fn test_app_id() -> String {
-    format!("test-app-{}", &Uuid::new_v4().to_string()[..8])
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+    format!("test-app-{}", COUNTER.fetch_add(1, Ordering::SeqCst))
 }
 
 /// Generate a unique session ID for testing
 pub fn test_session_id() -> flutter_demon::app::session::SessionId {
-    flutter_demon::app::session::SessionId::new()
+    flutter_demon::app::session::next_session_id()
 }
 
 // ─────────────────────────────────────────────────────────
@@ -175,80 +141,80 @@ pub async fn with_timeout<T, F: std::future::Future<Output = T>>(
     duration_ms: u64,
     future: F,
 ) -> Result<T, &'static str> {
-    tokio::time::timeout(
-        std::time::Duration::from_millis(duration_ms),
-        future,
-    )
-    .await
-    .map_err(|_| "Operation timed out")
+    tokio::time::timeout(std::time::Duration::from_millis(duration_ms), future)
+        .await
+        .map_err(|_| "Operation timed out")
 }
-```
 
-### Acceptance Criteria
+// ─────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────
 
-1. `tests/e2e.rs` exists and compiles
-2. `tests/e2e/mod.rs` exists with helper functions
-3. `cargo test --test e2e` runs (even if no tests exist yet)
-4. Helper functions compile and are usable:
-   - `test_device()`, `android_emulator()`, `ios_simulator()`
-   - `test_app_state()`, `test_app_id()`
-   - `load_fixture()`, `load_daemon_message()`
+#[cfg(test)]
+mod test_helpers {
+    use super::*;
 
-### Testing
+    #[test]
+    fn test_test_device() {
+        let device = test_device("device-123", "Test Device", "ios");
+        assert_eq!(device.id, "device-123");
+        assert_eq!(device.name, "Test Device");
+        assert_eq!(device.platform, "ios");
+        assert!(!device.emulator); // iOS is not emulator by default
+    }
 
-```bash
-# Verify module compiles
-cargo test --test e2e --no-run
+    #[test]
+    fn test_android_emulator() {
+        let device = android_emulator("emulator-5554");
+        assert_eq!(device.id, "emulator-5554");
+        assert_eq!(device.name, "Android Emulator");
+        assert_eq!(device.platform, "android");
+        assert!(device.emulator);
+    }
 
-# Verify helpers work (add a simple test)
-cargo test --test e2e test_helpers
-```
+    #[test]
+    fn test_ios_simulator() {
+        let device = ios_simulator("sim-123");
+        assert_eq!(device.id, "sim-123");
+        assert_eq!(device.name, "iPhone Simulator");
+        assert_eq!(device.platform, "ios");
+        assert!(device.emulator);
+    }
 
-### Notes
+    #[test]
+    fn test_ios_device() {
+        let device = ios_device("iphone-123");
+        assert_eq!(device.id, "iphone-123");
+        assert_eq!(device.name, "iPhone");
+        assert_eq!(device.platform, "ios");
+        assert!(!device.emulator);
+    }
 
-- This module does NOT include `MockFlutterDaemon` - that's Task 04
-- Uses `flutter_demon` library crate for type imports
-- The `tests/e2e.rs` file is required by Cargo's test discovery
-- Fixture loading uses `CARGO_MANIFEST_DIR` for reliable paths
-- Keep helpers focused on data creation, not behavior testing
+    #[test]
+    fn test_test_app_state() {
+        let state = test_app_state();
+        assert!(state.project_path.as_os_str().is_empty());
+    }
 
----
+    #[test]
+    fn test_test_app_state_with_project() {
+        let state = test_app_state_with_project("/test/path");
+        assert_eq!(state.project_path.to_str().unwrap(), "/test/path");
+    }
 
-## Completion Summary
+    #[test]
+    fn test_test_app_id_unique() {
+        let id1 = test_app_id();
+        let id2 = test_app_id();
+        assert_ne!(id1, id2);
+        assert!(id1.starts_with("test-app-"));
+        assert!(id2.starts_with("test-app-"));
+    }
 
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `tests/e2e.rs` | Created test entry point with helper functions and test module declarations |
-| `tests/e2e/mock_daemon.rs` | Created placeholder module for Task 04 |
-| `tests/e2e/daemon_interaction.rs` | Created placeholder test module |
-| `tests/e2e/hot_reload.rs` | Created placeholder test module |
-| `tests/e2e/session_management.rs` | Created placeholder test module |
-
-### Notable Decisions/Tradeoffs
-
-1. **Module Structure**: Used `tests/e2e.rs` with submodules in `tests/e2e/` directory instead of `tests/e2e/mod.rs` to follow Rust's standard test organization pattern. This avoids the "file found at both" error.
-
-2. **UUID Alternative**: The task spec referenced `uuid::Uuid` for `test_app_id()`, but the `uuid` crate was not added in Task 01. Implemented using an atomic counter instead (`AtomicU64`) which provides unique, deterministic IDs suitable for testing without additional dependencies.
-
-3. **Helper Function Tests**: Added 8 unit tests to verify all helper functions work correctly (test_device creation, app_state creation, unique ID generation, etc.). This ensures the utilities are usable for future test tasks.
-
-4. **Removed Unused Imports**: The task spec included imports for `Session`, `SessionHandle`, `RequestTracker`, and `Arc` that weren't actually used by any functions. These were removed to avoid compiler warnings.
-
-### Testing Performed
-
-- `cargo check` - PASSED (no compilation errors)
-- `cargo test --lib` - PASSED (1249 tests, no regressions)
-- `cargo test --test e2e` - PASSED (8 helper function tests)
-- `cargo test --test e2e --no-run` - PASSED (e2e module compiles)
-
-### Risks/Limitations
-
-1. **Fixture Loading**: The `load_fixture()` functions will panic if fixture files don't exist. This is intentional for early failure in tests, but the fixture directory structure (`tests/fixtures/daemon_responses/`) needs to be created in Task 02 or these functions will fail when called.
-
-2. **SessionId Generation**: The `test_session_id()` function uses `next_session_id()` from the app module which maintains global state. Tests using this should be aware that IDs are not reset between test runs (though Rust's test isolation typically handles this).
-
-3. **No Actual Tests Yet**: The placeholder test modules (daemon_interaction, hot_reload, session_management) are empty. They will be populated in future phase tasks.
+    #[test]
+    fn test_test_session_id_unique() {
+        let id1 = test_session_id();
+        let id2 = test_session_id();
+        assert_ne!(id1, id2);
+    }
+}

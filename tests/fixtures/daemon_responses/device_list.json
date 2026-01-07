@@ -1,0 +1,20 @@
+[
+  {
+    "id": "emulator-5554",
+    "name": "Android SDK built for x86",
+    "platform": "android",
+    "emulator": true,
+    "category": "mobile",
+    "platformType": "android",
+    "ephemeral": false
+  },
+  {
+    "id": "00008030-001A35E11234802E",
+    "name": "iPhone 14 Pro",
+    "platform": "ios",
+    "emulator": false,
+    "category": "mobile",
+    "platformType": "ios",
+    "ephemeral": false
+  }
+]

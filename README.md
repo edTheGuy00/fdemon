@@ -220,13 +220,9 @@ cargo clippy
 - **Flutter SDK** in your PATH
 - A terminal with Unicode support
 
-## Development Process
+## Development Process and Workflow
 
-Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured AI-assisted workflow.
-
-### Development Workflow
-
-This project follows a structured development process that ensures high code quality through distinct phases. Each feature goes through planning, phased implementation, testing, and review:
+Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured AI-assisted workflow. It follows a structured development process that ensures high code quality through distinct phases. Each feature goes through planning, phased implementation, testing, and review:
 
 ```mermaid
 flowchart TB
@@ -280,7 +276,7 @@ flowchart TB
 
 ### Workflow Artifacts
 
-Complete development history is maintained in `workflow/`:
+Complete AI-assisted development history is maintained in [workflow](./workflow/) with the following structure:
 
 ```
 workflow/
