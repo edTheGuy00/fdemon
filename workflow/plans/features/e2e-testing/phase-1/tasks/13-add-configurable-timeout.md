@@ -124,3 +124,33 @@ E2E_TEST_TIMEOUT_MS=5000 cargo test --test e2e
 - Existing tests continue to work unchanged
 - CI can set environment variable for longer timeouts
 - Consider documenting the environment variable in README or CI config
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/mock_daemon.rs` | Added configurable timeout support to `MockDaemonHandle` with `DEFAULT_TIMEOUT` constant, `recv_event_with_timeout()`, and `expect_stdout_with_timeout()` methods. Updated module documentation to reflect configurable timeouts. Added two new tests to demonstrate timeout functionality. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Did not implement environment variable support**: The task marked this as "optional", and the primary goal was to provide programmatic timeout control for tests. Environment variable support can be added later if CI reliability issues arise. The current implementation provides the flexibility needed without the complexity of environment variable parsing.
+
+2. **Added demonstration tests**: Added `test_recv_event_with_custom_timeout()` and `test_expect_stdout_with_custom_timeout()` to demonstrate and verify the new timeout functionality, ensuring the feature works as expected.
+
+### Testing Performed
+
+- `cargo test --test e2e` - Passed (58 tests, including 2 new timeout tests)
+- `cargo clippy --test e2e` - Passed (no warnings in e2e test code)
+- `cargo fmt` - Code properly formatted
+
+### Risks/Limitations
+
+1. **Backward compatibility**: This change is fully backward compatible. All existing tests continue to use the default 1-second timeout and pass without modification.
+
+2. **Environment variable support deferred**: The optional environment variable feature was not implemented. If CI environments need automatic timeout adjustment, this can be added in a follow-up task.

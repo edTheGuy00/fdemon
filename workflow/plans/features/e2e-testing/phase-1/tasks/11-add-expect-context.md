@@ -87,3 +87,30 @@ cargo clippy --test e2e
 - This is a test-only change
 - Better error messages help debug CI failures
 - Consider whether some errors should be handled gracefully vs panicking
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/mock_daemon.rs` | Replaced 3 `.unwrap()` calls with `.expect()` messages for better error context |
+
+### Notable Decisions/Tradeoffs
+
+1. **Serialization errors treated as panics**: Since these are test-only utilities and serialization failures indicate programming errors (invalid JSON structures), using `.expect()` is appropriate. These should never fail in normal operation.
+2. **Descriptive error messages**: Each `.expect()` call now includes context about which operation failed (event serialization, response serialization, initial event serialization).
+3. **No changes to handle_command()**: The existing error handling in `handle_command()` (line 202-205) already gracefully ignores malformed commands, which is appropriate for test resilience.
+
+### Testing Performed
+
+- `cargo test --test e2e` - Passed (56 tests)
+- `cargo clippy --test e2e` - Passed (no warnings in mock_daemon.rs; existing warning in src/app/state.rs is unrelated)
+
+### Risks/Limitations
+
+None. This is a test-only change that improves debugging experience without affecting functionality.

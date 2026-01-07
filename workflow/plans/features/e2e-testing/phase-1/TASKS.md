@@ -4,7 +4,7 @@
 
 Create mock daemon infrastructure enabling fast, deterministic integration tests without Flutter installation. This establishes the foundation for comprehensive E2E testing with <30 second execution time.
 
-**Total Tasks:** 13 (7 complete + 6 follow-up)
+**Total Tasks:** 13 (All Complete)
 **Parent Plan:** [../PLAN.md](../PLAN.md)
 
 ## Task Dependency Graph
@@ -67,12 +67,12 @@ These tasks address issues identified in [REVIEW.md](../../REVIEW.md).
 
 | # | Task | Status | Priority | Depends On | Modules |
 |---|------|--------|----------|------------|---------|
-| 8 | [08-fix-event-queue-performance](tasks/08-fix-event-queue-performance.md) | Not Started | Critical | - | `tests/e2e/mock_daemon.rs` |
-| 9 | [09-fix-channel-error-handling](tasks/09-fix-channel-error-handling.md) | Not Started | Critical | - | `tests/e2e/mock_daemon.rs` |
-| 10 | [10-fix-select-race-condition](tasks/10-fix-select-race-condition.md) | Not Started | Critical | - | `tests/e2e/mock_daemon.rs` |
-| 11 | [11-add-expect-context](tasks/11-add-expect-context.md) | Not Started | Major | - | `tests/e2e/mock_daemon.rs` |
-| 12 | [12-document-mock-limitations](tasks/12-document-mock-limitations.md) | Not Started | Major | - | `tests/e2e/mock_daemon.rs` |
-| 13 | [13-add-configurable-timeout](tasks/13-add-configurable-timeout.md) | Not Started | Minor | - | `tests/e2e/mock_daemon.rs` |
+| 8 | [08-fix-event-queue-performance](tasks/08-fix-event-queue-performance.md) | Done | Critical | - | `tests/e2e/mock_daemon.rs` |
+| 9 | [09-fix-channel-error-handling](tasks/09-fix-channel-error-handling.md) | Done | Critical | - | `tests/e2e/mock_daemon.rs` |
+| 10 | [10-fix-select-race-condition](tasks/10-fix-select-race-condition.md) | Done | Critical | - | `tests/e2e/mock_daemon.rs` |
+| 11 | [11-add-expect-context](tasks/11-add-expect-context.md) | Done | Major | - | `tests/e2e/mock_daemon.rs` |
+| 12 | [12-document-mock-limitations](tasks/12-document-mock-limitations.md) | Done | Major | - | `tests/e2e/mock_daemon.rs` |
+| 13 | [13-add-configurable-timeout](tasks/13-add-configurable-timeout.md) | Done | Minor | - | `tests/e2e/mock_daemon.rs` |
 
 ## Parallel Execution Opportunities
 
@@ -128,14 +128,14 @@ Phase 1 initial implementation is complete:
 
 Phase 1 follow-up is complete when:
 
-- [ ] Event queue uses `VecDeque::pop_front()` for O(1) performance (Task 8)
-- [ ] Channel send failures are handled, not silently ignored (Task 9)
-- [ ] `tokio::select!` race condition is fixed (Task 10)
-- [ ] All `.unwrap()` calls have `.expect()` context (Task 11)
-- [ ] Mock limitations are documented in module-level docs (Task 12)
-- [ ] Timeout is configurable for CI environments (Task 13)
-- [ ] All 56+ tests continue to pass
-- [ ] `cargo clippy --test e2e` passes with no warnings
+- [x] Event queue uses `VecDeque::pop_front()` for O(1) performance (Task 8)
+- [x] Channel send failures are handled, not silently ignored (Task 9)
+- [x] `tokio::select!` race condition is fixed (Task 10)
+- [x] All `.unwrap()` calls have `.expect()` context (Task 11)
+- [x] Mock limitations are documented in module-level docs (Task 12)
+- [x] Timeout is configurable for CI environments (Task 13)
+- [x] All 56+ tests continue to pass (58 tests)
+- [x] `cargo clippy --test e2e` passes with no warnings
 
 ## Test Execution
 

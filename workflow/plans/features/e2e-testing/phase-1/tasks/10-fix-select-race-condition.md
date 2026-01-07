@@ -138,3 +138,34 @@ Consider adding a test that sends multiple commands with delays between them to 
 - The `biased` keyword ensures deterministic branch selection
 - Testing race conditions is inherently difficult
 - May need to run tests multiple times to verify fix
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/mock_daemon.rs` | Fixed `run()` method to track channel closure explicitly and prevent premature exit |
+
+### Notable Decisions/Tradeoffs
+
+1. **Explicit channel-closed tracking**: Added `cmd_closed` and `ctrl_closed` boolean flags to track when channels are truly closed vs temporarily empty. This prevents premature exit when the event queue is temporarily empty but channels are still open.
+
+2. **Biased select**: Used `biased` keyword to ensure deterministic branch selection, prioritizing command handling over control messages and event queue processing.
+
+3. **Graceful yield in else branch**: When channels are not yet closed, the else branch now yields with a 1ms sleep instead of immediately breaking, preventing busy-waiting while allowing the loop to continue waiting for more work.
+
+### Testing Performed
+
+- `cargo test --test e2e` - Passed (56 tests)
+- `cargo clippy --test e2e` - Passed (no warnings in e2e test code)
+
+### Risks/Limitations
+
+1. **Race condition testing difficulty**: Race conditions are inherently difficult to test reliably. The fix is logically sound, but edge cases may still exist in highly concurrent scenarios.
+
+2. **Minimal sleep overhead**: The 1ms sleep in the else branch adds minimal overhead but ensures the loop doesn't busy-wait when all channels are idle.
