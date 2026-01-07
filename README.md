@@ -226,25 +226,57 @@ Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a s
 
 ### Development Workflow
 
-This project follows a structured development process that ensures high code quality through distinct phases:
+This project follows a structured development process that ensures high code quality through distinct phases. Each feature goes through planning, phased implementation, testing, and review:
 
 ```mermaid
-flowchart LR
+flowchart TB
     Research["🔍 Research"] --> Plan["📋 Plan"]
-    Plan --> Implement["⚙️ Implement"]
-    Implement --> Test["🧪 Test"]
-    Test --> Review["🔎 Review"]
-    Review -->|"✅ Approved"| Done["✅ Done"]
-    Review -->|"❌ Needs Work"| Implement
+    Plan --> Breakdown["📑 Break into Phases"]
+    Breakdown --> Phase1["Phase 1"]
+    Breakdown --> Phase2["Phase 2"]
+    Breakdown --> PhaseN["Phase N"]
+    
+    Phase1 --> Tasks1["📝 Break into Tasks"]
+    Tasks1 --> Task1A["Task 1"]
+    Tasks1 --> Task1B["Task 2"]
+    Tasks1 --> Task1C["Task N"]
+    
+    Task1A --> Impl1A["⚙️ Implement"]
+    Task1B --> Impl1B["⚙️ Implement"]
+    Task1C --> Impl1C["⚙️ Implement"]
+    
+    Impl1A --> PhaseTest1["🧪 Test Phase"]
+    Impl1B --> PhaseTest1
+    Impl1C --> PhaseTest1
+    
+    PhaseTest1 --> PhaseReview1["🔎 Review Phase"]
+    PhaseReview1 -->|"✅ Pass"| Phase2
+    PhaseReview1 -->|"❌ Issues"| Task1A
+    
+    Phase2 --> NextPhase["Continue..."]
+    PhaseN --> FinalReview["🔎 Final Review"]
+    FinalReview -->|"✅ Approved"| Done["✅ Done"]
+    FinalReview -->|"❌ Needs Work"| PhaseN
+    
+    style Research fill:#e1f5ff
+    style Plan fill:#fff4e1
+    style Breakdown fill:#fff4e1
+    style PhaseTest1 fill:#e8f5e9
+    style PhaseReview1 fill:#f3e5f5
+    style FinalReview fill:#f3e5f5
+    style Done fill:#c8e6c9
 ```
 
 | Phase | Description |
 |-------|-------------|
 | **Research** | Gather information on APIs, libraries, and best practices |
-| **Plan** | Design features, break down into tasks, document architecture |
-| **Implement** | Execute tasks following architectural guidelines |
-| **Test** | Verify with `cargo test`, `cargo clippy`, quality gates |
-| **Review** | Validate architecture, code quality, logic, and risks |
+| **Plan** | Design features, document architecture, identify affected modules |
+| **Break into Phases** | Divide feature into logical implementation phases with dependencies |
+| **Break into Tasks** | Decompose each phase into concrete, testable tasks (3-6h each) |
+| **Implement** | Execute individual tasks following architectural guidelines |
+| **Test Phase** | After all phase tasks complete, run full test suite and verify integration |
+| **Review Phase** | Validate architecture, code quality, logic, and risks for the phase |
+| **Final Review** | Comprehensive review after all phases complete |
 
 ### Workflow Artifacts
 
