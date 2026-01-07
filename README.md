@@ -222,24 +222,49 @@ cargo clippy
 
 ## Development Process
 
-Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured agent-based workflow.
+Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured AI-assisted workflow.
 
-### AI-Assisted Development
+### Development Workflow
 
-This project showcases a modern development approach using AI agents for planning, implementation, and research:
+This project follows a structured development process that ensures high code quality through distinct phases:
 
-- **[Agents](.claude/agents/)** - Specialized AI subagents for isolated task execution:
-  - `task-dispatcher` - Orchestrates parallel task execution, manages TASKS.md status
-  - `implementor` - Executes implementation tasks, writes completion summaries
-  - `researcher` - External API and documentation research
+```mermaid
+flowchart LR
+    Research["🔍 Research"] --> Plan["📋 Plan"]
+    Plan --> Implement["⚙️ Implement"]
+    Implement --> Test["🧪 Test"]
+    Test --> Review["🔎 Review"]
+    Review -->|"✅ Approved"| Done["✅ Done"]
+    Review -->|"❌ Needs Work"| Implement
+```
 
-- **[Skills](.claude/skills/)** - Knowledge and guidance for the main conversation:
-  - `planner` - Feature design templates and planning guidelines
+| Phase | Description |
+|-------|-------------|
+| **Research** | Gather information on APIs, libraries, and best practices |
+| **Plan** | Design features, break down into tasks, document architecture |
+| **Implement** | Execute tasks following architectural guidelines |
+| **Test** | Verify with `cargo test`, `cargo clippy`, quality gates |
+| **Review** | Validate architecture, code quality, logic, and risks |
 
-- **[Workflow History](workflow/plans/)** - Complete development history:
-  - Feature plans with architecture decisions
-  - Task breakdowns and progress tracking
-  - Bug reports and resolutions
+### Workflow Artifacts
+
+Complete development history is maintained in `workflow/`:
+
+```
+workflow/
+├── plans/
+│   ├── features/          # Feature plans with phases and tasks
+│   └── bugs/              # Bug reports and fix tasks
+└── reviews/
+    ├── features/          # Feature implementation reviews
+    └── bugs/              # Bug fix reviews
+```
+
+Each task file includes a **Completion Summary** with:
+- Files modified and changes made
+- Notable decisions and tradeoffs
+- Testing performed and results
+- Risks and limitations identified
 
 This transparent development process demonstrates how AI can augment software development while maintaining high code quality, comprehensive testing, and thorough documentation.
 
