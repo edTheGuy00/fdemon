@@ -4,7 +4,7 @@
 
 Complete launch configuration system with startup dialog, config editing, and VSCode launch.json compatibility. Replaces device selector with comprehensive startup dialog for session launching.
 
-**Total Tasks:** 18
+**Total Tasks:** 23
 
 ## Task Dependency Graph
 
@@ -70,6 +70,17 @@ Complete launch configuration system with startup dialog, config editing, and VS
             ┌─────────────────────────┐
             │ 09 Documentation        │
             └─────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│        ENHANCEMENT WAVE (10a-10e) - Sequential          │
+├─────────────────────────────────────────────────────────┤
+│ 10a Loading     │ 10b VSCode      │                     │
+│ Speed/Messages  │ Config Readonly │                     │
+├─────────────────┴─────────────────┴─────────────────────┤
+│ 10c FDemon → 10d No-Config → 10e New Config Option      │
+│ Auto-save       Auto-save        (VSCode escape hatch)  │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ## Tasks
@@ -94,6 +105,11 @@ Complete launch configuration system with startup dialog, config editing, and VS
 | 9b | [09b-manual-flavor-passthrough](tasks/09b-manual-flavor-passthrough.md) | Done | 8b | `handler/update.rs` |
 | 9c | [09c-loading-animation-fix](tasks/09c-loading-animation-fix.md) | Done | 8d | `tui/runner.rs`, `tui/startup.rs` |
 | 9 | [09-documentation](tasks/09-documentation.md) | Done | All | `docs/*.md` |
+| 10a | [10a-loading-animation-speed](tasks/10a-loading-animation-speed.md) | Done | 9c | `tui/render.rs`, `app/state.rs`, `tui/startup.rs` |
+| 10b | [10b-vscode-config-readonly](tasks/10b-vscode-config-readonly.md) | Done | - | `app/state.rs`, `startup_dialog/`, `handler/keys.rs` |
+| 10c | [10c-fdemon-config-autosave](tasks/10c-fdemon-config-autosave.md) | Done | 10b | `app/state.rs`, `handler/update.rs`, `config/launch.rs` |
+| 10d | [10d-noconfig-autosave](tasks/10d-noconfig-autosave.md) | Done | 10c | `app/state.rs`, `handler/update.rs`, `config/launch.rs` |
+| 10e | [10e-new-config-option](tasks/10e-new-config-option.md) | Done | 10b, 10d | `app/state.rs`, `startup_dialog/`, `handler/keys.rs` |
 
 ## Execution Waves
 
@@ -131,25 +147,43 @@ Complete launch configuration system with startup dialog, config editing, and VS
 ### Wave 5 (Documentation) - After All
 - Task 09: Documentation Updates
 
+### Wave 6 (Enhancements) - After Wave 5, Sequential
+- Task 10a: Loading Animation Speed & Message Cycling
+- Task 10b: VSCode Config Field Disabling (can parallel with 10a)
+- Task 10c: FDemon Config Auto-fill and Auto-save (after 10b)
+- Task 10d: No-Config Auto-save to New launch.toml (after 10c)
+- Task 10e: "New Config" Option for VSCode Users (after 10b, 10d)
+
 ## Success Criteria
 
 Phase 5 is complete when:
 
-- [ ] Startup dialog shows combined launch.toml + launch.json configs with divider
-- [ ] Config priority: launch.toml first, then launch.json
-- [ ] Auto-start respects `settings.local.toml` preferences
-- [ ] Startup dialog allows mode/flavor/dart-define selection
-- [ ] Last selection auto-saves to `settings.local.toml`
-- [ ] Creating/editing launch.toml configs works
-- [ ] launch.json remains read-only
-- [ ] Device selector deprecated for startup (may keep for add-session)
-- [ ] **No black screen on auto_start** (loading indicator shown)
-- [ ] **Device list cached** (instant display on 'n' for new session)
-- [ ] **VSCode launch.json with args[] flavor parsed correctly**
-- [ ] All keybindings documented in `docs/KEYBINDINGS.md`
-- [ ] All new code has unit tests
-- [ ] `cargo test` passes
-- [ ] `cargo clippy -- -D warnings` passes
+- [x] Startup dialog shows combined launch.toml + launch.json configs with divider
+- [x] Config priority: launch.toml first, then launch.json
+- [x] Auto-start respects `settings.local.toml` preferences
+- [x] Startup dialog allows mode/flavor/dart-define selection
+- [x] Last selection auto-saves to `settings.local.toml`
+- [x] Creating/editing launch.toml configs works
+- [x] launch.json remains read-only
+- [x] Device selector deprecated for startup (may keep for add-session)
+- [x] **No black screen on auto_start** (loading indicator shown)
+- [x] **Device list cached** (instant display on 'n' for new session)
+- [x] **VSCode launch.json with args[] flavor parsed correctly**
+- [x] All keybindings documented in `docs/KEYBINDINGS.md`
+- [x] All new code has unit tests
+- [x] `cargo test` passes
+- [x] `cargo clippy -- -D warnings` passes
+
+### Enhancement Wave Success Criteria (Tasks 10a-10e)
+
+- [ ] Loading spinner animates at ~100ms per frame (faster than current)
+- [ ] Loading messages cycle through 3-4 messages during device discovery
+- [ ] VSCode config selection disables Flavor/Dart Defines fields
+- [ ] FDemon config selection auto-fills fields with config values
+- [ ] FDemon config field edits auto-save back to launch.toml
+- [ ] No-config field edits create new default config in launch.toml
+- [ ] "+ New config" option appears when configs exist
+- [ ] Tab navigation skips disabled fields appropriately
 
 ## Keyboard Shortcuts (New)
 

@@ -32,6 +32,7 @@ async fn animate_during_async<T, F>(
     state: &mut AppState,
     term: &mut ratatui::DefaultTerminal,
     future: F,
+    cycle_messages: bool,
 ) -> T
 where
     F: std::future::Future<Output = T>,
@@ -48,7 +49,7 @@ where
                 return result;
             }
             _ = tick_interval.tick() => {
-                state.tick_loading_animation();
+                state.tick_loading_animation_with_cycling(cycle_messages);
                 let _ = term.draw(|frame| render::view(frame, state));
             }
         }
@@ -92,9 +93,9 @@ async fn auto_start_session(
         // Update loading message (Task 08d)
         state.update_loading_message("Detecting devices...");
 
-        // Discover devices with animation (Task 09c)
+        // Discover devices with animation and message cycling (Task 10a)
         let discovery = devices::discover_devices();
-        let result = animate_during_async(state, term, discovery).await;
+        let result = animate_during_async(state, term, discovery, true).await;
 
         match result {
             Ok(discovery_result) => {
@@ -134,9 +135,9 @@ async fn auto_start_session(
     // Update loading message (Task 08d)
     state.update_loading_message("Detecting devices...");
 
-    // Discover devices with animation (Task 09c)
+    // Discover devices with animation and message cycling (Task 10a)
     let discovery = devices::discover_devices();
-    let result = animate_during_async(state, term, discovery).await;
+    let result = animate_during_async(state, term, discovery, true).await;
 
     match result {
         Ok(discovery_result) => {

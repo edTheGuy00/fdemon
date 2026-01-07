@@ -90,7 +90,8 @@ impl<'a> StartupDialog<'a> {
         let mut items: Vec<ListItem> = Vec::new();
 
         for (i, config) in self.state.configs.configs.iter().enumerate() {
-            let is_selected = self.state.selected_config == Some(i);
+            let is_selected =
+                self.state.selected_config == Some(i) && !self.state.new_config_selected;
             let is_vscode_start = self.state.configs.vscode_start_index == Some(i);
 
             // Add divider before VSCode configs
@@ -120,6 +121,30 @@ impl<'a> StartupDialog<'a> {
 
             let line = format!("{}{}{}", indicator, config.display_name, source_tag);
             items.push(ListItem::new(line).style(style));
+        }
+
+        // Task 10e: Render "+ New config" option if applicable
+        if self.state.should_show_new_config_option() {
+            // Add divider before "+ New config"
+            if !self.state.configs.configs.is_empty() {
+                items.push(
+                    ListItem::new("  ─────────────────────────────────")
+                        .style(Style::default().fg(DIVIDER_COLOR)),
+                );
+            }
+
+            let is_selected = self.state.new_config_selected;
+            let style = if is_selected && is_active {
+                Style::default()
+                    .fg(NEW_CONFIG_COLOR)
+                    .bg(SELECTED_BG)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(NEW_CONFIG_COLOR)
+            };
+
+            let indicator = if is_selected { "▶ " } else { "  " };
+            items.push(ListItem::new(format!("{}+ New config", indicator)).style(style));
         }
 
         let list = List::new(items);
@@ -174,40 +199,60 @@ impl<'a> StartupDialog<'a> {
         label: &str,
         value: &str,
         section: DialogSection,
+        enabled: bool,
     ) {
         let is_active = self.state.active_section == section;
-        let is_editing = is_active && self.state.editing;
+        let is_editing = is_active && self.state.editing && enabled;
 
-        // Show cursor at end when editing
-        let display_value = if is_editing {
+        // Disabled styling
+        let (value_style, label_style) = if !enabled {
+            (
+                Style::default().fg(DISABLED_COLOR),
+                Style::default().fg(DISABLED_COLOR),
+            )
+        } else if is_editing {
+            (
+                Style::default().fg(VALUE_COLOR).bg(Color::DarkGray),
+                Style::default().fg(VALUE_COLOR),
+            )
+        } else if is_active {
+            (
+                Style::default().fg(VALUE_COLOR),
+                Style::default().fg(VALUE_COLOR),
+            )
+        } else {
+            (
+                Style::default().fg(if value.is_empty() {
+                    PLACEHOLDER_COLOR
+                } else {
+                    VALUE_COLOR
+                }),
+                Style::default().fg(LABEL_COLOR),
+            )
+        };
+
+        // Show cursor only when editing AND enabled
+        let display_value = if is_editing && enabled {
             format!("{}|", value)
         } else if value.is_empty() {
-            "(optional)".to_string()
+            if enabled {
+                "(optional)".to_string()
+            } else {
+                "-".to_string()
+            }
         } else {
             value.to_string()
         };
 
-        // Highlight background when editing
-        let value_style = if is_editing {
-            Style::default().fg(VALUE_COLOR).bg(Color::DarkGray)
-        } else if is_active {
-            Style::default().fg(VALUE_COLOR)
-        } else {
-            Style::default().fg(if value.is_empty() {
-                PLACEHOLDER_COLOR
-            } else {
-                VALUE_COLOR
-            })
-        };
+        // Add disabled hint for VSCode configs
+        let suffix = if !enabled { "  (from config)" } else { "" };
 
         let line = Line::from(vec![
             Span::raw(format!("  {}: ", label)),
-            Span::styled(format!("[{}]", display_value), value_style),
+            Span::styled(format!("[{}]{}", display_value, suffix), value_style),
         ]);
 
-        Paragraph::new(line)
-            .style(Style::default().fg(if is_active { VALUE_COLOR } else { LABEL_COLOR }))
-            .render(area, buf);
+        Paragraph::new(line).style(label_style).render(area, buf);
     }
 
     /// Render device list section
@@ -335,19 +380,24 @@ impl Widget for StartupDialog<'_> {
 
         self.render_config_list(chunks[0], buf);
         self.render_mode_selector(chunks[1], buf);
+
+        // Task 10b: Use new methods for disabled state support
+        let flavor_editable = self.state.flavor_editable();
         self.render_input_field(
             chunks[2],
             buf,
             "Flavor",
-            &self.state.flavor,
+            self.state.flavor_display(),
             DialogSection::Flavor,
+            flavor_editable,
         );
         self.render_input_field(
             chunks[3],
             buf,
             "Dart Defines",
-            &self.state.dart_defines,
+            &self.state.dart_defines_display(),
             DialogSection::DartDefines,
+            flavor_editable, // Same editability rule as flavor
         );
         self.render_device_list(chunks[5], buf);
         self.render_footer(chunks[6], buf);

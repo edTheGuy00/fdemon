@@ -331,6 +331,12 @@ pub enum Message {
     /// Move to previous section (Shift+Tab)
     StartupDialogPrevSection,
 
+    /// Move to next section, skipping disabled fields (Task 10b)
+    StartupDialogNextSectionSkipDisabled,
+
+    /// Move to previous section, skipping disabled fields (Task 10b)
+    StartupDialogPrevSectionSkipDisabled,
+
     /// Select specific config by index
     StartupDialogSelectConfig(usize),
 
@@ -379,4 +385,10 @@ pub enum Message {
         field: String,
         value: String,
     },
+
+    // ─────────────────────────────────────────────────────────────
+    // FDemon Config Auto-save (Phase 5, Task 10c)
+    // ─────────────────────────────────────────────────────────────
+    /// Save FDemon config edits (flavor, dart_defines) after debounce
+    SaveStartupDialogConfig,
 }

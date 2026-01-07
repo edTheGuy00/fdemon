@@ -4,6 +4,7 @@ use crate::app::message::Message;
 use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, LogSource};
 use crate::tui::editor::{open_in_editor, sanitize_path};
+use tracing::warn;
 
 use super::{
     daemon::handle_session_daemon_event, keys::handle_key, Task, UpdateAction, UpdateResult,
@@ -143,6 +144,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Tick loading screen animation (Task 08d)
             if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
                 state.tick_loading_animation();
+            }
+
+            // Task 10c: Check if startup dialog needs to save (debounced)
+            if state.ui_mode == UiMode::StartupDialog && state.startup_dialog_state.should_save() {
+                return UpdateResult::message(Message::SaveStartupDialogConfig);
             }
 
             UpdateResult::none()
@@ -1234,6 +1240,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::HideStartupDialog => {
+            // Task 10d: Reset creating_new_config flag on cancel
+            if state.startup_dialog_state.creating_new_config {
+                state.startup_dialog_state.creating_new_config = false;
+                state.startup_dialog_state.dirty = false;
+            }
             state.hide_startup_dialog();
             UpdateResult::none()
         }
@@ -1258,9 +1269,38 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // Task 10b: Skip disabled fields during Tab navigation
+        Message::StartupDialogNextSectionSkipDisabled => {
+            use crate::app::state::DialogSection;
+            let mut next = state.startup_dialog_state.active_section.next();
+
+            // Skip Flavor and DartDefines if they're disabled
+            while matches!(next, DialogSection::Flavor | DialogSection::DartDefines) {
+                next = next.next();
+            }
+
+            state.startup_dialog_state.editing = false;
+            state.startup_dialog_state.active_section = next;
+            UpdateResult::none()
+        }
+
+        Message::StartupDialogPrevSectionSkipDisabled => {
+            use crate::app::state::DialogSection;
+            let mut prev = state.startup_dialog_state.active_section.prev();
+
+            // Skip Flavor and DartDefines if they're disabled
+            while matches!(prev, DialogSection::Flavor | DialogSection::DartDefines) {
+                prev = prev.prev();
+            }
+
+            state.startup_dialog_state.editing = false;
+            state.startup_dialog_state.active_section = prev;
+            UpdateResult::none()
+        }
+
         Message::StartupDialogSelectConfig(idx) => {
-            state.startup_dialog_state.selected_config = Some(idx);
-            state.startup_dialog_state.apply_config_defaults();
+            // Task 10b: Use on_config_selected to handle VSCode config field population
+            state.startup_dialog_state.on_config_selected(Some(idx));
             UpdateResult::none()
         }
 
@@ -1275,14 +1315,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::StartupDialogCharInput(c) => {
-            // TODO: Handle character input for flavor/dart-defines
-            if state.startup_dialog_state.editing {
+            // Task 10b: Block input on disabled fields (VSCode configs)
+            if state.startup_dialog_state.editing && state.startup_dialog_state.flavor_editable() {
                 match state.startup_dialog_state.active_section {
                     crate::app::state::DialogSection::Flavor => {
                         state.startup_dialog_state.flavor.push(c);
+                        // Task 10c: Mark dirty for auto-save
+                        state.startup_dialog_state.mark_dirty();
                     }
                     crate::app::state::DialogSection::DartDefines => {
                         state.startup_dialog_state.dart_defines.push(c);
+                        // Task 10c: Mark dirty for auto-save
+                        state.startup_dialog_state.mark_dirty();
                     }
                     _ => {}
                 }
@@ -1291,13 +1335,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::StartupDialogBackspace => {
-            if state.startup_dialog_state.editing {
+            // Task 10b: Block backspace on disabled fields (VSCode configs)
+            if state.startup_dialog_state.editing && state.startup_dialog_state.flavor_editable() {
                 match state.startup_dialog_state.active_section {
                     crate::app::state::DialogSection::Flavor => {
                         state.startup_dialog_state.flavor.pop();
+                        // Task 10c: Mark dirty for auto-save
+                        state.startup_dialog_state.mark_dirty();
                     }
                     crate::app::state::DialogSection::DartDefines => {
                         state.startup_dialog_state.dart_defines.pop();
+                        // Task 10c: Mark dirty for auto-save
+                        state.startup_dialog_state.mark_dirty();
                     }
                     _ => {}
                 }
@@ -1309,9 +1358,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             match state.startup_dialog_state.active_section {
                 crate::app::state::DialogSection::Flavor => {
                     state.startup_dialog_state.flavor.clear();
+                    // Task 10c: Mark dirty for auto-save
+                    state.startup_dialog_state.mark_dirty();
                 }
                 crate::app::state::DialogSection::DartDefines => {
                     state.startup_dialog_state.dart_defines.clear();
+                    // Task 10c: Mark dirty for auto-save
+                    state.startup_dialog_state.mark_dirty();
                 }
                 _ => {}
             }
@@ -1319,6 +1372,103 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::StartupDialogConfirm => handle_startup_dialog_confirm(state),
+
+        Message::SaveStartupDialogConfig => {
+            let dialog = &mut state.startup_dialog_state;
+
+            // Task 10d: Handle new config creation (no config selected, user entered data)
+            if dialog.creating_new_config && dialog.dirty {
+                // Don't create empty config
+                if dialog.flavor.is_empty() && dialog.dart_defines.is_empty() {
+                    dialog.creating_new_config = false;
+                    dialog.mark_saved();
+                    return UpdateResult::none();
+                }
+
+                let project_path = state.project_path.clone();
+                let new_config = crate::config::LaunchConfig {
+                    name: dialog.new_config_name.clone(),
+                    device: "auto".to_string(),
+                    mode: dialog.mode,
+                    flavor: if dialog.flavor.is_empty() {
+                        None
+                    } else {
+                        Some(dialog.flavor.clone())
+                    },
+                    dart_defines: crate::config::parse_dart_defines(&dialog.dart_defines),
+                    ..Default::default()
+                };
+
+                match crate::config::add_launch_config(&project_path, new_config) {
+                    Ok(()) => {
+                        tracing::info!("Created new config: {}", dialog.new_config_name);
+
+                        // Reload configs to show the new one
+                        let reloaded = crate::config::load_all_configs(&project_path);
+
+                        // Find the actual name (may have been renamed due to collision)
+                        let new_idx = reloaded
+                            .configs
+                            .iter()
+                            .position(|c| c.config.name.starts_with(&dialog.new_config_name))
+                            .or_else(|| {
+                                // Fallback: find last config (most recently added)
+                                if !reloaded.configs.is_empty() {
+                                    Some(reloaded.configs.len() - 1)
+                                } else {
+                                    None
+                                }
+                            });
+
+                        let actual_name = new_idx
+                            .and_then(|idx| reloaded.configs.get(idx))
+                            .map(|c| c.config.name.clone())
+                            .unwrap_or_else(|| dialog.new_config_name.clone());
+
+                        dialog.configs = reloaded;
+                        dialog.selected_config = new_idx;
+                        dialog.creating_new_config = false;
+                        dialog.editing_config_name = Some(actual_name);
+                        dialog.mark_saved();
+                    }
+                    Err(e) => {
+                        warn!("Failed to create config: {}", e);
+                        // Could show error to user in the future
+                    }
+                }
+            }
+            // Task 10c: Save FDemon config edits (flavor, dart_defines)
+            else if let Some(ref config_name) = dialog.editing_config_name {
+                if dialog.dirty {
+                    let project_path = state.project_path.clone();
+                    let name = config_name.clone();
+                    let flavor = dialog.flavor.clone();
+                    let dart_defines = dialog.dart_defines.clone();
+
+                    // Save flavor
+                    if let Err(e) = crate::config::update_launch_config_field(
+                        &project_path,
+                        &name,
+                        "flavor",
+                        &flavor,
+                    ) {
+                        warn!("Failed to save flavor: {}", e);
+                    }
+
+                    // Save dart_defines
+                    if let Err(e) = crate::config::update_launch_config_dart_defines(
+                        &project_path,
+                        &name,
+                        &dart_defines,
+                    ) {
+                        warn!("Failed to save dart_defines: {}", e);
+                    }
+
+                    dialog.mark_saved();
+                }
+            }
+            UpdateResult::none()
+        }
 
         Message::StartupDialogRefreshDevices => {
             // Mark as refreshing (shows loading indicator but keeps existing devices)
@@ -1334,7 +1484,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::StartupDialogEnterEdit => {
-            state.startup_dialog_state.enter_edit();
+            // Task 10b: Prevent entering edit mode on disabled fields
+            if state.startup_dialog_state.flavor_editable() {
+                state.startup_dialog_state.enter_edit();
+            }
             UpdateResult::none()
         }
 
@@ -1513,6 +1666,55 @@ fn rescan_links_if_active(state: &mut AppState) {
 
 /// Handle startup dialog confirm (launch session with selected config and device)
 fn handle_startup_dialog_confirm(state: &mut AppState) -> UpdateResult {
+    // Task 10d: Save config before launching if dirty (user clicked launch before debounce)
+    if state.startup_dialog_state.dirty {
+        if state.startup_dialog_state.creating_new_config {
+            // Save new config synchronously before launch
+            if !state.startup_dialog_state.flavor.is_empty()
+                || !state.startup_dialog_state.dart_defines.is_empty()
+            {
+                let project_path = state.project_path.clone();
+                let dialog = &mut state.startup_dialog_state;
+
+                let new_config = crate::config::LaunchConfig {
+                    name: dialog.new_config_name.clone(),
+                    device: "auto".to_string(),
+                    mode: dialog.mode,
+                    flavor: if dialog.flavor.is_empty() {
+                        None
+                    } else {
+                        Some(dialog.flavor.clone())
+                    },
+                    dart_defines: crate::config::parse_dart_defines(&dialog.dart_defines),
+                    ..Default::default()
+                };
+
+                if let Ok(()) = crate::config::add_launch_config(&project_path, new_config) {
+                    tracing::info!(
+                        "Created new config before launch: {}",
+                        dialog.new_config_name
+                    );
+                    dialog.creating_new_config = false;
+                }
+            }
+        } else if let Some(ref config_name) = state.startup_dialog_state.editing_config_name {
+            // Save existing config edits before launch
+            let project_path = state.project_path.clone();
+            let name = config_name.clone();
+            let flavor = state.startup_dialog_state.flavor.clone();
+            let dart_defines = state.startup_dialog_state.dart_defines.clone();
+
+            let _ =
+                crate::config::update_launch_config_field(&project_path, &name, "flavor", &flavor);
+            let _ = crate::config::update_launch_config_dart_defines(
+                &project_path,
+                &name,
+                &dart_defines,
+            );
+        }
+        state.startup_dialog_state.mark_saved();
+    }
+
     let dialog = &state.startup_dialog_state;
 
     // Get selected device (required)
@@ -1546,7 +1748,7 @@ fn handle_startup_dialog_confirm(state: &mut AppState) -> UpdateResult {
 
             // Override dart-defines if user entered any
             if has_custom_defines {
-                cfg.dart_defines = parse_dart_defines(&dialog.dart_defines);
+                cfg.dart_defines = crate::config::parse_dart_defines(&dialog.dart_defines);
             }
 
             Some(cfg)
@@ -1563,7 +1765,7 @@ fn handle_startup_dialog_confirm(state: &mut AppState) -> UpdateResult {
                     None
                 },
                 dart_defines: if has_custom_defines {
-                    parse_dart_defines(&dialog.dart_defines)
+                    crate::config::parse_dart_defines(&dialog.dart_defines)
                 } else {
                     std::collections::HashMap::new()
                 },
@@ -1609,59 +1811,4 @@ fn handle_startup_dialog_confirm(state: &mut AppState) -> UpdateResult {
     }
 }
 
-/// Parse dart-defines string into HashMap
-///
-/// Format: "KEY=VALUE,KEY2=VALUE2"
-fn parse_dart_defines(input: &str) -> std::collections::HashMap<String, String> {
-    input
-        .split(',')
-        .filter_map(|pair| {
-            let mut parts = pair.splitn(2, '=');
-            let key = parts.next()?.trim().to_string();
-            let value = parts.next()?.trim().to_string();
-            if key.is_empty() {
-                None
-            } else {
-                Some((key, value))
-            }
-        })
-        .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_dart_defines() {
-        let input = "API_URL=https://api.com,DEBUG=true";
-        let result = parse_dart_defines(input);
-
-        assert_eq!(result.get("API_URL"), Some(&"https://api.com".to_string()));
-        assert_eq!(result.get("DEBUG"), Some(&"true".to_string()));
-    }
-
-    #[test]
-    fn test_parse_dart_defines_empty() {
-        let result = parse_dart_defines("");
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_parse_dart_defines_single() {
-        let input = "KEY=VALUE";
-        let result = parse_dart_defines(input);
-
-        assert_eq!(result.len(), 1);
-        assert_eq!(result.get("KEY"), Some(&"VALUE".to_string()));
-    }
-
-    #[test]
-    fn test_parse_dart_defines_with_spaces() {
-        let input = " KEY = VALUE , KEY2 = VALUE2 ";
-        let result = parse_dart_defines(input);
-
-        assert_eq!(result.get("KEY"), Some(&"VALUE".to_string()));
-        assert_eq!(result.get("KEY2"), Some(&"VALUE2".to_string()));
-    }
-}
+// Tests have been moved to src/config/launch.rs where parse_dart_defines is now defined

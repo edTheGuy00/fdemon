@@ -221,8 +221,8 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     // Braille spinner characters for smooth animation
     const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-    // Calculate spinner index (change every ~100ms assuming 60fps)
-    let spinner_idx = ((loading.animation_frame / 6) as usize) % SPINNER.len();
+    // Direct modulo - each tick is 100ms, each frame shows next spinner char
+    let spinner_idx = (loading.animation_frame as usize) % SPINNER.len();
     let spinner_char = SPINNER[spinner_idx];
 
     // Create centered content box

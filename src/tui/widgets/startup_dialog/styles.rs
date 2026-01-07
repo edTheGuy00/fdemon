@@ -21,3 +21,7 @@ pub const VALUE_COLOR: Color = Color::White;
 pub const PLACEHOLDER_COLOR: Color = Color::DarkGray;
 pub const ERROR_COLOR: Color = Color::Red;
 pub const LOADING_COLOR: Color = Color::Yellow;
+pub const DISABLED_COLOR: Color = Color::DarkGray;
+
+// Task 10e: New config option color
+pub const NEW_CONFIG_COLOR: Color = Color::Green;

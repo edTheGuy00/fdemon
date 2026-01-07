@@ -248,6 +248,52 @@ pub fn update_launch_config_field(
     save_launch_configs(project_path, &configs)
 }
 
+/// Update dart_defines for a launch configuration (Task 10c)
+pub fn update_launch_config_dart_defines(
+    project_path: &Path,
+    config_name: &str,
+    dart_defines_str: &str,
+) -> Result<()> {
+    let mut configs: Vec<LaunchConfig> = load_launch_configs(project_path)
+        .into_iter()
+        .map(|r| r.config)
+        .collect();
+
+    let config = configs
+        .iter_mut()
+        .find(|c| c.name == config_name)
+        .ok_or_else(|| Error::config(format!("Config '{}' not found", config_name)))?;
+
+    // Parse dart_defines from "KEY=VALUE,KEY2=VALUE2" format
+    config.dart_defines = parse_dart_defines(dart_defines_str);
+
+    save_launch_configs(project_path, &configs)
+}
+
+/// Parse dart defines from comma-separated KEY=VALUE string (Task 10c)
+pub fn parse_dart_defines(s: &str) -> std::collections::HashMap<String, String> {
+    if s.trim().is_empty() {
+        return std::collections::HashMap::new();
+    }
+
+    s.split(',')
+        .filter_map(|pair| {
+            let trimmed = pair.trim();
+            if !trimmed.contains('=') {
+                return None; // Skip entries without '='
+            }
+            let mut parts = trimmed.splitn(2, '=');
+            let key = parts.next()?.trim();
+            let value = parts.next().unwrap_or("").trim();
+            if key.is_empty() {
+                None
+            } else {
+                Some((key.to_string(), value.to_string()))
+            }
+        })
+        .collect()
+}
+
 impl LaunchConfig {
     /// Build flutter run arguments from this configuration
     pub fn build_flutter_args(&self, device_id: &str) -> Vec<String> {
@@ -1020,5 +1066,154 @@ EMPTY = ""
             loaded[0].config.dart_defines.get("DEBUG"),
             Some(&"true".to_string())
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Dart Defines Parsing Tests (Task 10c)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_dart_defines() {
+        let result = parse_dart_defines("API_URL=https://dev.com,DEBUG=true");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("API_URL"), Some(&"https://dev.com".to_string()));
+        assert_eq!(result.get("DEBUG"), Some(&"true".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_empty() {
+        let result = parse_dart_defines("");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dart_defines_whitespace() {
+        let result = parse_dart_defines("  ");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_parse_dart_defines_single_pair() {
+        let result = parse_dart_defines("KEY=value");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("KEY"), Some(&"value".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_with_spaces() {
+        let result = parse_dart_defines(" KEY1 = value1 , KEY2 = value2 ");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("KEY1"), Some(&"value1".to_string()));
+        assert_eq!(result.get("KEY2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_empty_value() {
+        let result = parse_dart_defines("KEY=");
+        assert_eq!(result.len(), 1);
+        assert_eq!(result.get("KEY"), Some(&"".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_no_equals() {
+        let result = parse_dart_defines("INVALID");
+        // Should skip invalid pairs
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_parse_dart_defines_mixed_valid_invalid() {
+        let result = parse_dart_defines("KEY1=value1,INVALID,KEY2=value2");
+        assert_eq!(result.len(), 2);
+        assert_eq!(result.get("KEY1"), Some(&"value1".to_string()));
+        assert_eq!(result.get("KEY2"), Some(&"value2".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dart_defines_with_equals_in_value() {
+        let result = parse_dart_defines("URL=https://api.com?key=value");
+        assert_eq!(result.len(), 1);
+        assert_eq!(
+            result.get("URL"),
+            Some(&"https://api.com?key=value".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_launch_config_dart_defines() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Dev".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Update dart_defines
+        update_launch_config_dart_defines(
+            temp.path(),
+            "Dev",
+            "API_URL=https://test.com,DEBUG=true",
+        )
+        .unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.dart_defines.len(), 2);
+        assert_eq!(
+            loaded[0].config.dart_defines.get("API_URL"),
+            Some(&"https://test.com".to_string())
+        );
+        assert_eq!(
+            loaded[0].config.dart_defines.get("DEBUG"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[test]
+    fn test_update_launch_config_dart_defines_empty() {
+        let temp = tempdir().unwrap();
+
+        let mut dart_defines = std::collections::HashMap::new();
+        dart_defines.insert("KEY".to_string(), "value".to_string());
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Dev".to_string(),
+                dart_defines,
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Clear dart_defines with empty string
+        update_launch_config_dart_defines(temp.path(), "Dev", "").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert!(loaded[0].config.dart_defines.is_empty());
+    }
+
+    #[test]
+    fn test_update_launch_config_dart_defines_not_found() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Dev".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        let result = update_launch_config_dart_defines(temp.path(), "NonExistent", "KEY=value");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Config 'NonExistent' not found"));
     }
 }

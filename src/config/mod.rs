@@ -13,8 +13,8 @@ pub mod vscode;
 
 pub use launch::{
     add_launch_config, create_default_launch_config, delete_launch_config, find_config_by_name,
-    get_auto_start_configs, init_launch_file, load_launch_configs, save_launch_configs,
-    update_launch_config_field,
+    get_auto_start_configs, init_launch_file, load_launch_configs, parse_dart_defines,
+    save_launch_configs, update_launch_config_dart_defines, update_launch_config_field,
 };
 pub use priority::{
     find_config, get_first_auto_start, get_first_config, load_all_configs, LoadedConfigs,

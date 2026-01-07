@@ -496,12 +496,32 @@ fn handle_key_startup_dialog(state: &AppState, key: KeyEvent) -> Option<Message>
 
         // ─────────────────────────────────────────────────────────
         // Section navigation (Tab/Shift+Tab/BackTab)
+        // Task 10b: Skip disabled fields when VSCode config selected
         // ─────────────────────────────────────────────────────────
         (KeyCode::Tab, m) if m.contains(KeyModifiers::SHIFT) => {
-            Some(Message::StartupDialogPrevSection)
+            // Navigate backward, skipping disabled sections
+            if !dialog.flavor_editable() {
+                Some(Message::StartupDialogPrevSectionSkipDisabled)
+            } else {
+                Some(Message::StartupDialogPrevSection)
+            }
         }
-        (KeyCode::BackTab, _) => Some(Message::StartupDialogPrevSection),
-        (KeyCode::Tab, KeyModifiers::NONE) => Some(Message::StartupDialogNextSection),
+        (KeyCode::BackTab, _) => {
+            // Navigate backward, skipping disabled sections
+            if !dialog.flavor_editable() {
+                Some(Message::StartupDialogPrevSectionSkipDisabled)
+            } else {
+                Some(Message::StartupDialogPrevSection)
+            }
+        }
+        (KeyCode::Tab, KeyModifiers::NONE) => {
+            // Navigate forward, skipping disabled sections
+            if !dialog.flavor_editable() {
+                Some(Message::StartupDialogNextSectionSkipDisabled)
+            } else {
+                Some(Message::StartupDialogNextSection)
+            }
+        }
 
         // ─────────────────────────────────────────────────────────
         // Enter - context sensitive (confirm or start editing)

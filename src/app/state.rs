@@ -2,6 +2,8 @@
 
 use std::path::PathBuf;
 
+use rand::Rng;
+
 use crate::config::{
     FlutterMode, LoadedConfigs, Settings, SettingsTab, SourcedConfig, UserPreferences,
 };
@@ -165,6 +167,94 @@ impl SettingsViewState {
 // Loading State (Phase 5 Task 08d)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Loading messages to cycle through during device discovery (Claude Code style gerunds)
+const LOADING_MESSAGES: &[&str] = &[
+    "Detecting devices...",
+    "Scanning for emulators...",
+    "Initializing flutter daemon...",
+    "Querying device connections...",
+    "Waking up simulators...",
+    "Consulting the device oracle...",
+    "Rummaging through USB ports...",
+    "Befriending nearby devices...",
+    "Summoning Android spirits...",
+    "Polishing iOS artifacts...",
+    "Resolving adb identity crisis...",
+    "Jiggling the USB cable...",
+    "Bribing the operating system...",
+    "Waking up the GPU hamsters...",
+    "Filtering logcat noise...",
+    "Paging Dr. Flutter...",
+    "Ignoring deprecated warnings...",
+    "Linking binary libraries...",
+    "Writing an App Store appeal email...",
+    "Demonizing Flutter daemon...",
+    "Possesing the terminal...",
+    "Negotiating with local ghosts..",
+    "Calibrating flux capacitors...",
+    "Flushing the socket buffers...",
+    "Asking the hub for directions...",
+    "Convincing the emulator it's a real phone...",
+    "Interrogating system processes...",
+    "Consulting the runes...",
+    "Tuning the JVM...",
+    "Refactoring AndroidManifest.xml...",
+    "Warming up the JIT compiler...",
+    "Waiting for Xcode to finish 'Indexing'...",
+    "Calculating safe area insets...",
+    "Convincing the simulator it has a notch...",
+    "Archiving... Validating... Distributing...",
+    "Awaiting the Future...",
+    "Consulting Guideline 4.2...",
+    "Fighting Provisioning Profiles...",
+    "Calculating the 30% cut...",
+    "Searching for the dSYM...",
+    "Asking Siri for help...",
+    "Checking IAP entitlements...",
+    "Polishing the launch screen...",
+    "Generating technical debt...",
+    "Blaming the firewall...",
+    "Sacrificing RAM to Chrome...",
+    "Waiting for Internet Explorer...",
+    "Loading... (fingers crossed)...",
+    "Reticulating splines...",
+    "Downloading Maven Central...",
+    "Feeding the Gradle Daemon...",
+    "Conversing with the build cache...",
+    "Fumigating node_modules folder...",
+    "Herding NPM packages...",
+    "Orchestrating a race condition...",
+    "Debugging the debugger...",
+    "Demystifying the provisioning profile...",
+    "Exorcising the stale cache...",
+    "Arbitrating state management conflicts...",
+    "Liquidating memory leaks...",
+    "Gambling with hot reload...",
+    "Cannibalizing system RAM...",
+    "Negotiating with the garbage collector...",
+    "Obfuscating spaghetti logic...",
+    "Rehydrating the widget tree...",
+    "Monkey-patching the framework...",
+    "Consulting the dart gods...",
+    "Polymorphing into a widget...",
+    "Hiding Android artifacts...",
+    "Hiding iOS artifacts...",
+    "Optimizing the crash loop...",
+    "Backporting the bugs...",
+    "Injecting hot-reload magic...",
+    "Overengineering 'Hello World'...",
+    "Demystifying the stack trace...",
+    "Siphoning user's data (allegedly)...",
+    "Distributing bugs evenly...",
+    "Distributing the tech debt...",
+    "Distributing spaghetti code globally...",
+    "Quantifying 'TODO' comments...",
+    "Resolving merge conflicts with a coin toss...",
+    "Git cloning node_modules...",
+    "Hammering the build button...",
+    "Hammering core #2...",
+];
+
 /// Loading state for startup initialization
 #[derive(Debug, Clone)]
 pub struct LoadingState {
@@ -172,19 +262,35 @@ pub struct LoadingState {
     pub message: String,
     /// Animation frame counter for spinner
     pub animation_frame: u64,
+    /// Current index into LOADING_MESSAGES for cycling
+    message_index: usize,
 }
 
 impl LoadingState {
-    pub fn new(message: &str) -> Self {
+    pub fn new(_message: &str) -> Self {
+        // Start at a random index for variety
+        let start_index = rand::thread_rng().gen_range(0..LOADING_MESSAGES.len());
+
         Self {
-            message: message.to_string(),
+            message: LOADING_MESSAGES[start_index].to_string(),
             animation_frame: 0,
+            message_index: start_index,
         }
     }
 
-    /// Tick animation frame
-    pub fn tick(&mut self) {
+    /// Tick animation frame and optionally cycle message
+    ///
+    /// `cycle_messages`: If true, cycle through messages every ~15 ticks (1.5 sec at 100ms)
+    pub fn tick(&mut self, cycle_messages: bool) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
+
+        if cycle_messages {
+            // Cycle message every 15 frames (~1.5 seconds at 100ms tick rate)
+            if self.animation_frame % 15 == 0 {
+                self.message_index = (self.message_index + 1) % LOADING_MESSAGES.len();
+                self.message = LOADING_MESSAGES[self.message_index].to_string();
+            }
+        }
     }
 
     /// Update message
@@ -271,6 +377,33 @@ pub struct StartupDialogState {
 
     /// Animation frame for loading indicator
     pub animation_frame: u64,
+
+    // ─────────────────────────────────────────────────────────
+    // Auto-save State (Task 10c)
+    // ─────────────────────────────────────────────────────────
+    /// Name of the currently selected fdemon config (for saving edits)
+    pub editing_config_name: Option<String>,
+
+    /// Whether there are unsaved changes
+    pub dirty: bool,
+
+    /// Timestamp of last edit (for debouncing)
+    pub last_edit_time: Option<std::time::Instant>,
+
+    // ─────────────────────────────────────────────────────────
+    // No-Config Auto-save State (Task 10d)
+    // ─────────────────────────────────────────────────────────
+    /// True if we're creating a new config from scratch (no selection)
+    pub creating_new_config: bool,
+
+    /// Name for the new config being created
+    pub new_config_name: String,
+
+    // ─────────────────────────────────────────────────────────
+    // "New Config" Option (Task 10e)
+    // ─────────────────────────────────────────────────────────
+    /// Whether the "+ New config" option is selected
+    pub new_config_selected: bool,
 }
 
 impl Default for StartupDialogState {
@@ -289,6 +422,12 @@ impl Default for StartupDialogState {
             refreshing: false,
             error: None,
             animation_frame: 0,
+            editing_config_name: None,
+            dirty: false,
+            last_edit_time: None,
+            creating_new_config: false,
+            new_config_name: "Default".to_string(),
+            new_config_selected: false,
         }
     }
 }
@@ -349,18 +488,101 @@ impl StartupDialogState {
         self.selected_device.is_some()
     }
 
+    // ─────────────────────────────────────────────────────────
+    // "New Config" Option Helpers (Task 10e)
+    // ─────────────────────────────────────────────────────────
+
+    /// Should show "+ New config" option?
+    /// Show when there are any configs (VSCode or FDemon)
+    pub fn should_show_new_config_option(&self) -> bool {
+        !self.configs.configs.is_empty()
+    }
+
+    /// Total items in config list (including "+ New config" if applicable)
+    pub fn config_list_len(&self) -> usize {
+        let base = self.configs.configs.len();
+        if self.should_show_new_config_option() {
+            base + 1 // +1 for "+ New config"
+        } else {
+            base
+        }
+    }
+
+    /// Handle navigation down in config list (with "+ New config" support)
+    pub fn navigate_config_down(&mut self) {
+        if self.new_config_selected {
+            // From "+ New config" -> wrap to first config
+            self.new_config_selected = false;
+            self.selected_config = if self.configs.configs.is_empty() {
+                None
+            } else {
+                Some(0)
+            };
+        } else if let Some(idx) = self.selected_config {
+            if idx >= self.configs.configs.len().saturating_sub(1) {
+                // At last real config -> go to "+ New config" if available
+                if self.should_show_new_config_option() {
+                    self.new_config_selected = true;
+                    self.selected_config = None;
+                } else {
+                    // Wrap to first
+                    self.selected_config = Some(0);
+                }
+            } else {
+                self.selected_config = Some(idx + 1);
+            }
+        } else {
+            // No selection -> select first
+            self.selected_config = Some(0);
+        }
+
+        self.on_selection_changed();
+    }
+
+    /// Handle navigation up in config list (with "+ New config" support)
+    pub fn navigate_config_up(&mut self) {
+        if self.new_config_selected {
+            // From "+ New config" -> go to last real config
+            self.new_config_selected = false;
+            if !self.configs.configs.is_empty() {
+                self.selected_config = Some(self.configs.configs.len() - 1);
+            }
+        } else if let Some(idx) = self.selected_config {
+            if idx == 0 {
+                // At first config -> go to "+ New config" or wrap
+                if self.should_show_new_config_option() {
+                    self.new_config_selected = true;
+                    self.selected_config = None;
+                } else {
+                    // Wrap to last
+                    self.selected_config = Some(self.configs.configs.len().saturating_sub(1));
+                }
+            } else {
+                self.selected_config = Some(idx - 1);
+            }
+        }
+
+        self.on_selection_changed();
+    }
+
+    /// Handle selection change (used by navigate_config_down/up)
+    fn on_selection_changed(&mut self) {
+        if self.new_config_selected {
+            // Enable editing mode for new config
+            self.creating_new_config = true;
+            self.editing_config_name = None;
+            // Keep existing field values (user might switch back and forth)
+        } else if let Some(idx) = self.selected_config {
+            self.on_config_selected(Some(idx));
+        }
+    }
+
     /// Navigate up in current section
     pub fn navigate_up(&mut self) {
         match self.active_section {
             DialogSection::Configs => {
-                if let Some(idx) = self.selected_config {
-                    if idx > 0 {
-                        self.selected_config = Some(idx - 1);
-                    } else {
-                        // Wrap to end or set to None (no config)
-                        self.selected_config = Some(self.configs.configs.len().saturating_sub(1));
-                    }
-                }
+                // Task 10e: Use new navigate_config_up for proper "+ New config" handling
+                self.navigate_config_up();
             }
             DialogSection::Mode => {
                 self.mode = match self.mode {
@@ -386,11 +608,8 @@ impl StartupDialogState {
     pub fn navigate_down(&mut self) {
         match self.active_section {
             DialogSection::Configs => {
-                if !self.configs.configs.is_empty() {
-                    let max = self.configs.configs.len() - 1;
-                    let current = self.selected_config.unwrap_or(0);
-                    self.selected_config = Some(if current >= max { 0 } else { current + 1 });
-                }
+                // Task 10e: Use new navigate_config_down for proper "+ New config" handling
+                self.navigate_config_down();
             }
             DialogSection::Mode => {
                 self.mode = match self.mode {
@@ -481,6 +700,136 @@ impl StartupDialogState {
             }
         }
     }
+
+    // ─────────────────────────────────────────────────────────
+    // VSCode Config Field Disabling (Task 10b)
+    // ─────────────────────────────────────────────────────────
+
+    /// Whether flavor/dart_defines fields are editable
+    /// VSCode configs have these fields disabled (read-only)
+    /// Task 10e: "+ New config" option makes fields editable
+    pub fn flavor_editable(&self) -> bool {
+        // Editable if "+ New config" is selected
+        if self.new_config_selected {
+            return true;
+        }
+
+        match self.selected_config {
+            Some(idx) => self
+                .configs
+                .configs
+                .get(idx)
+                .map(|c| c.source != crate::config::ConfigSource::VSCode)
+                .unwrap_or(true),
+            None => true, // No config selected = editable
+        }
+    }
+
+    /// Get display value for flavor (from config if VSCode, else manual input)
+    pub fn flavor_display(&self) -> &str {
+        if let Some(idx) = self.selected_config {
+            if let Some(config) = self.configs.configs.get(idx) {
+                if config.source == crate::config::ConfigSource::VSCode {
+                    // Show config value (read-only)
+                    return config.config.flavor.as_deref().unwrap_or("");
+                }
+            }
+        }
+        &self.flavor
+    }
+
+    /// Get display value for dart_defines (from config if VSCode, else manual input)
+    pub fn dart_defines_display(&self) -> String {
+        if let Some(idx) = self.selected_config {
+            if let Some(config) = self.configs.configs.get(idx) {
+                if config.source == crate::config::ConfigSource::VSCode {
+                    // Show config value (read-only)
+                    return format_dart_defines(&config.config.dart_defines);
+                }
+            }
+        }
+        self.dart_defines.clone()
+    }
+
+    /// Update field values when config selection changes
+    pub fn on_config_selected(&mut self, idx: Option<usize>) {
+        self.selected_config = idx;
+
+        // Clear dirty state when changing selection
+        self.dirty = false;
+        self.last_edit_time = None;
+        self.editing_config_name = None;
+        self.creating_new_config = false; // Task 10d: Reset new config flag
+
+        // If VSCode config, populate fields with config values (read-only display)
+        // If FDemon config, auto-fill fields and enable auto-save
+        // If no config, keep current manual values
+        if let Some(i) = idx {
+            if let Some(config) = self.configs.configs.get(i) {
+                if config.source == crate::config::ConfigSource::VSCode {
+                    // Show config values in fields (read-only)
+                    self.flavor = config.config.flavor.clone().unwrap_or_default();
+                    self.dart_defines = format_dart_defines(&config.config.dart_defines);
+                    self.mode = config.config.mode;
+                } else if config.source == crate::config::ConfigSource::FDemon {
+                    // Task 10c: Auto-fill fields from FDemon config
+                    self.mode = config.config.mode;
+                    self.flavor = config.config.flavor.clone().unwrap_or_default();
+                    self.dart_defines = format_dart_defines(&config.config.dart_defines);
+
+                    // Track config name for auto-save
+                    self.editing_config_name = Some(config.config.name.clone());
+                }
+            }
+        }
+    }
+
+    /// Check if we should create a new config on save (Task 10d)
+    pub fn should_create_new_config(&self) -> bool {
+        // No config selected AND user has entered something
+        self.selected_config.is_none() && (!self.flavor.is_empty() || !self.dart_defines.is_empty())
+    }
+
+    /// Mark as dirty and record edit time (Task 10c)
+    /// Also flags for new config creation if no config selected (Task 10d)
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+        self.last_edit_time = Some(std::time::Instant::now());
+
+        // If no config selected and user is entering data, flag for new config (Task 10d)
+        if self.selected_config.is_none()
+            && !self.creating_new_config
+            && (!self.flavor.is_empty() || !self.dart_defines.is_empty())
+        {
+            self.creating_new_config = true;
+        }
+    }
+
+    /// Check if debounce period has passed (500ms since last edit) (Task 10c)
+    pub fn should_save(&self) -> bool {
+        if !self.dirty {
+            return false;
+        }
+        match self.last_edit_time {
+            Some(t) => t.elapsed() >= std::time::Duration::from_millis(500),
+            None => false,
+        }
+    }
+
+    /// Clear dirty state after save (Task 10c)
+    pub fn mark_saved(&mut self) {
+        self.dirty = false;
+        self.last_edit_time = None;
+    }
+}
+
+/// Helper function to format dart-defines HashMap into comma-separated string
+fn format_dart_defines(defines: &std::collections::HashMap<String, String>) -> String {
+    defines
+        .iter()
+        .map(|(k, v)| format!("{}={}", k, v))
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Complete application state (the Model in TEA)
@@ -678,11 +1027,16 @@ impl AppState {
         }
     }
 
-    /// Tick loading animation
-    pub fn tick_loading_animation(&mut self) {
+    /// Tick loading animation with optional message cycling
+    pub fn tick_loading_animation_with_cycling(&mut self, cycle_messages: bool) {
         if let Some(ref mut loading) = self.loading_state {
-            loading.tick();
+            loading.tick(cycle_messages);
         }
+    }
+
+    /// Tick loading animation (no message cycling - backward compat)
+    pub fn tick_loading_animation(&mut self) {
+        self.tick_loading_animation_with_cycling(false);
     }
 
     // ─────────────────────────────────────────────────────────
@@ -965,16 +1319,17 @@ mod tests {
     #[test]
     fn test_loading_state_creation() {
         let loading = LoadingState::new("Test message");
-        assert_eq!(loading.message, "Test message");
+        // Should start with one of the LOADING_MESSAGES, not the passed message
+        assert!(LOADING_MESSAGES.contains(&loading.message.as_str()));
         assert_eq!(loading.animation_frame, 0);
     }
 
     #[test]
     fn test_loading_state_tick() {
         let mut loading = LoadingState::new("Test");
-        loading.tick();
+        loading.tick(false);
         assert_eq!(loading.animation_frame, 1);
-        loading.tick();
+        loading.tick(false);
         assert_eq!(loading.animation_frame, 2);
     }
 
@@ -982,8 +1337,91 @@ mod tests {
     fn test_loading_state_tick_wraps() {
         let mut loading = LoadingState::new("Test");
         loading.animation_frame = u64::MAX;
-        loading.tick();
+        loading.tick(false);
         assert_eq!(loading.animation_frame, 0);
+    }
+
+    #[test]
+    fn test_loading_state_random_start() {
+        // Run multiple times to verify randomness (statistically)
+        let mut seen_indices: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        for _ in 0..20 {
+            let loading = LoadingState::new("ignored");
+            seen_indices.insert(loading.message.clone());
+        }
+
+        // With 10 messages and 20 trials, we should see multiple different starting messages
+        assert!(
+            seen_indices.len() > 1,
+            "Should have random starting messages, saw {} unique messages",
+            seen_indices.len()
+        );
+    }
+
+    #[test]
+    fn test_loading_state_message_cycling() {
+        let mut loading = LoadingState::new("ignored");
+        let initial_message = loading.message.clone();
+
+        // First 14 ticks - no change (cycle at 15)
+        for _ in 0..14 {
+            loading.tick(true);
+        }
+        assert_eq!(loading.message, initial_message);
+
+        // 12th tick - first cycle
+        loading.tick(true);
+        assert_ne!(
+            loading.message, initial_message,
+            "Message should change after 15 ticks"
+        );
+
+        // After 30 total ticks - should be on third message
+        let second_message = loading.message.clone();
+        for _ in 0..15 {
+            loading.tick(true);
+        }
+        // Message should have changed again
+        assert_ne!(loading.message, second_message);
+    }
+
+    #[test]
+    fn test_loading_state_wraps_around() {
+        let mut loading = LoadingState::new("ignored");
+        let start_message = loading.message.clone();
+
+        // Cycle through all 84 messages (84 * 15 = 1260 ticks)
+        for _ in 0..1260 {
+            loading.tick(true);
+        }
+
+        // Should have wrapped back to starting message
+        assert_eq!(loading.message, start_message);
+    }
+
+    #[test]
+    fn test_loading_spinner_speed() {
+        let mut loading = LoadingState::new("Test");
+        let frame0 = loading.animation_frame;
+        loading.tick(false);
+        assert_eq!(loading.animation_frame, frame0 + 1);
+    }
+
+    #[test]
+    fn test_loading_no_cycle_when_disabled() {
+        let mut loading = LoadingState::new("ignored");
+        let initial_message = loading.message.clone();
+
+        // Tick without cycling
+        for _ in 0..50 {
+            loading.tick(false);
+        }
+
+        assert_eq!(
+            loading.message, initial_message,
+            "Message should not change when cycling disabled"
+        );
     }
 
     #[test]
@@ -1000,7 +1438,8 @@ mod tests {
 
         assert_eq!(state.ui_mode, UiMode::Loading);
         assert!(state.loading_state.is_some());
-        assert_eq!(state.loading_state.as_ref().unwrap().message, "Loading...");
+        // Message will be one of LOADING_MESSAGES (random start), not the passed message
+        assert!(LOADING_MESSAGES.contains(&state.loading_state.as_ref().unwrap().message.as_str()));
     }
 
     #[test]
@@ -1170,5 +1609,649 @@ mod tests {
         assert!(state.startup_dialog_state.loading);
         assert!(!state.startup_dialog_state.refreshing);
         assert_eq!(state.startup_dialog_state.selected_device, None);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // VSCode Config Field Disabling Tests (Task 10b)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_flavor_editable_vscode() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+
+        assert!(!state.flavor_editable());
+    }
+
+    #[test]
+    fn test_flavor_editable_fdemon() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::FDemon,
+            display_name: "FDemon".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+
+        assert!(state.flavor_editable());
+    }
+
+    #[test]
+    fn test_flavor_editable_no_config() {
+        let state = StartupDialogState::new();
+        assert!(state.flavor_editable());
+    }
+
+    #[test]
+    fn test_flavor_display_vscode() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        let mut config = LaunchConfig::default();
+        config.flavor = Some("production".to_string());
+        configs.configs.push(SourcedConfig {
+            config,
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+        state.flavor = "manual".to_string(); // Should be ignored
+
+        assert_eq!(state.flavor_display(), "production");
+    }
+
+    #[test]
+    fn test_flavor_display_fdemon() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::FDemon,
+            display_name: "FDemon".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+        state.flavor = "manual".to_string();
+
+        assert_eq!(state.flavor_display(), "manual");
+    }
+
+    #[test]
+    fn test_dart_defines_display_vscode() {
+        use crate::config::{ConfigSource, LaunchConfig};
+        use std::collections::HashMap;
+
+        let mut configs = LoadedConfigs::default();
+        let mut config = LaunchConfig::default();
+        let mut defines = HashMap::new();
+        defines.insert("API_URL".to_string(), "https://api.example.com".to_string());
+        defines.insert("DEBUG".to_string(), "true".to_string());
+        config.dart_defines = defines;
+        configs.configs.push(SourcedConfig {
+            config,
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+        state.dart_defines = "manual=value".to_string(); // Should be ignored
+
+        let display = state.dart_defines_display();
+        // Note: HashMap iteration order is not guaranteed, so check both are present
+        assert!(display.contains("API_URL=https://api.example.com"));
+        assert!(display.contains("DEBUG=true"));
+    }
+
+    #[test]
+    fn test_on_config_selected_vscode() {
+        use crate::config::{ConfigSource, FlutterMode, LaunchConfig};
+        use std::collections::HashMap;
+
+        let mut configs = LoadedConfigs::default();
+        let mut config = LaunchConfig::default();
+        config.flavor = Some("production".to_string());
+        config.mode = FlutterMode::Release;
+        let mut defines = HashMap::new();
+        defines.insert("KEY".to_string(), "value".to_string());
+        config.dart_defines = defines;
+        configs.configs.push(SourcedConfig {
+            config,
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.flavor = "initial".to_string();
+        state.mode = FlutterMode::Debug;
+
+        state.on_config_selected(Some(0));
+
+        assert_eq!(state.flavor, "production");
+        assert_eq!(state.mode, FlutterMode::Release);
+        assert!(state.dart_defines.contains("KEY=value"));
+    }
+
+    #[test]
+    fn test_on_config_selected_fdemon() {
+        use crate::config::{ConfigSource, FlutterMode, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        let mut config = LaunchConfig::default();
+        config.flavor = Some("dev".to_string());
+        config.mode = FlutterMode::Profile;
+        configs.configs.push(SourcedConfig {
+            config,
+            source: ConfigSource::FDemon,
+            display_name: "FDemon".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.flavor = "manual".to_string();
+        state.mode = FlutterMode::Debug;
+
+        state.on_config_selected(Some(0));
+
+        // Task 10c: FDemon configs now auto-populate fields (for auto-save)
+        assert_eq!(state.flavor, "dev");
+        assert_eq!(state.mode, FlutterMode::Profile);
+    }
+
+    #[test]
+    fn test_on_config_selected_none() {
+        let mut state = StartupDialogState::new();
+        state.flavor = "test".to_string();
+        state.on_config_selected(None);
+
+        // Should not change anything
+        assert_eq!(state.flavor, "test");
+        assert!(state.selected_config.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // FDemon Config Auto-fill and Auto-save Tests (Task 10c)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_on_config_selected_fills_fields_fdemon() {
+        use crate::config::{ConfigSource, LaunchConfig};
+        use std::collections::HashMap;
+
+        let mut configs = LoadedConfigs::default();
+        let mut dart_defines = HashMap::new();
+        dart_defines.insert("API_URL".to_string(), "https://dev.com".to_string());
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Dev".to_string(),
+                flavor: Some("development".to_string()),
+                mode: FlutterMode::Profile,
+                dart_defines,
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Dev".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.on_config_selected(Some(0));
+
+        assert_eq!(state.flavor, "development");
+        assert_eq!(state.mode, FlutterMode::Profile);
+        assert!(state.dart_defines.contains("API_URL=https://dev.com"));
+        assert_eq!(state.editing_config_name, Some("Dev".to_string()));
+    }
+
+    #[test]
+    fn test_mark_dirty_and_should_save() {
+        let mut state = StartupDialogState::new();
+
+        assert!(!state.should_save());
+
+        state.mark_dirty();
+        assert!(state.dirty);
+        assert!(state.last_edit_time.is_some());
+        assert!(!state.should_save()); // Not enough time passed
+
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        assert!(state.should_save()); // Now should save
+
+        state.mark_saved();
+        assert!(!state.dirty);
+        assert!(state.last_edit_time.is_none());
+        assert!(!state.should_save());
+    }
+
+    #[test]
+    fn test_mark_dirty_updates_timestamp() {
+        let mut state = StartupDialogState::new();
+
+        state.mark_dirty();
+        let first_time = state.last_edit_time;
+        assert!(first_time.is_some());
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        state.mark_dirty();
+        let second_time = state.last_edit_time;
+
+        assert!(second_time > first_time);
+    }
+
+    #[test]
+    fn test_should_save_not_dirty() {
+        let mut state = StartupDialogState::new();
+        state.last_edit_time = Some(std::time::Instant::now());
+
+        assert!(!state.should_save()); // Not dirty
+    }
+
+    #[test]
+    fn test_should_save_no_timestamp() {
+        let mut state = StartupDialogState::new();
+        state.dirty = true;
+        state.last_edit_time = None;
+
+        assert!(!state.should_save()); // No timestamp
+    }
+
+    #[test]
+    fn test_on_config_selected_clears_dirty() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Dev".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Dev".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.dirty = true;
+        state.last_edit_time = Some(std::time::Instant::now());
+        state.editing_config_name = Some("Old".to_string());
+
+        state.on_config_selected(Some(0));
+
+        assert!(!state.dirty);
+        assert!(state.last_edit_time.is_none());
+        assert_eq!(state.editing_config_name, Some("Dev".to_string()));
+    }
+
+    #[test]
+    fn test_on_config_selected_fdemon_tracks_config_name() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "MyConfig".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "MyConfig".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.on_config_selected(Some(0));
+
+        assert_eq!(state.editing_config_name, Some("MyConfig".to_string()));
+    }
+
+    #[test]
+    fn test_on_config_selected_vscode_does_not_track() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "VSCode".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.on_config_selected(Some(0));
+
+        assert!(state.editing_config_name.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // No-Config Auto-save Tests (Task 10d)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_should_create_new_config() {
+        let mut state = StartupDialogState::new();
+        state.selected_config = None;
+
+        // Initially false - no data entered
+        assert!(!state.should_create_new_config());
+
+        // After entering flavor
+        state.flavor = "test".to_string();
+        assert!(state.should_create_new_config());
+
+        // After entering dart_defines
+        state.flavor = String::new();
+        state.dart_defines = "KEY=value".to_string();
+        assert!(state.should_create_new_config());
+
+        // Both empty again - false
+        state.dart_defines = String::new();
+        assert!(!state.should_create_new_config());
+    }
+
+    #[test]
+    fn test_should_create_new_config_with_selected() {
+        let mut state = StartupDialogState::new();
+        state.selected_config = Some(0);
+        state.flavor = "test".to_string();
+
+        // Should not create when config is selected
+        assert!(!state.should_create_new_config());
+    }
+
+    #[test]
+    fn test_mark_dirty_sets_creating_flag() {
+        let mut state = StartupDialogState::new();
+        state.selected_config = None;
+        state.flavor = "test".to_string();
+
+        state.mark_dirty();
+
+        assert!(state.creating_new_config);
+        assert!(state.dirty);
+        assert!(state.last_edit_time.is_some());
+    }
+
+    #[test]
+    fn test_mark_dirty_no_create_if_empty() {
+        let mut state = StartupDialogState::new();
+        state.selected_config = None;
+        state.flavor = String::new();
+        state.dart_defines = String::new();
+
+        state.mark_dirty();
+
+        assert!(!state.creating_new_config);
+    }
+
+    #[test]
+    fn test_mark_dirty_no_create_if_already_creating() {
+        let mut state = StartupDialogState::new();
+        state.selected_config = None;
+        state.flavor = "test".to_string();
+
+        state.mark_dirty();
+        assert!(state.creating_new_config);
+
+        // Shouldn't toggle off
+        state.flavor = "test2".to_string();
+        state.mark_dirty();
+        assert!(state.creating_new_config);
+    }
+
+    #[test]
+    fn test_on_config_selected_clears_creating_flag() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Dev".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Dev".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.creating_new_config = true;
+        state.dirty = true;
+
+        state.on_config_selected(Some(0));
+
+        assert!(!state.creating_new_config);
+        assert!(!state.dirty);
+    }
+
+    #[test]
+    fn test_default_new_config_name() {
+        let state = StartupDialogState::new();
+        assert_eq!(state.new_config_name, "Default");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // "New Config" Option Tests (Task 10e)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_should_show_new_config_option() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let state = StartupDialogState::with_configs(configs);
+        assert!(state.should_show_new_config_option());
+    }
+
+    #[test]
+    fn test_should_show_new_config_option_empty() {
+        let state = StartupDialogState::new();
+        assert!(!state.should_show_new_config_option());
+    }
+
+    #[test]
+    fn test_config_list_len_includes_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let state = StartupDialogState::with_configs(configs);
+        assert_eq!(state.config_list_len(), 2); // 1 config + 1 "New config"
+    }
+
+    #[test]
+    fn test_config_list_len_without_new_config() {
+        let state = StartupDialogState::new();
+        assert_eq!(state.config_list_len(), 0);
+    }
+
+    #[test]
+    fn test_navigate_config_down_to_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+
+        state.navigate_config_down();
+
+        assert!(state.new_config_selected);
+        assert!(state.selected_config.is_none());
+    }
+
+    #[test]
+    fn test_navigate_config_up_from_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.new_config_selected = true;
+        state.selected_config = None;
+
+        state.navigate_config_up();
+
+        assert!(!state.new_config_selected);
+        assert_eq!(state.selected_config, Some(0));
+    }
+
+    #[test]
+    fn test_navigate_config_down_wraps_from_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.new_config_selected = true;
+        state.selected_config = None;
+
+        state.navigate_config_down();
+
+        assert!(!state.new_config_selected);
+        assert_eq!(state.selected_config, Some(0));
+    }
+
+    #[test]
+    fn test_navigate_config_up_wraps_from_first_to_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+
+        state.navigate_config_up();
+
+        assert!(state.new_config_selected);
+        assert!(state.selected_config.is_none());
+    }
+
+    #[test]
+    fn test_flavor_editable_new_config_selected() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.new_config_selected = true;
+
+        assert!(state.flavor_editable());
+    }
+
+    #[test]
+    fn test_on_selection_changed_sets_creating_new_config() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.creating_new_config = false;
+        state.new_config_selected = true;
+
+        state.on_selection_changed();
+
+        assert!(state.creating_new_config);
+        assert!(state.editing_config_name.is_none());
+    }
+
+    #[test]
+    fn test_navigate_with_multiple_configs() {
+        use crate::config::{ConfigSource, LaunchConfig};
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Config1".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Config1".to_string(),
+        });
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Config2".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "Config2".to_string(),
+        });
+
+        let mut state = StartupDialogState::with_configs(configs);
+        state.selected_config = Some(0);
+
+        // Navigate down to second config
+        state.navigate_config_down();
+        assert_eq!(state.selected_config, Some(1));
+        assert!(!state.new_config_selected);
+
+        // Navigate down to "+ New config"
+        state.navigate_config_down();
+        assert!(state.new_config_selected);
+        assert!(state.selected_config.is_none());
+
+        // Navigate down wraps to first
+        state.navigate_config_down();
+        assert_eq!(state.selected_config, Some(0));
+        assert!(!state.new_config_selected);
+    }
+
+    #[test]
+    fn test_default_new_config_selected_false() {
+        let state = StartupDialogState::new();
+        assert!(!state.new_config_selected);
     }
 }
