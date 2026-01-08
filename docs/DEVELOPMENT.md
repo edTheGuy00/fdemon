@@ -42,6 +42,13 @@ cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings
 | `cargo test --lib` | Run unit tests only |
 | `cargo test <pattern>` | Run tests matching pattern |
 | `cargo test -- --nocapture` | Show println! output |
+| `cargo nextest run --test e2e` | Run E2E tests with retry (requires nextest) |
+| `./scripts/test-e2e.sh` | Run E2E tests with retry if nextest available |
+
+**Install cargo-nextest for enhanced testing with automatic retry:**
+```bash
+cargo install cargo-nextest --locked
+```
 
 ## File Extensions
 

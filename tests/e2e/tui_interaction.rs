@@ -4,6 +4,24 @@
 //! verification. These tests spawn actual `fdemon` processes in a pseudo-terminal
 //! and interact with them as a real user would.
 //!
+//! ## Test Categories
+//!
+//! ### TUI Tests (use `spawn()`)
+//! Tests that verify terminal rendering and visual output:
+//! - Startup header display
+//! - Status bar content
+//! - Device selector appearance
+//! - Dialog rendering
+//! - Golden file snapshots
+//!
+//! ### Event Tests (use `spawn_headless()`)
+//! Tests that verify JSON event emission:
+//! - Daemon connected events
+//! - Session lifecycle events
+//! - Error reporting format
+//!
+//! **Most tests in this file are TUI tests using the default `spawn()`.**
+//!
 //! ## Test Organization
 //!
 //! Tests are organized into logical sections:
@@ -133,8 +151,14 @@ async fn wait_for_termination(session: &mut FdemonSession) -> bool {
 }
 
 // ===========================================================================
-// TUI Interaction Tests
+// TUI TESTS
 // ===========================================================================
+// These tests verify terminal rendering using spawn() (TUI mode).
+// They check visual output, UI state, and screen content.
+
+// ─────────────────────────────────────────────────────────
+// Startup Tests
+// ─────────────────────────────────────────────────────────
 
 /// Test that fdemon shows the header bar with project name on startup
 #[tokio::test]

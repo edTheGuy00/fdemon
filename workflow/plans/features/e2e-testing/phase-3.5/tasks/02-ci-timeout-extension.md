@@ -84,4 +84,31 @@ cargo test --test e2e test_timeout_values -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/pty_utils.rs` | Added CI detection and dynamic timeout functions; replaced constant timeout references with function calls; added tests for CI detection and timeout behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **CI Detection**: Checks both `CI` and `GITHUB_ACTIONS` environment variables for broad CI platform support
+2. **Function-based Timeouts**: Converted `DEFAULT_TIMEOUT` constant to `default_timeout()` function for dynamic calculation based on CI environment
+3. **Test Isolation**: New tests save and restore environment variables to avoid interfering with other tests
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --test e2e pty_utils::tests` - Passed (11 tests, 6 ignored PTY tests)
+- `cargo test --test e2e pty_utils::tests::test_timeout_values` - Passed
+- `cargo test --test e2e pty_utils::tests::test_is_ci_detection` - Passed
+- `CI=true cargo test --test e2e pty_utils::tests::test_timeout_values` - Passed (verified 2x timeout in CI)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Environment Variable Pollution**: Tests that manipulate CI environment variables include cleanup code to restore original state, but concurrent test execution could cause interference
+2. **CI Platform Coverage**: Only checks for `CI` and `GITHUB_ACTIONS` variables; other CI platforms may use different variables (but these two cover most common cases)

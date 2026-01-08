@@ -2,6 +2,14 @@
 //!
 //! Provides helpers for spawning fdemon in a pseudo-terminal
 //! and interacting with it programmatically.
+//!
+//! ## Test Modes
+//!
+//! - **TUI Mode** (`spawn()`): Renders widgets to terminal. Use for verifying
+//!   headers, status bars, dialogs, keyboard navigation.
+//!
+//! - **Headless Mode** (`spawn_headless()`): Outputs JSON events. Use for
+//!   testing event emission and machine-readable output.
 
 #![allow(dead_code)] // Some utilities are for future tests
 
@@ -13,11 +21,30 @@ use std::time::Duration;
 #[cfg(test)]
 use serial_test::serial;
 
+/// Check if running in CI environment
+fn is_ci() -> bool {
+    std::env::var("CI").is_ok() || std::env::var("GITHUB_ACTIONS").is_ok()
+}
+
+/// Timeout multiplier for CI environments
+/// CI containers have less CPU/memory, need longer waits
+const CI_TIMEOUT_MULTIPLIER: u64 = 2;
+
 /// Default timeout for expect operations
-pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Extended in CI environments for reliability
+pub fn default_timeout() -> Duration {
+    let base = 10; // seconds
+    let multiplier = if is_ci() { CI_TIMEOUT_MULTIPLIER } else { 1 };
+    Duration::from_secs(base * multiplier)
+}
 
 /// Time to wait for graceful quit before force-killing
-const QUIT_TIMEOUT_MS: u64 = 2000;
+pub fn quit_timeout() -> Duration {
+    let base = 2000; // milliseconds
+    let multiplier = if is_ci() { CI_TIMEOUT_MULTIPLIER } else { 1 };
+    Duration::from_millis(base * multiplier)
+}
+
 /// Interval between process state checks
 const QUIT_POLL_INTERVAL_MS: u64 = 100;
 /// Time to wait between kill attempts
@@ -77,10 +104,13 @@ impl Drop for FdemonSession {
 }
 
 impl FdemonSession {
-    /// Spawn fdemon in headless mode for the given Flutter project.
+    /// Spawn fdemon in TUI mode for terminal interaction testing.
     ///
-    /// This is a convenience wrapper around [`spawn_with_args`](Self::spawn_with_args)
-    /// that automatically passes the `--headless` flag for non-interactive testing.
+    /// This spawns fdemon WITHOUT the `--headless` flag so the TUI renders
+    /// to the terminal, allowing tests to verify text output like headers,
+    /// status bars, and dialogs.
+    ///
+    /// For tests that need JSON event output, use [`spawn_headless`](Self::spawn_headless).
     ///
     /// # Arguments
     ///
@@ -97,6 +127,31 @@ impl FdemonSession {
     /// - Project path is invalid
     /// - PTY spawn fails
     pub fn spawn(project_path: &Path) -> PtyResult<Self> {
+        Self::spawn_with_args(project_path, &[]) // TUI mode - renders to terminal
+    }
+
+    /// Spawn fdemon in headless mode for JSON event testing.
+    ///
+    /// Headless mode outputs NDJSON events to stdout instead of rendering
+    /// the TUI. Use this for testing event emission, not TUI appearance.
+    ///
+    /// For TUI interaction tests, use [`spawn`](Self::spawn).
+    ///
+    /// # Arguments
+    ///
+    /// * `project_path` - Path to a Flutter project directory
+    ///
+    /// # Returns
+    ///
+    /// A new `FdemonSession` ready for interaction.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if:
+    /// - fdemon binary not found (run `cargo build` first)
+    /// - Project path is invalid
+    /// - PTY spawn fails
+    pub fn spawn_headless(project_path: &Path) -> PtyResult<Self> {
         Self::spawn_with_args(project_path, &["--headless"])
     }
 
@@ -226,7 +281,7 @@ impl FdemonSession {
     ///
     /// Returns error if pattern is not matched within the timeout period.
     pub fn expect(&mut self, pattern: &str) -> PtyResult<Captures> {
-        self.expect_timeout(pattern, DEFAULT_TIMEOUT)
+        self.expect_timeout(pattern, default_timeout())
     }
 
     /// Wait for output matching a pattern with a custom timeout.
@@ -253,7 +308,7 @@ impl FdemonSession {
         let result = self.session.expect(Regex(pattern));
 
         // Restore default timeout
-        self.session.set_expect_timeout(Some(DEFAULT_TIMEOUT));
+        self.session.set_expect_timeout(Some(default_timeout()));
 
         Ok(result?)
     }
@@ -369,7 +424,7 @@ impl FdemonSession {
     /// ```
     pub fn capture_screen(&mut self) -> PtyResult<String> {
         // Save current timeout
-        let original_timeout = Some(DEFAULT_TIMEOUT);
+        let original_timeout = Some(default_timeout());
 
         // Use a shorter timeout for capture
         let capture_timeout = Duration::from_millis(CAPTURE_DELAY_MS);
@@ -530,7 +585,8 @@ impl FdemonSession {
         self.send_key('y')?;
 
         // Wait for graceful shutdown with polling
-        let iterations = QUIT_TIMEOUT_MS / QUIT_POLL_INTERVAL_MS;
+        let quit_timeout_ms = quit_timeout().as_millis() as u64;
+        let iterations = quit_timeout_ms / QUIT_POLL_INTERVAL_MS;
         for _ in 0..iterations {
             std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
             if !self.session.is_alive()? {
@@ -1053,5 +1109,91 @@ mod tests {
         let raw = "\x1b[2J\x1b[H\x1b[1;32mTest\x1b[0m\x1b[K";
         let cleaned = sanitize_for_snapshot(raw);
         assert_eq!(cleaned, "Test");
+    }
+
+    #[test]
+    fn test_timeout_values() {
+        // Test that timeout functions return expected values
+        // Note: This test verifies the base values when not in CI
+        // In CI, these would be 2x longer
+
+        // Save current CI state
+        let ci_var = std::env::var("CI");
+        let github_actions_var = std::env::var("GITHUB_ACTIONS");
+
+        // Clear CI variables to test non-CI behavior
+        std::env::remove_var("CI");
+        std::env::remove_var("GITHUB_ACTIONS");
+
+        let default = default_timeout();
+        let quit = quit_timeout();
+
+        // Non-CI: base timeouts
+        assert_eq!(default, Duration::from_secs(10));
+        assert_eq!(quit, Duration::from_millis(2000));
+
+        // Set CI environment variable
+        std::env::set_var("CI", "true");
+
+        let default_ci = default_timeout();
+        let quit_ci = quit_timeout();
+
+        // CI: 2x timeouts
+        assert_eq!(default_ci, Duration::from_secs(20));
+        assert_eq!(quit_ci, Duration::from_millis(4000));
+
+        // Restore original CI state
+        if let Ok(val) = ci_var {
+            std::env::set_var("CI", val);
+        } else {
+            std::env::remove_var("CI");
+        }
+        if let Ok(val) = github_actions_var {
+            std::env::set_var("GITHUB_ACTIONS", val);
+        } else {
+            std::env::remove_var("GITHUB_ACTIONS");
+        }
+    }
+
+    #[test]
+    fn test_is_ci_detection() {
+        // Save current CI state
+        let ci_var = std::env::var("CI");
+        let github_actions_var = std::env::var("GITHUB_ACTIONS");
+
+        // Clear CI variables
+        std::env::remove_var("CI");
+        std::env::remove_var("GITHUB_ACTIONS");
+        assert!(
+            !is_ci(),
+            "Should not detect CI without environment variables"
+        );
+
+        // Test CI=true
+        std::env::set_var("CI", "true");
+        assert!(is_ci(), "Should detect CI with CI=true");
+        std::env::remove_var("CI");
+
+        // Test GITHUB_ACTIONS=true
+        std::env::set_var("GITHUB_ACTIONS", "true");
+        assert!(is_ci(), "Should detect CI with GITHUB_ACTIONS=true");
+        std::env::remove_var("GITHUB_ACTIONS");
+
+        // Test both
+        std::env::set_var("CI", "true");
+        std::env::set_var("GITHUB_ACTIONS", "true");
+        assert!(is_ci(), "Should detect CI with both variables set");
+
+        // Restore original CI state
+        if let Ok(val) = ci_var {
+            std::env::set_var("CI", val);
+        } else {
+            std::env::remove_var("CI");
+        }
+        if let Ok(val) = github_actions_var {
+            std::env::set_var("GITHUB_ACTIONS", val);
+        } else {
+            std::env::remove_var("GITHUB_ACTIONS");
+        }
     }
 }

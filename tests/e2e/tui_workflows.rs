@@ -1,7 +1,33 @@
-//! Complex workflow tests for end-to-end user journey verification
+//! # TUI Workflow Tests
 //!
-//! These tests cover multi-step user workflows that exercise
-//! multiple features in sequence.
+//! Complex multi-step tests that exercise user journeys through the TUI.
+//! All tests in this file use TUI mode (`spawn()`) to verify terminal output.
+//!
+//! ## Test Categories
+//!
+//! ### TUI Workflow Tests (use `spawn()`)
+//! Multi-step workflows that verify terminal UI behavior:
+//! - Complete session lifecycle (startup -> run -> reload -> quit)
+//! - Navigation flows (device selector -> escape -> quit)
+//! - Error recovery flows (crash -> error display -> quit)
+//! - Multi-session management workflows
+//!
+//! ### When to Use Headless Mode
+//!
+//! Use `spawn_headless()` when:
+//! - Testing JSON event format/content
+//! - Testing machine-readable output
+//! - NOT testing visual appearance
+//! - Implementing integration tests that don't need TUI
+//!
+//! ## Current Test Status
+//!
+//! Many workflow tests are marked `#[ignore]` because they require:
+//! - Real Flutter devices (not available in CI)
+//! - Full Flutter daemon (not mocked)
+//! - State transitions only possible with real Flutter
+//!
+//! These tests serve as documentation and can be run manually.
 //!
 //! ## Headless Mode Constraints
 //!
@@ -63,8 +89,14 @@ const INITIALIZATION_DELAY_MS: u64 = 500;
 const STATE_TRANSITION_TIMEOUT_SECS: u64 = 10;
 
 // ===========================================================================
-// Complete Session Lifecycle Test
+// TUI WORKFLOW TESTS
 // ===========================================================================
+// These tests verify multi-step user workflows using spawn() (TUI mode).
+// They check complete user journeys through the terminal interface.
+
+// ─────────────────────────────────────────────────────────
+// Complete Session Lifecycle Tests
+// ─────────────────────────────────────────────────────────
 
 /// Full session lifecycle: create -> run -> reload -> stop -> remove -> exit
 ///
@@ -197,9 +229,9 @@ async fn test_full_session_lifecycle() {
     println!("Full session lifecycle test completed successfully!");
 }
 
-// ===========================================================================
-// Simplified Lifecycle Test (Headless Compatible)
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
+// Simplified Lifecycle Tests (Headless Compatible)
+// ─────────────────────────────────────────────────────────
 
 /// Simplified lifecycle test that works in headless mode
 ///
@@ -255,9 +287,9 @@ async fn test_simplified_lifecycle_headless() {
     println!("Simplified lifecycle test completed successfully!");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Session State Machine Tests
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Verify session state transitions are valid
 ///
@@ -311,9 +343,9 @@ async fn test_session_state_machine() {
     session.kill().expect("Kill");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Multi-Key Workflow Tests (Headless Compatible)
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Test various key combinations work without crashing
 ///
@@ -395,9 +427,9 @@ async fn test_key_handling_robustness() {
     println!("Key handling robustness test completed successfully!");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Navigation Flow Tests
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Test device selector -> escape -> quit flow
 ///
@@ -496,9 +528,9 @@ async fn test_quit_cancel_flow() {
     println!("Quit cancellation flow completed successfully!");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Double-Key Shortcut Tests
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Test double-'q' quick quit shortcut
 ///
@@ -537,9 +569,9 @@ async fn test_double_q_quick_quit() {
     println!("Double-q quick quit test completed!");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Multi-Session Workflow Tests
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Multi-session workflow: create two sessions and switch between them
 ///
@@ -856,9 +888,9 @@ async fn test_session_switching_keys_headless() {
     println!("Session switching keys test completed!");
 }
 
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 // Error Recovery Workflow Tests
-// ===========================================================================
+// ─────────────────────────────────────────────────────────
 
 /// Test recovery from daemon crash (display error, allow restart)
 ///

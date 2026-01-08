@@ -87,18 +87,30 @@ cargo test --test e2e
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (none yet)
+### Files Modified
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo test --test e2e` - Pending
+| File | Changes |
+|------|---------|
+| `tests/e2e/pty_utils.rs` | Changed `spawn()` to use TUI mode (no `--headless`), added `spawn_headless()` method, updated module docs |
 
-**Notable Decisions:**
-- (none yet)
+### Notable Decisions/Tradeoffs
 
-**Risks/Limitations:**
-- (none yet)
+1. **No tests required updating to use `spawn_headless()`**: All existing tests were using `spawn()` for TUI testing, so they benefit from the change to TUI mode. The only test using `--headless` explicitly was already using `spawn_with_args()` directly (line 953).
+
+2. **Test failures are expected**: Some e2e tests now fail because they were incorrectly using headless mode before. These tests were trying to verify TUI output but couldn't because headless mode outputs JSON. This is the bug that this task fixes. The failing tests will need to be fixed in subsequent tasks (likely with timing adjustments or proper TUI interaction patterns).
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (0.24s)
+- `cargo test --test e2e pty_utils::tests` - Passed (9 tests passed, 6 ignored as expected)
+- `cargo clippy -- -D warnings` - Passed (0.27s)
+- `cargo test --test e2e` - Ran with 24 expected failures (tests that now correctly run in TUI mode but need timing/interaction fixes)
+
+### Risks/Limitations
+
+1. **Expected test failures**: 24 e2e tests now fail because they were designed for headless mode but are actually testing TUI features. These tests need to be updated in follow-up tasks to work with proper TUI mode. This is the intended outcome of this task - exposing the tests that were incorrectly using headless mode.
+
+2. **Breaking change for external users**: If anyone was depending on `spawn()` defaulting to headless mode, they'll need to switch to `spawn_headless()`. However, this is in the test utilities, not production code, so the impact is limited to test code.

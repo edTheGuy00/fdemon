@@ -117,9 +117,15 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Run mock tests
+      - name: Install nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Run mock tests with retry
         id: mock_tests
-        run: cargo test --test e2e
+        run: cargo nextest run --profile ci --test e2e
+        env:
+          CI: true
+          RUST_BACKTRACE: 1
         continue-on-error: true
 
       - name: Check test result

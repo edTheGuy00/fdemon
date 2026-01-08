@@ -109,4 +109,34 @@ cargo test --test e2e workflow
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/tui_interaction.rs` | Added module-level test category documentation explaining TUI vs Event tests; Added category section comments to group tests |
+| `tests/e2e/tui_workflows.rs` | Added comprehensive module-level documentation explaining TUI workflow tests, when to use headless mode, and current test status; Added category section comments for all test groups |
+
+### Notable Decisions/Tradeoffs
+
+1. **Category Documentation Placement**: Placed test category documentation at the module level (in `//!` doc comments) rather than inline with tests, making it immediately visible when viewing the file or reading generated documentation.
+
+2. **Section Comment Style**: Used consistent section comment format with visual separators (`// ─────────────────────────────────────────────────────────`) to clearly delineate test groups, improving readability and navigation.
+
+3. **Headless Guidance**: Added explicit guidance in `tui_workflows.rs` about when to use `spawn_headless()` vs `spawn()`, preventing future confusion about test mode selection.
+
+4. **Test Status Documentation**: Documented that many workflow tests are marked `#[ignore]` with clear explanations of why (require real Flutter devices/daemon), making it clear these are intentional and serve as documentation/manual tests.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --test e2e --no-run` - Passed (tests compile successfully)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No Functional Changes**: This task only adds documentation and comments, no functional code changes. All tests continue to work as before.
+
+2. **All `#[ignore]` Tests Have Reasons**: Verified that all ignored tests already have reason comments in the `#[ignore = "..."]` attribute format, meeting the acceptance criteria.

@@ -66,6 +66,29 @@ cargo build --release
 ./target/release/fdemon --headless tests/fixtures/simple_app
 ```
 
+### Run Tests with Retry (cargo-nextest)
+
+cargo-nextest provides enhanced testing capabilities including automatic retry for flaky tests:
+
+```bash
+# Install nextest (one-time)
+cargo install cargo-nextest --locked
+
+# Run tests with retry (default profile: 2 retries)
+cargo nextest run --test e2e
+
+# Run with CI profile (3 retries, stores output)
+cargo nextest run --profile ci --test e2e
+
+# Use convenience script (auto-detects nextest)
+./scripts/test-e2e.sh
+
+# Show detailed test timing
+cargo nextest run --test e2e --status-level all
+```
+
+**Configuration:** See `.config/nextest.toml` for retry and timeout settings.
+
 ## Test Categories
 
 ### Unit Tests
@@ -111,6 +134,12 @@ cargo test --test e2e
 
 # Run specific mock test module
 cargo test --test e2e hot_reload
+
+# Run with automatic retry (recommended for PTY tests)
+cargo nextest run --test e2e
+
+# Or use the convenience script
+./scripts/test-e2e.sh
 ```
 
 Test modules:
@@ -224,13 +253,14 @@ Runs on:
 
 Jobs:
 1. **Docker E2E Tests** - Builds Docker test image, runs all E2E scripts
-2. **Mock Daemon Tests** - Runs `cargo test --test e2e` for fast feedback
+2. **Mock Daemon Tests** - Runs `cargo nextest run --profile ci --test e2e` with automatic retry for flaky PTY tests
 
 Features:
 - BuildKit caching for faster builds
 - Test logs uploaded as artifacts (retained 7 days)
 - Configurable timeout via workflow inputs
 - Concurrent run cancellation
+- Automatic retry for flaky tests (up to 3 retries in CI)
 
 ### Unit Tests (Not Yet Implemented)
 

@@ -119,4 +119,41 @@ cargo nextest run --test e2e --status-level all
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.config/nextest.toml` | NEW - Created nextest configuration with retry profiles (default: 2 retries, ci: 3 retries) |
+| `scripts/test-e2e.sh` | NEW - Created convenience script that auto-detects nextest and falls back to cargo test |
+| `.github/workflows/e2e.yml` | Updated mock-tests job to use nextest with ci profile for automatic retry |
+| `docs/TESTING.md` | Added section on cargo-nextest usage, updated mock daemon tests section, updated CI workflows documentation |
+| `docs/DEVELOPMENT.md` | Added nextest commands to test commands table with installation instructions |
+
+### Notable Decisions/Tradeoffs
+
+1. **CI Profile vs Default Profile**: Used separate profiles for CI (3 retries) vs local development (2 retries) to balance reliability with feedback speed. CI profile also stores success/failure output for debugging.
+
+2. **e2e.yml vs test.yml**: Updated existing `.github/workflows/e2e.yml` instead of non-existent `test.yml` file. The mock-tests job now uses nextest with automatic retry.
+
+3. **Convenience Script**: Created `scripts/test-e2e.sh` that gracefully falls back to cargo test if nextest is not installed, making it optional for local development while required in CI.
+
+4. **Test Timeouts**: Configured 30s timeout for default profile and 60s for CI to handle slower CI environments.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (no code files modified)
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- Verified `.config/nextest.toml` created with correct TOML syntax
+- Verified `scripts/test-e2e.sh` is executable (755 permissions)
+- Tested convenience script execution - correctly detects missing nextest and falls back to cargo test
+
+### Risks/Limitations
+
+1. **Retry Masks Flakiness**: While retry improves CI reliability, it can mask underlying test flakiness. The task notes recommend investigating if retry rate exceeds 5%.
+
+2. **nextest Not Required Locally**: The implementation makes nextest optional for local development but required in CI. Developers need to manually install it with `cargo install cargo-nextest --locked`.
+
+3. **JUnit Output Storage**: CI profile stores both success and failure output which increases storage requirements but aids debugging.

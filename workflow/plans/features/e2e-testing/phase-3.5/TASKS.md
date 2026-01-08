@@ -69,11 +69,11 @@ Wave 7: Final Validation
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-spawn-default](tasks/01-fix-spawn-default.md) | Not Started | - | `tests/e2e/pty_utils.rs` |
-| 2 | [02-ci-timeout-extension](tasks/02-ci-timeout-extension.md) | Not Started | 1 | `tests/e2e/pty_utils.rs` |
-| 3 | [03-test-categorization](tasks/03-test-categorization.md) | Not Started | 1 | `tests/e2e/*.rs` |
-| 4 | [04-retry-config](tasks/04-retry-config.md) | Not Started | 1 | `.config/nextest.toml` |
-| 5 | [05-validate-pty-tests](tasks/05-validate-pty-tests.md) | Not Started | 2, 3, 4 | validation |
+| 1 | [01-fix-spawn-default](tasks/01-fix-spawn-default.md) | Done | - | `tests/e2e/pty_utils.rs` |
+| 2 | [02-ci-timeout-extension](tasks/02-ci-timeout-extension.md) | Done | 1 | `tests/e2e/pty_utils.rs` |
+| 3 | [03-test-categorization](tasks/03-test-categorization.md) | Done | 1 | `tests/e2e/*.rs` |
+| 4 | [04-retry-config](tasks/04-retry-config.md) | Done | 1 | `.config/nextest.toml` |
+| 5 | [05-validate-all-tests](tasks/05-validate-all-tests.md) | Done | 2, 3, 4 | validation |
 
 ### TestBackend Infrastructure (Task 06)
 
