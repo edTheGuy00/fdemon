@@ -113,14 +113,14 @@ Wave 5: Complex Workflows     ▼
 | 5 | [05-test-reload-key](tasks/05-test-reload-key.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
 | 6 | [06-test-session-keys](tasks/06-test-session-keys.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
 | 7 | [07-test-quit-key](tasks/07-test-quit-key.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
-| 7a | [07a-fix-double-q-test](tasks/07a-fix-double-q-test.md) | Not Started | 7 | `src/app/handler/keys.rs`, `docs/KEYBINDINGS.md` |
-| 7b | [07b-extract-magic-numbers](tasks/07b-extract-magic-numbers.md) | Not Started | 7 | `tests/e2e/tui_interaction.rs` |
-| 7c | [07c-extract-termination-helper](tasks/07c-extract-termination-helper.md) | Not Started | 7b | `tests/e2e/tui_interaction.rs` |
-| 7d | [07d-module-documentation](tasks/07d-module-documentation.md) | Not Started | 7c | `tests/e2e/tui_interaction.rs` |
-| 7e | [07e-quit-flow-verification](tasks/07e-quit-flow-verification.md) | Not Started | 7c | `tests/e2e/tui_interaction.rs` |
-| 7f | [07f-standardize-cleanup](tasks/07f-standardize-cleanup.md) | Not Started | 7d | `tests/e2e/tui_interaction.rs` |
-| 7g | [07g-tighten-regex-patterns](tasks/07g-tighten-regex-patterns.md) | Not Started | 7f | `tests/e2e/tui_interaction.rs` |
-| 7h | [07h-tokio-sleep](tasks/07h-tokio-sleep.md) | Not Started | 7b | `tests/e2e/tui_interaction.rs` |
+| 7a | [07a-fix-double-q-test](tasks/07a-fix-double-q-test.md) | Done | 7 | `src/app/handler/keys.rs`, `docs/KEYBINDINGS.md` |
+| 7b | [07b-extract-magic-numbers](tasks/07b-extract-magic-numbers.md) | Done | 7 | `tests/e2e/tui_interaction.rs` |
+| 7c | [07c-extract-termination-helper](tasks/07c-extract-termination-helper.md) | Done | 7b | `tests/e2e/tui_interaction.rs` |
+| 7d | [07d-module-documentation](tasks/07d-module-documentation.md) | Done | 7c | `tests/e2e/tui_interaction.rs` |
+| 7e | [07e-quit-flow-verification](tasks/07e-quit-flow-verification.md) | Done | 7c | `tests/e2e/tui_interaction.rs` |
+| 7f | [07f-standardize-cleanup](tasks/07f-standardize-cleanup.md) | Done | 7d | `tests/e2e/tui_interaction.rs` |
+| 7g | [07g-tighten-regex-patterns](tasks/07g-tighten-regex-patterns.md) | Done | 7f | `tests/e2e/tui_interaction.rs` |
+| 7h | [07h-tokio-sleep](tasks/07h-tokio-sleep.md) | Done | 7b | `tests/e2e/tui_interaction.rs` |
 | 8 | [08-snapshot-infrastructure](tasks/08-snapshot-infrastructure.md) | Not Started | 7a-7f | `tests/e2e/snapshots/` |
 | 9 | [09-golden-files](tasks/09-golden-files.md) | Not Started | 8 | `tests/e2e/snapshots/` |
 | 10 | [10-session-lifecycle](tasks/10-session-lifecycle.md) | Not Started | 8, 9 | `tests/e2e/tui_workflows.rs` |

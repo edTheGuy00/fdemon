@@ -104,4 +104,26 @@ cargo test --test e2e --no-run
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/tui_interaction.rs` | Added 4 module-level constants with doc comments, replaced all hardcoded timing values and loop counts |
+
+### Notable Decisions/Tradeoffs
+
+1. **Loop counter in test_invalid_session_number_ignored**: Changed from 100ms to `TERMINATION_CHECK_INTERVAL_MS` (100ms) for consistency with other interval-based loops, even though it's not checking for termination. This provides semantic consistency across all repeated operations.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (0.22s)
+- `cargo clippy --test e2e -- -D warnings` - Passed (2.96s)
+- `cargo test --test e2e --no-run` - Passed (2.29s)
+- `grep -n "from_millis([0-9]" tests/e2e/tui_interaction.rs` - No matches (all literals removed)
+
+### Risks/Limitations
+
+None. This is a purely mechanical refactoring that improves code maintainability without changing behavior.

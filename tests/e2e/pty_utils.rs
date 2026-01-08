@@ -394,9 +394,13 @@ impl FdemonSession {
         result
     }
 
-    /// Send quit command ('q') and wait for graceful exit.
+    /// Send quit command ('q' + 'y') and wait for graceful exit.
     ///
-    /// Sends 'q' key to fdemon and waits for the process to terminate.
+    /// Sends 'q' key to initiate quit, followed by 'y' to confirm
+    /// the quit dialog (if shown). This handles both cases:
+    /// - Sessions running: 'q' shows dialog, 'y' confirms
+    /// - No sessions: 'q' quits directly, 'y' is ignored
+    ///
     /// If the process doesn't exit within the timeout period, it will
     /// be forcefully killed with [`kill`](Self::kill).
     ///
@@ -419,7 +423,14 @@ impl FdemonSession {
     /// # }
     /// ```
     pub fn quit(&mut self) -> PtyResult<()> {
+        // Send 'q' to initiate quit (may show confirmation dialog)
         self.send_key('q')?;
+
+        // Brief pause for dialog to appear
+        std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
+
+        // Send 'y' to confirm quit (if dialog appeared, otherwise ignored)
+        self.send_key('y')?;
 
         // Wait for graceful shutdown with polling
         let iterations = QUIT_TIMEOUT_MS / QUIT_POLL_INTERVAL_MS;

@@ -134,4 +134,31 @@ cargo test --test e2e --no-run
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/tui_interaction.rs` | Added `wait_for_termination()` helper function with doc comments; Replaced 3 inline termination polling loops with calls to the helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in tui_interaction.rs**: Kept the helper in the same file rather than moving to `pty_utils.rs` since it's only used in this test file currently. If other test files need it in the future, it can be moved to `pty_utils.rs` as a shared utility.
+
+2. **Code Reduction**: Eliminated 27 lines of duplicated code (9 lines × 3 occurrences) and replaced with 3 concise function calls, improving maintainability.
+
+3. **Single Source of Truth**: Timing adjustments now only need to be made in one location (the constants and helper function), making it easier to tune test behavior.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (0.16s)
+- `cargo clippy --test e2e -- -D warnings` - Passed (0.95s)
+- `grep -c "fn wait_for_termination"` - Returns 1 (single implementation)
+- `grep -c "session.session_mut().is_alive()"` - Returns 1 (only inside helper)
+- `cargo test --test e2e --no-run` - Passed (1.18s)
+
+### Risks/Limitations
+
+None identified. The refactoring is straightforward and all acceptance criteria are met.
