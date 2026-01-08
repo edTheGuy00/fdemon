@@ -1,0 +1,16 @@
+# Insta snapshot configuration
+# See: https://insta.rs/docs/settings/
+
+# Behavior settings
+behavior:
+  # Fail on first mismatch (CI-friendly)
+  fail_fast: false
+  # Review mode for local development
+  review: true
+
+# Snapshot file settings
+snapshot:
+  # Store snapshots alongside test files
+  snapshot_path: "{module_path}/snapshots"
+  # Include header with metadata
+  include_header: true

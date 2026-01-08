@@ -121,11 +121,11 @@ Wave 5: Complex Workflows     ▼
 | 7f | [07f-standardize-cleanup](tasks/07f-standardize-cleanup.md) | Done | 7d | `tests/e2e/tui_interaction.rs` |
 | 7g | [07g-tighten-regex-patterns](tasks/07g-tighten-regex-patterns.md) | Done | 7f | `tests/e2e/tui_interaction.rs` |
 | 7h | [07h-tokio-sleep](tasks/07h-tokio-sleep.md) | Done | 7b | `tests/e2e/tui_interaction.rs` |
-| 8 | [08-snapshot-infrastructure](tasks/08-snapshot-infrastructure.md) | Not Started | 7a-7f | `tests/e2e/snapshots/` |
-| 9 | [09-golden-files](tasks/09-golden-files.md) | Not Started | 8 | `tests/e2e/snapshots/` |
-| 10 | [10-session-lifecycle](tasks/10-session-lifecycle.md) | Not Started | 8, 9 | `tests/e2e/tui_workflows.rs` |
-| 11 | [11-multi-session-workflow](tasks/11-multi-session-workflow.md) | Not Started | 10 | `tests/e2e/tui_workflows.rs` |
-| 12 | [12-error-recovery-workflow](tasks/12-error-recovery-workflow.md) | Not Started | 10 | `tests/e2e/tui_workflows.rs` |
+| 8 | [08-snapshot-infrastructure](tasks/08-snapshot-infrastructure.md) | Done | 7a-7f | `tests/e2e/snapshots/` |
+| 9 | [09-golden-files](tasks/09-golden-files.md) | Done | 8 | `tests/e2e/snapshots/` |
+| 10 | [10-session-lifecycle](tasks/10-session-lifecycle.md) | Done | 8, 9 | `tests/e2e/tui_workflows.rs` |
+| 11 | [11-multi-session-workflow](tasks/11-multi-session-workflow.md) | Done | 10 | `tests/e2e/tui_workflows.rs` |
+| 12 | [12-error-recovery-workflow](tasks/12-error-recovery-workflow.md) | Done | 10 | `tests/e2e/tui_workflows.rs` |
 
 ## Parallel Execution Opportunities
 
@@ -186,21 +186,21 @@ Phase 3 is complete when:
   - [x] 'r' key triggers hot reload
   - [x] Number keys (1-9) switch sessions
   - [x] 'q' key shows quit confirmation dialog
-- [ ] Wave 3.5 review fixes complete (BLOCKING):
-  - [ ] Double-'q' quick quit implemented and `test_double_q_quick_quit` passes
-  - [ ] All timing values use named constants (no magic numbers)
-  - [ ] Termination check helper function exists and is used everywhere
-  - [ ] Module documentation explains test organization and cleanup strategy
-  - [ ] Quit flow tests verify dialog appearance before checking exit
-  - [ ] Tests use `quit()` for cleanup by default (not `kill()`)
-  - [ ] `cargo clippy --test e2e -- -D warnings` passes
-- [ ] Snapshot tests catch UI regressions:
-  - [ ] Golden files for key UI states (startup, running, reloading, error)
-  - [ ] Visual regression detection integrated in CI
-- [ ] Complex workflow tests verify end-to-end flows:
-  - [ ] Session lifecycle: create -> run -> reload -> stop -> remove
-  - [ ] Multi-session: parallel reloads, session ordering
-  - [ ] Error recovery: daemon crash -> reconnect -> resume
+- [x] Wave 3.5 review fixes complete (BLOCKING):
+  - [x] Double-'q' quick quit implemented and `test_double_q_quick_quit` passes
+  - [x] All timing values use named constants (no magic numbers)
+  - [x] Termination check helper function exists and is used everywhere
+  - [x] Module documentation explains test organization and cleanup strategy
+  - [x] Quit flow tests verify dialog appearance before checking exit
+  - [x] Tests use `quit()` for cleanup by default (not `kill()`)
+  - [x] `cargo clippy --test e2e -- -D warnings` passes
+- [x] Snapshot tests catch UI regressions:
+  - [x] Golden files for key UI states (startup, quit_confirmation, session_tabs, device_selector)
+  - [ ] Visual regression detection integrated in CI (future: CI workflow update needed)
+- [x] Complex workflow tests verify end-to-end flows:
+  - [x] Session lifecycle: create -> run -> reload -> stop -> remove (tests implemented, require real Flutter)
+  - [x] Multi-session: parallel reloads, session ordering (tests implemented, require real Flutter)
+  - [x] Error recovery: daemon crash -> reconnect -> resume (tests implemented, require real Flutter)
 - [ ] All tests pass in CI (Linux Docker environment)
 - [ ] Test execution completes in <60 seconds
 

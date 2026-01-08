@@ -6,6 +6,7 @@
 #![allow(dead_code)] // Some utilities are for future tests
 
 use expectrl::{Captures, Regex, Session};
+use insta::{assert_snapshot, with_settings};
 use std::path::Path;
 use std::time::Duration;
 
@@ -394,6 +395,102 @@ impl FdemonSession {
         result
     }
 
+    /// Capture current screen and return sanitized content for snapshot.
+    ///
+    /// This method captures the terminal output and prepares it for snapshot
+    /// testing by:
+    /// - Stripping ANSI escape codes for readability
+    /// - Normalizing whitespace (trimming trailing spaces)
+    ///
+    /// # Returns
+    ///
+    /// `Ok(String)` with sanitized content ready for snapshot comparison.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if terminal capture fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::path::Path;
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let fixture_path = Path::new(".");
+    /// let mut session = FdemonSession::spawn(fixture_path)?;
+    /// session.expect_header()?;
+    ///
+    /// let content = session.capture_for_snapshot()?;
+    /// // Content is now clean and ready for snapshot comparison
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn capture_for_snapshot(&mut self) -> PtyResult<String> {
+        let raw = self.capture_screen()?;
+        Ok(sanitize_for_snapshot(&raw))
+    }
+
+    /// Assert current screen matches snapshot.
+    ///
+    /// Captures the current terminal content, sanitizes it (strips ANSI codes,
+    /// normalizes whitespace), and compares it against a stored snapshot using
+    /// `insta`. Dynamic content like timestamps, UUIDs, and paths are automatically
+    /// redacted for stable snapshots.
+    ///
+    /// # Arguments
+    ///
+    /// * `name` - Snapshot name (used in filename, e.g., "startup_screen")
+    ///
+    /// # Errors
+    ///
+    /// Returns error if terminal capture fails. Snapshot mismatches are handled
+    /// by `insta` (test failure with review prompt).
+    ///
+    /// # Redaction Filters
+    ///
+    /// The following patterns are automatically redacted:
+    /// - Timestamps: `12:34:56` -> `[TIME]`
+    /// - Dates: `2024-01-15` -> `[DATE]`
+    /// - UUIDs: `550e8400-e29b-41d4-a716-446655440000` -> `[UUID]`
+    /// - Milliseconds: `245ms` -> `[TIME_MS]`
+    /// - User paths: `/Users/username/` -> `/USER/` or `/home/username/` -> `/USER/`
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::path::Path;
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let fixture_path = Path::new(".");
+    /// let mut session = FdemonSession::spawn(fixture_path)?;
+    /// session.expect_header()?;
+    ///
+    /// // Assert UI matches expected snapshot
+    /// session.assert_snapshot("startup_screen")?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn assert_snapshot(&mut self, name: &str) -> PtyResult<()> {
+        let content = self.capture_for_snapshot()?;
+        with_settings!({
+            // Redact dynamic content for stable snapshots
+            filters => vec![
+                // Redact timestamps like "12:34:56"
+                (r"\d{2}:\d{2}:\d{2}", "[TIME]"),
+                // Redact dates like "2024-01-15"
+                (r"\d{4}-\d{2}-\d{2}", "[DATE]"),
+                // Redact UUIDs
+                (r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", "[UUID]"),
+                // Redact reload times like "245ms"
+                (r"\d+ms", "[TIME_MS]"),
+                // Redact user paths (macOS/Linux)
+                (r"/Users/[^/\s]+/", "/USER/"),
+                (r"/home/[^/\s]+/", "/USER/"),
+            ],
+        }, {
+            assert_snapshot!(name, content);
+        });
+        Ok(())
+    }
+
     /// Send quit command ('q' + 'y') and wait for graceful exit.
     ///
     /// Sends 'q' key to initiate quit, followed by 'y' to confirm
@@ -516,6 +613,44 @@ impl FdemonSession {
     pub fn project_path(&self) -> &str {
         &self.project_path
     }
+}
+
+/// Sanitize terminal output for snapshot comparison.
+///
+/// Prepares raw terminal output for stable snapshot testing by:
+/// 1. Removing ANSI escape codes (colors, cursor movement, etc.)
+/// 2. Normalizing whitespace (trimming trailing spaces from lines)
+///
+/// # Arguments
+///
+/// * `raw` - Raw terminal output including ANSI escape codes
+///
+/// # Returns
+///
+/// Cleaned string suitable for snapshot comparison.
+///
+/// # Example
+///
+/// ```
+/// let raw = "\x1b[1;32mHello\x1b[0m World  \n\x1b[KTest\x1b[0m  ";
+/// let clean = sanitize_for_snapshot(&raw);
+/// assert_eq!(clean, "Hello World\nTest");
+/// ```
+fn sanitize_for_snapshot(raw: &str) -> String {
+    // Remove ANSI escape codes for cleaner snapshots
+    // Matches: ESC [ <numbers/semicolons> <letter>
+    // Examples: \x1b[0m (reset), \x1b[1;32m (bold green), \x1b[2J (clear screen)
+    let ansi_regex = regex::Regex::new(r"\x1b\[[0-9;]*[a-zA-Z]").unwrap();
+    let cleaned = ansi_regex.replace_all(raw, "");
+
+    // Normalize whitespace:
+    // - Trim trailing spaces from each line
+    // - Preserve line structure
+    cleaned
+        .lines()
+        .map(|line| line.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Special keys that can be sent to the terminal.
@@ -876,5 +1011,47 @@ mod tests {
 
         // Quit and wait for exit
         session.quit().unwrap();
+    }
+
+    #[test]
+    fn test_sanitize_for_snapshot_removes_ansi_codes() {
+        // Test basic ANSI color codes
+        let raw = "\x1b[1;32mHello\x1b[0m World";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Hello World");
+
+        // Test multiple ANSI sequences
+        let raw = "\x1b[1mBold\x1b[0m \x1b[32mGreen\x1b[0m \x1b[1;33mBold Yellow\x1b[0m";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Bold Green Bold Yellow");
+    }
+
+    #[test]
+    fn test_sanitize_for_snapshot_trims_whitespace() {
+        // Test trailing whitespace removal
+        let raw = "Line 1   \nLine 2     \nLine 3";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Line 1\nLine 2\nLine 3");
+
+        // Test mixed ANSI codes and whitespace
+        let raw = "\x1b[1mText\x1b[0m   \n\x1b[32mMore\x1b[0m     ";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Text\nMore");
+    }
+
+    #[test]
+    fn test_sanitize_for_snapshot_preserves_structure() {
+        // Test that line structure is preserved
+        let raw = "Header\nBody line 1\nBody line 2\nFooter";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Header\nBody line 1\nBody line 2\nFooter");
+    }
+
+    #[test]
+    fn test_sanitize_for_snapshot_complex_ansi() {
+        // Test cursor movement and clear screen codes
+        let raw = "\x1b[2J\x1b[H\x1b[1;32mTest\x1b[0m\x1b[K";
+        let cleaned = sanitize_for_snapshot(raw);
+        assert_eq!(cleaned, "Test");
     }
 }

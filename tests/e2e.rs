@@ -10,6 +10,7 @@ mod e2e {
     pub mod pty_utils;
     mod session_management;
     mod tui_interaction;
+    mod tui_workflows;
 }
 
 use flutter_demon::app::state::AppState;
