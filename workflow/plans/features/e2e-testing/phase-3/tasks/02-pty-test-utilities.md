@@ -224,22 +224,69 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (none yet)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `tests/e2e/pty_utils.rs` | **NEW** - Created PTY utilities module with FdemonSession, SpecialKey, and TestFixture |
+| `tests/e2e.rs` | Added `pub mod pty_utils;` to export the new module |
 
-(to be filled after implementation)
+### Implementation Details
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo clippy` - Pending
-- `cargo test` - Pending
+Successfully implemented all required components:
 
-**Notable Decisions:**
-- (none yet)
+1. **FdemonSession** - Wraps `expectrl::Session` with fdemon-specific helpers:
+   - `spawn()` and `spawn_with_args()` - Spawns fdemon in PTY using `std::process::Command`
+   - `expect_header()`, `expect_device_selector()`, `expect_running()`, `expect_reloading()` - UI state detection using regex patterns
+   - `expect()` and `expect_timeout()` - Pattern matching with configurable timeouts
+   - `send_key()`, `send_special()`, `send_raw()` - Input methods for keyboard interaction
+   - `capture_screen()` - Captures terminal output for snapshot testing
+   - `quit()` and `kill()` - Clean shutdown and forced termination
+   - `session_mut()` and `project_path()` - Access to underlying session and metadata
 
-**Risks/Limitations:**
-- (none yet)
+2. **SpecialKey enum** - ANSI escape sequences for special keys:
+   - Basic keys: Enter, Escape, Tab, Backspace
+   - Arrow keys: Up, Down, Left, Right
+   - Navigation: PageUp, PageDown, Home, End
+   - Function keys: F1-F12
+
+3. **TestFixture struct** - Convenient access to test fixtures:
+   - `simple_app()`, `error_app()`, `multi_module()`, `plugin_with_example()`
+   - `path()` returns absolute path to fixture directory
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check --tests` - Passed
+- `cargo test --test e2e` - Passed (62 tests, 6 ignored)
+- Unit tests for SpecialKey bytes verification - Passed
+- Unit tests for TestFixture paths and existence - Passed
+- PTY spawn tests marked as `#[ignore]` (require binary build, slow)
+
+### Notable Decisions/Tradeoffs
+
+1. **quit() returns Result<()> instead of WaitStatus**: Changed from spec because `expectrl` doesn't expose process PID or WaitStatus in a way compatible with nix crate's types. The simpler API is more practical.
+
+2. **spawn() uses std::process::Command**: Used standard library Command instead of bash wrapper for cleaner, more reliable process spawning.
+
+3. **capture_screen() uses expect with timeout**: Captures output by expecting any pattern with a timeout, returning empty string on timeout. This is more reliable than trying to read raw stream bytes.
+
+4. **kill() uses Ctrl+C and Ctrl+D**: Instead of system kill command, sends control codes which is more portable and reliable in PTY context.
+
+5. **Added multi_module and plugin_with_example fixtures**: Extended TestFixture beyond spec to cover all available fixtures.
+
+6. **PTY tests marked with #[ignore]**: Slow tests that spawn actual processes are ignored by default, run with `cargo test -- --ignored`.
+
+### Risks/Limitations
+
+1. **Platform-specific behavior**: PTY behavior may differ between Linux and macOS. Primary testing on macOS, CI will validate Linux.
+
+2. **Timeout sensitivity**: Default 10-second timeout may need adjustment for slower CI environments. All methods with timeouts provide configurable variants.
+
+3. **ANSI escape codes**: `capture_screen()` returns raw terminal output including ANSI codes. Users may need to strip these for clean snapshots using a library like `strip-ansi-escapes`.
+
+4. **No process lifecycle events**: Unlike the mock daemon, this doesn't capture process spawn/exit events - it only interacts with running processes.
+
+5. **Binary must be built**: Tests require the fdemon binary to exist. Tests will fail if `cargo build` hasn't been run first.

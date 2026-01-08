@@ -7,6 +7,7 @@ mod e2e {
     mod daemon_interaction;
     mod hot_reload;
     pub mod mock_daemon;
+    pub mod pty_utils;
     mod session_management;
 }
 

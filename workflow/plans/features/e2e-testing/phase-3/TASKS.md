@@ -4,7 +4,7 @@
 
 Enable full end-to-end testing of keyboard input and terminal output using PTY interaction. This phase adds the `expectrl` crate for PTY-based testing and `insta` for snapshot testing, enabling automated verification of TUI behavior including keyboard navigation, hot reload triggers, and session management.
 
-**Total Tasks:** 12
+**Total Tasks:** 17
 **Parent Plan:** [../PLAN.md](../PLAN.md)
 **Prerequisite:** Phase 2 complete (Docker infrastructure, headless mode)
 
@@ -14,11 +14,17 @@ Enable full end-to-end testing of keyboard input and terminal output using PTY i
 Wave 1: Dependencies & Foundation
 ┌─────────────────────────────┐     ┌─────────────────────────────┐
 │  01-add-pty-dependencies    │     │  02-pty-test-utilities      │
-└─────────────┬───────────────┘     └─────────────┬───────────────┘
-              │                                   │
-              └───────────────┬───────────────────┘
-                              │
-Wave 2: Basic TUI Tests       ▼
+└─────────────────────────────┘     └─────────────┬───────────────┘
+                                                  │
+Wave 1.5: Follow-up Fixes (Blocking)              ▼
+┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐ ┌──────────────┐
+│ 02a-drop     │ │ 02b-quit     │ │ 02c-serial   │ │ 02d-capture  │ │ 02e-quality  │
+│ trait        │ │ race fix     │ │ test         │ │ screen       │ │ improvements │
+└──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘ └──────┬───────┘
+       │                │                │                │                │
+       └────────────────┴────────────────┼────────────────┴────────────────┘
+                                         │
+Wave 2: Basic TUI Tests                  ▼
               ┌───────────────────────────────────┐
               │                                   │
               ▼                                   ▼
@@ -63,10 +69,15 @@ Wave 5: Complex Workflows     ▼
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-add-pty-dependencies](tasks/01-add-pty-dependencies.md) | Not Started | - | `Cargo.toml` |
-| 2 | [02-pty-test-utilities](tasks/02-pty-test-utilities.md) | Not Started | 1 | `tests/e2e/pty_utils.rs` |
-| 3 | [03-test-startup-header](tasks/03-test-startup-header.md) | Not Started | 2 | `tests/e2e/tui_interaction.rs` |
-| 4 | [04-test-device-selector](tasks/04-test-device-selector.md) | Not Started | 2 | `tests/e2e/tui_interaction.rs` |
+| 1 | [01-add-pty-dependencies](tasks/01-add-pty-dependencies.md) | Done | - | `Cargo.toml` |
+| 2 | [02-pty-test-utilities](tasks/02-pty-test-utilities.md) | Done | 1 | `tests/e2e/pty_utils.rs` |
+| 2a | [02a-implement-drop-trait](tasks/02a-implement-drop-trait.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
+| 2b | [02b-fix-quit-race-condition](tasks/02b-fix-quit-race-condition.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
+| 2c | [02c-add-test-isolation](tasks/02c-add-test-isolation.md) | Not Started | 2 | `Cargo.toml`, `tests/e2e/pty_utils.rs` |
+| 2d | [02d-fix-capture-screen](tasks/02d-fix-capture-screen.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
+| 2e | [02e-code-quality-improvements](tasks/02e-code-quality-improvements.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
+| 3 | [03-test-startup-header](tasks/03-test-startup-header.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
+| 4 | [04-test-device-selector](tasks/04-test-device-selector.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
 | 5 | [05-test-reload-key](tasks/05-test-reload-key.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
 | 6 | [06-test-session-keys](tasks/06-test-session-keys.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
 | 7 | [07-test-quit-key](tasks/07-test-quit-key.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
@@ -81,6 +92,13 @@ Wave 5: Complex Workflows     ▼
 **Wave 1 (Foundation):**
 - Task 01: Add expectrl and insta dependencies
 - Task 02: Create PTY test utilities (depends on 01)
+
+**Wave 1.5 (Parallel - Follow-up Fixes):** ⚠️ **Must complete before Wave 2**
+- Task 02a: Implement Drop trait for process cleanup
+- Task 02b: Fix quit() race condition
+- Task 02c: Add test isolation with serial_test
+- Task 02d: Fix capture_screen() logic
+- Task 02e: Code quality improvements (docs, constants, traits)
 
 **Wave 2 (Parallel - Basic Tests):**
 - Task 03: Test startup header
@@ -104,8 +122,14 @@ Wave 5: Complex Workflows     ▼
 
 Phase 3 is complete when:
 
-- [ ] `expectrl` and `insta` dependencies added to Cargo.toml
-- [ ] PTY test utilities provide reliable terminal interaction
+- [x] `expectrl` and `insta` dependencies added to Cargo.toml
+- [x] PTY test utilities provide reliable terminal interaction
+- [ ] Wave 1 follow-up fixes complete:
+  - [ ] `FdemonSession` implements `Drop` for cleanup on panic
+  - [ ] `quit()` uses polling loop with termination verification
+  - [ ] PTY tests use `#[serial]` for test isolation
+  - [ ] `capture_screen()` works correctly or behavior documented
+  - [ ] Public methods have doc comments, magic numbers extracted
 - [ ] TUI interaction tests verify keyboard input handling:
   - [ ] Startup shows header with project name
   - [ ] Device selector responds to arrow keys and Enter

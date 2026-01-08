@@ -60,3 +60,9 @@ tempfile = "3"
 
 # E2E Testing
 mockall = "0.13"
+
+# PTY-based TUI testing
+expectrl = "0.7"           # PTY spawn and interaction
+
+# Snapshot testing
+insta = { version = "1.41", features = ["filters"] }

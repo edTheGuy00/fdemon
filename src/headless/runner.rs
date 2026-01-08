@@ -16,9 +16,7 @@ use crate::app::UpdateAction;
 use crate::common::prelude::*;
 use crate::config::{self, LaunchConfig};
 use crate::core::DaemonEvent;
-use crate::daemon::{
-    devices, protocol, DaemonMessage, Device, FlutterProcess, RequestTracker,
-};
+use crate::daemon::{devices, protocol, DaemonMessage, Device, FlutterProcess, RequestTracker};
 use crate::tui::SessionTaskMap;
 use crate::watcher::{FileWatcher, WatcherConfig};
 
@@ -75,12 +73,7 @@ pub async fn run_headless(project_path: &Path) -> Result<()> {
     // Auto-start: discover devices and spawn session
     // In headless mode, always auto-start regardless of config setting
     info!("Discovering devices for headless auto-start...");
-    let startup_action = headless_auto_start(
-        &mut state,
-        project_path,
-        msg_tx.clone(),
-    )
-    .await;
+    let startup_action = headless_auto_start(&mut state, project_path, msg_tx.clone()).await;
 
     // If we got an action, spawn the session
     if let Some(action) = startup_action {
@@ -341,12 +334,7 @@ async fn headless_auto_start(
 
             // Emit device_detected events for each device
             for device in &result.devices {
-                HeadlessEvent::device_detected(
-                    &device.id,
-                    &device.name,
-                    &device.platform,
-                )
-                .emit();
+                HeadlessEvent::device_detected(&device.id, &device.name, &device.platform).emit();
             }
 
             // Cache devices in state
@@ -362,11 +350,8 @@ async fn headless_auto_start(
                         info!("Created session {}", session_id);
 
                         // Emit session_created event
-                        HeadlessEvent::session_created(
-                            &session_id.to_string(),
-                            &device.name,
-                        )
-                        .emit();
+                        HeadlessEvent::session_created(&session_id.to_string(), &device.name)
+                            .emit();
 
                         Some(UpdateAction::SpawnSession {
                             session_id,
@@ -552,7 +537,10 @@ fn spawn_headless_session(
                 // Shutdown
                 if !process_exited {
                     info!("Session {} ending, initiating shutdown...", session_id);
-                    if let Err(e) = process.shutdown(app_id.as_deref(), Some(&session_sender)).await {
+                    if let Err(e) = process
+                        .shutdown(app_id.as_deref(), Some(&session_sender))
+                        .await
+                    {
                         warn!("Shutdown error for session {}: {}", session_id, e);
                     }
                 }

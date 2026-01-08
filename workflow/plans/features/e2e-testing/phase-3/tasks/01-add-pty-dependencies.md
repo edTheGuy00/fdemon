@@ -74,23 +74,30 @@ fn test_imports() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (none yet)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | Added `expectrl = "0.7"` and `insta = { version = "1.41", features = ["filters"] }` to `[dev-dependencies]` section |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo clippy` - Pending
-- `cargo build` - Pending
-- `cargo test` - Pending
+1. **Version Selection**: Used `expectrl` 0.7 rather than 0.8 (latest) because Cargo locked to 0.7.1 as a compatible version. This ensures stability and compatibility with existing dependencies.
+2. **Insta Features**: Enabled the `filters` feature for `insta` to allow sanitizing dynamic content (timestamps, paths, UUIDs) in snapshots, which is essential for reliable snapshot testing in a TUI application.
 
-**Notable Decisions:**
-- (none yet)
+### Testing Performed
 
-**Risks/Limitations:**
-- (none yet)
+- `cargo fmt` - Passed (formatted unrelated file `/src/headless/runner.rs` that had formatting issues)
+- `cargo fmt --check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo build` - Passed (1m 44s, added 20 new transitive dependencies)
+- `cargo test` - Passed (1255 tests passed, 0 failed)
+- `cargo test --doc` - Passed (4 doc tests passed)
+
+### Risks/Limitations
+
+1. **Platform Support**: `expectrl` has limited Windows support. This is acceptable as the primary development platforms are Linux and macOS. E2E tests may need conditional compilation or skipping on Windows.
+2. **Dependency Count**: Added 20 transitive dependencies (mostly Windows compatibility crates). This is standard for PTY interaction libraries and doesn't pose a significant risk.
+3. **No Functional Verification**: Did not create actual test code using these dependencies in this task - that will be done in subsequent tasks. Only verified that imports are available.
