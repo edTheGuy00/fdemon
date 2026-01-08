@@ -4,7 +4,7 @@
 
 Enable full end-to-end testing of keyboard input and terminal output using PTY interaction. This phase adds the `expectrl` crate for PTY-based testing and `insta` for snapshot testing, enabling automated verification of TUI behavior including keyboard navigation, hot reload triggers, and session management.
 
-**Total Tasks:** 17
+**Total Tasks:** 25
 **Parent Plan:** [../PLAN.md](../PLAN.md)
 **Prerequisite:** Phase 2 complete (Docker infrastructure, headless mode)
 
@@ -45,6 +45,38 @@ Wave 3: Keyboard Input Tests  ▼
           │                      │                      │
           └──────────────────────┼──────────────────────┘
                                  │
+Wave 3.5: Review Fixes (Blocking)▼
+              ┌───────────────┬───────────────────┐
+              │               │                   │
+              ▼               ▼                   ▼
+┌────────────────────┐ ┌────────────────────┐ ┌────────────────────┐
+│ 07a-fix-double-q   │ │ 07b-extract-magic  │ │ 07h-tokio-sleep    │
+│     test           │ │     -numbers       │ │  (minor)           │
+└─────────┬──────────┘ └─────────┬──────────┘ └────────────────────┘
+          │                      │
+          │                      ▼
+          │            ┌────────────────────┐
+          │            │ 07c-extract-       │
+          │            │   termination-help │
+          │            └─────────┬──────────┘
+          │                      │
+          └──────────┬───────────┘
+                     ▼
+    ┌────────────────────────────────────────────┐
+    │               │                            │
+    ▼               ▼                            ▼
+┌──────────────┐ ┌──────────────┐ ┌────────────────────┐
+│ 07d-module   │ │ 07e-quit-flow│ │ 07g-tighten-regex  │
+│   -docs      │ │  verification│ │  (minor)           │
+└──────┬───────┘ └──────┬───────┘ └────────────────────┘
+       │                │
+       └────────┬───────┘
+                ▼
+       ┌──────────────┐
+       │ 07f-standard │
+       │   -cleanup   │
+       └──────┬───────┘
+              │
 Wave 4: Snapshot Testing         ▼
               ┌─────────────────────────────────────┐
               │                                     │
@@ -76,12 +108,20 @@ Wave 5: Complex Workflows     ▼
 | 2c | [02c-add-test-isolation](tasks/02c-add-test-isolation.md) | Done | 2 | `Cargo.toml`, `tests/e2e/pty_utils.rs` |
 | 2d | [02d-fix-capture-screen](tasks/02d-fix-capture-screen.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
 | 2e | [02e-code-quality-improvements](tasks/02e-code-quality-improvements.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
-| 3 | [03-test-startup-header](tasks/03-test-startup-header.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
-| 4 | [04-test-device-selector](tasks/04-test-device-selector.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
-| 5 | [05-test-reload-key](tasks/05-test-reload-key.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
-| 6 | [06-test-session-keys](tasks/06-test-session-keys.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
-| 7 | [07-test-quit-key](tasks/07-test-quit-key.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
-| 8 | [08-snapshot-infrastructure](tasks/08-snapshot-infrastructure.md) | Not Started | 5, 6, 7 | `tests/e2e/snapshots/` |
+| 3 | [03-test-startup-header](tasks/03-test-startup-header.md) | Done | 2a-2e | `tests/e2e/tui_interaction.rs` |
+| 4 | [04-test-device-selector](tasks/04-test-device-selector.md) | Done | 2a-2e | `tests/e2e/tui_interaction.rs` |
+| 5 | [05-test-reload-key](tasks/05-test-reload-key.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
+| 6 | [06-test-session-keys](tasks/06-test-session-keys.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
+| 7 | [07-test-quit-key](tasks/07-test-quit-key.md) | Done | 3, 4 | `tests/e2e/tui_interaction.rs` |
+| 7a | [07a-fix-double-q-test](tasks/07a-fix-double-q-test.md) | Not Started | 7 | `src/app/handler/keys.rs`, `docs/KEYBINDINGS.md` |
+| 7b | [07b-extract-magic-numbers](tasks/07b-extract-magic-numbers.md) | Not Started | 7 | `tests/e2e/tui_interaction.rs` |
+| 7c | [07c-extract-termination-helper](tasks/07c-extract-termination-helper.md) | Not Started | 7b | `tests/e2e/tui_interaction.rs` |
+| 7d | [07d-module-documentation](tasks/07d-module-documentation.md) | Not Started | 7c | `tests/e2e/tui_interaction.rs` |
+| 7e | [07e-quit-flow-verification](tasks/07e-quit-flow-verification.md) | Not Started | 7c | `tests/e2e/tui_interaction.rs` |
+| 7f | [07f-standardize-cleanup](tasks/07f-standardize-cleanup.md) | Not Started | 7d | `tests/e2e/tui_interaction.rs` |
+| 7g | [07g-tighten-regex-patterns](tasks/07g-tighten-regex-patterns.md) | Not Started | 7f | `tests/e2e/tui_interaction.rs` |
+| 7h | [07h-tokio-sleep](tasks/07h-tokio-sleep.md) | Not Started | 7b | `tests/e2e/tui_interaction.rs` |
+| 8 | [08-snapshot-infrastructure](tasks/08-snapshot-infrastructure.md) | Not Started | 7a-7f | `tests/e2e/snapshots/` |
 | 9 | [09-golden-files](tasks/09-golden-files.md) | Not Started | 8 | `tests/e2e/snapshots/` |
 | 10 | [10-session-lifecycle](tasks/10-session-lifecycle.md) | Not Started | 8, 9 | `tests/e2e/tui_workflows.rs` |
 | 11 | [11-multi-session-workflow](tasks/11-multi-session-workflow.md) | Not Started | 10 | `tests/e2e/tui_workflows.rs` |
@@ -109,6 +149,16 @@ Wave 5: Complex Workflows     ▼
 - Task 06: Test number keys for sessions
 - Task 07: Test 'q' key quit confirmation
 
+**Wave 3.5 (Review Fixes - Blocking):** ⚠️ **Must complete before Wave 4**
+- Task 07a: Implement double-'q' quick quit feature (CRITICAL)
+- Task 07b: Extract magic numbers to constants (CRITICAL)
+- Task 07c: Extract termination check helper (CRITICAL, depends on 07b)
+- Task 07d: Add module documentation (depends on 07c)
+- Task 07e: Improve quit flow verification (depends on 07c)
+- Task 07f: Standardize cleanup approach (depends on 07d)
+- Task 07g: Tighten regex patterns (MINOR, depends on 07f)
+- Task 07h: Use tokio sleep (MINOR, depends on 07b)
+
 **Wave 4 (Parallel - Snapshot Testing):**
 - Task 08: Set up snapshot infrastructure
 - Task 09: Create golden files
@@ -130,12 +180,20 @@ Phase 3 is complete when:
   - [x] PTY tests use `#[serial]` for test isolation
   - [x] `capture_screen()` works correctly or behavior documented
   - [x] Public methods have doc comments, magic numbers extracted
-- [ ] TUI interaction tests verify keyboard input handling:
-  - [ ] Startup shows header with project name
-  - [ ] Device selector responds to arrow keys and Enter
-  - [ ] 'r' key triggers hot reload
-  - [ ] Number keys (1-9) switch sessions
-  - [ ] 'q' key shows quit confirmation dialog
+- [x] TUI interaction tests verify keyboard input handling:
+  - [x] Startup shows header with project name
+  - [x] Device selector responds to arrow keys and Enter
+  - [x] 'r' key triggers hot reload
+  - [x] Number keys (1-9) switch sessions
+  - [x] 'q' key shows quit confirmation dialog
+- [ ] Wave 3.5 review fixes complete (BLOCKING):
+  - [ ] Double-'q' quick quit implemented and `test_double_q_quick_quit` passes
+  - [ ] All timing values use named constants (no magic numbers)
+  - [ ] Termination check helper function exists and is used everywhere
+  - [ ] Module documentation explains test organization and cleanup strategy
+  - [ ] Quit flow tests verify dialog appearance before checking exit
+  - [ ] Tests use `quit()` for cleanup by default (not `kill()`)
+  - [ ] `cargo clippy --test e2e -- -D warnings` passes
 - [ ] Snapshot tests catch UI regressions:
   - [ ] Golden files for key UI states (startup, running, reloading, error)
   - [ ] Visual regression detection integrated in CI

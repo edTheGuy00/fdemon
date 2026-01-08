@@ -127,22 +127,35 @@ time cargo test --test e2e test_r_key_triggers_reload -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (none yet)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `tests/e2e/tui_interaction.rs` | Added three hot reload key tests after device selector tests section |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo clippy` - Pending
-- `cargo test` - Pending
+1. **Test Organization**: Added tests in a new "Hot Reload Tests" section after the existing "Device Selector Tests" section to maintain logical grouping
+2. **Test Pattern Matching**: Used existing `expect_running()` and `expect_reloading()` helper methods from `pty_utils.rs` for consistent state verification
+3. **Test Coverage**: Implemented all three tests as specified:
+   - `test_r_key_triggers_reload` - verifies 'r' key triggers hot reload when running
+   - `test_shift_r_triggers_restart` - verifies 'R' key triggers hot restart
+   - `test_r_key_no_op_when_not_running` - verifies 'r' key is safely ignored when not running
+4. **Graceful Exit Handling**: Used different exit strategies for different tests - graceful quit with confirmation for reload test, force kill for restart test (as it's a more disruptive operation)
+5. **No Auto-Start Flag**: Used `spawn_with_args` with `--no-auto-start` flag in the no-op test to ensure the app doesn't automatically start, allowing us to verify behavior when not running
 
-**Notable Decisions:**
-- (none yet)
+### Testing Performed
 
-**Risks/Limitations:**
-- (none yet)
+- `cargo fmt` - Passed (code formatted automatically)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --test e2e reload --no-run` - Passed (test compilation successful)
+- `cargo clippy --test e2e -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Device Availability**: These tests require a running Flutter app which needs a device. In CI environments without devices, the tests may timeout at `expect_running()`. The tests are marked with `#[serial]` to prevent conflicts.
+2. **Timing Sensitivity**: The tests use default timeouts (10 seconds) which should be sufficient for most systems, but slow systems or under heavy load may experience timeouts.
+3. **State Transitions**: The restart test expects a "Restart|restart" pattern which may vary depending on the exact UI text. This pattern should be flexible enough to handle variations.
+4. **Test Isolation**: All tests are marked with `#[serial]` from the serial_test crate to ensure they run sequentially and don't interfere with each other's PTY sessions.

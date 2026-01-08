@@ -3,6 +3,8 @@
 //! Provides helpers for spawning fdemon in a pseudo-terminal
 //! and interacting with it programmatically.
 
+#![allow(dead_code)] // Some utilities are for future tests
+
 use expectrl::{Captures, Regex, Session};
 use std::path::Path;
 use std::time::Duration;
@@ -277,7 +279,7 @@ impl FdemonSession {
     /// # }
     /// ```
     pub fn send_key(&mut self, key: char) -> PtyResult<()> {
-        self.session.send(&key.to_string())?;
+        self.session.send(key.to_string())?;
         Ok(())
     }
 

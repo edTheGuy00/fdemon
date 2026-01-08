@@ -9,6 +9,7 @@ mod e2e {
     pub mod mock_daemon;
     pub mod pty_utils;
     mod session_management;
+    mod tui_interaction;
 }
 
 use flutter_demon::app::state::AppState;
