@@ -179,10 +179,10 @@ The following tasks were created to address limitations discovered during Phase 
 | F7-github-ios-simulator | Deferred | GitHub Actions with iOS simulator |
 | F8-avd-snapshot-caching | Deferred | Cache AVD for faster startup |
 
-### Wave 4: Documentation
-| Task | Priority | Description |
-|------|----------|-------------|
-| [F9-document-testing-strategy](tasks/F9-document-testing-strategy.md) | Medium | Document E2E testing pyramid |
+### Wave 4: Documentation ✅
+| Task | Priority | Status | Description |
+|------|----------|--------|-------------|
+| [F9-document-testing-strategy](tasks/F9-document-testing-strategy.md) | Medium | Done | Document E2E testing pyramid |
 
 **Full details:** [FOLLOWUP.md](FOLLOWUP.md)
 
