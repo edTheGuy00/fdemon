@@ -79,29 +79,31 @@ Wave 7: Final Validation
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 6 | [06-testbackend-utilities](tasks/06-testbackend-utilities.md) | Not Started | 5 | `src/tui/test_utils.rs` |
+| 6 | [06-testbackend-utilities](tasks/06-testbackend-utilities.md) | Done | 5 | `src/tui/test_utils.rs` |
 
 ### Widget Unit Tests (Tasks 07-10)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 7 | [07-header-widget-tests](tasks/07-header-widget-tests.md) | Not Started | 6 | `src/tui/widgets/header.rs` |
-| 8 | [08-statusbar-widget-tests](tasks/08-statusbar-widget-tests.md) | Not Started | 6 | `src/tui/widgets/status_bar.rs` |
-| 9 | [09-device-selector-tests](tasks/09-device-selector-tests.md) | Not Started | 6 | `src/tui/widgets/device_selector.rs` |
-| 10 | [10-confirm-dialog-tests](tasks/10-confirm-dialog-tests.md) | Not Started | 6 | `src/tui/widgets/confirm_dialog.rs` |
+| 7 | [07-header-widget-tests](tasks/07-header-widget-tests.md) | Done | 6 | `src/tui/widgets/header.rs` |
+| 8 | [08-statusbar-widget-tests](tasks/08-statusbar-widget-tests.md) | Done | 6 | `src/tui/widgets/status_bar.rs` |
+| 9 | [09-device-selector-tests](tasks/09-device-selector-tests.md) | Done | 6 | `src/tui/widgets/device_selector.rs` |
+| 10 | [10-confirm-dialog-tests](tasks/10-confirm-dialog-tests.md) | Done | 6 | `src/tui/widgets/confirm_dialog.rs` |
 
 ### Full-Screen Tests (Tasks 11-12)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 11 | [11-screen-snapshots](tasks/11-screen-snapshots.md) | Not Started | 7, 8, 9, 10 | `src/tui/render.rs` |
-| 12 | [12-ui-mode-transitions](tasks/12-ui-mode-transitions.md) | Not Started | 7, 8, 9, 10 | `src/tui/render.rs` |
+| 11 | [11-screen-snapshots](tasks/11-screen-snapshots.md) | Done | 7, 8, 9, 10 | `src/tui/render/` |
+| 12 | [12-ui-mode-transitions](tasks/12-ui-mode-transitions.md) | Done | 7, 8, 9, 10 | `src/tui/render/` |
 
 ### Final Validation (Task 13)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 13 | [13-final-validation](tasks/13-final-validation.md) | Not Started | 11, 12 | validation |
+| 13 | [13-final-validation](tasks/13-final-validation.md) | Superseded | 11, 12 | validation |
+
+> **Note:** Task 13 superseded by Phase 3.6 final validation. The Phase 3.5 Wave 4-6 review identified issues that need fixing before meaningful validation. See `phase-3.6/TASKS.md`.
 
 ## Parallel Execution Opportunities
 
