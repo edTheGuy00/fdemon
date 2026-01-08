@@ -1,0 +1,10 @@
+name: multi_module_fixture
+packages:
+  - apps/**
+  - packages/**
+
+scripts:
+  analyze:
+    exec: flutter analyze
+  test:
+    exec: flutter test

@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use clap::Parser;
 use flutter_demon::common::prelude::*;
 use flutter_demon::core::{
     discover_flutter_projects, get_project_type, is_runnable_flutter_project, ProjectType,
@@ -11,17 +12,36 @@ use flutter_demon::core::{
 };
 use flutter_demon::tui::{select_project, SelectionResult};
 
+/// Flutter Demon - A high-performance TUI for Flutter development
+#[derive(Parser, Debug)]
+#[command(name = "fdemon")]
+#[command(about = "A high-performance TUI for Flutter development", long_about = None)]
+struct Args {
+    /// Path to Flutter project
+    #[arg(value_name = "PATH")]
+    path: Option<PathBuf>,
+
+    /// Run in headless mode (JSON output, no TUI)
+    #[arg(long)]
+    headless: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    let args = Args::parse();
+
     // Get base path from args or use current directory
-    let base_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
+    let base_path = args
+        .path
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
 
     // Step 1: Check if base_path is directly a runnable Flutter project
     if is_runnable_flutter_project(&base_path) {
-        return flutter_demon::run_with_project(&base_path).await;
+        return if args.headless {
+            flutter_demon::run_headless(&base_path).await
+        } else {
+            flutter_demon::run_with_project(&base_path).await
+        };
     }
 
     // Step 2: If base_path has pubspec but isn't runnable, explain why
@@ -87,17 +107,31 @@ async fn main() -> Result<()> {
             // Exactly one runnable project found - auto-select
             let project = &discovery.projects[0];
             eprintln!("✅ Found Flutter project: {}", project.display());
-            flutter_demon::run_with_project(project).await
+            if args.headless {
+                flutter_demon::run_headless(project).await
+            } else {
+                flutter_demon::run_with_project(project).await
+            }
         }
         _ => {
             // Multiple runnable projects found - show selector
-            match select_project(&discovery.projects, &discovery.searched_from)? {
-                SelectionResult::Selected(project) => {
-                    flutter_demon::run_with_project(&project).await
-                }
-                SelectionResult::Cancelled => {
-                    eprintln!("Selection cancelled.");
-                    Ok(())
+            if args.headless {
+                // In headless mode, we can't show a selector, so just use the first project
+                let project = &discovery.projects[0];
+                eprintln!(
+                    "Multiple projects found, using first: {}",
+                    project.display()
+                );
+                flutter_demon::run_headless(project).await
+            } else {
+                match select_project(&discovery.projects, &discovery.searched_from)? {
+                    SelectionResult::Selected(project) => {
+                        flutter_demon::run_with_project(&project).await
+                    }
+                    SelectionResult::Cancelled => {
+                        eprintln!("Selection cancelled.");
+                        Ok(())
+                    }
                 }
             }
         }

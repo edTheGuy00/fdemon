@@ -1,0 +1,64 @@
+services:
+  flutter-e2e-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+      cache_from:
+        - fdemon-test:latest
+    image: fdemon-test:latest
+
+    # Mount source code and fixtures
+    volumes:
+      - .:/app:cached
+      - cargo-cache:/root/.cargo/registry
+      - cargo-git:/root/.cargo/git
+      - target-cache:/app/target
+
+    # Environment configuration
+    environment:
+      - DISPLAY=:99
+      - FDEMON_TEST_TIMEOUT=${FDEMON_TEST_TIMEOUT:-60}
+      - RUST_BACKTRACE=1
+      - RUST_LOG=fdemon=debug
+      - CI=${CI:-false}
+      - TERM=xterm-256color
+
+    # Working directory
+    working_dir: /app
+
+    # Enable pseudo-TTY for TUI app
+    tty: true
+    stdin_open: true
+
+    # Default command - run all tests (script handles Xvfb)
+    command: ["./tests/e2e/scripts/run_all_e2e.sh"]
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+
+  # Service for running specific test scripts
+  flutter-e2e-startup:
+    extends:
+      service: flutter-e2e-test
+    command: ["./tests/e2e/scripts/test_startup.sh"]
+
+  flutter-e2e-hot-reload:
+    extends:
+      service: flutter-e2e-test
+    command: ["./tests/e2e/scripts/test_hot_reload.sh"]
+
+  # Interactive shell for debugging
+  flutter-e2e-shell:
+    extends:
+      service: flutter-e2e-test
+    command: ["/bin/bash"]
+    stdin_open: true
+    tty: true
+
+volumes:
+  cargo-cache:
+  cargo-git:
+  target-cache:

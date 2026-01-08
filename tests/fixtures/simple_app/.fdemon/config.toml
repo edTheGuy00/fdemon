@@ -1,0 +1,32 @@
+# Flutter Demon Configuration
+# See: https://github.com/example/flutter-demon#configuration
+
+[behavior]
+auto_start = false      # Set to true to skip device selection
+confirm_quit = true     # Ask before quitting with running apps
+
+[watcher]
+paths = ["lib"]
+debounce_ms = 500
+auto_reload = true
+extensions = ["dart"]
+
+[ui]
+log_buffer_size = 10000
+show_timestamps = true
+compact_logs = false
+theme = "default"
+stack_trace_collapsed = true
+stack_trace_max_frames = 3
+
+[devtools]
+auto_open = false
+browser = ""            # Empty = system default
+
+[editor]
+# Editor command (leave empty for auto-detection)
+# Auto-detected from: parent IDE, $VISUAL, $EDITOR, or common editors in PATH
+command = ""
+# Pattern for opening file at line/column
+# Variables: $EDITOR, $FILE, $LINE, $COLUMN
+open_pattern = "$EDITOR $FILE:$LINE"

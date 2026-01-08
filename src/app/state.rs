@@ -286,7 +286,7 @@ impl LoadingState {
 
         if cycle_messages {
             // Cycle message every 15 frames (~1.5 seconds at 100ms tick rate)
-            if self.animation_frame % 15 == 0 {
+            if self.animation_frame.is_multiple_of(15) {
                 self.message_index = (self.message_index + 1) % LOADING_MESSAGES.len();
                 self.message = LOADING_MESSAGES[self.message_index].to_string();
             }

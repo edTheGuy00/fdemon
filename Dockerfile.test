@@ -1,0 +1,73 @@
+# Dockerfile.test
+# Multi-stage Docker build for E2E testing Flutter Demon
+# Provides a complete Flutter + Rust environment for running E2E tests
+
+# Stage 1: Rust toolchain setup
+FROM ghcr.io/cirruslabs/flutter:stable AS builder
+
+# Install Rust via rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Pre-cache Rust dependencies for faster rebuilds
+WORKDIR /app
+COPY Cargo.toml Cargo.lock ./
+
+# Create dummy source to build dependencies
+RUN mkdir src && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "// lib" > src/lib.rs
+
+# Build dependencies (will fail due to dummy source, but caches deps)
+RUN cargo build --release 2>/dev/null || true
+
+# Clean up dummy files
+RUN rm -rf src target/release/fdemon target/release/flutter-demon target/release/flutter_demon
+
+# Stage 2: Test runner environment
+FROM ghcr.io/cirruslabs/flutter:stable
+
+# Copy Rust toolchain from builder stage
+COPY --from=builder /root/.cargo /root/.cargo
+COPY --from=builder /root/.rustup /root/.rustup
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+# Install expect for unbuffer (TTY emulation for TUI apps) and jq for JSON parsing
+RUN apt-get update && apt-get install -y --no-install-recommends expect jq && \
+    rm -rf /var/lib/apt/lists/*
+
+# Linux desktop dependencies for headless testing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    clang \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    libstdc++-12-dev \
+    libgl1-mesa-dev \
+    libgles2-mesa-dev \
+    libegl1-mesa-dev \
+    libdrm-dev \
+    xvfb \
+    x11-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Configure Flutter for headless operation
+RUN flutter config --no-analytics && \
+    flutter config --enable-linux-desktop && \
+    flutter precache --linux
+
+# Disable adb - it's an x86 binary that crashes on ARM and prevents Linux device detection
+# Flutter will still work fine for Linux desktop development without Android support
+RUN mv /opt/android-sdk-linux/platform-tools/adb /opt/android-sdk-linux/platform-tools/adb.disabled || true
+
+# Set environment variables for testing
+ENV FDEMON_TEST_TIMEOUT=60000
+ENV FLUTTER_TEST=true
+ENV CI=true
+
+# Set working directory
+WORKDIR /app
+
+# Default command - runs all E2E tests
+CMD ["./tests/e2e/scripts/run_all_e2e.sh"]

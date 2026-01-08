@@ -755,9 +755,7 @@ mod tests {
             .await;
 
         // Should succeed with longer timeout
-        let result = handle
-            .recv_event_with_timeout(Duration::from_secs(2))
-            .await;
+        let result = handle.recv_event_with_timeout(Duration::from_secs(2)).await;
         assert!(result.is_some());
     }
 

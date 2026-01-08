@@ -200,12 +200,22 @@ async fn run_flutter_devices() -> Result<FlutterOutput> {
         debug!("flutter devices stderr: {}", stderr);
     }
 
+    // Be lenient with exit codes - flutter devices may fail for non-critical reasons
+    // (e.g., adb not found) but still output valid Linux/web devices
     if !output.status.success() {
-        return Err(Error::process(format!(
-            "flutter devices failed with exit code {:?}: {}",
-            output.status.code(),
-            stderr
-        )));
+        // Check if there's still usable JSON output before failing
+        if stdout.contains('[') && stdout.contains(']') {
+            warn!(
+                "flutter devices exited with code {:?} but has JSON output, parsing anyway",
+                output.status.code()
+            );
+        } else {
+            return Err(Error::process(format!(
+                "flutter devices failed with exit code {:?}: {}",
+                output.status.code(),
+                stderr
+            )));
+        }
     }
 
     Ok(FlutterOutput { stdout, stderr })
