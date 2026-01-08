@@ -15,6 +15,7 @@
 //! - `selector`: Project/device selection
 //! - `terminal`: Terminal setup/restore
 //! - `widgets`: Reusable UI components
+//! - `test_utils`: Test utilities for widget testing (test-only)
 
 pub mod actions;
 pub mod editor;
@@ -29,6 +30,9 @@ pub mod spawn;
 pub mod startup;
 pub mod terminal;
 pub mod widgets;
+
+#[cfg(test)]
+pub mod test_utils;
 
 // Re-export main entry points
 pub use runner::{run, run_with_project};

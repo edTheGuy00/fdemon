@@ -1,0 +1,20 @@
+---
+source: src/tui/render/tests.rs
+expression: content
+---
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                    ┌──────────────────────────────────────┐                    
+                    │              flutter_app             │                    
+                    │                                      │                    
+                    │ ⠋ [LOADING_MESSAGE]...│                    
+                    │                                      │                    
+                    │                                      │                    
+                    │                                      │                    
+                    └──────────────────────────────────────┘

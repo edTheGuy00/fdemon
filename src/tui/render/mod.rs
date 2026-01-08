@@ -1,5 +1,8 @@
 //! Main render/view function (View in TEA pattern)
 
+#[cfg(test)]
+mod tests;
+
 use std::collections::VecDeque;
 
 use super::{layout, widgets};

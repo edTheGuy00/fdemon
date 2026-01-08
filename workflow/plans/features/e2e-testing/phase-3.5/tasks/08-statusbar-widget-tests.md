@@ -199,4 +199,28 @@ cargo test widgets::status_bar --lib -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/status_bar.rs` | Added 9 TestTerminal-based unit tests (lines 864-1030) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Adapted "Error" phase test**: The task template included a test for `AppPhase::Error`, but this phase doesn't exist in the codebase. Instead, added test for `AppPhase::Stopped` to cover all actual phase states (Initializing, Running, Reloading, Stopped, Quitting).
+
+2. **Device name test adjustment**: The status bar doesn't directly display device names (it shows config info like Debug/Profile/Release instead). The test verifies that the widget renders correctly when a session with a device is present.
+
+3. **Reload count test adjustment**: The status bar shows reload timing (last reload time) rather than a reload count. The test verifies this timing display renders correctly.
+
+### Testing Performed
+
+- `cargo test widgets::status_bar --lib -- --nocapture` - Passed (34 tests, including 9 new TestTerminal-based tests)
+- All tests complete in <10ms each as required
+- `cargo clippy -- status_bar.rs` - Passed (no warnings)
+
+### Risks/Limitations
+
+None identified. All tests pass and meet performance requirements.

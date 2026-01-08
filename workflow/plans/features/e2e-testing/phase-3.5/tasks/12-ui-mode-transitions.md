@@ -236,4 +236,30 @@ cargo test tui::render::tests --lib
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/render/tests.rs` | Added 8 UI mode transition tests covering Normal <-> DeviceSelector, Normal <-> ConfirmDialog, Loading <-> Normal, phase transitions, modal overlays, and rapid mode changes |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test Structure**: Added tests to existing `tests.rs` file as a new section at the end, maintaining consistency with the existing snapshot test organization.
+2. **Assertion Strategy**: Used flexible assertions that check for presence of key UI elements rather than exact string matches, making tests more resilient to UI text changes.
+3. **Rapid Mode Test**: Included a stress test that cycles through multiple modes quickly to catch any rendering panics or state inconsistencies.
+
+### Testing Performed
+
+- `cargo test tui::render::tests::test_transition --lib -- --nocapture` - Passed (4 transition tests)
+- `cargo test tui::render::tests --lib` - Passed (23 tests total: 15 snapshots + 8 transitions)
+- `cargo test --lib` - Passed (1323 tests)
+- `cargo fmt` - Passed
+- `cargo clippy --lib -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **UI Text Dependencies**: Some assertions check for specific text like "Select", "Device", "Quit" - if UI text changes significantly, tests may need updates.
+2. **Modal Background Checks**: The `test_modal_overlay_preserves_background` test is minimal - it only checks that the modal renders without errors, not that background content is truly preserved (implementation-dependent).
+3. **No Handler Tests**: These tests verify rendering only, not the key handling that triggers mode transitions. Handler tests already exist in `src/app/handler/tests.rs`.

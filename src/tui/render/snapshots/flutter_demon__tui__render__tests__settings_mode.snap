@@ -1,0 +1,28 @@
+---
+source: src/tui/render/tests.rs
+expression: content
+---
+╭ Settings ───────────────────────────────────────────────────────[Esc] Close ─╮
+│     1.Project           2.User            3.Launch           4.VSCode        │
+╰──────────────────────────────────────────────────────────────────────────────╯
+│ [Behavior]                                                                   │
+│▶  Auto Start               false            Skip device selector and start i..
+│   Confirm Quit             true             Ask before quitting with running..
+│                                                                              │
+│ [Watcher]                                                                    │
+│   Watch Paths              lib              Directories to watch for changes │
+│   Debounce (ms)            500              Delay before triggering reload   │
+│   Auto Reload              true             Hot reload on file changes       │
+│   Extensions               dart             File extensions to watch         │
+│                                                                              │
+│ [UI]                                                                         │
+│   Log Buffer Size          10000            Maximum log entries to keep      │
+│   Show Timestamps          true             Display timestamps in logs       │
+│   Compact Logs             false            Collapse similar consecutive logs│
+│   Theme                    default          Color theme                      │
+│   Collapse Stack Traces    true             Start stack traces collapsed     │
+│   Max Frames               3                Frames shown when collapsed      │
+│                                                                              │
+│ [DevTools]                                                                   │
+│          Tab: Switch tabs  j/k: Navigate  Enter: Edit  Ctrl+S: Save          │
+╰──────────────────────────────────────────────────────────────────────────────╯

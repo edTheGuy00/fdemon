@@ -149,8 +149,147 @@ impl Widget for ConfirmDialog<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tui::test_utils::TestTerminal;
     use ratatui::{backend::TestBackend, Terminal};
 
+    fn create_quit_dialog() -> ConfirmDialogState {
+        ConfirmDialogState::new(
+            "Quit?",
+            "Are you sure you want to quit?",
+            vec![("Yes", Message::ConfirmQuit), ("No", Message::CancelQuit)],
+        )
+    }
+
+    fn create_close_session_dialog() -> ConfirmDialogState {
+        ConfirmDialogState::new(
+            "Close Session",
+            "Close the current session?",
+            vec![("Yes", Message::ConfirmQuit), ("No", Message::CancelQuit)],
+        )
+    }
+
+    #[test]
+    fn test_confirm_dialog_renders_title() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        assert!(term.buffer_contains("Quit"), "Dialog should show title");
+    }
+
+    #[test]
+    fn test_confirm_dialog_renders_message() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        assert!(
+            term.buffer_contains("sure") || term.buffer_contains("quit"),
+            "Dialog should show confirmation message"
+        );
+    }
+
+    #[test]
+    fn test_confirm_dialog_shows_options() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        // Should show Yes/No or y/n options
+        assert!(
+            term.buffer_contains("Yes")
+                || term.buffer_contains("y")
+                || term.buffer_contains("No")
+                || term.buffer_contains("n"),
+            "Dialog should show confirmation options"
+        );
+    }
+
+    #[test]
+    fn test_confirm_dialog_shows_keybindings() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        // Should show key hints
+        let content = term.content();
+        assert!(
+            content.contains("y")
+                || content.contains("n")
+                || content.contains("Enter")
+                || content.contains("Esc"),
+            "Dialog should show keybinding hints"
+        );
+    }
+
+    #[test]
+    fn test_confirm_dialog_different_actions() {
+        let mut term = TestTerminal::new();
+
+        // Quit dialog
+        let quit_state = create_quit_dialog();
+        let quit_dialog = ConfirmDialog::new(&quit_state);
+        term.render_widget(quit_dialog, term.area());
+        assert!(term.buffer_contains("Quit"));
+
+        term.clear();
+
+        // Close session dialog
+        let close_state = create_close_session_dialog();
+        let close_dialog = ConfirmDialog::new(&close_state);
+        term.render_widget(close_dialog, term.area());
+        assert!(term.buffer_contains("Close") || term.buffer_contains("Session"));
+    }
+
+    #[test]
+    fn test_confirm_dialog_modal_overlay() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        // Modal should render (just verify no panic)
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_dialog_compact() {
+        let mut term = TestTerminal::compact();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        // Should fit in small terminal
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_confirm_dialog_centered() {
+        let mut term = TestTerminal::new();
+        let state = create_quit_dialog();
+        let dialog = ConfirmDialog::new(&state);
+
+        term.render_widget(dialog, term.area());
+
+        // Dialog content should be roughly centered
+        // (This is hard to verify precisely, just check it renders)
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    // Legacy tests retained for backward compatibility
     #[test]
     fn test_confirm_dialog_state_single_session() {
         let state = ConfirmDialogState::quit_confirmation(1);

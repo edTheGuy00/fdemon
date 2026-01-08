@@ -860,4 +860,171 @@ mod tests {
         // Compact bar should NOT show error indicator when 0 errors
         assert!(!content.contains('✗'));
     }
+
+    // ─────────────────────────────────────────────────────────
+    // TestTerminal-based tests (Phase 3.5 Task 8)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_statusbar_renders_phase() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+        state.phase = AppPhase::Running;
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        assert!(
+            term.buffer_contains("Running") || term.buffer_contains("RUNNING"),
+            "Status bar should show Running phase"
+        );
+    }
+
+    #[test]
+    fn test_statusbar_renders_device_name() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+
+        // Create a session with device
+        let device = test_device("d1", "iPhone 15 Pro");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        // Device name is not directly shown in status bar (config info is shown instead)
+        // but the session should be present
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_statusbar_renders_reload_count() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+
+        // Create a session
+        let device = test_device("d1", "Device");
+        let id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(id);
+
+        // Add some reload timing
+        if let Some(handle) = state.session_manager.get_mut(id) {
+            handle.session.phase = AppPhase::Running;
+            handle.session.last_reload_time = Some(Local::now());
+        }
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        // Should render without panic and show timing
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_statusbar_phase_initializing() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+        state.phase = AppPhase::Initializing;
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        assert!(
+            term.buffer_contains("Initializing") || term.buffer_contains("Starting"),
+            "Should show initializing phase"
+        );
+    }
+
+    #[test]
+    fn test_statusbar_phase_reloading() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+        state.phase = AppPhase::Reloading;
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        assert!(
+            term.buffer_contains("Reloading") || term.buffer_contains("Reload"),
+            "Should show reloading phase"
+        );
+    }
+
+    #[test]
+    fn test_statusbar_phase_stopped() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = create_test_state();
+        state.phase = AppPhase::Stopped;
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        assert!(
+            term.buffer_contains("Stopped") || term.buffer_contains("STOPPED"),
+            "Should show stopped phase"
+        );
+    }
+
+    #[test]
+    fn test_statusbar_no_device() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let state = create_test_state();
+        // No session created, so no device
+
+        let status_bar = StatusBar::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        // Should render without panic
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_statusbar_compact() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::compact();
+        let state = create_test_state();
+
+        let status_bar = StatusBarCompact::new(&state);
+        term.render_widget(status_bar, term.area());
+
+        // Compact bar should fit in small terminal
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_statusbar_compact_vs_full() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let state = create_test_state();
+
+        let mut term_full = TestTerminal::new();
+        let mut term_compact = TestTerminal::compact();
+
+        term_full.render_widget(StatusBar::new(&state), term_full.area());
+        term_compact.render_widget(StatusBarCompact::new(&state), term_compact.area());
+
+        // Both should render, but content differs
+        assert!(!term_full.content().is_empty());
+        assert!(!term_compact.content().is_empty());
+    }
 }

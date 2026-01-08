@@ -16,3 +16,7 @@ pub mod watcher;
 // Re-export main entry points
 pub use app::{run, run_with_project};
 pub use headless::runner::run_headless;
+
+// Re-export test utilities for easy access in tests
+#[cfg(test)]
+pub use tui::test_utils;

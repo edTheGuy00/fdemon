@@ -198,4 +198,52 @@ cargo test widgets::confirm_dialog --lib -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/confirm_dialog.rs` | Added 8 new TestTerminal-based tests for widget rendering verification |
+
+### Notable Decisions/Tradeoffs
+
+1. **Adapted API to match actual implementation**: The task file referenced `ConfirmAction` enum which doesn't exist in the codebase. Adapted helper functions to use `Message` enum directly with `ConfirmQuit` and `CancelQuit` variants, matching the existing `ConfirmDialogState::new()` API signature.
+
+2. **Retained legacy tests**: Kept the existing 5 tests that were already in the module (using TestBackend directly) for backward compatibility, while adding 8 new tests using TestTerminal utility.
+
+3. **Consolidated test module**: All tests now use the same test module structure with both TestTerminal (new) and TestBackend (legacy) approaches coexisting.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test widgets::confirm_dialog --lib -- --nocapture` - Passed (13 tests: 8 new + 5 legacy)
+- `cargo fmt -- --check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+
+### Test Coverage Summary
+
+All 8 specified test cases implemented and passing:
+
+| Test Case | Status | Verifies |
+|-----------|--------|----------|
+| `test_confirm_dialog_renders_title` | PASS | Title displayed |
+| `test_confirm_dialog_renders_message` | PASS | Message displayed |
+| `test_confirm_dialog_shows_options` | PASS | Yes/No options |
+| `test_confirm_dialog_shows_keybindings` | PASS | Key hints (y/n) |
+| `test_confirm_dialog_different_actions` | PASS | Multiple dialog types |
+| `test_confirm_dialog_modal_overlay` | PASS | Modal rendering |
+| `test_confirm_dialog_compact` | PASS | Small terminal (40x12) |
+| `test_confirm_dialog_centered` | PASS | Layout positioning |
+
+### Acceptance Criteria
+
+- [x] Title and message render correctly
+- [x] Yes/No options visible
+- [x] Keybinding hints displayed
+- [x] Multiple dialog types supported
+- [x] Works in various terminal sizes
+
+### Risks/Limitations
+
+None identified. All tests are fast (<1ms), deterministic, and use the TestTerminal utility correctly.

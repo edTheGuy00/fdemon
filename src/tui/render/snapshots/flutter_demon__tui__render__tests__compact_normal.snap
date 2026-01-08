@@ -1,0 +1,16 @@
+---
+source: src/tui/render/tests.rs
+expression: term.content()
+---
+ Flutter Demon  [r] [R] [x] [d] [q]────┐
+│                                      │
+└──────────────────────────────────────┘
+┌ Logs ────────────────────────────────┐
+│                                      │
+│        Waiting for Flutter...        │
+│                                      │
+│Make sure you're in a Flutter project │
+│                                      │
+└──────────────────────────────────────┘
+────────────────────────────────────────
+ ●

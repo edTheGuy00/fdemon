@@ -1,0 +1,16 @@
+---
+source: src/tui/render/tests.rs
+expression: term.content()
+---
+ Flutter Demon  [r] [R] [x] [d] [q]────┐
+│                                      │
+└───────╭ Select Target Device ╮───────┘
+┌ Logs ─│▶ + Launch Android Emu│───────┐
+│       │  + Launch iOS Simulat│       │
+│       │                      │       │
+│       │                      │       │
+│Make su│↑↓ Navigate  Enter Sel│roject │
+│       │                      │       │
+└───────╰──────────────────────╯───────┘
+────────────────────────────────────────
+ ○

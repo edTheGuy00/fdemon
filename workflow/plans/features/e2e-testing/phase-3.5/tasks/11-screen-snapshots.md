@@ -253,4 +253,46 @@ cargo insta test --check
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/test_utils.rs` | Made `terminal` field public for direct test access |
+| `src/tui/render.rs` → `src/tui/render/mod.rs` | Converted to directory module |
+| `src/tui/render/tests.rs` | **NEW** - Full-screen snapshot tests for all UI modes |
+| `src/tui/render/snapshots/` | **NEW** - 14 snapshot files for regression testing |
+
+### Notable Decisions/Tradeoffs
+
+1. **Loading Message Filter**: Used insta's filter feature to normalize randomized loading messages with regex `r"\s*⠋[^│\n]+"` to handle variable whitespace padding and message truncation at box borders.
+
+2. **Test Coverage**: Created 15 tests covering all major UI modes:
+   - Normal mode (4 states: Initializing, Running, Reloading, Stopped)
+   - Device Selector (empty and populated)
+   - Confirm Dialog (single and multiple sessions)
+   - Loading screen (with filtered random message)
+   - Settings mode
+   - Compact terminal variants (2 tests)
+   - Edge cases (no project name, very long project name)
+   - SearchInput mode (basic render verification)
+
+3. **Module Structure**: Converted `render.rs` to a directory module to accommodate tests file, following the pattern used by other widgets like `log_view`.
+
+4. **TestTerminal Enhancement**: Made the `terminal` field public to allow tests direct access to `draw()` method for full-screen rendering.
+
+### Testing Performed
+
+- `cargo test tui::render::tests --lib -- --nocapture` - **Passed** (15 tests, 100% success rate across 3 consecutive runs)
+- `cargo test --lib` - **Passed** (1312 tests)
+- `cargo clippy --lib` - **Passed** (no warnings)
+- `cargo fmt --check` - **Passed** (formatted)
+
+### Risks/Limitations
+
+1. **Snapshot Stability**: Loading screen snapshot requires regex filtering due to randomized messages. Filter is robust but may need adjustment if loading message format changes.
+
+2. **SearchInput Mode**: Test verifies basic rendering without a session. Future enhancement could add session-based search input testing once session mocking utilities are available.
+
+3. **Snapshot Maintenance**: 14 snapshot files will need review whenever UI layout changes. This is by design for regression detection but requires developer attention during reviews.

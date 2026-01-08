@@ -1103,4 +1103,183 @@ mod tests {
         // Should have gauge characters (from header indicator)
         assert!(content.contains('━') || content.contains('─') || content.contains('─'));
     }
+
+    // ─────────────────────────────────────────────────────────
+    // Task 09: TestTerminal-based Widget Tests
+    // ─────────────────────────────────────────────────────────
+
+    fn create_mock_device(id: &str, name: &str) -> Device {
+        Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    fn create_selector_state_with_devices(devices: Vec<Device>) -> DeviceSelectorState {
+        let mut state = DeviceSelectorState::new();
+        state.set_devices(devices);
+        state
+    }
+
+    #[test]
+    fn test_device_selector_renders_title() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let state = DeviceSelectorState::new();
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        assert!(
+            term.buffer_contains("Select") || term.buffer_contains("Device"),
+            "Should show device selector title"
+        );
+    }
+
+    #[test]
+    fn test_device_selector_shows_device_list() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let devices = vec![
+            create_mock_device("linux", "Linux Desktop"),
+            create_mock_device("chrome", "Chrome"),
+        ];
+        let state = create_selector_state_with_devices(devices);
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        assert!(term.buffer_contains("Linux"), "Should show Linux device");
+        assert!(term.buffer_contains("Chrome"), "Should show Chrome device");
+    }
+
+    #[test]
+    fn test_device_selector_highlights_selected() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let devices = vec![
+            create_mock_device("linux", "Linux Desktop"),
+            create_mock_device("chrome", "Chrome"),
+        ];
+        let mut state = create_selector_state_with_devices(devices);
+        state.select_next(); // Select Chrome
+
+        let selector = DeviceSelector::with_session_state(&state, false);
+        term.render_widget(selector, term.area());
+
+        // Both should appear, Chrome should be highlighted (verify visually or by position)
+        assert!(term.buffer_contains("Chrome"));
+    }
+
+    #[test]
+    fn test_device_selector_empty_state() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let mut state = DeviceSelectorState::new(); // No devices
+        state.show_emulator_options = false; // Disable emulator options to get true empty state
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        assert!(
+            term.buffer_contains("No device") || term.buffer_contains("no device"),
+            "Should show empty state message"
+        );
+    }
+
+    #[test]
+    fn test_device_selector_shows_hints() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let devices = vec![create_mock_device("linux", "Linux")];
+        let state = create_selector_state_with_devices(devices);
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        // Should show navigation hints
+        assert!(
+            term.buffer_contains("Enter")
+                || term.buffer_contains("↑")
+                || term.buffer_contains("↓")
+                || term.buffer_contains("Esc"),
+            "Should show navigation hints"
+        );
+    }
+
+    #[test]
+    fn test_device_selector_with_running_sessions() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let state = DeviceSelectorState::new();
+        // has_sessions = true should show different UI (e.g., "Add device" vs "Select device")
+        let selector = DeviceSelector::with_session_state(&state, true);
+
+        term.render_widget(selector, term.area());
+
+        // Should render with session-aware messaging
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_device_selector_modal_overlay() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let state = DeviceSelectorState::new();
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        // Modal should have borders or clear background
+        // This is more of a visual test - just verify it renders
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
+
+    #[test]
+    fn test_device_selector_many_devices() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::new();
+        let devices: Vec<Device> = (0..10)
+            .map(|i| create_mock_device(&format!("device{}", i), &format!("Device {}", i)))
+            .collect();
+        let state = create_selector_state_with_devices(devices);
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        // Should handle many devices (may need scrolling)
+        assert!(term.buffer_contains("Device 0"));
+    }
+
+    #[test]
+    fn test_device_selector_compact() {
+        use crate::tui::test_utils::TestTerminal;
+
+        let mut term = TestTerminal::compact();
+        let devices = vec![create_mock_device("linux", "Linux")];
+        let state = create_selector_state_with_devices(devices);
+        let selector = DeviceSelector::with_session_state(&state, false);
+
+        term.render_widget(selector, term.area());
+
+        // Should fit in compact terminal
+        let content = term.content();
+        assert!(!content.is_empty());
+    }
 }

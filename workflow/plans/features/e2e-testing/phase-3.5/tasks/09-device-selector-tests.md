@@ -219,4 +219,31 @@ cargo test widgets::device_selector --lib -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/device_selector.rs` | Added 9 TestTerminal-based widget tests (lines 1107-1285) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helper Functions**: Created `create_mock_device()` and `create_selector_state_with_devices()` helper functions specific to the TestTerminal tests to avoid conflicts with existing test helpers that use different patterns.
+
+2. **Empty State Test**: Modified the empty state test to disable emulator options (`state.show_emulator_options = false`) to achieve a true empty state, since the DeviceSelector shows emulator launch options by default even when no devices are present.
+
+3. **Selection Test**: Used `state.select_next()` instead of `state.select_index(1)` as specified in the task plan, since `select_next()` is the public API method available on `DeviceSelectorState`.
+
+### Testing Performed
+
+- `cargo test widgets::device_selector --lib -- --nocapture` - Passed (44 tests total, including 9 new tests)
+- `cargo test --lib` - Passed (1300 tests)
+- `cargo fmt --check` - Passed
+- `cargo clippy --lib -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Visual Testing**: Some tests (like `test_device_selector_highlights_selected`) verify that content renders but cannot directly verify visual highlighting due to the limitations of buffer-based testing. These tests confirm the content appears but not the exact styling.
+
+2. **Existing Tests**: The file already had comprehensive tests using `TestBackend` directly. The new tests demonstrate the TestTerminal API as requested but provide similar coverage to existing tests. This is intentional to showcase the new test utility pattern.

@@ -1,21 +1,3 @@
-## Task: Create TestBackend Test Utilities
-
-**Objective**: Create a test utilities module that provides easy setup for TestBackend-based widget and rendering tests.
-
-**Depends on**: 05-validate-pty-tests
-
-### Scope
-
-- `src/tui/test_utils.rs`: **NEW** - Test utilities module
-- `src/tui/mod.rs`: Export test utilities
-
-### Details
-
-#### 1. Create Test Utilities Module
-
-Create `src/tui/test_utils.rs`:
-
-```rust
 //! Test utilities for TUI rendering verification
 //!
 //! Provides helpers for testing widgets and full-screen rendering
@@ -29,7 +11,7 @@ Create `src/tui/test_utils.rs`:
 //!
 //! #[test]
 //! fn test_header_renders_project_name() {
-//!     let mut term = TestTerminal::new(80, 24);
+//!     let mut term = TestTerminal::new();
 //!     let header = MainHeader::new(Some("my_project"));
 //!
 //!     term.render_widget(&header, term.area());
@@ -41,8 +23,8 @@ Create `src/tui/test_utils.rs`:
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::Terminal;
 use ratatui::widgets::Widget;
+use ratatui::Terminal;
 
 /// Standard test terminal size (matches common terminal dimensions)
 pub const TEST_WIDTH: u16 = 80;
@@ -54,7 +36,7 @@ pub const COMPACT_HEIGHT: u16 = 12;
 
 /// A test terminal wrapper for easy widget testing
 pub struct TestTerminal {
-    terminal: Terminal<TestBackend>,
+    pub terminal: Terminal<TestBackend>,
 }
 
 impl TestTerminal {
@@ -77,7 +59,8 @@ impl TestTerminal {
 
     /// Get the full terminal area
     pub fn area(&self) -> Rect {
-        self.terminal.size().expect("Failed to get terminal size")
+        let size = self.terminal.size().expect("Failed to get terminal size");
+        Rect::new(0, 0, size.width, size.height)
     }
 
     /// Render a widget to the terminal
@@ -120,7 +103,7 @@ impl TestTerminal {
     pub fn cell_at(&self, x: u16, y: u16) -> Option<&str> {
         let buffer = self.buffer();
         if x < buffer.area.width && y < buffer.area.height {
-            Some(buffer.get(x, y).symbol())
+            Some(buffer[(x, y)].symbol())
         } else {
             None
         }
@@ -148,7 +131,7 @@ fn buffer_to_string(buffer: &Buffer) -> String {
     let mut result = String::new();
     for y in 0..buffer.area.height {
         for x in 0..buffer.area.width {
-            result.push_str(buffer.get(x, y).symbol());
+            result.push_str(buffer[(x, y)].symbol());
         }
         result.push('\n');
     }
@@ -160,23 +143,20 @@ fn get_line_content(buffer: &Buffer, line: u16) -> String {
     let mut result = String::new();
     if line < buffer.area.height {
         for x in 0..buffer.area.width {
-            result.push_str(buffer.get(x, line).symbol());
+            result.push_str(buffer[(x, line)].symbol());
         }
     }
     result
 }
 
 /// Create a minimal AppState for testing
-#[cfg(test)]
 pub fn create_test_state() -> crate::app::state::AppState {
     use crate::app::state::AppState;
-    use std::path::PathBuf;
 
-    AppState::new(PathBuf::from("/test/project"))
+    AppState::new()
 }
 
 /// Create AppState with custom project name
-#[cfg(test)]
 pub fn create_test_state_with_name(name: &str) -> crate::app::state::AppState {
     let mut state = create_test_state();
     state.project_name = Some(name.to_string());
@@ -216,81 +196,93 @@ mod tests {
         // Default buffer is filled with spaces
         assert_eq!(content.lines().count(), 2);
     }
+
+    #[test]
+    fn test_buffer_contains() {
+        use ratatui::widgets::Paragraph;
+
+        let mut term = TestTerminal::with_size(20, 5);
+        let paragraph = Paragraph::new("Hello World");
+        term.render_widget(paragraph, term.area());
+
+        assert!(term.buffer_contains("Hello World"));
+        assert!(!term.buffer_contains("Goodbye"));
+    }
+
+    #[test]
+    fn test_line_contains() {
+        use ratatui::widgets::Paragraph;
+
+        let mut term = TestTerminal::with_size(20, 5);
+        let paragraph = Paragraph::new("Hello\nWorld");
+        term.render_widget(paragraph, term.area());
+
+        assert!(term.line_contains(0, "Hello"));
+        assert!(term.line_contains(1, "World"));
+        assert!(!term.line_contains(0, "World"));
+    }
+
+    #[test]
+    fn test_cell_at() {
+        use ratatui::widgets::Paragraph;
+
+        let mut term = TestTerminal::with_size(20, 5);
+        let paragraph = Paragraph::new("AB");
+        term.render_widget(paragraph, term.area());
+
+        assert_eq!(term.cell_at(0, 0), Some("A"));
+        assert_eq!(term.cell_at(1, 0), Some("B"));
+        assert_eq!(term.cell_at(2, 0), Some(" "));
+    }
+
+    #[test]
+    fn test_cell_at_out_of_bounds() {
+        let term = TestTerminal::with_size(10, 5);
+        assert_eq!(term.cell_at(100, 100), None);
+    }
+
+    #[test]
+    fn test_content_full_dump() {
+        let term = TestTerminal::with_size(5, 2);
+        let content = term.content();
+        // Should have 2 lines of 5 spaces each (with newlines)
+        assert!(content.contains('\n'));
+        assert_eq!(content.lines().count(), 2);
+    }
+
+    #[test]
+    fn test_clear() {
+        use ratatui::widgets::Paragraph;
+
+        let mut term = TestTerminal::with_size(20, 5);
+        let paragraph = Paragraph::new("Hello");
+        term.render_widget(paragraph, term.area());
+
+        assert!(term.buffer_contains("Hello"));
+
+        term.clear();
+        // After clear, the buffer should still exist but be empty
+        let content = term.content();
+        assert!(!content.contains("Hello"));
+    }
+
+    #[test]
+    fn test_default_terminal() {
+        let term = TestTerminal::default();
+        assert_eq!(term.area().width, TEST_WIDTH);
+        assert_eq!(term.area().height, TEST_HEIGHT);
+    }
+
+    #[test]
+    fn test_create_test_state() {
+        let state = create_test_state();
+        // Should create a valid AppState
+        assert_eq!(state.ui_mode, crate::app::state::UiMode::Normal);
+    }
+
+    #[test]
+    fn test_create_test_state_with_name() {
+        let state = create_test_state_with_name("test_project");
+        assert_eq!(state.project_name, Some("test_project".to_string()));
+    }
 }
-```
-
-#### 2. Export from mod.rs
-
-Add to `src/tui/mod.rs`:
-
-```rust
-#[cfg(test)]
-pub mod test_utils;
-```
-
-#### 3. Re-export for Easy Access
-
-Consider adding to `src/lib.rs` for test visibility:
-
-```rust
-#[cfg(test)]
-pub use tui::test_utils;
-```
-
-### Acceptance Criteria
-
-1. `TestTerminal` struct provides easy widget testing
-2. Helper methods for common assertions:
-   - `buffer_contains(text)` - Check if text appears anywhere
-   - `line_contains(line, text)` - Check specific line
-   - `cell_at(x, y)` - Get specific cell content
-3. Standard and compact terminal sizes available
-4. `create_test_state()` helper for AppState creation
-5. All utility tests pass
-
-### Testing
-
-```bash
-# Run test utility tests
-cargo test tui::test_utils --lib
-
-# Verify module compiles
-cargo check --lib
-```
-
-### Notes
-
-- These utilities are `#[cfg(test)]` only - not in release builds
-- Keep utilities simple - complexity belongs in widget tests
-- Consider adding insta integration in Task 11
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `src/tui/test_utils.rs` | Created complete test utilities module with TestTerminal struct and helper functions |
-| `src/tui/mod.rs` | Added `#[cfg(test)] pub mod test_utils;` export |
-| `src/lib.rs` | Added `#[cfg(test)] pub use tui::test_utils;` re-export for easy test access |
-
-### Notable Decisions/Tradeoffs
-
-1. **API Compatibility**: Updated code to use current ratatui API - used `terminal.size()` which returns `Size` instead of `Rect`, and used `buffer[(x, y)]` instead of deprecated `buffer.get(x, y)`.
-2. **AppState Creation**: Used `AppState::new()` which creates a state with default settings and an empty PathBuf, as the constructor doesn't require a path parameter.
-3. **Comprehensive Test Coverage**: Added 13 unit tests covering all TestTerminal methods to ensure reliability.
-
-### Testing Performed
-
-- `cargo fmt` - Passed
-- `cargo check --lib` - Passed (0.95s)
-- `cargo test tui::test_utils --lib` - Passed (13 tests in 0.00s)
-- `cargo clippy -- -D warnings` - Passed (1.96s)
-
-### Risks/Limitations
-
-1. **None identified**: Implementation follows established patterns and uses only test-safe APIs. The module is properly gated with `#[cfg(test)]` to exclude from release builds.

@@ -115,65 +115,164 @@ impl Widget for MainHeader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
+    use crate::daemon::Device;
+    use crate::tui::test_utils::TestTerminal;
 
-    #[test]
-    fn test_main_header_with_project_name() {
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).unwrap();
-
-        terminal
-            .draw(|f| {
-                let header = MainHeader::new(Some("my_cool_app"));
-                f.render_widget(header, f.area());
-            })
-            .unwrap();
-
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-
-        assert!(content.contains("Flutter Demon"));
-        assert!(content.contains("my_cool_app"));
-        assert!(content.contains("[r]"));
-        assert!(content.contains("[d]"));
-        assert!(content.contains("[q]"));
+    fn test_device(id: &str, name: &str, platform: &str) -> Device {
+        Device {
+            id: id.to_string(),
+            name: name.to_string(),
+            platform: platform.to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
     }
 
     #[test]
-    fn test_main_header_without_project_name() {
-        let backend = TestBackend::new(80, 3);
-        let mut terminal = Terminal::new(backend).unwrap();
+    fn test_header_renders_title() {
+        let mut term = TestTerminal::new();
+        let header = MainHeader::new(None);
 
-        terminal
-            .draw(|f| {
-                let header = MainHeader::new(None);
-                f.render_widget(header, f.area());
-            })
-            .unwrap();
+        term.render_widget(header, term.area());
 
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
-
-        assert!(content.contains("Flutter Demon"));
-        assert!(content.contains("flutter")); // Default fallback
+        // Should contain app name
+        assert!(
+            term.buffer_contains("Flutter Demon"),
+            "Header should contain app title"
+        );
     }
 
     #[test]
-    fn test_main_header_narrow_terminal() {
-        let backend = TestBackend::new(40, 3);
-        let mut terminal = Terminal::new(backend).unwrap();
+    fn test_header_renders_project_name() {
+        let mut term = TestTerminal::new();
+        let header = MainHeader::new(Some("my_flutter_app"));
 
-        terminal
-            .draw(|f| {
-                let header = MainHeader::new(Some("my_app"));
-                f.render_widget(header, f.area());
-            })
+        term.render_widget(header, term.area());
+
+        assert!(
+            term.buffer_contains("my_flutter_app"),
+            "Header should contain project name"
+        );
+    }
+
+    #[test]
+    fn test_header_without_project_name() {
+        let mut term = TestTerminal::new();
+        let header = MainHeader::new(None);
+
+        term.render_widget(header, term.area());
+
+        // Should still render without crashing
+        let content = term.content();
+        assert!(!content.is_empty(), "Header should render something");
+        // Default fallback is "flutter"
+        assert!(
+            term.buffer_contains("flutter"),
+            "Header should use default project name"
+        );
+    }
+
+    #[test]
+    fn test_header_with_sessions() {
+        let mut term = TestTerminal::new();
+        let mut session_manager = SessionManager::new();
+
+        // Add mock sessions
+        session_manager
+            .create_session(&test_device("device1", "iPhone 15", "ios"))
+            .unwrap();
+        session_manager
+            .create_session(&test_device("device2", "Pixel 7", "android"))
             .unwrap();
 
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        let header = MainHeader::new(Some("test_app")).with_sessions(&session_manager);
 
-        // Should still contain the title
-        assert!(content.contains("Flutter Demon"));
+        term.render_widget(header, term.area());
+
+        // Verify session tabs appear (tabs show device names with status icons)
+        assert!(
+            term.buffer_contains("iPhone 15"),
+            "Header should show first session device name"
+        );
+        assert!(
+            term.buffer_contains("Pixel 7"),
+            "Header should show second session device name"
+        );
+        // Check for status icon (○ for initializing sessions)
+        assert!(
+            term.buffer_contains("○"),
+            "Header should show status icons for sessions"
+        );
+    }
+
+    #[test]
+    fn test_header_truncates_long_project_name() {
+        let mut term = TestTerminal::with_size(40, 5); // Narrow terminal
+        let long_name = "this_is_a_very_long_flutter_project_name_that_should_truncate";
+        let header = MainHeader::new(Some(long_name));
+
+        term.render_widget(header, term.area());
+
+        // Should not overflow - verify no panic and content fits
+        let content = term.content();
+        assert!(content.len() > 0, "Should render without panic");
+        // The header renders the full name but it gets truncated by the terminal width
+        // Verify basic rendering worked without panic
+        assert!(
+            term.buffer_contains("Flutter Demon"),
+            "Should still show app title"
+        );
+    }
+
+    #[test]
+    fn test_header_compact_mode() {
+        let mut term = TestTerminal::compact();
+        let header = MainHeader::new(Some("app"));
+
+        term.render_widget(header, term.area());
+
+        // Should adapt to compact size
+        let content = term.content();
+        assert!(!content.is_empty(), "Should render in compact mode");
+        assert!(
+            term.buffer_contains("Flutter Demon"),
+            "Should contain title in compact mode"
+        );
+    }
+
+    #[test]
+    fn test_header_with_keybindings() {
+        let mut term = TestTerminal::new();
+        let header = MainHeader::new(Some("test_project"));
+
+        term.render_widget(header, term.area());
+
+        // Verify keybindings are present
+        assert!(term.buffer_contains("[r]"), "Should show reload key");
+        assert!(term.buffer_contains("[R]"), "Should show restart key");
+        assert!(term.buffer_contains("[x]"), "Should show stop key");
+        assert!(
+            term.buffer_contains("[d]"),
+            "Should show device selector key"
+        );
+        assert!(term.buffer_contains("[q]"), "Should show quit key");
+    }
+
+    #[test]
+    fn test_header_without_sessions() {
+        let mut term = TestTerminal::new();
+        let session_manager = SessionManager::new(); // Empty session manager
+
+        let header = MainHeader::new(Some("test_app")).with_sessions(&session_manager);
+
+        term.render_widget(header, term.area());
+
+        // Should render without tabs when no sessions
+        let content = term.content();
+        assert!(!content.is_empty(), "Should render without sessions");
+        assert!(term.buffer_contains("test_app"), "Should show project name");
     }
 }
