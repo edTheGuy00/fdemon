@@ -35,6 +35,7 @@ Normal mode is the default mode when viewing logs and managing your Flutter app 
 | Key | Action | Description |
 |-----|--------|-------------|
 | `q` | Quit | Request to quit (may show confirmation dialog if sessions are running) |
+| `qq` | Quick Quit | Quick quit shortcut - second `q` confirms the quit dialog |
 | `Esc` | Quit | Same as `q` |
 | `Ctrl+C` | Force Quit | Emergency exit, bypasses confirmation dialog |
 | `c` | Clear Logs | Clear all logs in the current session |
@@ -322,6 +323,7 @@ When quitting with active sessions, a confirmation dialog appears.
 | Key | Action | Description |
 |-----|--------|-------------|
 | `y` / `Y` | Confirm | Confirm and quit Flutter Demon |
+| `q` | Confirm | Confirm quit (enables "qq" quick quit pattern) |
 | `Enter` | Confirm | Same as `y` |
 | `n` / `N` | Cancel | Cancel quit and return to normal mode |
 | `Esc` | Cancel | Same as `n` |

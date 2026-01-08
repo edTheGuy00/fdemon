@@ -294,6 +294,20 @@ fn test_ctrl_c_in_confirm_dialog_force_quits() {
     assert!(matches!(result, Some(Message::Quit)));
 }
 
+#[test]
+fn test_q_in_confirm_dialog_confirms() {
+    use crate::app::state::UiMode;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::ConfirmDialog;
+
+    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+    let result = handle_key(&state, key);
+
+    // 'q' in confirm dialog should confirm (enables "qq" quick quit)
+    assert!(matches!(result, Some(Message::ConfirmQuit)));
+}
+
 // ─────────────────────────────────────────────────────────
 // Device selector tests
 // ─────────────────────────────────────────────────────────

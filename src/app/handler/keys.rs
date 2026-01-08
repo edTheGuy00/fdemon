@@ -60,9 +60,12 @@ fn handle_key_device_selector(state: &AppState, key: KeyEvent) -> Option<Message
 fn handle_key_confirm_dialog(key: KeyEvent) -> Option<Message> {
     match (key.code, key.modifiers) {
         // Confirm quit
-        (KeyCode::Char('y'), _) | (KeyCode::Char('Y'), _) | (KeyCode::Enter, _) => {
-            Some(Message::ConfirmQuit)
-        }
+        // 'y', 'Y', or 'q' confirms the dialog action
+        // Note: 'q' allows double-tap "qq" as quick quit shortcut
+        (KeyCode::Char('y'), _)
+        | (KeyCode::Char('Y'), _)
+        | (KeyCode::Char('q'), _)
+        | (KeyCode::Enter, _) => Some(Message::ConfirmQuit),
         // Cancel
         (KeyCode::Char('n'), _) | (KeyCode::Char('N'), _) | (KeyCode::Esc, _) => {
             Some(Message::CancelQuit)
