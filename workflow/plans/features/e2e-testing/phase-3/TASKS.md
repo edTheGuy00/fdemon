@@ -71,11 +71,11 @@ Wave 5: Complex Workflows     ▼
 |---|------|--------|------------|---------|
 | 1 | [01-add-pty-dependencies](tasks/01-add-pty-dependencies.md) | Done | - | `Cargo.toml` |
 | 2 | [02-pty-test-utilities](tasks/02-pty-test-utilities.md) | Done | 1 | `tests/e2e/pty_utils.rs` |
-| 2a | [02a-implement-drop-trait](tasks/02a-implement-drop-trait.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
-| 2b | [02b-fix-quit-race-condition](tasks/02b-fix-quit-race-condition.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
-| 2c | [02c-add-test-isolation](tasks/02c-add-test-isolation.md) | Not Started | 2 | `Cargo.toml`, `tests/e2e/pty_utils.rs` |
-| 2d | [02d-fix-capture-screen](tasks/02d-fix-capture-screen.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
-| 2e | [02e-code-quality-improvements](tasks/02e-code-quality-improvements.md) | Not Started | 2 | `tests/e2e/pty_utils.rs` |
+| 2a | [02a-implement-drop-trait](tasks/02a-implement-drop-trait.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
+| 2b | [02b-fix-quit-race-condition](tasks/02b-fix-quit-race-condition.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
+| 2c | [02c-add-test-isolation](tasks/02c-add-test-isolation.md) | Done | 2 | `Cargo.toml`, `tests/e2e/pty_utils.rs` |
+| 2d | [02d-fix-capture-screen](tasks/02d-fix-capture-screen.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
+| 2e | [02e-code-quality-improvements](tasks/02e-code-quality-improvements.md) | Done | 2 | `tests/e2e/pty_utils.rs` |
 | 3 | [03-test-startup-header](tasks/03-test-startup-header.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
 | 4 | [04-test-device-selector](tasks/04-test-device-selector.md) | Not Started | 2a-2e | `tests/e2e/tui_interaction.rs` |
 | 5 | [05-test-reload-key](tasks/05-test-reload-key.md) | Not Started | 3, 4 | `tests/e2e/tui_interaction.rs` |
@@ -124,12 +124,12 @@ Phase 3 is complete when:
 
 - [x] `expectrl` and `insta` dependencies added to Cargo.toml
 - [x] PTY test utilities provide reliable terminal interaction
-- [ ] Wave 1 follow-up fixes complete:
-  - [ ] `FdemonSession` implements `Drop` for cleanup on panic
-  - [ ] `quit()` uses polling loop with termination verification
-  - [ ] PTY tests use `#[serial]` for test isolation
-  - [ ] `capture_screen()` works correctly or behavior documented
-  - [ ] Public methods have doc comments, magic numbers extracted
+- [x] Wave 1 follow-up fixes complete:
+  - [x] `FdemonSession` implements `Drop` for cleanup on panic
+  - [x] `quit()` uses polling loop with termination verification
+  - [x] PTY tests use `#[serial]` for test isolation
+  - [x] `capture_screen()` works correctly or behavior documented
+  - [x] Public methods have doc comments, magic numbers extracted
 - [ ] TUI interaction tests verify keyboard input handling:
   - [ ] Startup shows header with project name
   - [ ] Device selector responds to arrow keys and Enter

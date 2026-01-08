@@ -60,6 +60,7 @@ tempfile = "3"
 
 # E2E Testing
 mockall = "0.13"
+serial_test = "3"
 
 # PTY-based TUI testing
 expectrl = "0.7"           # PTY spawn and interaction

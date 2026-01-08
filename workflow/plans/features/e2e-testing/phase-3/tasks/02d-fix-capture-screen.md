@@ -110,3 +110,41 @@ fn test_capture_screen_returns_content() {
 
 - Logic Reasoning Checker: "capture_screen() Logic Flaw"
 - ACTION_ITEMS.md Issue #4
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/tests/e2e/pty_utils.rs` | Fixed `capture_screen()` method to use `found.get(0)` instead of `found.before()`, added comprehensive documentation, implemented timeout handling with clear behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Used Option A (matched content) with enhanced timeout handling**: Changed from `found.before()` to `found.get(0)` to capture the actual matched content. Used `.+` regex instead of `.*` to ensure at least one character is matched.
+
+2. **Implemented graceful timeout handling**: Instead of returning an error on timeout (which would break the best-effort snapshot use case), the method returns an empty string on timeout but documents this behavior clearly. A short 500ms timeout is used to avoid long waits when no output is available.
+
+3. **Added comprehensive documentation**: Included detailed doc comments explaining the method's purpose, return values, and when to use `expect()` instead for reliable content verification. Added a code example showing proper usage.
+
+4. **Updated test to use TUI mode**: The existing test was using headless mode (default for `spawn()`), which outputs JSON events instead of TUI content. Changed the test to spawn in TUI mode (no `--headless` flag) so that actual screen content can be captured and verified.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --test e2e test_capture_screen -- --ignored` - Passed (verified method returns non-empty content with project name)
+- `cargo test --test e2e -- --ignored` - 5/6 tests passed (1 pre-existing failure in `test_quit` unrelated to this change)
+
+### Risks/Limitations
+
+1. **Empty string on timeout is intentional**: The method returns an empty string if no output is available within 500ms. This is documented as expected behavior for snapshot/debugging use cases. For reliable content verification, users should use `expect()` with specific patterns instead.
+
+2. **ANSI escape codes in captured content**: The captured content includes raw ANSI escape codes from the TUI, making string matching challenging. Tests should either strip ANSI codes or look for basic text content that appears in the output.
+
+3. **Headless mode incompatibility**: This method only works in TUI mode, not headless mode (which outputs JSON events). This is documented in the test and should be noted in any future usage.

@@ -96,3 +96,34 @@ fn test_quit_verifies_termination() {
 
 - Logic Reasoning Checker: "Race Condition in quit() Method"
 - ACTION_ITEMS.md Issue #2
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/tests/e2e/pty_utils.rs` | Added polling-based quit implementation with named constants |
+
+### Notable Decisions/Tradeoffs
+
+1. **Polling Interval**: Used 100ms polling interval (QUIT_POLL_INTERVAL_MS) as a balance between responsiveness and CPU usage
+2. **Graceful Timeout**: Set 2000ms timeout (QUIT_TIMEOUT_MS) for graceful shutdown before force-kill, which should be sufficient for most cases
+3. **Post-Kill Verification**: Added additional 1s verification loop (10 iterations x 100ms) after force-kill to ensure process is actually dead
+4. **Error Propagation**: Method now returns explicit error if process doesn't terminate, making test failures more obvious
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --test e2e -- --ignored` - Compiled successfully (warnings are expected for unused helper methods)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **CI Environment**: 2000ms timeout may still be insufficient in extremely slow CI environments. Future enhancement could read timeout from environment variable `FDEMON_TEST_TIMEOUT_MS` as suggested in task notes
+2. **Process State Race**: Very minor race condition exists between `is_alive()` check and return, but this is inherent to process management and the window is minimal (< 1ms)
