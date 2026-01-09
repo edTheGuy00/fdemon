@@ -95,10 +95,24 @@ cargo doc --no-deps
 
 ## Completion Summary
 
-**Status:** ❌ Not done
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Testing Performed:**
-- (pending)
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated layer dependency table to show TUI → App dependency; added TEA View pattern explanation; updated tui/ module table with render/ structure and test_utils.rs; updated test coverage table with render/tests.rs and status_bar tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **TEA View Pattern Explanation**: Added explicit documentation that the TUI→App dependency is intentional and required by the TEA pattern. This clarifies what could appear to be a layer violation to future maintainers.
+2. **Test Coverage**: Listed status_bar tests as "inline" rather than separate file, reflecting actual test organization in the codebase.
+
+### Testing Performed
+
+- `cargo doc --no-deps` - Passed (documentation builds successfully)
+- `cargo check` - Passed (code compiles without errors)
+
+### Risks/Limitations
+
+None - This is a documentation-only change that accurately reflects the existing architecture and test structure.

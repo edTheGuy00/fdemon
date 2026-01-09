@@ -76,10 +76,17 @@ Each layer has clear responsibilities and dependencies flow downward:
 | **Binary** | CLI, entry point | All |
 | **App** | State, orchestration | Core, Daemon, TUI |
 | **Services** | Reusable controllers | Core, Daemon |
-| **TUI** | Presentation | Core |
+| **TUI** | Presentation | Core, App (TEA View pattern) |
 | **Daemon** | Flutter process I/O | Core |
 | **Core** | Domain types | None |
 | **Common** | Utilities | None |
+
+### Layer Dependencies Note
+
+The TUI layer depends on App because of the TEA pattern:
+- **View** (`tui::render`) must receive **Model** (`AppState`) to render it
+- This is the fundamental TEA contract: `View: State → UI`
+- The dependency is intentional and necessary, not a violation
 
 ### Error Handling
 
@@ -285,11 +292,13 @@ Presentation layer using `ratatui` for rendering.
 | File | Purpose |
 |------|---------|
 | `mod.rs` | Main event loop, message channel setup, task spawning. |
-| `render.rs` | Renders `AppState` to terminal frame. |
+| `render/mod.rs` | State → UI rendering (was render.rs). |
+| `render/tests.rs` | Full-screen snapshot and transition tests. |
 | `layout.rs` | Layout calculations for different UI modes. |
 | `event.rs` | Terminal event polling (keyboard, resize). |
 | `terminal.rs` | Terminal initialization, cleanup, panic hook. |
 | `selector.rs` | Interactive project selection (when multiple found). |
+| `test_utils.rs` | TestTerminal wrapper and test helpers. |
 
 **Widgets (`widgets/`):**
 
@@ -636,7 +645,9 @@ cargo test test_hot_reload_flow
 | `core/discovery` | inline | Project detection logic |
 | `core/ansi` | inline | ANSI escape handling |
 | `daemon/protocol` | inline | JSON-RPC parsing |
+| `tui/render` | `render/tests.rs` | Full-screen snapshots, UI transitions |
 | `tui/widgets/log_view` | `tests.rs` | Widget rendering, scrolling |
+| `tui/widgets/status_bar` | inline | Widget rendering, phase display |
 
 ---
 

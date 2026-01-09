@@ -115,21 +115,7 @@ impl Widget for MainHeader<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::Device;
-    use crate::tui::test_utils::TestTerminal;
-
-    fn test_device(id: &str, name: &str, platform: &str) -> Device {
-        Device {
-            id: id.to_string(),
-            name: name.to_string(),
-            platform: platform.to_string(),
-            emulator: false,
-            category: None,
-            platform_type: None,
-            ephemeral: false,
-            emulator_id: None,
-        }
-    }
+    use crate::tui::test_utils::{test_device_with_platform, TestTerminal};
 
     #[test]
     fn test_header_renders_title() {
@@ -182,10 +168,10 @@ mod tests {
 
         // Add mock sessions
         session_manager
-            .create_session(&test_device("device1", "iPhone 15", "ios"))
+            .create_session(&test_device_with_platform("device1", "iPhone 15", "ios"))
             .unwrap();
         session_manager
-            .create_session(&test_device("device2", "Pixel 7", "android"))
+            .create_session(&test_device_with_platform("device2", "Pixel 7", "android"))
             .unwrap();
 
         let header = MainHeader::new(Some("test_app")).with_sessions(&session_manager);

@@ -502,19 +502,7 @@ fn truncate_string(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn test_device(id: &str, name: &str, emulator: bool) -> Device {
-        Device {
-            id: id.to_string(),
-            name: name.to_string(),
-            platform: "ios".to_string(),
-            emulator,
-            category: None,
-            platform_type: None,
-            ephemeral: false,
-            emulator_id: None,
-        }
-    }
+    use crate::tui::test_utils::test_device_full;
 
     #[test]
     fn test_state_new() {
@@ -530,8 +518,8 @@ mod tests {
     fn test_state_navigation() {
         let mut state = DeviceSelectorState::new();
         state.set_devices(vec![
-            test_device("d1", "Device 1", false),
-            test_device("d2", "Device 2", true),
+            test_device_full("d1", "Device 1", "ios", false),
+            test_device_full("d2", "Device 2", "ios", true),
         ]);
 
         // 2 devices + 2 emulator options = 4 items
@@ -561,8 +549,8 @@ mod tests {
     fn test_selected_device() {
         let mut state = DeviceSelectorState::new();
         state.set_devices(vec![
-            test_device("d1", "Device 1", false),
-            test_device("d2", "Device 2", true),
+            test_device_full("d1", "Device 1", "ios", false),
+            test_device_full("d2", "Device 2", "ios", true),
         ]);
 
         assert_eq!(state.selected_device().map(|d| d.id.as_str()), Some("d1"));
@@ -585,7 +573,7 @@ mod tests {
         assert!(state.visible);
         assert!(state.loading);
 
-        state.set_devices(vec![test_device("d1", "D1", false)]);
+        state.set_devices(vec![test_device_full("d1", "D1", "ios", false)]);
         assert!(!state.loading);
         assert!(state.visible);
     }
@@ -633,7 +621,7 @@ mod tests {
     fn test_hide_emulator_options() {
         let mut state = DeviceSelectorState::new();
         state.show_emulator_options = false;
-        state.set_devices(vec![test_device("d1", "Device 1", false)]);
+        state.set_devices(vec![test_device_full("d1", "Device 1", "ios", false)]);
 
         assert_eq!(state.item_count(), 1);
         assert!(!state.is_android_emulator_selected());
@@ -646,7 +634,7 @@ mod tests {
         state.show_emulator_options = false;
         assert!(state.is_empty());
 
-        state.set_devices(vec![test_device("d1", "D1", false)]);
+        state.set_devices(vec![test_device_full("d1", "D1", "ios", false)]);
         assert!(!state.is_empty());
 
         state.devices.clear();
@@ -705,8 +693,8 @@ mod tests {
     fn test_device_items_generation() {
         let mut state = DeviceSelectorState::new();
         state.set_devices(vec![
-            test_device("iphone", "iPhone 15 Pro", true),
-            test_device("pixel", "Pixel 8", true),
+            test_device_full("iphone", "iPhone 15 Pro", "ios", true),
+            test_device_full("pixel", "Pixel 8", "ios", true),
         ]);
 
         let selector = DeviceSelector::new(&state);
@@ -735,8 +723,8 @@ mod tests {
         let mut state = DeviceSelectorState::new();
         state.visible = true;
         state.set_devices(vec![
-            test_device("iphone", "iPhone 15 Pro", true),
-            test_device("pixel", "Pixel 8", true),
+            test_device_full("iphone", "iPhone 15 Pro", "ios", true),
+            test_device_full("pixel", "Pixel 8", "ios", true),
         ]);
 
         let backend = TestBackend::new(80, 24);
@@ -975,7 +963,7 @@ mod tests {
         let mut state = DeviceSelectorState::new();
 
         // First discovery
-        let devices = vec![test_device("iphone", "iPhone 15", false)];
+        let devices = vec![test_device_full("iphone", "iPhone 15", "ios", false)];
         state.set_devices(devices.clone());
 
         assert!(state.has_cache());
@@ -1008,8 +996,8 @@ mod tests {
         let mut state = DeviceSelectorState::new();
 
         let devices = vec![
-            test_device("device1", "Device 1", false),
-            test_device("device2", "Device 2", true),
+            test_device_full("device1", "Device 1", "ios", false),
+            test_device_full("device2", "Device 2", "ios", true),
         ];
         state.set_devices(devices);
 
@@ -1029,7 +1017,7 @@ mod tests {
         let mut state = DeviceSelectorState::new();
 
         // Initial devices
-        state.set_devices(vec![test_device("device1", "Device 1", false)]);
+        state.set_devices(vec![test_device_full("device1", "Device 1", "ios", false)]);
         state.hide();
         state.show_refreshing();
 
@@ -1038,8 +1026,8 @@ mod tests {
 
         // Discovery completes with new devices
         state.set_devices(vec![
-            test_device("device1", "Device 1", false),
-            test_device("device2", "Device 2 (new)", true),
+            test_device_full("device1", "Device 1", "ios", false),
+            test_device_full("device2", "Device 2 (new)", "ios", true),
         ]);
 
         assert!(!state.refreshing);
@@ -1049,7 +1037,7 @@ mod tests {
     #[test]
     fn test_clear_cache() {
         let mut state = DeviceSelectorState::new();
-        state.set_devices(vec![test_device("device1", "Device 1", false)]);
+        state.set_devices(vec![test_device_full("device1", "Device 1", "ios", false)]);
 
         assert!(state.has_cache());
 
@@ -1061,7 +1049,7 @@ mod tests {
     #[test]
     fn test_set_error_clears_refreshing() {
         let mut state = DeviceSelectorState::new();
-        state.set_devices(vec![test_device("d1", "D1", false)]);
+        state.set_devices(vec![test_device_full("d1", "D1", "ios", false)]);
         state.hide();
         state.show_refreshing();
 
@@ -1079,7 +1067,7 @@ mod tests {
         use ratatui::{backend::TestBackend, Terminal};
 
         let mut state = DeviceSelectorState::new();
-        state.set_devices(vec![test_device("iphone", "iPhone 15", false)]);
+        state.set_devices(vec![test_device_full("iphone", "iPhone 15", "ios", false)]);
         state.hide();
         state.show_refreshing();
         state.tick(); // Advance animation

@@ -60,30 +60,30 @@ Address code quality issues from Phase 3.5 Wave 4-6 review: fix assertion logic,
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-or-assertions](tasks/01-fix-or-assertions.md) | Not Started | - | `render/tests.rs` |
-| 2 | [02-document-terminal-field](tasks/02-document-terminal-field.md) | Not Started | - | `test_utils.rs` |
+| 1 | [01-fix-or-assertions](tasks/01-fix-or-assertions.md) | Done | - | `render/tests.rs` |
+| 2 | [02-document-terminal-field](tasks/02-document-terminal-field.md) | Done | - | `test_utils.rs` |
 
 ### Wave 2: Code Deduplication
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 3 | [03-extract-test-device](tasks/03-extract-test-device.md) | Not Started | Wave 1 | `test_utils.rs` |
-| 4 | [04-migrate-widget-tests](tasks/04-migrate-widget-tests.md) | Not Started | 3 | `widgets/*.rs` |
+| 3 | [03-extract-test-device](tasks/03-extract-test-device.md) | Done | Wave 1 | `test_utils.rs` |
+| 4 | [04-migrate-widget-tests](tasks/04-migrate-widget-tests.md) | Done | 3 | `widgets/*.rs` |
 
 ### Wave 3: File Organization
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 5 | [05-refactor-status-bar](tasks/05-refactor-status-bar.md) | Not Started | Wave 2 | `widgets/status_bar/` |
-| 6 | [06-improve-testterminal](tasks/06-improve-testterminal.md) | Not Started | Wave 2 | `test_utils.rs` |
+| 5 | [05-refactor-status-bar](tasks/05-refactor-status-bar.md) | Done | Wave 2 | `widgets/status_bar/` |
+| 6 | [06-improve-testterminal](tasks/06-improve-testterminal.md) | Done | Wave 2 | `test_utils.rs` |
 
 ### Wave 4: Documentation & Cleanup
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 7 | [07-update-architecture](tasks/07-update-architecture.md) | Not Started | Wave 3 | `docs/ARCHITECTURE.md` |
-| 8 | [08-strengthen-search-test](tasks/08-strengthen-search-test.md) | Not Started | 6 | `render/tests.rs` |
-| 9 | [09-final-validation](tasks/09-final-validation.md) | Not Started | 7, 8 | validation |
+| 7 | [07-update-architecture](tasks/07-update-architecture.md) | Done | Wave 3 | `docs/ARCHITECTURE.md` |
+| 8 | [08-strengthen-search-test](tasks/08-strengthen-search-test.md) | Done | 6 | `render/tests.rs` |
+| 9 | [09-final-validation](tasks/09-final-validation.md) | Done | 7, 8 | validation |
 
 > **Note:** Task 09 incorporates Phase 3.5 Task 13, running validation after all fixes are applied.
 
@@ -91,16 +91,16 @@ Address code quality issues from Phase 3.5 Wave 4-6 review: fix assertion logic,
 
 Phase 3.6 is complete when:
 
-- [ ] All transition tests use AND logic for assertions
-- [ ] `test_device()` deduplicated to single location in `test_utils.rs`
-- [ ] `status_bar.rs` refactored to directory module (widget < 500 lines)
-- [ ] `TestTerminal::draw_with()` method added
-- [ ] ARCHITECTURE.md accurately documents TUI→App dependency for TEA
-- [ ] SearchInput test validates actual rendered content
-- [ ] All tests pass: `cargo test`
-- [ ] No flaky tests (5/5 runs pass)
-- [ ] Clippy clean: `cargo clippy -- -D warnings`
-- [ ] Final validation documented
+- [x] All transition tests use AND logic for assertions
+- [x] `test_device()` deduplicated to single location in `test_utils.rs`
+- [x] `status_bar.rs` refactored to directory module (widget < 500 lines)
+- [x] `TestTerminal::draw_with()` method added
+- [x] ARCHITECTURE.md accurately documents TUI→App dependency for TEA
+- [x] SearchInput test validates actual rendered content
+- [x] All tests pass: `cargo test` (lib tests: 1320 pass)
+- [x] No flaky tests (3/3 runs pass)
+- [x] Clippy clean: `cargo clippy -- -D warnings`
+- [x] Final validation documented
 
 ## Notes
 

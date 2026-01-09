@@ -19,7 +19,7 @@ fn create_base_state() -> AppState {
 // Helper to render full screen and return content
 fn render_screen(state: &mut AppState) -> String {
     let mut term = TestTerminal::new();
-    term.terminal.draw(|frame| view(frame, state)).unwrap();
+    term.draw_with(|frame| view(frame, state));
     term.content()
 }
 
@@ -190,7 +190,7 @@ fn snapshot_compact_normal() {
     state.phase = AppPhase::Running;
 
     let mut term = TestTerminal::compact();
-    term.terminal.draw(|frame| view(frame, &mut state)).unwrap();
+    term.draw_with(|frame| view(frame, &mut state));
 
     assert_snapshot!("compact_normal", term.content());
 }
@@ -201,7 +201,7 @@ fn snapshot_compact_device_selector() {
     state.ui_mode = UiMode::DeviceSelector;
 
     let mut term = TestTerminal::compact();
-    term.terminal.draw(|frame| view(frame, &mut state)).unwrap();
+    term.draw_with(|frame| view(frame, &mut state));
 
     assert_snapshot!("compact_device_selector", term.content());
 }
@@ -225,16 +225,53 @@ fn snapshot_settings_mode() {
 
 #[test]
 fn snapshot_search_input_mode() {
+    use crate::daemon::Device;
+
     let mut state = create_base_state();
     state.ui_mode = UiMode::SearchInput;
 
-    // We need a session to show search input
-    // For now, we'll just test the render without crashing
+    // Create a device and session
+    let device = Device {
+        id: "test-device".to_string(),
+        name: "Test Device".to_string(),
+        platform: "android".to_string(),
+        emulator: false,
+        category: None,
+        platform_type: None,
+        ephemeral: true,
+        emulator_id: None,
+    };
+
+    // Create session through the manager's public API
+    let session_id = state
+        .session_manager
+        .create_session(&device)
+        .expect("Failed to create session");
+
+    // Set up search query and make it active on the created session
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.set_search_query("test query");
+        handle.session.start_search();
+    }
+
     let content = render_screen(&mut state);
 
-    // In SearchInput mode without a session, it just shows normal view
-    // This is still a valid test - ensuring it doesn't crash
-    assert!(content.len() > 0);
+    // Verify search UI elements are visible
+    assert!(
+        content.contains("/") || content.contains("Search") || content.contains("search"),
+        "Search mode should show search indicator, but got:\n{}",
+        content
+    );
+
+    // Verify the query is displayed
+    assert!(
+        content.contains("test query"),
+        "Search input should display the current query, but got:\n{}",
+        content
+    );
+
+    // Snapshot for regression detection
+    assert_snapshot!("search_input_mode", content);
 }
 
 // ===========================================================================
@@ -276,7 +313,10 @@ fn test_transition_normal_to_device_selector() {
 
     // Render normal mode
     let before = render_screen(&mut state);
-    assert!(!before.contains("Select") || !before.contains("Device"));
+    assert!(
+        !before.contains("Select") && !before.contains("Device"),
+        "Normal mode should not show device selector"
+    );
 
     // Transition to device selector
     state.ui_mode = UiMode::DeviceSelector;
@@ -284,8 +324,8 @@ fn test_transition_normal_to_device_selector() {
 
     // Device selector should now be visible
     assert!(
-        after.contains("Select") || after.contains("Device") || after.contains("device"),
-        "Device selector should appear after transition"
+        after.contains("Select") && after.contains("Device"),
+        "DeviceSelector mode should show selector dialog"
     );
 }
 

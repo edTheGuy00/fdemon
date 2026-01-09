@@ -408,22 +408,8 @@ impl Widget for StartupDialog<'_> {
 mod tests {
     use super::*;
     use crate::config::{LoadedConfigs, SourcedConfig};
-    use crate::daemon::Device;
+    use crate::tui::test_utils::test_device;
     use ratatui::{backend::TestBackend, Terminal};
-
-    // Helper to create a test device
-    fn test_device(id: &str, name: &str) -> Device {
-        Device {
-            id: id.to_string(),
-            name: name.to_string(),
-            platform: "ios".to_string(),
-            emulator: false,
-            category: None,
-            platform_type: None,
-            ephemeral: false,
-            emulator_id: None,
-        }
-    }
 
     #[test]
     fn test_startup_dialog_renders() {

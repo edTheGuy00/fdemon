@@ -86,10 +86,28 @@ cargo test --lib
 
 ## Completion Summary
 
-**Status:** ❌ Not done
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Testing Performed:**
-- (pending)
+| File | Changes |
+|------|---------|
+| `src/tui/test_utils.rs` | Added `draw_with()` method to TestTerminal impl, added Frame import, updated struct and field documentation |
+| `src/tui/render/tests.rs` | Updated 3 occurrences of `term.terminal.draw()` to use `term.draw_with()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Return type simplification**: Changed from `std::io::Result<()>` to no return value. TestBackend's draw method returns `Result<_, Infallible>` which can never fail, so following the pattern of other wrapper methods (`render_widget`, `render_stateful_widget`) which use `.expect()` is cleaner and more ergonomic for tests.
+
+2. **Maintained public terminal field**: Kept the `terminal` field public as requested, but updated the documentation to emphasize preferring wrapper methods like `draw_with()` for most scenarios.
+
+### Testing Performed
+
+- `cargo test --lib test_utils` - Passed (13 tests)
+- `cargo test --lib render` - Passed (48 tests)
+- `cargo test --lib` - Passed (1320 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None. The change is additive and backward compatible. Existing code that directly accesses `terminal` field will continue to work.

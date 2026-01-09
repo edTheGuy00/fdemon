@@ -20,10 +20,12 @@
 //! }
 //! ```
 
+use crate::daemon::Device;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::Widget;
+use ratatui::Frame;
 use ratatui::Terminal;
 
 /// Standard test terminal size (matches common terminal dimensions)
@@ -34,8 +36,33 @@ pub const TEST_HEIGHT: u16 = 24;
 pub const COMPACT_WIDTH: u16 = 40;
 pub const COMPACT_HEIGHT: u16 = 12;
 
-/// A test terminal wrapper for easy widget testing
+/// Test utility wrapper around ratatui's TestBackend terminal.
+///
+/// Provides ergonomic methods for widget testing while maintaining
+/// access to the underlying terminal for advanced use cases.
+///
+/// # Usage
+///
+/// For simple widget testing, use the wrapper methods:
+/// ```ignore
+/// let mut term = TestTerminal::new();
+/// term.render_widget(my_widget, term.area());
+/// assert!(term.buffer_contains("expected text"));
+/// ```
+///
+/// For full-frame rendering (like `tui::view`), use `draw_with()`:
+/// ```ignore
+/// let mut term = TestTerminal::new();
+/// term.draw_with(|frame| view(frame, &state))?;
+/// ```
 pub struct TestTerminal {
+    /// The underlying ratatui terminal with TestBackend.
+    ///
+    /// This field is public to allow direct access for advanced terminal
+    /// operations not covered by wrapper methods.
+    ///
+    /// Prefer using wrapper methods (`render_widget`, `draw_with`,
+    /// `buffer_contains`, etc.) for most test scenarios.
     pub terminal: Terminal<TestBackend>,
 }
 
@@ -78,6 +105,27 @@ impl TestTerminal {
         self.terminal
             .draw(|frame| frame.render_stateful_widget(widget, area, state))
             .expect("Failed to render stateful widget");
+    }
+
+    /// Draws a frame using a custom rendering function.
+    ///
+    /// This is useful for testing full-screen rendering (like `tui::view`)
+    /// rather than individual widgets.
+    ///
+    /// # Arguments
+    /// * `f` - A closure that receives a mutable Frame reference
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut term = TestTerminal::new();
+    /// term.draw_with(|frame| view(frame, &state));
+    /// assert!(term.buffer_contains("expected content"));
+    /// ```
+    pub fn draw_with<F>(&mut self, f: F)
+    where
+        F: FnOnce(&mut Frame),
+    {
+        self.terminal.draw(f).expect("Failed to draw frame");
     }
 
     /// Get the underlying buffer for assertions
@@ -161,6 +209,48 @@ pub fn create_test_state_with_name(name: &str) -> crate::app::state::AppState {
     let mut state = create_test_state();
     state.project_name = Some(name.to_string());
     state
+}
+
+/// Creates a test device with basic defaults.
+///
+/// # Arguments
+/// * `id` - Device identifier
+/// * `name` - Human-readable device name
+///
+/// # Returns
+/// A Device with iOS platform, non-emulator defaults.
+pub fn test_device(id: &str, name: &str) -> Device {
+    test_device_full(id, name, "ios", false)
+}
+
+/// Creates a test device with platform specification.
+///
+/// # Arguments
+/// * `id` - Device identifier
+/// * `name` - Human-readable device name
+/// * `platform` - Platform string (e.g., "ios", "android", "macos")
+pub fn test_device_with_platform(id: &str, name: &str, platform: &str) -> Device {
+    test_device_full(id, name, platform, false)
+}
+
+/// Creates a test device with full control over all fields.
+///
+/// # Arguments
+/// * `id` - Device identifier
+/// * `name` - Human-readable device name
+/// * `platform` - Platform string
+/// * `emulator` - Whether this is an emulator/simulator
+pub fn test_device_full(id: &str, name: &str, platform: &str, emulator: bool) -> Device {
+    Device {
+        id: id.to_string(),
+        name: name.to_string(),
+        platform: platform.to_string(),
+        emulator,
+        category: None,
+        platform_type: None,
+        ephemeral: false,
+        emulator_id: None,
+    }
 }
 
 #[cfg(test)]

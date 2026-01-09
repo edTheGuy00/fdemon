@@ -309,20 +309,7 @@ fn render_single_session_header(manager: &SessionManager, area: Rect, buf: &mut 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::Device;
-
-    fn test_device(id: &str, name: &str) -> Device {
-        Device {
-            id: id.to_string(),
-            name: name.to_string(),
-            platform: "ios".to_string(),
-            emulator: false,
-            category: None,
-            platform_type: None,
-            ephemeral: false,
-            emulator_id: None,
-        }
-    }
+    use crate::tui::test_utils::test_device;
 
     #[test]
     fn test_truncate_name_short() {

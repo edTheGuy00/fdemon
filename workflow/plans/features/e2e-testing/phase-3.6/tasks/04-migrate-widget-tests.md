@@ -98,10 +98,34 @@ cargo test --lib startup_dialog
 
 ## Completion Summary
 
-**Status:** ❌ Not done
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Testing Performed:**
-- (pending)
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/device_selector.rs` | Removed local `test_device(id, name, emulator)` function; added import of `test_device_full`; updated all calls to use `test_device_full(id, name, "ios", emulator)` |
+| `src/tui/widgets/status_bar.rs` | Removed local `test_device(id, name)` function; added import of `test_device`; no call changes needed (signature matches) |
+| `src/tui/widgets/header.rs` | Removed local `test_device(id, name, platform)` function; added import of `test_device_with_platform`; updated all calls to use `test_device_with_platform(id, name, platform)` |
+| `src/tui/widgets/tabs.rs` | Removed local `test_device(id, name)` function; added import of `test_device`; no call changes needed (signature matches) |
+| `src/tui/widgets/startup_dialog/mod.rs` | Removed local `test_device(id, name)` function; added import of `test_device`; no call changes needed (signature matches) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import Cleanup**: Removed unused `Device` imports from test modules that were only needed for the local `test_device()` function. This reduces clutter and improves code clarity.
+2. **Platform Parameter**: For `device_selector.rs`, consistently used `"ios"` as the platform parameter for `test_device_full()` to match the original implementation, ensuring no behavioral changes to tests.
+3. **Minimal Migration Scope**: Only migrated the test helper functions as specified, without touching any test logic or assertions. This keeps the change focused and reduces risk.
+
+### Testing Performed
+
+- `cargo test --lib device_selector` - Passed (57 tests)
+- `cargo test --lib status_bar` - Passed (34 tests)
+- `cargo test --lib header` - Passed (18 tests)
+- `cargo test --lib tabs` - Passed (17 tests)
+- `cargo test --lib startup_dialog` - Passed (38 tests)
+- `cargo test --lib widgets` - Passed (253 tests total)
+- `cargo clippy --lib -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: All tests pass with no changes to test behavior. The migration is purely a code organization improvement with no functional impact.
