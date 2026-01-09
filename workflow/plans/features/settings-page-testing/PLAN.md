@@ -18,6 +18,15 @@ The settings page was implemented as part of the Log & Config Enhancements featu
 4. Different project configurations (VSCode-only, FDemon-only, mixed)
 5. Boolean toggle functionality (confirmed bug: Enter key doesn't toggle)
 
+### Startup Flow (Simplified Testing)
+
+The [startup flow rework](../startup-flow-rework/PLAN.md) has been completed, which **significantly simplifies E2E testing**:
+
+- **Before**: App started in `StartupDialog` mode, tests needed workarounds to escape
+- **After**: App starts directly in `UiMode::Normal` with "Not Connected" state
+
+This means tests can immediately interact with the TUI (open settings, navigate, etc.) without needing to dismiss dialogs or wait for Flutter device discovery.
+
 ### Known Bugs
 
 **Bug #1: Boolean Toggle Does Nothing**
@@ -374,6 +383,9 @@ workflow/plans/bugs/
 ## Test Patterns Reference
 
 ### E2E Test Pattern (PTY)
+
+With the startup flow rework complete, tests start directly in Normal mode with "Not Connected" state. No need to escape dialogs.
+
 ```rust
 #[tokio::test]
 #[serial]
@@ -381,11 +393,10 @@ async fn test_settings_page_opens() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn");
 
-    // Wait for initialization
-    session.expect_header().expect("header");
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // App starts directly in Normal mode - wait for "Not Connected" state
+    session.expect("Not Connected").expect("startup complete");
 
-    // Open settings
+    // Open settings immediately - no dialog to dismiss!
     session.send_key(',').expect("send comma");
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -408,17 +419,27 @@ async fn test_boolean_toggle_actually_changes_value() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn");
 
-    // Navigate to boolean setting and toggle
-    // ... test implementation ...
+    // App starts in Normal mode - ready immediately
+    session.expect("Not Connected").expect("startup complete");
+
+    // Open settings and navigate to boolean setting
+    session.send_key(',').expect("send comma");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Navigate to a boolean setting (e.g., auto_reload)
+    // Press Enter to toggle...
 
     // EXPECTED: Value should flip from true to false
     // ACTUAL: Value remains unchanged (dirty flag set but no toggle)
+
+    session.quit().expect("quit");
 }
 ```
 
 ### Config File Test Pattern
 ```rust
 #[tokio::test]
+#[serial]
 async fn test_config_file_created_on_save() {
     let temp = tempdir().expect("tempdir");
     let project_path = temp.path().join("test_app");
@@ -429,13 +450,21 @@ async fn test_config_file_created_on_save() {
     // Verify no .fdemon exists
     assert!(!project_path.join(".fdemon").exists());
 
-    // Spawn fdemon and trigger save
+    // Spawn fdemon - starts directly in Normal mode
     let mut session = FdemonSession::spawn(&project_path).expect("spawn");
-    // ... navigate to settings, make change, save ...
+    session.expect("Not Connected").expect("startup complete");
+
+    // Open settings, make change, save
+    session.send_key(',').expect("open settings");
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    // ... navigate and edit ...
+    session.send_key('s').expect("save"); // Ctrl+S or 's' depending on mode
 
     // Verify .fdemon created
     assert!(project_path.join(".fdemon").exists());
     assert!(project_path.join(".fdemon/config.toml").exists());
+
+    session.quit().expect("quit");
 }
 ```
 
@@ -507,6 +536,7 @@ All testing infrastructure is already in place from E2E testing phases 1-3.
 ## References
 
 - [E2E Testing Plan](../e2e-testing/PLAN.md) - Phases 1-3 completed
+- [Startup Flow Rework](../startup-flow-rework/PLAN.md) - Enables simpler E2E testing (completed)
 - [Log & Config Enhancements](../log-config-enhancements/PLAN.md) - Settings UI in Phase 4
 - [PTY Utilities](../../../../tests/e2e/pty_utils.rs) - `FdemonSession`, `TestFixture`
 - [Settings Panel Tests](../../../../src/tui/widgets/settings_panel/tests.rs) - Existing unit tests
@@ -514,6 +544,7 @@ All testing infrastructure is already in place from E2E testing phases 1-3.
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Created:** 2025-01-09
+**Updated:** 2025-01-09 - Updated for startup flow rework (simpler testing)
 **Status:** Draft - Awaiting Approval
