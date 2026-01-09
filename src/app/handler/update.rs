@@ -1022,9 +1022,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(item) = panel.get_selected_item(&state.settings_view_state) {
                     // Start editing based on value type
                     match &item.value {
-                        SettingValue::Bool(_) | SettingValue::Enum { .. } => {
-                            // These don't use traditional edit mode
-                            // Bool toggles directly, Enum cycles
+                        SettingValue::Bool(_) => {
+                            // Bool toggles directly without edit mode
+                            return update(state, Message::SettingsToggleBool);
+                        }
+                        SettingValue::Enum { .. } => {
+                            // Enums cycle through options
+                            return update(state, Message::SettingsCycleEnumNext);
                         }
                         SettingValue::Number(n) => {
                             state.settings_view_state.start_editing(&n.to_string());
@@ -1100,9 +1104,69 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Settings Editing Messages (Phase 4, Task 10)
         // ─────────────────────────────────────────────────────────
         Message::SettingsToggleBool => {
-            // Toggle boolean setting value
-            // Actual implementation needs access to settings item
-            state.settings_view_state.mark_dirty();
+            use crate::config::{SettingValue, SettingsTab};
+            use crate::tui::widgets::SettingsPanel;
+
+            let panel = SettingsPanel::new(&state.settings, &state.project_path);
+            if let Some(item) = panel.get_selected_item(&state.settings_view_state) {
+                // Only toggle if it's a boolean value
+                if let SettingValue::Bool(val) = &item.value {
+                    // Create new item with flipped value
+                    let new_value = SettingValue::Bool(!val);
+                    let mut toggled_item = item.clone();
+                    toggled_item.value = new_value;
+
+                    // Apply based on active tab
+                    match state.settings_view_state.active_tab {
+                        SettingsTab::Project => {
+                            super::settings::apply_project_setting(
+                                &mut state.settings,
+                                &toggled_item,
+                            );
+                            state.settings_view_state.mark_dirty();
+                        }
+                        SettingsTab::UserPrefs => {
+                            super::settings::apply_user_preference(
+                                &mut state.settings_view_state.user_prefs,
+                                &toggled_item,
+                            );
+                            state.settings_view_state.mark_dirty();
+                        }
+                        SettingsTab::LaunchConfig => {
+                            // For launch configs, we need to load, modify, and save
+                            // Extract config index from item ID (format: "launch.{idx}.field")
+                            let parts: Vec<&str> = toggled_item.id.split('.').collect();
+                            if parts.len() >= 3 && parts[0] == "launch" {
+                                if let Ok(config_idx) = parts[1].parse::<usize>() {
+                                    use crate::config::launch::{
+                                        load_launch_configs, save_launch_configs,
+                                    };
+                                    let mut configs = load_launch_configs(&state.project_path);
+                                    if let Some(resolved) = configs.get_mut(config_idx) {
+                                        super::settings::apply_launch_config_change(
+                                            &mut resolved.config,
+                                            &toggled_item,
+                                        );
+                                        // Save the modified configs back to disk
+                                        let config_vec: Vec<_> =
+                                            configs.iter().map(|r| r.config.clone()).collect();
+                                        if let Err(e) =
+                                            save_launch_configs(&state.project_path, &config_vec)
+                                        {
+                                            tracing::error!("Failed to save launch configs: {}", e);
+                                        } else {
+                                            state.settings_view_state.mark_dirty();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        SettingsTab::VSCodeConfig => {
+                            // Read-only tab - ignore toggle
+                        }
+                    }
+                }
+            }
             UpdateResult::none()
         }
 

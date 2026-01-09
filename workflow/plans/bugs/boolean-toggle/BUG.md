@@ -2,17 +2,17 @@
 
 ## TL;DR
 
-Pressing Enter on a boolean setting in the settings page marks the setting as dirty but does not actually flip the boolean value (true → false or false → true). The `SettingsToggleBool` message handler in `update.rs` is incomplete—it recognizes boolean values but lacks the logic to toggle them.
+Pressing Enter on a boolean setting in the settings page marks the setting as dirty but does not flip the boolean value (true → false or false → true). The `SettingsToggleBool` message handler in `update.rs:1102-1107` is a stub—it only calls `mark_dirty()` without actually toggling the value. All infrastructure (item retrieval, apply functions) is ready; the handler just needs to be completed.
 
 ---
 
-## Bug Reports
+## Bug Report
 
-### Bug 1: Boolean Settings Cannot Be Toggled
+### Bug: Boolean Settings Cannot Be Toggled
 
 **Symptom:**
-- User navigates to a boolean setting (e.g., "Auto Start")
-- User presses Enter or Space to toggle the value
+- User navigates to a boolean setting (e.g., "Auto Start", "Auto Reload")
+- User presses Enter to toggle the value
 - The dirty indicator (*) appears, suggesting a change was made
 - The actual value remains unchanged (still shows original true/false)
 - Saving does not persist any change because no change actually occurred
@@ -21,40 +21,36 @@ Pressing Enter on a boolean setting in the settings page marks the setting as di
 - Pressing Enter on a boolean setting should immediately flip the value
 - `true` → `false` or `false` → `true`
 - The displayed value should update immediately
-- Dirty flag should only be set if value actually changed
+- Dirty flag should be set after toggle
 
 **Root Cause Analysis:**
 
-1. **Key binding works correctly:**
-   - `src/app/handler/keys.rs:386` - Enter/Space on a setting triggers `Message::SettingsToggleEdit`
+1. **Key binding dispatches correct message:**
+   - `src/app/handler/keys.rs:398` - Enter on a boolean item triggers `Message::SettingsToggleEdit`
+   - `src/app/handler/keys.rs:422-428` - In edit mode, Enter dispatches `Message::SettingsToggleBool`
 
-2. **Handler recognizes booleans but doesn't toggle:**
-   - `src/app/handler/update.rs:1012-1046` - `SettingsToggleEdit` handler checks value type
-   - Lines 1025-1028: Comment states "Bool toggles directly, Enum cycles" but...
-   - No actual toggle logic is implemented
+2. **SettingsToggleEdit handler recognizes but doesn't toggle:**
+   - `src/app/handler/update.rs:1012-1046` - Handler checks value type
+   - Lines 1025-1028: Comment states "Bool toggles directly" but contains no toggle logic:
+   ```rust
+   SettingValue::Bool(_) | SettingValue::Enum { .. } => {
+       // These don't use traditional edit mode
+       // Bool toggles directly, Enum cycles
+   }
+   ```
+   - This branch is effectively a no-op
 
-3. **Separate toggle message exists but is incomplete:**
-   - `src/app/message.rs` - `Message::SettingsToggleBool` exists
-   - `src/app/handler/update.rs:1102-1107` - Handler only marks `dirty = true`
-   - Missing: Actual value flip and call to `apply_project_setting()` or `apply_user_preference()`
-
-**Code Location:**
-
-```rust
-// src/app/handler/update.rs:1102-1107
-Message::SettingsToggleBool => {
-    if let UiMode::Settings(ref mut settings_state) = state.ui_mode {
-        settings_state.dirty = true;  // Only this line exists
-        // MISSING: Get current item, flip boolean, apply change
-    }
-    UpdateResult::none()
-}
-```
-
-**Affected Files:**
-- `src/app/handler/update.rs:1102-1107` - Primary fix location
-- `src/app/handler/settings.rs` - Has `apply_project_setting()` helper ready to use
-- `src/tui/widgets/settings_panel/mod.rs:890` - Has `get_selected_item()` to retrieve current item
+3. **SettingsToggleBool handler is incomplete:**
+   - `src/app/handler/update.rs:1102-1107`
+   - Only marks dirty, does NOT flip the value:
+   ```rust
+   Message::SettingsToggleBool => {
+       // Toggle boolean setting value
+       // Actual implementation needs access to settings item
+       state.settings_view_state.mark_dirty();
+       UpdateResult::none()
+   }
+   ```
 
 ---
 
@@ -62,9 +58,10 @@ Message::SettingsToggleBool => {
 
 | File | Changes Needed |
 |------|----------------|
-| `src/app/handler/update.rs` | Implement boolean toggle in `SettingsToggleBool` handler |
-| `src/app/handler/settings.rs` | No changes needed - `apply_project_setting()` already handles booleans |
-| `src/tui/widgets/settings_panel/mod.rs` | No changes needed - `get_selected_item()` already available |
+| `src/app/handler/update.rs:1102-1107` | **PRIMARY FIX** - Implement toggle logic in `SettingsToggleBool` handler |
+| `src/app/handler/update.rs:1012-1046` | **SECONDARY** - Fix `SettingsToggleEdit` to dispatch toggle for booleans |
+| `src/app/handler/settings.rs` | No changes - `apply_project_setting()` already handles booleans |
+| `src/tui/widgets/settings_panel/mod.rs` | No changes - `get_selected_item()` already available |
 
 ---
 
@@ -72,28 +69,12 @@ Message::SettingsToggleBool => {
 
 ### Phase 1: Implement Boolean Toggle
 
-**Steps:**
+The fix requires completing the `SettingsToggleBool` handler with this logic:
 
-1. **Get the currently selected item**
-   - Access `SettingsPanel::get_selected_item()` with current state
-   - This requires access to settings and project path
-
-2. **Flip the boolean value**
-   ```rust
-   if let SettingValue::Bool(ref mut val) = item.value {
-       *val = !*val;
-   }
-   ```
-
-3. **Apply the change to settings struct**
-   - Call `apply_project_setting()` for Project tab
-   - Call `apply_user_preference()` for UserPrefs tab
-   - Launch tab booleans need separate handling
-
-4. **Mark dirty flag**
-   - Only after successful toggle
-
-5. **Return appropriate UpdateResult**
+1. **Get the currently selected item** via `SettingsPanel::get_selected_item()`
+2. **Flip the boolean value** in the item
+3. **Apply the change** via the appropriate apply function based on active tab
+4. **Mark dirty** after successful toggle
 
 **Proposed Implementation:**
 
@@ -101,34 +82,44 @@ Message::SettingsToggleBool => {
 // src/app/handler/update.rs - Replace lines 1102-1107
 
 Message::SettingsToggleBool => {
-    if let UiMode::Settings(ref mut settings_state) = state.ui_mode {
-        // Get the currently selected item
-        if let Some(mut item) = SettingsPanel::get_selected_item(
-            &state.settings,
-            &state.settings_state.user_prefs,
-            // ... other required params
-        ) {
-            // Toggle the boolean
-            if let SettingValue::Bool(ref mut val) = item.value {
-                *val = !*val;
+    use crate::config::{SettingValue, SettingsTab};
+    use crate::tui::widgets::SettingsPanel;
 
-                // Apply based on active tab
-                match settings_state.active_tab {
-                    SettingsTab::Project => {
-                        apply_project_setting(&mut state.settings, &item);
-                    }
-                    SettingsTab::UserPrefs => {
-                        apply_user_preference(&mut settings_state.user_prefs, &item);
-                    }
-                    SettingsTab::LaunchConfig => {
-                        // Handle launch config booleans if any
-                    }
-                    SettingsTab::VSCodeConfig => {
-                        // Read-only - should not reach here
+    let panel = SettingsPanel::new(&state.settings, &state.project_path);
+    if let Some(mut item) = panel.get_selected_item(&state.settings_view_state) {
+        // Only toggle if it's a boolean value
+        if let SettingValue::Bool(val) = &item.value {
+            // Create new item with flipped value
+            let new_value = SettingValue::Bool(!val);
+            let mut toggled_item = item.clone();
+            toggled_item.value = new_value;
+
+            // Apply based on active tab
+            match state.settings_view_state.active_tab {
+                SettingsTab::Project => {
+                    apply_project_setting(&mut state.settings, &toggled_item);
+                    state.settings_view_state.mark_dirty();
+                }
+                SettingsTab::UserPrefs => {
+                    apply_user_preference(
+                        &mut state.settings_view_state.user_prefs,
+                        &toggled_item
+                    );
+                    state.settings_view_state.mark_dirty();
+                }
+                SettingsTab::LaunchConfig => {
+                    // Handle launch config booleans (auto_start)
+                    if let Some(config) = state.settings_view_state
+                        .launch_configs
+                        .get_mut(state.settings_view_state.selected_launch_config)
+                    {
+                        apply_launch_config_change(config, &toggled_item);
+                        state.settings_view_state.mark_dirty();
                     }
                 }
-
-                settings_state.dirty = true;
+                SettingsTab::VSCodeConfig => {
+                    // Read-only tab - ignore toggle
+                }
             }
         }
     }
@@ -136,76 +127,60 @@ Message::SettingsToggleBool => {
 }
 ```
 
-**Measurable Outcomes:**
-- Boolean settings can be toggled with Enter key
-- Dirty indicator appears after toggle
-- Value persists after save
-- Unit tests pass
+### Phase 2: Fix SettingsToggleEdit Flow (Optional Enhancement)
+
+Currently, pressing Enter on a boolean enters a confusing state where nothing happens. The `SettingsToggleEdit` handler should dispatch `SettingsToggleBool` directly for boolean items:
+
+```rust
+// src/app/handler/update.rs - In SettingsToggleEdit handler (lines 1024-1028)
+// Replace the no-op with direct toggle dispatch:
+
+SettingValue::Bool(_) => {
+    // Bool toggles directly without edit mode
+    return update(state, Message::SettingsToggleBool);
+}
+SettingValue::Enum { .. } => {
+    // Enums cycle through options
+    return update(state, Message::SettingsCycleEnumNext);
+}
+```
+
+---
+
+## Boolean Settings Affected
+
+These settings are boolean type and affected by this bug:
+
+| ID | Label | Tab |
+|----|-------|-----|
+| `behavior.auto_start` | Auto Start | Project |
+| `behavior.confirm_quit` | Confirm Quit | Project |
+| `watcher.auto_reload` | Auto Reload | Project |
+| `ui.show_timestamps` | Show Timestamps | Project |
+| `ui.compact_logs` | Compact Logs | Project |
+| `ui.stack_trace_collapsed` | Collapse Stack Traces | Project |
+| `devtools.auto_open` | Auto Open DevTools | Project |
+| `launch.X.auto_start` | Auto Start | Launch Config |
 
 ---
 
 ## Edge Cases & Risks
 
-### Access to Settings Panel
-- **Risk:** `SettingsPanel::get_selected_item()` may need restructuring to work from handler
-- **Mitigation:** May need to store item key in state or refactor item retrieval
+### Access Pattern
+- **Risk:** Handler needs access to SettingsPanel which requires settings and project_path
+- **Mitigation:** Both are available on `state`; pattern already used in `SettingsToggleEdit`
 
-### VSCode Tab Booleans
-- **Risk:** User somehow triggers toggle on read-only VSCode settings
-- **Mitigation:** Check tab before toggling; ignore for VSCode tab
+### VSCode Tab Protection
+- **Risk:** User could somehow trigger toggle on read-only VSCode settings
+- **Mitigation:** Check `active_tab` and ignore for `VSCodeConfig`
 
-### Undo/Redo
-- **Risk:** No undo mechanism for accidental toggles
-- **Mitigation:** Document as limitation; user can toggle again
+### Launch Config Booleans
+- **Risk:** Launch config index might be out of bounds
+- **Mitigation:** Use `.get_mut()` with bounds check before applying
 
-### Concurrent State
-- **Risk:** State race if toggle happens during save
-- **Mitigation:** Settings page is modal; no concurrent operations possible
-
----
-
-## Testing
-
-### Unit Tests to Add
-
-```rust
-// src/app/handler/tests.rs or update.rs test module
-
-#[test]
-fn test_settings_toggle_bool_flips_true_to_false() {
-    let mut state = test_app_state();
-    state.settings.behavior.auto_start = true;
-    state.ui_mode = UiMode::Settings(SettingsViewState::new());
-    // Position on auto_start setting
-
-    let (new_state, _) = handler::update(state, Message::SettingsToggleBool);
-
-    assert!(!new_state.settings.behavior.auto_start);
-    if let UiMode::Settings(ref ss) = new_state.ui_mode {
-        assert!(ss.dirty);
-    }
-}
-
-#[test]
-fn test_settings_toggle_bool_flips_false_to_true() {
-    let mut state = test_app_state();
-    state.settings.behavior.auto_start = false;
-    state.ui_mode = UiMode::Settings(SettingsViewState::new());
-
-    let (new_state, _) = handler::update(state, Message::SettingsToggleBool);
-
-    assert!(new_state.settings.behavior.auto_start);
-}
-
-#[test]
-fn test_settings_toggle_bool_ignored_for_vscode_tab() {
-    // Should not toggle anything on VSCode tab (read-only)
-}
-```
-
-### E2E Tests
-
-See `workflow/plans/features/settings-page-testing/PLAN.md` Phase 2 for comprehensive E2E test approach.
+### No Undo
+- **Risk:** Accidental toggle has no undo
+- **Mitigation:** Document as limitation; user can toggle again; changes not saved until explicit save
 
 ---
 
@@ -213,19 +188,19 @@ See `workflow/plans/features/settings-page-testing/PLAN.md` Phase 2 for comprehe
 
 ```
 ┌─────────────────────────────────────────┐
-│  01-implement-boolean-toggle            │
-│  (Primary fix in update.rs)             │
+│  01-implement-toggle-handler            │
+│  (Complete SettingsToggleBool)          │
 └─────────────────────┬───────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────┐
-│  02-add-unit-tests                      │
-│  (Verify fix with unit tests)           │
+│  02-fix-toggle-edit-dispatch            │
+│  (SettingsToggleEdit dispatches toggle) │
 └─────────────────────┬───────────────────┘
                       │
                       ▼
 ┌─────────────────────────────────────────┐
-│  03-update-e2e-tests                    │
+│  03-enable-e2e-tests                    │
 │  (Remove #[ignore] from toggle tests)   │
 └─────────────────────────────────────────┘
 ```
@@ -236,10 +211,10 @@ See `workflow/plans/features/settings-page-testing/PLAN.md` Phase 2 for comprehe
 
 ### Bug Fixed When:
 - [ ] Pressing Enter on boolean setting flips the value
-- [ ] Displayed value updates immediately
+- [ ] Displayed value updates immediately after toggle
 - [ ] Dirty indicator appears after toggle
 - [ ] Value persists to config file after save
-- [ ] All boolean settings work: auto_start, auto_reload, devtools_auto_open, stack_trace_collapsed
+- [ ] All boolean settings work across all tabs (Project, Launch Config)
 - [ ] Unit tests pass for toggle behavior
 - [ ] E2E tests (previously ignored) now pass
 
@@ -248,6 +223,23 @@ See `workflow/plans/features/settings-page-testing/PLAN.md` Phase 2 for comprehe
 - [ ] VSCode tab remains read-only
 - [ ] Save functionality unchanged
 - [ ] Edit mode for non-boolean types unaffected
+
+---
+
+## Testing References
+
+### Existing Tests (Currently Ignored)
+
+**E2E Tests** (`tests/e2e/settings_page.rs`):
+- `test_boolean_toggle_changes_value` - line ~768
+- `test_toggle_auto_start`
+- `test_toggle_auto_reload`
+- `test_toggle_devtools_auto_open`
+- `test_toggle_stack_trace_collapsed`
+
+**Unit Tests** (`src/app/handler/tests.rs`):
+- `test_settings_toggle_bool_flips_value` - line ~2108 (ignored, demonstrates bug)
+- `test_settings_toggle_bool_sets_dirty_flag` - line ~2144 (passes, dirty flag works)
 
 ---
 
@@ -260,12 +252,13 @@ Boolean settings in the settings page can be toggled with Enter key. Users can e
 ## References
 
 - [Settings Page Testing Plan](../../features/settings-page-testing/PLAN.md)
-- [Log & Config Enhancements Plan](../../features/log-config-enhancements/PLAN.md) - Phase 4
 - Source: `src/app/handler/update.rs:1102-1107`
-- Helper: `src/app/handler/settings.rs` - `apply_project_setting()`, `apply_user_preference()`
+- Helpers: `src/app/handler/settings.rs` - `apply_project_setting()`, `apply_user_preference()`, `apply_launch_config_change()`
+- Item retrieval: `src/tui/widgets/settings_panel/mod.rs:890-915` - `get_selected_item()`
 
 ---
 
-**Document Version:** 1.0
+**Document Version:** 2.0
 **Created:** 2025-01-09
+**Updated:** 2025-01-09
 **Status:** Confirmed Bug - Ready for Implementation

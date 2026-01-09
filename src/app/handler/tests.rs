@@ -2098,3 +2098,61 @@ fn test_devices_discovered_only_updates_startup_dialog_in_startup_mode() {
     // startup_dialog_state should NOT be updated (still empty)
     assert_eq!(state.startup_dialog_state.devices.len(), 0);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Settings Toggle Tests (for bug demonstration)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_settings_toggle_bool_flips_value() {
+    // This test verifies that SettingsToggleBool correctly flips boolean values.
+    // The handler identifies which setting is selected and flips its boolean value.
+
+    let mut state = AppState::new();
+
+    // Open settings page (set UI mode to Settings)
+    state.ui_mode = UiMode::Settings;
+
+    // Set initial boolean value to true for auto_reload setting
+    state.settings.watcher.auto_reload = true;
+
+    // Select the auto_reload item (index 4 in Project tab)
+    state.settings_view_state.selected_index = 4;
+
+    // Handle the toggle message
+    update(&mut state, Message::SettingsToggleBool);
+
+    // Value should be flipped to false
+    assert_eq!(
+        state.settings.watcher.auto_reload, false,
+        "auto_reload should be flipped to false"
+    );
+
+    // Test flipping back
+    update(&mut state, Message::SettingsToggleBool);
+    assert_eq!(
+        state.settings.watcher.auto_reload, true,
+        "auto_reload should be flipped back to true"
+    );
+}
+
+#[test]
+fn test_settings_toggle_bool_sets_dirty_flag() {
+    // This test verifies that the SettingsToggleBool handler correctly sets
+    // the dirty flag. This part of the implementation works correctly.
+
+    let mut state = AppState::new();
+
+    // Ensure dirty flag starts as false
+    state.settings_view_state.dirty = false;
+    assert!(!state.settings_view_state.dirty);
+
+    // Handle the toggle message
+    update(&mut state, Message::SettingsToggleBool);
+
+    // Dirty flag should be set (this part works correctly)
+    assert!(
+        state.settings_view_state.dirty,
+        "SettingsToggleBool should set the dirty flag"
+    );
+}
