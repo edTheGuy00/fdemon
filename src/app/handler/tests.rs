@@ -324,17 +324,6 @@ fn test_d_shows_startup_dialog_without_sessions() {
 }
 
 #[test]
-fn test_n_shows_startup_dialog_without_sessions() {
-    let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
-
-    let result = handle_key(&state, key);
-
-    // Without running sessions, should show StartupDialog instead of DeviceSelector
-    assert!(matches!(result, Some(Message::ShowStartupDialog)));
-}
-
-#[test]
 fn test_show_device_selector_uses_cache() {
     use crate::app::state::UiMode;
 
@@ -1655,14 +1644,14 @@ fn test_n_key_with_search_query_navigates() {
 }
 
 #[test]
-fn test_n_key_without_search_shows_startup_dialog() {
+fn test_n_key_without_search_does_nothing() {
     let state = AppState::new();
     let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
 
     let msg = handle_key(&state, key);
 
-    // Without running sessions and no active search query, 'n' should show startup dialog
-    assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+    // Without active search query, 'n' should do nothing (it's only for search navigation)
+    assert!(msg.is_none());
 }
 
 #[test]

@@ -9,8 +9,8 @@ expression: term.content()
 │       │  + Launch iOS Simulat│       │
 │       │                      │       │
 │       │                      │       │
-│Make su│↑↓ Navigate  Enter Sel│roject │
+│    Pre│↑↓ Navigate  Enter Sel│ion    │
 │       │                      │       │
 └───────╰──────────────────────╯───────┘
 ────────────────────────────────────────
- ○
+ ○ Not Connected

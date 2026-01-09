@@ -8,6 +8,7 @@ This document provides a comprehensive reference of all keyboard controls availa
 
 - [Normal Mode](#normal-mode)
   - [General Controls](#general-controls)
+  - [Startup State](#startup-state)
   - [Session Management](#session-management)
   - [App Control](#app-control)
   - [Log Navigation](#log-navigation)
@@ -40,6 +41,14 @@ Normal mode is the default mode when viewing logs and managing your Flutter app 
 | `Ctrl+C` | Force Quit | Emergency exit, bypasses confirmation dialog |
 | `c` | Clear Logs | Clear all logs in the current session |
 
+### Startup State
+
+When Flutter Demon starts without auto-start configured, you'll see:
+- Status bar: "○ Not Connected"
+- Log area: "Press + to start a new session"
+
+Press `+` or `d` to open the Startup Dialog and configure your first session.
+
 ### Session Management
 
 Flutter Demon supports running up to 9 simultaneous device sessions.
@@ -51,8 +60,8 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `Shift+Tab` | Previous Session | Cycle to the previous session |
 | `x` | Close Session | Close the current session |
 | `Ctrl+W` | Close Session | Alternative binding to close current session |
-| `d` | Add Device Session | Add device session (shows Startup Dialog if no sessions, Device Selector if sessions running) |
-| `n` | Device Selector | Alternative binding (also used for search navigation) |
+| `+` | Start New Session | Start a new session (shows Startup Dialog if no sessions, Device Selector if sessions exist) |
+| `d` | Start New Session | Alternative binding for starting new session |
 
 ### App Control
 
@@ -109,10 +118,8 @@ Search for patterns in logs using regex (vim-style search).
 | Key | Action | Description |
 |-----|--------|-------------|
 | `/` | Start Search | Enter search input mode to type a query |
-| `n` | Next Match | Jump to the next search match |
+| `n` | Next Match | Jump to the next search match (only when search active) |
 | `N` | Previous Match | Jump to the previous search match |
-
-> **Note:** The `n` key is context-sensitive. If a search query is active, it navigates to the next match. Otherwise, it opens the device selector.
 
 ### Error Navigation
 
@@ -346,7 +353,6 @@ While Flutter Demon is initializing or loading.
 ## Tips
 
 - **Vim-style Navigation**: Flutter Demon uses vim-style keybindings (`hjkl`, `gg`, `G`, etc.) for efficient keyboard-only navigation.
-- **Context-Sensitive Keys**: Some keys like `n` change behavior based on context (search active vs. no search).
 - **Emergency Exit**: `Ctrl+C` always forces an immediate quit in any mode.
 - **Multi-Device Workflow**: Use number keys `1`-`9` for quick switching between up to 9 simultaneous sessions.
 - **File Opening**: Link mode automatically detects your editor from environment variables (`$VISUAL`, `$EDITOR`) or common IDEs in your terminal.

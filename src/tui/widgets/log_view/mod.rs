@@ -590,23 +590,23 @@ impl<'a> LogView<'a> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // Center the waiting message
-        let waiting_text = vec![
+        // Center the instruction message
+        let instruction_text = vec![
             Line::from(""),
             Line::from(Span::styled(
-                "Waiting for Flutter...",
+                "Not Connected",
                 Style::default()
                     .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
-                "Make sure you're in a Flutter project directory",
+                "Press + to start a new session",
                 Style::default().fg(Color::DarkGray),
             )),
         ];
 
-        Paragraph::new(waiting_text)
+        Paragraph::new(instruction_text)
             .alignment(ratatui::layout::Alignment::Center)
             .render(inner, buf);
     }

@@ -29,9 +29,9 @@ Replace the "n" keybinding with "+" for starting new sessions. The "n" key will 
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-replace-n-with-plus](tasks/01-replace-n-with-plus.md) | Not Started | - | `app/handler/keys.rs` |
-| 2 | [02-update-keybinding-tests](tasks/02-update-keybinding-tests.md) | Not Started | 1 | `app/handler/keys.rs`, `app/handler/tests.rs` |
-| 3 | [03-update-related-handlers](tasks/03-update-related-handlers.md) | Not Started | 1 | `app/handler/keys.rs` |
+| 1 | [01-replace-n-with-plus](tasks/01-replace-n-with-plus.md) | Done | - | `app/handler/keys.rs` |
+| 2 | [02-update-keybinding-tests](tasks/02-update-keybinding-tests.md) | Done | 1 | `app/handler/keys.rs`, `app/handler/tests.rs` |
+| 3 | [03-update-related-handlers](tasks/03-update-related-handlers.md) | Done | 1 | `app/handler/keys.rs` |
 
 ## Success Criteria
 

@@ -73,7 +73,8 @@ pub async fn startup_flutter(
     if settings.behavior.auto_start {
         auto_start_session(state, &configs, project_path, msg_tx, term).await
     } else {
-        show_startup_dialog(state, configs, msg_tx)
+        // NEW: Enter normal mode directly, don't show startup dialog
+        enter_normal_mode_disconnected(state)
     }
 }
 
@@ -260,14 +261,13 @@ fn launch_session(
     }
 }
 
-/// Show startup dialog (manual mode)
-fn show_startup_dialog(
-    state: &mut AppState,
-    configs: LoadedConfigs,
-    msg_tx: mpsc::Sender<Message>,
-) -> Option<UpdateAction> {
-    state.show_startup_dialog(configs);
-    spawn::spawn_device_discovery(msg_tx);
+/// Enter normal mode without starting a session (manual mode)
+///
+/// User can press '+' to show the StartupDialog when ready.
+fn enter_normal_mode_disconnected(state: &mut AppState) -> Option<UpdateAction> {
+    // Don't show any dialog - stay in Normal mode
+    // User will see "Not Connected" status and can press '+' to start
+    state.ui_mode = UiMode::Normal;
     None
 }
 

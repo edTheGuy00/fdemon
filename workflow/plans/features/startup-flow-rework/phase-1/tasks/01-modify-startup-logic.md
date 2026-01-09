@@ -82,16 +82,29 @@ cargo test --lib
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
-(To be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/tui/startup.rs` | Replaced `show_startup_dialog()` with `enter_normal_mode_disconnected()` and updated `startup_flutter()` to call new function in non-auto-start path |
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy` - Pending
-- `cargo test` - Pending
+### Notable Decisions/Tradeoffs
+
+1. **Removed Device Discovery on Non-Auto-Start**: The `spawn_device_discovery()` call is no longer made when `auto_start = false`. Device discovery is now deferred until the user explicitly requests it by pressing '+' to show the StartupDialog. This improves startup performance and reduces unnecessary background work.
+
+2. **Configs Still Loaded Upfront**: The configs are still loaded at startup even though they're not used immediately in the non-auto-start path. This is noted in the task as potentially unnecessary and will be considered for lazy loading in Phase 2.
+
+3. **msg_tx Parameter Now Unused in Non-Auto-Start Path**: The `msg_tx` parameter is passed to `startup_flutter()` but is no longer used when `auto_start = false`. This is acceptable as it maintains the function signature for consistency with the auto-start path.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib` - Passed (1321 tests passed, 0 failed)
+
+### Risks/Limitations
+
+1. **Existing Tests**: Some existing tests that depend on StartupDialog appearing automatically may need adjustment in subsequent tasks. However, all current unit tests pass, indicating no immediate breakage.

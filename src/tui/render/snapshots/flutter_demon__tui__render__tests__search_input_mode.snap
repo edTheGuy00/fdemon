@@ -1,6 +1,5 @@
 ---
 source: src/tui/render/tests.rs
-assertion_line: 274
 expression: content
 ---
  Flutter Demon  │  flutter_app──────────────────────────[r] [R] [x] [d] [q]────┐
@@ -8,9 +7,9 @@ expression: content
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌ Logs ────────────────────────────────────────────────────────────────────────┐
 │                                                                              │
-│                            Waiting for Flutter...                            │
+│                                 Not Connected                                │
 │                                                                              │
-│                Make sure you're in a Flutter project directory               │
+│                        Press + to start a new session                        │
 │                                                                              │
 │                                                                              │
 │                                                                              │

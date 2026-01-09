@@ -198,7 +198,21 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // Stop app (lowercase 's') - only when not busy
         (KeyCode::Char('s'), KeyModifiers::NONE) if !is_busy => Some(Message::StopApp),
 
-        // 'd' for adding device/session
+        // ─────────────────────────────────────────────────────────
+        // Session Management
+        // ─────────────────────────────────────────────────────────
+        // '+' - Start new session
+        // If sessions are running: show quick device selector
+        // If no sessions: show full startup dialog
+        (KeyCode::Char('+'), KeyModifiers::NONE) | (KeyCode::Char('+'), KeyModifiers::SHIFT) => {
+            if state.has_running_sessions() {
+                Some(Message::ShowDeviceSelector)
+            } else {
+                Some(Message::ShowStartupDialog)
+            }
+        }
+
+        // 'd' for adding device/session (alternative to '+')
         // If sessions are running: show quick device selector
         // If no sessions: show full startup dialog
         (KeyCode::Char('d'), KeyModifiers::NONE) => {
@@ -230,21 +244,16 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // '/' - Enter search mode (vim-style)
         (KeyCode::Char('/'), KeyModifiers::NONE) => Some(Message::StartSearch),
 
-        // 'n' - Next search match (only when search has query)
-        // Note: 'n' is overloaded - it's also used for "New session"
-        // If there's an active search query, use it for next match
-        // Otherwise: show StartupDialog if no sessions, DeviceSelector if sessions running
+        // 'n' - Next search match (vim-style, only when search active)
+        // Note: This is ONLY for search navigation, NOT for session management
+        // Only works when there's an active search query
         (KeyCode::Char('n'), KeyModifiers::NONE) => {
             if let Some(handle) = state.session_manager.selected() {
                 if !handle.session.search_state.query.is_empty() {
                     return Some(Message::NextSearchMatch);
                 }
             }
-            if state.has_running_sessions() {
-                Some(Message::ShowDeviceSelector)
-            } else {
-                Some(Message::ShowStartupDialog)
-            }
+            None // No action when no search query
         }
 
         // 'N' - Previous search match
@@ -830,7 +839,8 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
 
-        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+        // 'n' should do nothing when no search query is active
+        assert!(msg.is_none());
     }
 
     #[test]
@@ -840,7 +850,8 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
 
-        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+        // 'n' should do nothing when no search query is active
+        assert!(msg.is_none());
     }
 
     #[test]
@@ -859,8 +870,56 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('n')));
 
-        // Should prioritize search over session check
+        // Should trigger NextSearchMatch when search query is active
         assert!(matches!(msg, Some(Message::NextSearchMatch)));
+    }
+
+    #[test]
+    fn test_plus_key_with_running_sessions() {
+        use crate::core::AppPhase;
+
+        let mut state = AppState::new();
+        // Simulate running session
+        let device = test_device();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        // Mark session as running (newly created sessions aren't in Running phase)
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.phase = AppPhase::Running;
+        }
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('+')));
+
+        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+    }
+
+    #[test]
+    fn test_plus_key_without_sessions() {
+        let state = AppState::new();
+        // No running sessions
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('+')));
+
+        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+    }
+
+    #[test]
+    fn test_plus_key_with_shift_modifier() {
+        use crate::core::AppPhase;
+
+        let mut state = AppState::new();
+        // Simulate running session
+        let device = test_device();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            handle.session.phase = AppPhase::Running;
+        }
+
+        let msg = handle_key_normal(
+            &state,
+            KeyEvent::new(KeyCode::Char('+'), KeyModifiers::SHIFT),
+        );
+
+        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
     }
 
     #[test]

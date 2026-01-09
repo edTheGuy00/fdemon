@@ -29,9 +29,9 @@ Enable the app to start in Normal mode without sessions and show appropriate "No
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-modify-startup-logic](tasks/01-modify-startup-logic.md) | Not Started | - | `tui/startup.rs` |
-| 2 | [02-update-empty-state-display](tasks/02-update-empty-state-display.md) | Not Started | 1 | `tui/widgets/log_view/mod.rs` |
-| 3 | [03-update-status-bar](tasks/03-update-status-bar.md) | Not Started | 1 | `tui/widgets/status_bar/mod.rs` |
+| 1 | [01-modify-startup-logic](tasks/01-modify-startup-logic.md) | Done | - | `tui/startup.rs` |
+| 2 | [02-update-empty-state-display](tasks/02-update-empty-state-display.md) | Done | 1 | `tui/widgets/log_view/mod.rs` |
+| 3 | [03-update-status-bar](tasks/03-update-status-bar.md) | Done | 1 | `tui/widgets/status_bar/mod.rs` |
 
 ## Success Criteria
 

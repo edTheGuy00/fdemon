@@ -7,10 +7,10 @@ expression: term.content()
 └──────────────────────────────────────┘
 ┌ Logs ────────────────────────────────┐
 │                                      │
-│        Waiting for Flutter...        │
+│             Not Connected            │
 │                                      │
-│Make sure you're in a Flutter project │
+│    Press + to start a new session    │
 │                                      │
 └──────────────────────────────────────┘
 ────────────────────────────────────────
- ●
+ ○ Not Connected

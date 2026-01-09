@@ -24,7 +24,13 @@ fn test_device(id: &str, name: &str) -> Device {
 
 #[test]
 fn test_state_indicator_initializing() {
-    let state = create_test_state();
+    let mut state = create_test_state();
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+    // Session starts with Initializing phase by default
+
     let bar = StatusBar::new(&state);
     let indicator = bar.state_indicator();
 
@@ -35,7 +41,15 @@ fn test_state_indicator_initializing() {
 #[test]
 fn test_state_indicator_running() {
     let mut state = create_test_state();
-    state.phase = AppPhase::Running;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Running
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Running;
+    }
 
     let bar = StatusBar::new(&state);
     let indicator = bar.state_indicator();
@@ -47,7 +61,15 @@ fn test_state_indicator_running() {
 #[test]
 fn test_state_indicator_reloading() {
     let mut state = create_test_state();
-    state.phase = AppPhase::Reloading;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Reloading
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Reloading;
+    }
 
     let bar = StatusBar::new(&state);
     let indicator = bar.state_indicator();
@@ -59,7 +81,15 @@ fn test_state_indicator_reloading() {
 #[test]
 fn test_state_indicator_quitting() {
     let mut state = create_test_state();
-    state.phase = AppPhase::Quitting;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Quitting
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Quitting;
+    }
 
     let bar = StatusBar::new(&state);
     let indicator = bar.state_indicator();
@@ -529,6 +559,119 @@ fn test_compact_status_bar_no_errors() {
 }
 
 // ─────────────────────────────────────────────────────────
+// Not Connected State Tests (Phase 1 Task 3)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_state_indicator_not_connected() {
+    let state = create_test_state();
+    // No sessions created, so session_manager.is_empty() == true
+    let bar = StatusBar::new(&state);
+    let indicator = bar.state_indicator();
+
+    assert_eq!(indicator.style.fg, Some(Color::DarkGray));
+    assert!(indicator.content.to_string().contains("Not Connected"));
+}
+
+#[test]
+fn test_state_indicator_transitions_from_not_connected() {
+    let mut state = create_test_state();
+
+    // Initially no sessions
+    let bar = StatusBar::new(&state);
+    let indicator = bar.state_indicator();
+    assert!(indicator.content.to_string().contains("Not Connected"));
+
+    // Create a session
+    let device = test_device("d1", "iPhone");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Now should show normal phase (Initializing by default)
+    let bar = StatusBar::new(&state);
+    let indicator = bar.state_indicator();
+    assert!(indicator.content.to_string().contains("Starting"));
+}
+
+#[test]
+fn test_build_segments_not_connected() {
+    let state = create_test_state();
+    // No sessions created
+    let bar = StatusBar::new(&state);
+    let segments = bar.build_segments();
+
+    // Collect all content
+    let content: String = segments.iter().map(|s| s.content.to_string()).collect();
+
+    assert!(content.contains("Not Connected"));
+}
+
+#[test]
+fn test_compact_status_bar_not_connected() {
+    let backend = TestBackend::new(40, 3);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let state = create_test_state();
+    // No sessions created
+
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let bar = StatusBarCompact::new(&state);
+            frame.render_widget(bar, area);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+
+    assert!(content.contains("Not Connected"));
+}
+
+#[test]
+fn test_compact_status_bar_transitions_from_not_connected() {
+    let backend = TestBackend::new(40, 3);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    let mut state = create_test_state();
+
+    // Initially no sessions - render first time
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let bar = StatusBarCompact::new(&state);
+            frame.render_widget(bar, area);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(content.contains("Not Connected"));
+
+    // Create a session
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Running;
+        handle.session.started_at = Some(Local::now());
+    }
+
+    // Render again - should now show running state
+    terminal
+        .draw(|frame| {
+            let area = frame.area();
+            let bar = StatusBarCompact::new(&state);
+            frame.render_widget(bar, area);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|cell| cell.symbol()).collect();
+    assert!(content.contains("●")); // Running indicator
+}
+
+// ─────────────────────────────────────────────────────────
 // TestTerminal-based tests (Phase 3.5 Task 8)
 // ─────────────────────────────────────────────────────────
 
@@ -538,7 +681,15 @@ fn test_statusbar_renders_phase() {
 
     let mut term = TestTerminal::new();
     let mut state = create_test_state();
-    state.phase = AppPhase::Running;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Running
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Running;
+    }
 
     let status_bar = StatusBar::new(&state);
     term.render_widget(status_bar, term.area());
@@ -602,7 +753,11 @@ fn test_statusbar_phase_initializing() {
 
     let mut term = TestTerminal::new();
     let mut state = create_test_state();
-    state.phase = AppPhase::Initializing;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+    // Session starts with Initializing phase by default
 
     let status_bar = StatusBar::new(&state);
     term.render_widget(status_bar, term.area());
@@ -619,7 +774,15 @@ fn test_statusbar_phase_reloading() {
 
     let mut term = TestTerminal::new();
     let mut state = create_test_state();
-    state.phase = AppPhase::Reloading;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Reloading
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Reloading;
+    }
 
     let status_bar = StatusBar::new(&state);
     term.render_widget(status_bar, term.area());
@@ -636,7 +799,15 @@ fn test_statusbar_phase_stopped() {
 
     let mut term = TestTerminal::new();
     let mut state = create_test_state();
-    state.phase = AppPhase::Stopped;
+    // Create a session so we don't show "Not Connected"
+    let device = test_device("d1", "Device");
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
+    // Set session phase to Stopped
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Stopped;
+    }
 
     let status_bar = StatusBar::new(&state);
     term.render_widget(status_bar, term.area());

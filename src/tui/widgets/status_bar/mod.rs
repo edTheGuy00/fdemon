@@ -25,6 +25,11 @@ impl<'a> StatusBar<'a> {
 
     /// Get the state indicator with appropriate styling
     fn state_indicator(&self) -> Span<'static> {
+        // If no sessions exist, show "Not Connected"
+        if self.state.session_manager.is_empty() {
+            return Span::styled("○ Not Connected", Style::default().fg(Color::DarkGray));
+        }
+
         // Use selected session's phase if available, otherwise fall back to global phase
         let phase = self
             .state
@@ -265,6 +270,17 @@ impl Widget for StatusBarCompact<'_> {
 
         let inner = block.inner(area);
         block.render(area, buf);
+
+        // If no sessions exist, show "Not Connected"
+        if self.state.session_manager.is_empty() {
+            let spans = vec![
+                Span::raw(" "),
+                Span::styled("○ Not Connected", Style::default().fg(Color::DarkGray)),
+            ];
+            let line = Line::from(spans);
+            Paragraph::new(line).render(inner, buf);
+            return;
+        }
 
         // Use selected session's phase if available, otherwise fall back to global phase
         let phase = self

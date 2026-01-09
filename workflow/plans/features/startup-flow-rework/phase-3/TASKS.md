@@ -42,11 +42,11 @@ Update all documentation, snapshot tests, and E2E tests to reflect the new start
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-update-keybindings-doc](tasks/01-update-keybindings-doc.md) | Not Started | - | `docs/KEYBINDINGS.md` |
-| 2 | [02-update-snapshot-tests](tasks/02-update-snapshot-tests.md) | Not Started | - | `tui/render/tests.rs`, snapshots |
-| 3 | [03-update-e2e-tests](tasks/03-update-e2e-tests.md) | Not Started | - | `tests/e2e/` |
-| 4 | [04-verify-all-tests](tasks/04-verify-all-tests.md) | Not Started | 1, 2, 3 | All |
-| 5 | [05-visual-output-tests](tasks/05-visual-output-tests.md) | Not Started | 3 | `tests/e2e/settings_page.rs` |
+| 1 | [01-update-keybindings-doc](tasks/01-update-keybindings-doc.md) | Done | - | `docs/KEYBINDINGS.md` |
+| 2 | [02-update-snapshot-tests](tasks/02-update-snapshot-tests.md) | Done | - | `tui/render/tests.rs`, snapshots |
+| 3 | [03-update-e2e-tests](tasks/03-update-e2e-tests.md) | Done | - | `tests/e2e/` |
+| 4 | [04-verify-all-tests](tasks/04-verify-all-tests.md) | Done | 1, 2, 3 | All |
+| 5 | [05-visual-output-tests](tasks/05-visual-output-tests.md) | Done | 3 | `tests/e2e/settings_page.rs` |
 
 ## Success Criteria
 

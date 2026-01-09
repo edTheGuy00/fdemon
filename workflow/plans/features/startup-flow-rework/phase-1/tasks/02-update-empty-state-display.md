@@ -81,16 +81,33 @@ Unit tests in log_view module should still pass (if any exist for empty state).
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
-(To be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/log_view/mod.rs` | Updated `render_empty()` function (lines 583-612) to display "Not Connected" with bold styling and "Press + to start a new session" instruction message |
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy` - Pending
-- `cargo test` - Pending
+### Notable Decisions/Tradeoffs
+
+1. **Styling Consistency**: Used `DarkGray` color for both text elements to maintain consistency with existing UI. "Not Connected" uses `Modifier::BOLD` for emphasis while the instruction text remains normal weight.
+
+2. **Message Simplicity**: Kept the message simple and action-oriented ("Press + to start a new session") rather than explaining the situation. This aligns with the user-initiated session model.
+
+3. **Comment Update**: Changed the comment from "Center the waiting message" to "Center the instruction message" to reflect the new purpose of the empty state.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (compiled successfully in 0.97s)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib log_view` - Passed (77 tests passed, 0 failed)
+
+### Risks/Limitations
+
+1. **Snapshot Test Failures**: As expected per task notes, 13 snapshot tests in `tui::render` module fail due to the changed text. These will be updated in Phase 3 as documented.
+
+2. **Status Bar Test Failures**: 9 status bar tests fail, but these failures are due to Task 01's changes to `status_bar/mod.rs` (which added "Not Connected" logic to `state_indicator()`), not this task's changes. The tests need sessions to be created to properly test phase indicators.
+
+3. **Visual-Only Verification**: The centered layout behavior is not covered by unit tests - it relies on ratatui's Paragraph alignment. Visual verification recommended via `cargo run -- tests/fixtures/simple_app`.

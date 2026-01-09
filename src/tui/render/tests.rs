@@ -386,19 +386,41 @@ fn test_transition_confirm_to_normal_cancel() {
 
 #[test]
 fn test_phase_transition_renders_correctly() {
+    use crate::daemon::Device;
+
     let mut state = create_base_state();
     state.ui_mode = UiMode::Normal;
 
+    // Create a session so phases are visible (not "Not Connected")
+    let device = Device {
+        id: "test-device".to_string(),
+        name: "Test Device".to_string(),
+        platform: "linux".to_string(),
+        emulator: false,
+        category: None,
+        platform_type: None,
+        ephemeral: false,
+        emulator_id: None,
+    };
+    let id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(id);
+
     // Initializing
-    state.phase = AppPhase::Initializing;
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Initializing;
+    }
     let init = render_screen(&mut state);
 
     // Running
-    state.phase = AppPhase::Running;
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Running;
+    }
     let running = render_screen(&mut state);
 
     // Reloading
-    state.phase = AppPhase::Reloading;
+    if let Some(handle) = state.session_manager.get_mut(id) {
+        handle.session.phase = AppPhase::Reloading;
+    }
     let reloading = render_screen(&mut state);
 
     // All should be different

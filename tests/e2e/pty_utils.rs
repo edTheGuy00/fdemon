@@ -270,6 +270,22 @@ impl FdemonSession {
         Ok(())
     }
 
+    /// Wait for the app to reach Normal mode with "Not Connected" state.
+    ///
+    /// Waits for the status bar to show "Not Connected" along with the
+    /// instruction to press + to start a new session. This indicates the
+    /// app has started in Normal mode without auto-starting a session.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if "Not Connected" status is not found within the default timeout.
+    pub fn expect_not_connected(&mut self) -> PtyResult<()> {
+        self.session.expect(Regex("Not Connected"))?;
+        self.session
+            .expect(Regex("Press \\+ to start a new session"))?;
+        Ok(())
+    }
+
     /// Wait for any output matching a regex pattern.
     ///
     /// Uses the default timeout (`DEFAULT_TIMEOUT`). For custom timeout,

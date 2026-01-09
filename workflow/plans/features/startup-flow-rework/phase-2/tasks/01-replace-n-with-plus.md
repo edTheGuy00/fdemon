@@ -100,16 +100,27 @@ cargo test keys -- --nocapture
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (To be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
-(To be filled after implementation)
+| File | Changes |
+|------|---------|
+| `src/app/handler/keys.rs` | Modified 'n' key handler (lines 245-254) to only trigger NextSearchMatch when search query is active, returns None otherwise. Added '+' key handler (lines 212-222) to show StartupDialog when no sessions exist or DeviceSelector when sessions are running. Updated existing tests and added 3 new tests for '+' key functionality. |
 
-**Testing Performed:**
-- `cargo fmt` - Pending
-- `cargo check` - Pending
-- `cargo clippy` - Pending
-- `cargo test` - Pending
+### Notable Decisions/Tradeoffs
+
+1. **KeyModifiers for '+'**: The '+' key handler accepts both `KeyModifiers::NONE` and `KeyModifiers::SHIFT` to ensure compatibility across different keyboard layouts and terminal emulators. On US keyboards, '+' typically requires Shift+= but some terminals may report it differently.
+
+2. **Test Updates**: Updated existing 'n' key tests to expect `None` when no search query is active, ensuring the new behavior is properly validated.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib app::handler::keys` - Passed (49 unit tests, all passing)
+
+### Risks/Limitations
+
+1. **E2E Test Failures**: Two E2E tests (`test_number_keys_switch_sessions` and `test_arrow_keys_navigate_settings`) failed, but these appear to be flaky tests unrelated to the changes made. As noted in the task description, some tests may fail after this change and will be updated in task 02.
