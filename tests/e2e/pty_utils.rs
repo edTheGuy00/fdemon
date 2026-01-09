@@ -408,6 +408,19 @@ impl FdemonSession {
         Ok(())
     }
 
+    /// Send Enter key using expectrl's send_line method (Experiment C).
+    ///
+    /// This uses expectrl's built-in send_line("") which may handle
+    /// Enter differently than sending raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns error if the PTY session fails to send the input.
+    pub fn send_enter_line(&mut self) -> PtyResult<()> {
+        self.session.send_line("")?;
+        Ok(())
+    }
+
     /// Get current terminal content (for snapshot testing)
     ///
     /// Attempts to capture available terminal output with a short timeout.

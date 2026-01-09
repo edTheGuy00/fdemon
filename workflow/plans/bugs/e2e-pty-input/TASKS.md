@@ -38,21 +38,27 @@ Investigate and fix the PTY input issue where Enter/Space keys don't trigger exp
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-investigate-event-kinds](tasks/01-investigate-event-kinds.md) | Not Started | - | `src/tui/event.rs` |
-| 2 | [02-test-alternative-sequences](tasks/02-test-alternative-sequences.md) | Not Started | 1 | `tests/e2e/pty_utils.rs` |
-| 3 | [03-implement-fix](tasks/03-implement-fix.md) | Not Started | 2 | TBD based on findings |
-| 4 | [04-enable-toggle-tests](tasks/04-enable-toggle-tests.md) | Not Started | 3 | `tests/e2e/settings_page.rs` |
+| 1 | [01-investigate-event-kinds](tasks/01-investigate-event-kinds.md) | Done | - | `src/tui/event.rs` |
+| 2 | [02-test-alternative-sequences](tasks/02-test-alternative-sequences.md) | Done | 1 | `tests/e2e/pty_utils.rs` |
+| 3 | [03-implement-fix](tasks/03-implement-fix.md) | Done (No Fix) | 2 | Documented limitation |
+| 4 | [04-enable-toggle-tests](tasks/04-enable-toggle-tests.md) | Blocked | 3 | Cannot enable - PTY limitation |
 
 ## Success Criteria
 
-Bug fix is complete when:
+Investigation complete:
 
-- [ ] Root cause identified and documented
-- [ ] Enter key triggers toggle in E2E tests
-- [ ] Space key triggers toggle in E2E tests
-- [ ] All toggle tests pass (currently ignored)
-- [ ] No regressions in other E2E tests
-- [ ] Solution doesn't break real terminal usage
+- [x] Root cause identified and documented - **PTY/crossterm fundamental limitation**
+- [ ] ~~Enter key triggers toggle in E2E tests~~ - **Not fixable**
+- [ ] ~~Space key triggers toggle in E2E tests~~ - **Not fixable**
+- [ ] ~~All toggle tests pass (currently ignored)~~ - **Remain ignored**
+- [x] No regressions in other E2E tests
+- [x] Solution doesn't break real terminal usage
+
+## Investigation Outcome
+
+**Status: LIMITATION DOCUMENTED**
+
+After comprehensive investigation (6 experiments), confirmed this is a **fundamental PTY/crossterm compatibility issue**. The application works correctly in real terminals. E2E tests must remain ignored for Enter/Space key interactions. Unit tests provide adequate coverage.
 
 ## Quick Experiments
 
