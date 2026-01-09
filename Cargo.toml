@@ -3,7 +3,7 @@ name = "flutter-demon"
 version = "0.1.0"
 edition = "2021"
 description = "A high-performance TUI for Flutter development"
-license = "MIT"
+license = "BSL-1.1"
 
 # Separate library and binary
 [[bin]]

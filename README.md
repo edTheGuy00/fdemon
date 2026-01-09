@@ -13,8 +13,8 @@
     <br>
     <a href="https://github.com/edTheGuy00/flutter-demon/actions">
         <img src="https://img.shields.io/github/actions/workflow/status/edTheGuy00/flutter-demon/ci.yml?style=flat&labelColor=1d1d1d&color=white&logo=GitHub%20Actions&logoColor=white" alt="CI"></a>
-    <a href="https://opensource.org/licenses/MIT">
-        <img src="https://img.shields.io/badge/license-MIT-white?style=flat&labelColor=1d1d1d" alt="License"></a>
+    <a href="https://github.com/edTheGuy00/flutter-demon/blob/main/LICENSE">
+        <img src="https://img.shields.io/badge/license-BSL%201.1-white?style=flat&labelColor=1d1d1d" alt="License"></a>
 </p>
 
 <h4 align="center">
@@ -296,9 +296,41 @@ Each task file includes a **Completion Summary** with:
 
 This transparent development process demonstrates how AI can augment software development while maintaining high code quality, comprehensive testing, and thorough documentation.
 
+## Contributing
+
+Contributions are welcome! Flutter Demon is licensed under BSL-1.1, which allows contributions while protecting the project's commercial interests.
+
+By contributing, you agree that your contributions will be licensed under the same BSL-1.1 license (converting to AGPL-3.0 after 4 years). You retain copyright to your contributions but grant perpetual rights for use in the project.
+
+Please read [CONTRIBUTING.md](CONTRIBUTING.md) for:
+- Contribution guidelines and workflow
+- Code quality standards
+- Testing requirements
+- License implications for contributors
+
+### Quick Start
+
+```bash
+# Build
+cargo build
+
+# Run tests
+cargo test
+
+# Format code
+cargo fmt
+
+# Run lints
+cargo clippy
+```
+
+For questions or discussions, open an issue or start a discussion on GitHub.
+
 ## License
 
-Licensed under the [MIT License](LICENSE).
+Licensed under the [Business Source License 1.1](LICENSE).
+
+The BSL 1.1 allows you to use Flutter Demon freely for any purpose, including production use, except for providing a commercial hosted/managed Flutter development service. After four years from each release, the license automatically converts to AGPL-3.0.
 
 ---
 

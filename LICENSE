@@ -1,0 +1,269 @@
+Business Source License 1.1
+
+License text copyright (c) 2017 MariaDB Corporation Ab, All Rights Reserved.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+-----------------------------------------------------------------------------
+
+Parameters
+
+Licensor:             edTheGuy00
+
+Licensed Work:        Flutter Demon
+                      The Licensed Work is (c) 2025 edTheGuy00
+
+Additional Use Grant: You may use the Licensed Work for any purpose,
+                      including production use, provided you do not use
+                      the Licensed Work to provide a commercial offering
+                      that allows third parties to use the Licensed Work's
+                      functionality as a service (e.g., hosted or managed
+                      Flutter development environment service).
+
+Change Date:          Four years from the date of release of this version
+
+Change License:       GNU Affero General Public License v3.0 (AGPL-3.0)
+
+-----------------------------------------------------------------------------
+
+Terms
+
+The Licensor hereby grants you the right to copy, modify, create derivative
+works, redistribute, and make non-production use of the Licensed Work. The
+Licensor may make an Additional Use Grant, above, permitting limited production
+use.
+
+Effective on the Change Date, or the fourth anniversary of the first publicly
+available distribution of a specific version of the Licensed Work under this
+License, whichever comes first, the Licensor hereby grants you rights under
+the terms of the Change License, and the rights granted in the paragraph above
+terminate.
+
+If your use of the Licensed Work does not comply with the requirements
+currently in effect as described in this License, you must purchase a
+commercial license from the Licensor, its affiliated entities, or authorized
+resellers, or you must refrain from using the Licensed Work.
+
+All copies of the original and modified Licensed Work, and derivative works
+of the Licensed Work, are subject to this License. This License applies
+separately for each version of the Licensed Work and the Change Date may vary
+for each version of the Licensed Work released by Licensor.
+
+You must conspicuously display this License on each original or modified copy
+of the Licensed Work. If you receive the Licensed Work in original or
+modified form from a third party, the terms and conditions set forth in this
+License apply to your use of that work.
+
+Any use of the Licensed Work in violation of this License will automatically
+terminate your rights under this License for the current and all other
+versions of the Licensed Work.
+
+This License does not grant you any right in any trademark or logo of
+Licensor or its affiliates (provided that you may use a trademark or logo of
+Licensor as expressly required by this License).
+
+TO THE EXTENT PERMITTED BY APPLICABLE LAW, THE LICENSED WORK IS PROVIDED ON
+AN "AS IS" BASIS. LICENSOR HEREBY DISCLAIMS ALL WARRANTIES AND CONDITIONS,
+EXPRESS OR IMPLIED, INCLUDING (WITHOUT LIMITATION) WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, NON-INFRINGEMENT, AND
+TITLE.
+
+MariaDB hereby grants you permission to use this License's text to license
+your works, and to refer to it using the trademark "Business Source License",
+as long as you comply with the Covenants of Licensor below.
+
+-----------------------------------------------------------------------------
+
+Covenants of Licensor
+
+In consideration of the right to use this License's text and the "Business
+Source License" name and trademark, Licensor covenants to MariaDB, and to all
+other recipients of the licensed work to be provided by Licensor:
+
+1. To specify as the Change License the GPL Version 2.0 or any later version,
+   or a license that is compatible with GPL Version 2.0 or a later version,
+   where "compatible" means that software provided under the Change License can
+   be included in a program with software provided under GPL Version 2.0 or a
+   later version. Licensor may specify additional Change Licenses without
+   limitation.
+
+2. To either: (a) specify an additional grant of rights to use that does not
+   impose any additional restriction on the right granted in this License, as
+   the Additional Use Grant; or (b) insert the text "None".
+
+3. To specify a Change Date.
+
+4. Not to modify this License in any other way.
+
+-----------------------------------------------------------------------------
+
+Notice
+
+The Business Source License (this document, or the "License") is not an Open
+Source license. However, the Licensed Work will eventually be made available
+under an Open Source License, as stated in this License.
+
+-----------------------------------------------------------------------------
+
+Third-Party Software Licenses
+
+Flutter Demon incorporates or depends upon the following third-party open source
+software. All third-party licenses are compatible with the Business Source License
+and will remain in effect after conversion to AGPL-3.0.
+
+-----------------------------------------------------------------------------
+
+PERMISSIVE LICENSES (MIT, Apache-2.0, BSD, etc.)
+
+The majority of dependencies (300+ packages) are licensed under permissive
+open source licenses that allow commercial and non-commercial use with
+minimal restrictions:
+
+• MIT License
+  Used by: ratatui, crossterm, tokio, bytes, tracing, tracing-appender,
+  tracing-subscriber, compact_str, console, darling, mockall, nix, termwiz,
+  and many others
+  Copyright notices: See individual package repositories
+  License: https://opensource.org/licenses/MIT
+
+• Apache-2.0 OR MIT (Dual Licensed)
+  Used by: serde, serde_json, clap, regex, chrono, thiserror, color-eyre,
+  dirs, toml, notify-debouncer-full, rand, anyhow, parking_lot, and 200+ others
+  Copyright notices: See individual package repositories
+  Licenses: https://opensource.org/licenses/MIT
+           https://www.apache.org/licenses/LICENSE-2.0
+
+• MIT OR Unlicense (Dual Licensed)
+  Used by: aho-corasick, memchr, same-file
+  Copyright notices: See individual package repositories
+
+• Apache-2.0 (Standalone)
+  Used by: insta, similar, scc, sdd, fragile
+  Copyright notices: See individual package repositories
+  License: https://www.apache.org/licenses/LICENSE-2.0
+
+• BSD-3-Clause
+  Used by: instant
+  Copyright notices: See individual package repositories
+  License: https://opensource.org/licenses/BSD-3-Clause
+
+• ISC License
+  Used by: inotify, inotify-sys
+  Copyright notices: See individual package repositories
+  License: https://opensource.org/licenses/ISC
+
+• 0BSD OR Apache-2.0 OR MIT
+  Used by: adler2
+
+• Apache-2.0 OR BSD-2-Clause OR MIT
+  Used by: zerocopy, zerocopy-derive
+
+• Apache-2.0 OR MIT OR Zlib
+  Used by: bytemuck, miniz_oxide
+
+• Apache-2.0 OR BSL-1.0
+  Used by: ryu
+
+• Zlib License
+  Used by: foldhash
+  License: https://opensource.org/licenses/Zlib
+
+• MPL-2.0 (Mozilla Public License 2.0)
+  Used by: option-ext
+  License: https://www.mozilla.org/en-US/MPL/2.0/
+
+• WTFPL (Do What The F*ck You Want To Public License)
+  Used by: terminfo
+  License: http://www.wtfpl.net/
+
+• CC0-1.0 (Public Domain)
+  Used by: notify
+  License: https://creativecommons.org/publicdomain/zero/1.0/
+
+• Unicode-DFS-2016 (Unicode License Agreement)
+  Used by: finl_unicode (combined with Apache-2.0 OR MIT)
+  License: https://www.unicode.org/license.txt
+
+• Unicode-3.0
+  Used in combination with Apache-2.0 OR MIT
+  License: https://www.unicode.org/license.txt
+
+• Apache-2.0 WITH LLVM-exception
+  Used by: linux-raw-sys, rustix (combined with Apache-2.0 OR MIT)
+  License: https://llvm.org/foundation/relicensing/LICENSE.txt
+
+• LGPL-2.1-or-later (as alternative)
+  Used by: r-efi (Apache-2.0 OR LGPL-2.1-or-later OR MIT)
+  License: https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+
+-----------------------------------------------------------------------------
+
+KEY DEPENDENCIES
+
+The following are the primary direct dependencies and their licenses:
+
+TUI Framework:
+• ratatui (MIT) - https://github.com/ratatui/ratatui
+• crossterm (MIT) - https://github.com/crossterm-rs/crossterm
+
+Async Runtime:
+• tokio (MIT) - https://github.com/tokio-rs/tokio
+
+Serialization:
+• serde (Apache-2.0 OR MIT) - https://github.com/serde-rs/serde
+• serde_json (Apache-2.0 OR MIT) - https://github.com/serde-rs/json
+• toml (Apache-2.0 OR MIT) - https://github.com/toml-rs/toml
+
+Error Handling:
+• color-eyre (Apache-2.0 OR MIT) - https://github.com/eyre-rs/eyre
+• thiserror (Apache-2.0 OR MIT) - https://github.com/dtolnay/thiserror
+
+Logging:
+• tracing (MIT) - https://github.com/tokio-rs/tracing
+• tracing-subscriber (MIT) - https://github.com/tokio-rs/tracing
+• tracing-appender (MIT) - https://github.com/tokio-rs/tracing
+
+Time:
+• chrono (Apache-2.0 OR MIT) - https://github.com/chronotope/chrono
+
+CLI:
+• clap (Apache-2.0 OR MIT) - https://github.com/clap-rs/clap
+
+File Watching:
+• notify (CC0-1.0) - https://github.com/notify-rs/notify
+• notify-debouncer-full (Apache-2.0 OR MIT) - https://github.com/notify-rs/notify
+
+Utilities:
+• dirs (Apache-2.0 OR MIT) - https://github.com/soc/dirs-rs
+• regex (Apache-2.0 OR MIT) - https://github.com/rust-lang/regex
+• rand (Apache-2.0 OR MIT) - https://github.com/rust-random/rand
+
+Testing:
+• mockall (Apache-2.0 OR MIT) - https://github.com/asomers/mockall
+• serial_test (MIT) - https://github.com/palfrey/serial_test
+• expectrl (MIT) - https://github.com/zhiburt/expectrl
+• insta (Apache-2.0) - https://github.com/mitsuhiko/insta
+• tempfile (Apache-2.0 OR MIT) - https://github.com/Stebalien/tempfile
+
+-----------------------------------------------------------------------------
+
+COMPLETE DEPENDENCY LIST
+
+For a complete and up-to-date list of all dependencies and their licenses,
+run the following command in the project directory:
+
+    cargo license --authors
+
+Or visit the project's Cargo.toml file and repository at:
+https://github.com/edTheGuy00/flutter-demon
+
+-----------------------------------------------------------------------------
+
+ATTRIBUTION REQUIREMENT
+
+When distributing Flutter Demon or derivative works, you must include this
+LICENSE file which contains all required copyright notices and attributions
+for third-party software.
+
+All third-party software retains its original copyright and license terms.
+The inclusion of these components does not change their licensing - they
+remain under their respective licenses as listed above.
