@@ -9,6 +9,7 @@ mod e2e {
     pub mod mock_daemon;
     pub mod pty_utils;
     mod session_management;
+    pub mod settings_page;
     mod tui_interaction;
     mod tui_workflows;
 }

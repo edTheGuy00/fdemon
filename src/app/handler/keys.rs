@@ -45,6 +45,9 @@ fn handle_key_device_selector(state: &AppState, key: KeyEvent) -> Option<Message
         // Refresh
         KeyCode::Char('r') => Some(Message::RefreshDevices),
 
+        // Settings
+        KeyCode::Char(',') => Some(Message::ShowSettings),
+
         // Cancel/close - only if there are running sessions
         KeyCode::Esc => Some(Message::HideDeviceSelector),
 
@@ -600,6 +603,11 @@ fn handle_key_startup_dialog(state: &AppState, key: KeyEvent) -> Option<Message>
         // ─────────────────────────────────────────────────────────
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
 
+        // ─────────────────────────────────────────────────────────
+        // Settings (comma key)
+        // ─────────────────────────────────────────────────────────
+        (KeyCode::Char(','), KeyModifiers::NONE) => Some(Message::ShowSettings),
+
         _ => None,
     }
 }
@@ -853,6 +861,15 @@ mod device_selector_key_tests {
 
         // Should prioritize search over session check
         assert!(matches!(msg, Some(Message::NextSearchMatch)));
+    }
+
+    #[test]
+    fn test_comma_opens_settings_from_device_selector() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DeviceSelector;
+
+        let msg = handle_key_device_selector(&state, key(KeyCode::Char(',')));
+        assert!(matches!(msg, Some(Message::ShowSettings)));
     }
 }
 

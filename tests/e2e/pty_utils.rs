@@ -48,9 +48,15 @@ pub fn quit_timeout() -> Duration {
 /// Interval between process state checks
 const QUIT_POLL_INTERVAL_MS: u64 = 100;
 /// Time to wait between kill attempts
-const KILL_RETRY_DELAY_MS: u64 = 100;
+const KILL_RETRY_DELAY_MS: u64 = 200;
 /// Short delay for screen capture
 const CAPTURE_DELAY_MS: u64 = 500;
+/// Number of Ctrl+C retries before giving up
+const KILL_MAX_RETRIES: u32 = 3;
+/// Time to wait for quit dialog to appear after sending 'q'
+const QUIT_DIALOG_WAIT_MS: u64 = 300;
+/// Number of verification iterations after kill (each is QUIT_POLL_INTERVAL_MS)
+const POST_KILL_VERIFY_ITERATIONS: u32 = 20; // 2 seconds
 
 /// Result type for PTY operations
 pub type PtyResult<T> = Result<T, Box<dyn std::error::Error>>;
@@ -575,14 +581,36 @@ impl FdemonSession {
     /// # }
     /// ```
     pub fn quit(&mut self) -> PtyResult<()> {
-        // Send 'q' to initiate quit (may show confirmation dialog)
+        // Send 'q' to initiate quit (may show confirmation dialog or quit immediately)
         self.send_key('q')?;
 
-        // Brief pause for dialog to appear
-        std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
+        // Wait longer for dialog to appear - the UI needs time to render
+        std::thread::sleep(Duration::from_millis(QUIT_DIALOG_WAIT_MS));
 
-        // Send 'y' to confirm quit (if dialog appeared, otherwise ignored)
-        self.send_key('y')?;
+        // Check if process already exited (happens in DeviceSelector mode with no sessions)
+        if !self.session.is_alive()? {
+            return Ok(());
+        }
+
+        // Try to detect if a quit dialog appeared by looking for confirmation prompt
+        // Use a short timeout to avoid blocking too long
+        self.session
+            .set_expect_timeout(Some(Duration::from_millis(200)));
+        let dialog_appeared = self
+            .session
+            .expect(Regex("quit|Quit|confirm|y/n|Y/N|\\(y\\)"))
+            .is_ok();
+        self.session.set_expect_timeout(Some(default_timeout()));
+
+        if dialog_appeared {
+            // Dialog appeared, send confirmation
+            std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
+            self.send_key('y')?;
+        } else {
+            // No dialog detected - might have quit immediately or dialog uses different text
+            // Send 'y' anyway in case dialog is present with different wording
+            self.send_key('y')?;
+        }
 
         // Wait for graceful shutdown with polling
         let quit_timeout_ms = quit_timeout().as_millis() as u64;
@@ -597,8 +625,13 @@ impl FdemonSession {
         // Still alive after timeout, force kill
         self.kill()?;
 
-        // Verify termination
-        for _ in 0..10 {
+        // Verify termination with more retries (doubled in CI)
+        let verify_iterations = if is_ci() {
+            POST_KILL_VERIFY_ITERATIONS * 2
+        } else {
+            POST_KILL_VERIFY_ITERATIONS
+        };
+        for _ in 0..verify_iterations {
             std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
             if !self.session.is_alive()? {
                 return Ok(());
@@ -614,6 +647,10 @@ impl FdemonSession {
     /// the process. This is called automatically if [`quit`](Self::quit)
     /// times out.
     ///
+    /// The method retries Ctrl+C multiple times before falling back to
+    /// Ctrl+D (EOF). This improves reliability when the process is busy
+    /// or the signal handler has delays.
+    ///
     /// # Errors
     ///
     /// Returns error if unable to send interrupt signals.
@@ -623,13 +660,27 @@ impl FdemonSession {
     /// Prefer [`quit`](Self::quit) for graceful shutdown. This method
     /// should only be used when immediate termination is required.
     pub fn kill(&mut self) -> PtyResult<()> {
-        // Send Ctrl+C to interrupt the process
-        self.send_raw(b"\x03")?;
-        std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
+        // Try Ctrl+C multiple times - the signal handler may be delayed
+        for attempt in 1..=KILL_MAX_RETRIES {
+            // Send Ctrl+C to interrupt the process
+            self.send_raw(b"\x03")?;
+            std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
 
-        // If still alive, send Ctrl+D (EOF)
+            // Check if process terminated
+            if !self.session.is_alive()? {
+                return Ok(());
+            }
+
+            // On last attempt before EOF, wait a bit longer
+            if attempt == KILL_MAX_RETRIES {
+                std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
+            }
+        }
+
+        // Last resort: send Ctrl+D (EOF) to close stdin
         if self.session.is_alive()? {
             self.send_raw(b"\x04")?;
+            std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
         }
 
         Ok(())
@@ -734,6 +785,8 @@ pub enum SpecialKey {
     Escape,
     /// Tab key
     Tab,
+    /// Shift+Tab key (reverse tab)
+    ShiftTab,
     /// Backspace key
     Backspace,
     /// Up arrow key
@@ -768,6 +821,7 @@ impl SpecialKey {
             SpecialKey::Enter => b"\r",
             SpecialKey::Escape => b"\x1b",
             SpecialKey::Tab => b"\t",
+            SpecialKey::ShiftTab => b"\x1b[Z",
             SpecialKey::Backspace => b"\x7f",
             SpecialKey::ArrowUp => b"\x1b[A",
             SpecialKey::ArrowDown => b"\x1b[B",
@@ -880,6 +934,7 @@ mod tests {
         assert_eq!(SpecialKey::Enter.as_bytes(), b"\r");
         assert_eq!(SpecialKey::Escape.as_bytes(), b"\x1b");
         assert_eq!(SpecialKey::Tab.as_bytes(), b"\t");
+        assert_eq!(SpecialKey::ShiftTab.as_bytes(), b"\x1b[Z");
         assert_eq!(SpecialKey::Backspace.as_bytes(), b"\x7f");
         assert_eq!(SpecialKey::ArrowUp.as_bytes(), b"\x1b[A");
         assert_eq!(SpecialKey::ArrowDown.as_bytes(), b"\x1b[B");
