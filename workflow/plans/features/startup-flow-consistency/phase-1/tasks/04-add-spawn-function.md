@@ -210,20 +210,39 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/spawn.rs` | Added `spawn_auto_launch()` function and `find_auto_launch_target()` helper, including unit test |
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/actions.rs` | Replaced stub handler for `DiscoverDevicesAndAutoLaunch` with call to `spawn_auto_launch()` |
 
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- (pending)
+1. **Priority Logic Implementation**: The `find_auto_launch_target()` function implements the three-tier priority system exactly as specified:
+   - Priority 1: Saved selection from settings.local.toml
+   - Priority 2: Auto-start config or first config from launch.toml
+   - Priority 3: Bare run with first device
 
-**Notable Decisions:**
-- (pending)
+2. **Error Handling**: Device discovery errors and empty device lists send `AutoLaunchResult` with `Err(String)` message instead of panicking, allowing the UI to display the error gracefully.
 
-**Risks/Limitations:**
-- (pending)
+3. **Device Matching**: Used existing `devices::find_device()` function for config device matching with fallback to first device if specified device not found.
+
+4. **Progress Messages**: Added two progress messages ("Detecting devices..." and "Preparing launch...") to provide user feedback during async operation.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib` - Passed (1333 tests, including new `test_find_auto_launch_target_uses_first_device`)
+- `cargo test --lib spawn` - Passed (8 tests including the new spawn test)
+
+### Risks/Limitations
+
+1. **Async Task Error Handling**: If the message channel is closed while sending progress/result messages, the task silently returns. This is acceptable as it means the app is shutting down.
+
+2. **Empty Devices Safety**: The `devices.first().unwrap()` in Priority 3 is safe because we check `devices.is_empty()` earlier and return an error if true. Added a comment to clarify this safety invariant.
+
+3. **Device Selection Validation**: The `validate_last_selection()` function requires a valid device to return a result, which aligns with the requirement that we can't auto-launch without a device.

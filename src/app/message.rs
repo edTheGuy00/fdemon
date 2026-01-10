@@ -1,9 +1,19 @@
 //! Message types for the application (TEA pattern)
 
 use crate::app::session::SessionId;
+use crate::config::{LaunchConfig, LoadedConfigs};
 use crate::core::DaemonEvent;
 use crate::daemon::{CommandSender, Device, Emulator, EmulatorLaunchResult};
 use crossterm::event::KeyEvent;
+
+/// Successful auto-launch discovery result
+#[derive(Debug, Clone)]
+pub struct AutoLaunchSuccess {
+    /// Device to launch on
+    pub device: Device,
+    /// Optional launch config (None = bare flutter run)
+    pub config: Option<LaunchConfig>,
+}
 
 /// All possible messages/actions in the application
 #[derive(Debug, Clone)]
@@ -391,4 +401,29 @@ pub enum Message {
     // ─────────────────────────────────────────────────────────────
     /// Save FDemon config edits (flavor, dart_defines) after debounce
     SaveStartupDialogConfig,
+
+    // ─────────────────────────────────────────────────────────────
+    // Auto-Launch Messages (Startup Flow Consistency)
+    // ─────────────────────────────────────────────────────────────
+    /// Trigger auto-launch flow from Normal mode
+    /// Sent by runner after first render when auto_start=true
+    StartAutoLaunch {
+        /// Pre-loaded configs to avoid re-loading in handler
+        configs: LoadedConfigs,
+    },
+
+    /// Update loading screen message during auto-launch
+    /// Sent by auto-launch task during device discovery
+    AutoLaunchProgress {
+        /// Message to display on loading screen
+        message: String,
+    },
+
+    /// Report auto-launch result (success or failure)
+    /// Sent by auto-launch task when device discovery completes
+    AutoLaunchResult {
+        /// Ok: device and optional config to launch with
+        /// Err: error message to display in StartupDialog
+        result: Result<AutoLaunchSuccess, String>,
+    },
 }

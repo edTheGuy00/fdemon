@@ -161,20 +161,36 @@ fn test_auto_launch_progress_updates_message() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Added AutoLaunchSuccess import and replaced stub handlers for StartAutoLaunch, AutoLaunchProgress, and AutoLaunchResult messages with full scaffolding logic |
+| `src/app/handler/tests.rs` | Added two unit tests: test_start_auto_launch_sets_loading and test_auto_launch_progress_updates_message |
 
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- (pending)
+1. **AutoLaunchSuccess struct**: Used the AutoLaunchSuccess struct from message.rs which cleanly packages the device and optional config together for the success case.
 
-**Notable Decisions:**
-- (pending)
+2. **Error handling in AutoLaunchResult**: On session creation failure, the handler logs the error to the selected session if one exists, otherwise silently fails. On device discovery failure, it shows the StartupDialog with the error message, allowing manual device selection as a fallback.
 
-**Risks/Limitations:**
-- (pending)
+3. **Session creation branching**: The handler correctly branches between `create_session_with_config()` and `create_session()` based on whether a config is present in the success result.
+
+4. **Selection persistence**: Calls `save_last_selection()` after successful session creation to remember the user's choice for next startup.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1332 tests passed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- Unit tests added:
+  - `test_start_auto_launch_sets_loading` - Verifies loading state is set and DiscoverDevicesAndAutoLaunch action is returned
+  - `test_auto_launch_progress_updates_message` - Verifies loading message is updated correctly
+
+### Risks/Limitations
+
+1. **No AutoLaunchResult test**: Did not add a test for the AutoLaunchResult handler due to complexity of setting up proper device and config mocks. The handler logic is similar to existing DeviceSelected handler which is already tested.
+
+2. **E2E test failures**: Pre-existing E2E test failures (24 failed) related to PTY/crossterm limitations are documented in other tasks and not related to this change.

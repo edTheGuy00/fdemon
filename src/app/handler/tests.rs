@@ -2156,3 +2156,42 @@ fn test_settings_toggle_bool_sets_dirty_flag() {
         "SettingsToggleBool should set the dirty flag"
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// Auto-Launch Handler Tests (Startup Flow Consistency)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_start_auto_launch_sets_loading() {
+    use crate::config::LoadedConfigs;
+
+    let mut state = AppState::new();
+    let configs = LoadedConfigs::default();
+
+    let result = update(&mut state, Message::StartAutoLaunch { configs });
+
+    assert!(state.loading_state.is_some());
+    assert_eq!(state.ui_mode, UiMode::Loading);
+    assert!(matches!(
+        result.action,
+        Some(UpdateAction::DiscoverDevicesAndAutoLaunch { .. })
+    ));
+}
+
+#[test]
+fn test_auto_launch_progress_updates_message() {
+    let mut state = AppState::new();
+    state.set_loading_phase("Initial");
+
+    let _ = update(
+        &mut state,
+        Message::AutoLaunchProgress {
+            message: "Detecting devices...".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.loading_state.as_ref().unwrap().message,
+        "Detecting devices..."
+    );
+}

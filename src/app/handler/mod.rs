@@ -19,7 +19,7 @@ mod tests;
 
 use crate::app::message::Message;
 use crate::app::session::SessionId;
-use crate::config::LaunchConfig;
+use crate::config::{LaunchConfig, LoadedConfigs};
 use crate::daemon::Device;
 
 // Re-export main entry point
@@ -37,6 +37,14 @@ pub enum UpdateAction {
 
     /// Discover available devices
     DiscoverDevices,
+
+    /// Discover devices and auto-launch a session
+    /// Used when auto_start=true to run device discovery in background
+    /// and automatically launch with the best available config/device
+    DiscoverDevicesAndAutoLaunch {
+        /// Pre-loaded configs for selection logic
+        configs: LoadedConfigs,
+    },
 
     /// Discover available emulators
     DiscoverEmulators,

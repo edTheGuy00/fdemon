@@ -1,6 +1,6 @@
 //! Main update function - handles state transitions (TEA pattern)
 
-use crate::app::message::Message;
+use crate::app::message::{AutoLaunchSuccess, Message};
 use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, LogSource};
 use crate::tui::editor::{open_in_editor, sanitize_path};
@@ -1643,6 +1643,83 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     Some(format!("Config at index {} not found", config_idx));
             }
             UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Auto-Launch Messages (Startup Flow Consistency)
+        // ─────────────────────────────────────────────────────────
+        Message::StartAutoLaunch { configs } => {
+            // Phase 1: Scaffolding only - set loading state and return action
+            // Full logic will be refined in Phase 3
+
+            // Enter loading mode
+            state.set_loading_phase("Starting...");
+
+            // Return action to spawn the auto-launch task
+            UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch { configs })
+        }
+
+        Message::AutoLaunchProgress { message } => {
+            // Update loading screen message
+            state.update_loading_message(&message);
+            UpdateResult::none()
+        }
+
+        Message::AutoLaunchResult { result } => {
+            match result {
+                Ok(success) => {
+                    // Create session and spawn
+                    let AutoLaunchSuccess { device, config } = success;
+
+                    let session_result = if let Some(cfg) = &config {
+                        state
+                            .session_manager
+                            .create_session_with_config(&device, cfg.clone())
+                    } else {
+                        state.session_manager.create_session(&device)
+                    };
+
+                    match session_result {
+                        Ok(session_id) => {
+                            // Clear loading, enter normal mode
+                            state.clear_loading();
+                            state.ui_mode = UiMode::Normal;
+
+                            // Save selection for next time
+                            let _ = crate::config::save_last_selection(
+                                &state.project_path,
+                                config.as_ref().map(|c| c.name.as_str()),
+                                Some(&device.id),
+                            );
+
+                            UpdateResult::action(UpdateAction::SpawnSession {
+                                session_id,
+                                device,
+                                config: config.map(Box::new),
+                            })
+                        }
+                        Err(e) => {
+                            // Session creation failed
+                            state.clear_loading();
+                            if let Some(session) = state.session_manager.selected_mut() {
+                                session.session.log_error(
+                                    LogSource::App,
+                                    format!("Failed to create session: {}", e),
+                                );
+                            }
+                            UpdateResult::none()
+                        }
+                    }
+                }
+                Err(error_msg) => {
+                    // Device discovery failed, show startup dialog with error
+                    state.clear_loading();
+                    let configs = crate::config::load_all_configs(&state.project_path);
+                    state.show_startup_dialog(configs);
+                    state.startup_dialog_state.set_error(error_msg);
+                    UpdateResult::none()
+                }
+            }
         }
     }
 }

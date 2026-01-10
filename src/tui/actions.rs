@@ -56,6 +56,10 @@ pub fn handle_action(
             spawn::spawn_device_discovery(msg_tx);
         }
 
+        UpdateAction::DiscoverDevicesAndAutoLaunch { configs } => {
+            spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf());
+        }
+
         UpdateAction::SpawnSession {
             session_id,
             device,
