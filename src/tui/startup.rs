@@ -24,10 +24,23 @@ use super::actions::SessionTaskMap;
 use super::render;
 use super::spawn;
 
+/// Result of startup initialization
+#[derive(Debug)]
+pub enum StartupAction {
+    /// Enter normal mode, no auto-start
+    Ready,
+    /// Enter normal mode, then trigger auto-start
+    AutoStart {
+        /// Pre-loaded configs for auto-start flow
+        configs: LoadedConfigs,
+    },
+}
+
 /// Helper to animate loading screen during an async operation
 ///
 /// Uses `tokio::select!` to tick the loading animation at ~10fps (100ms intervals)
 /// while waiting for the future to complete.
+#[allow(dead_code)]
 async fn animate_during_async<T, F>(
     state: &mut AppState,
     term: &mut ratatui::DefaultTerminal,
@@ -56,29 +69,30 @@ where
     }
 }
 
-/// Handle auto-start or show startup dialog
+/// Initialize startup state
 ///
-/// Returns `Some(UpdateAction)` if a session should be spawned immediately,
-/// or `None` if the device selector/startup dialog is being shown.
-pub async fn startup_flutter(
+/// Always enters Normal mode. Returns whether auto-start should be triggered.
+/// The caller is responsible for sending the auto-start message if needed.
+pub fn startup_flutter(
     state: &mut AppState,
     settings: &config::Settings,
     project_path: &Path,
-    msg_tx: mpsc::Sender<Message>,
-    term: &mut ratatui::DefaultTerminal,
-) -> Option<UpdateAction> {
-    // Load all configs upfront (needed for both paths)
+) -> StartupAction {
+    // Load configs upfront (needed for auto-start path)
     let configs = load_all_configs(project_path);
 
+    // Always enter Normal mode first
+    state.ui_mode = UiMode::Normal;
+
     if settings.behavior.auto_start {
-        auto_start_session(state, &configs, project_path, msg_tx, term).await
+        StartupAction::AutoStart { configs }
     } else {
-        // NEW: Enter normal mode directly, don't show startup dialog
-        enter_normal_mode_disconnected(state)
+        StartupAction::Ready
     }
 }
 
 /// Auto-start mode: try to launch immediately based on preferences
+#[allow(dead_code)]
 async fn auto_start_session(
     state: &mut AppState,
     configs: &LoadedConfigs,
@@ -165,6 +179,7 @@ async fn auto_start_session(
 }
 
 /// Try to find and use an auto_start config
+#[allow(dead_code)]
 fn try_auto_start_config(
     state: &mut AppState,
     configs: &LoadedConfigs,
@@ -202,6 +217,7 @@ fn try_auto_start_config(
 }
 
 /// Launch with validated selection from settings.local.toml
+#[allow(dead_code)]
 fn launch_with_validated_selection(
     state: &mut AppState,
     configs: &LoadedConfigs,
@@ -216,6 +232,7 @@ fn launch_with_validated_selection(
 }
 
 /// Launch a session with optional config
+#[allow(dead_code)]
 fn launch_session(
     state: &mut AppState,
     config: Option<&LaunchConfig>,
@@ -264,6 +281,7 @@ fn launch_session(
 /// Enter normal mode without starting a session (manual mode)
 ///
 /// User can press '+' to show the StartupDialog when ready.
+#[allow(dead_code)]
 fn enter_normal_mode_disconnected(state: &mut AppState) -> Option<UpdateAction> {
     // Don't show any dialog - stay in Normal mode
     // User will see "Not Connected" status and can press '+' to start
@@ -318,5 +336,37 @@ pub async fn cleanup_sessions(
                 ),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+
+    #[test]
+    fn test_startup_flutter_auto_start_returns_configs() {
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_start = true;
+        let project_path = Path::new("/tmp/test");
+
+        let result = startup_flutter(&mut state, &settings, project_path);
+
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert!(matches!(result, StartupAction::AutoStart { .. }));
+    }
+
+    #[test]
+    fn test_startup_flutter_no_auto_start_returns_ready() {
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_start = false;
+        let project_path = Path::new("/tmp/test");
+
+        let result = startup_flutter(&mut state, &settings, project_path);
+
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert!(matches!(result, StartupAction::Ready));
     }
 }

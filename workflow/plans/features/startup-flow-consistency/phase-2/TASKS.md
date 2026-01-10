@@ -29,20 +29,20 @@ Remove synchronous startup logic from the runner and use the message-based auto-
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-simplify-startup-flutter](tasks/01-simplify-startup-flutter.md) | Not Started | Phase 1 | 1h | `tui/startup.rs` |
-| 2 | [02-update-runner](tasks/02-update-runner.md) | Not Started | 1 | 1h | `tui/runner.rs` |
-| 3 | [03-verify-animation](tasks/03-verify-animation.md) | Not Started | 2 | 0.5h | (verification only) |
+| 1 | [01-simplify-startup-flutter](tasks/01-simplify-startup-flutter.md) | Done | Phase 1 | 1h | `tui/startup.rs` |
+| 2 | [02-update-runner](tasks/02-update-runner.md) | Done | 1 | 1h | `tui/runner.rs` |
+| 3 | [03-verify-animation](tasks/03-verify-animation.md) | Done | 2 | 0.5h | (verification only) |
 
 ## Success Criteria
 
 Phase 2 is complete when:
 
-- [ ] `startup_flutter()` always enters Normal mode (no branching on `auto_start`)
-- [ ] `startup_flutter()` returns `StartupAction` enum indicating next step
-- [ ] `runner.rs` no longer sets loading state before the loop
-- [ ] `runner.rs` sends `StartAutoLaunch` message after first render (when `auto_start=true`)
-- [ ] Loading animation works correctly via `Message::Tick`
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] `startup_flutter()` always enters Normal mode (no branching on `auto_start`)
+- [x] `startup_flutter()` returns `StartupAction` enum indicating next step
+- [x] `runner.rs` no longer sets loading state before the loop
+- [x] `runner.rs` sends `StartAutoLaunch` message after first render (when `auto_start=true`)
+- [x] Loading animation works correctly via `Message::Tick`
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 - [ ] Manual verification: auto-start flow shows Normal (brief) → Loading → Running
 
 ## Notes

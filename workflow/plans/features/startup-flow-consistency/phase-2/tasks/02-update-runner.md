@@ -169,20 +169,29 @@ Manual testing required:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/tui/runner.rs` | Updated imports to include `StartupAction`, removed pre-loop loading state setup, updated `startup_flutter()` call to sync version with new signature, added first-frame render before auto-start message, and send `Message::StartAutoLaunch` via channel instead of executing action directly |
 
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- (pending)
+1. **First-frame render before auto-start message**: This ensures the user briefly sees Normal mode before the Loading screen appears, which is the desired behavior to show a clean transition. The "flash" of Normal mode is intentional and acceptable per the task specification.
 
-**Notable Decisions:**
-- (pending)
+2. **Ignored send error**: The `msg_tx.send().await` error is intentionally ignored with `let _ =` because the channel should never be full at startup, and if it somehow fails, the app will simply not auto-start (graceful degradation).
 
-**Risks/Limitations:**
-- (pending)
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1337 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo fmt -- --check` - Passed (code already properly formatted)
+
+### Risks/Limitations
+
+1. **Brief Normal mode flash**: Users will briefly see Normal mode before Loading screen appears when auto-start is enabled. This is intentional per the task design, but could be noticeable on slower systems. Phase 4 could add a "Starting..." status if needed.
+
+2. **Message send timing**: The auto-start message is sent immediately after first render. If the event loop is somehow blocked, there could be a delay before the message is processed. This is unlikely at startup but worth noting.

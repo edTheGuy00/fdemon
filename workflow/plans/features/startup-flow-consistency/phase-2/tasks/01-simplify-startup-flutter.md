@@ -142,20 +142,35 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/tui/startup.rs` | - Added `StartupAction` enum with `Ready` and `AutoStart` variants<br>- Changed `startup_flutter()` from async to sync function<br>- Removed `msg_tx` and `term` parameters<br>- Changed return type from `Option<UpdateAction>` to `StartupAction`<br>- Always sets `UiMode::Normal` immediately<br>- Added `#[allow(dead_code)]` to 5 functions: `animate_during_async`, `auto_start_session`, `try_auto_start_config`, `launch_with_validated_selection`, `launch_session`, `enter_normal_mode_disconnected`<br>- Added unit tests for both auto-start and manual modes |
+| `src/tui/runner.rs` | - Temporarily commented out the call to `startup_flutter()` with TODO comment<br>- Removed unused import `handle_action` (will be re-enabled in Task 02) |
 
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- (pending)
+1. **Sync over Async**: Changed `startup_flutter()` from async to sync, removing the blocking device discovery from the startup path. This aligns with Phase 1's deferred device discovery approach.
 
-**Notable Decisions:**
-- (pending)
+2. **Dead Code Attributes**: Added `#[allow(dead_code)]` to 6 functions that are no longer called but will be removed in Phase 4. This keeps the codebase clean while preserving code for reference during the refactor.
 
-**Risks/Limitations:**
-- (pending)
+3. **Temporary Comment in Runner**: Commented out the call to `startup_flutter()` in `runner.rs` to allow `cargo check` to pass. Task 02 will update the runner to use the new signature.
+
+4. **Always Normal Mode**: The function now always enters Normal mode immediately, regardless of auto_start setting. This provides a consistent initial state for the TUI.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib startup::tests` - Passed (2 new tests)
+- `cargo test --lib` - Passed (1337 tests total)
+- `cargo clippy --lib` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Temporary Breakage**: The runner is temporarily broken and commented out. The application cannot be run until Task 02 is complete. This is expected and documented in the task plan.
+
+2. **Dead Code**: Six functions are marked with `#[allow(dead_code)]` and will remain unused until Phase 4 cleanup. This is intentional to preserve code for reference.

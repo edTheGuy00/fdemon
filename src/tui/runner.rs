@@ -18,7 +18,8 @@ use crate::config;
 use crate::core::LogSource;
 use crate::watcher::{FileWatcher, WatcherConfig};
 
-use super::actions::{handle_action, SessionTaskMap};
+use super::actions::SessionTaskMap;
+use super::startup::StartupAction;
 use super::{event, process, render, startup, terminal};
 
 /// Run the TUI application with a Flutter project
@@ -57,35 +58,16 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Task 08d: Set initial loading state before async operations (if auto_start)
-    if settings.behavior.auto_start {
-        state.set_loading_phase("Initializing...");
-        // Draw initial loading frame BEFORE async operations
-        let _ = term.draw(|frame| render::view(frame, &mut state));
-    }
+    // Initialize startup state (always enters Normal mode)
+    let startup_result = startup::startup_flutter(&mut state, &settings, project_path);
 
-    // Determine startup behavior based on settings
-    // Returns an action to spawn a session if auto-start is configured
-    let startup_action = startup::startup_flutter(
-        &mut state,
-        &settings,
-        project_path,
-        msg_tx.clone(),
-        &mut term,
-    )
-    .await;
+    // Render first frame - user sees Normal mode briefly
+    let _ = term.draw(|frame| render::view(frame, &mut state));
 
-    // If we have a startup action (auto-start session), execute it
-    if let Some(action) = startup_action {
-        handle_action(
-            action,
-            msg_tx.clone(),
-            None,       // No session-specific cmd_sender yet
-            Vec::new(), // No session senders yet
-            session_tasks.clone(),
-            shutdown_rx.clone(),
-            project_path,
-        );
+    // If auto-start is configured, send message to trigger it
+    // This will be processed in the event loop, showing Loading screen
+    if let StartupAction::AutoStart { configs } = startup_result {
+        let _ = msg_tx.send(Message::StartAutoLaunch { configs }).await;
     }
 
     // Start file watcher for auto-reload
