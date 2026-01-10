@@ -63,4 +63,24 @@ grep -n "TODO(phase-4)" src/tui/startup.rs | wc -l
 
 ## Completion Summary
 
-**Status:** (Not started)
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/startup.rs` | Added TODO(phase-4) comments before 6 dead code functions |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comment Placement**: Placed TODO comments on the line immediately before each `#[allow(dead_code)]` attribute, following Rust documentation comment conventions.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (no formatting changes needed)
+- `cargo check` - Passed (compilation successful in 1.37s)
+- `grep -n "TODO(phase-4)" src/tui/startup.rs | wc -l` - Passed (returns 6)
+
+### Risks/Limitations
+
+None. This is a documentation-only change that adds clarity about the future cleanup of dead code without affecting functionality.

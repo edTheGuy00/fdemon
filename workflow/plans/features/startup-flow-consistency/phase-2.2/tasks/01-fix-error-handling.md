@@ -70,4 +70,26 @@ cargo test
 
 ## Completion Summary
 
-**Status:** (Not started)
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/runner.rs` | Added `error` to tracing imports (line 12); Replaced `let _ = term.draw(...)` with proper error handling (lines 65-67); Replaced `let _ = msg_tx.send(...)` with proper error handling (lines 72-76) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Error message format**: Used descriptive messages that explain both the failure and its consequence (e.g., "Auto-start will not trigger.") to aid debugging
+2. **Import consolidation**: Extended existing `tracing::warn` import to include `error` for consistency
+
+### Testing Performed
+
+- `cargo fmt` - Passed (auto-formatted multiline error message)
+- `cargo check` - Passed (0.06s)
+- `cargo test --lib` - Passed (1337 passed; 0 failed; 3 ignored)
+- `cargo clippy -- -D warnings` - Passed (1.44s, no warnings)
+
+### Risks/Limitations
+
+None. This is a low-risk logging-only change that improves debuggability without altering control flow.

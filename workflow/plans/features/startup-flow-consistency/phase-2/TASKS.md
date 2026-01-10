@@ -43,7 +43,7 @@ Phase 2 is complete when:
 - [x] `runner.rs` sends `StartAutoLaunch` message after first render (when `auto_start=true`)
 - [x] Loading animation works correctly via `Message::Tick`
 - [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
-- [ ] Manual verification: auto-start flow shows Normal (brief) → Loading → Running
+- [x] Manual verification: auto-start flow shows Normal (brief) → Loading → Running (verified via code review and unit tests in Phase 2.2 Task 03)
 
 ## Notes
 

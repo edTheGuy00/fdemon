@@ -224,13 +224,13 @@ echo "r" | ./target/release/fdemon --headless /path/to/app
 
 Or use a named pipe:
 ```bash
-mkfifo /tmp/fdemon_input
-./target/release/fdemon --headless /path/to/app < /tmp/fdemon_input &
+mkfifo ./tmp/fdemon_input
+./target/release/fdemon --headless /path/to/app < ./tmp/fdemon_input &
 PID=$!
 sleep 2
-echo "r" > /tmp/fdemon_input
+echo "r" > ./tmp/fdemon_input
 kill $PID
-rm /tmp/fdemon_input
+rm ./tmp/fdemon_input
 ```
 
 ### Other Commands
@@ -378,7 +378,7 @@ ensure_xvfb
 FIXTURE_DIR="$(prepare_fixture simple_app)"
 
 # Output file for JSON events
-OUTPUT_FILE="/tmp/test_my_feature_$$.jsonl"
+OUTPUT_FILE="./tmp/test_my_feature_$$.jsonl"
 
 # Build fdemon if not exists
 FDEMON_BIN="${FDEMON_BIN:-./target/release/fdemon}"
@@ -482,7 +482,7 @@ Or check if fdemon started successfully:
 bash -x ./tests/e2e/scripts/test_startup.sh
 
 # Check fdemon logs
-cat /tmp/test_*.jsonl
+cat ./tmp/test_*.jsonl
 ```
 
 ### Docker build slow

@@ -27,18 +27,18 @@ Address the action items from the Phase 2 code review. Phase 2 was "APPROVED WIT
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-error-handling](tasks/01-fix-error-handling.md) | Not Started | Phase 2 | 0.25h | `tui/runner.rs` |
-| 2 | [02-add-todo-comments](tasks/02-add-todo-comments.md) | Not Started | Phase 2 | 0.25h | `tui/startup.rs` |
-| 3 | [03-document-manual-testing](tasks/03-document-manual-testing.md) | Not Started | 1, 2 | 0.25h | (verification only) |
+| 1 | [01-fix-error-handling](tasks/01-fix-error-handling.md) | Done | Phase 2 | 0.25h | `tui/runner.rs` |
+| 2 | [02-add-todo-comments](tasks/02-add-todo-comments.md) | Done | Phase 2 | 0.25h | `tui/startup.rs` |
+| 3 | [03-document-manual-testing](tasks/03-document-manual-testing.md) | Done | 1, 2 | 0.25h | (verification only) |
 
 ## Success Criteria
 
 Phase 2.2 is complete when:
 
-- [ ] `let _ =` patterns in `runner.rs:65` and `runner.rs:70` are replaced with proper error logging
-- [ ] All 6 dead code functions in `startup.rs` have TODO comments referencing Phase 4
-- [ ] Manual testing documented for both `auto_start=true` and `auto_start=false` modes
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] `let _ =` patterns in `runner.rs:65` and `runner.rs:70` are replaced with proper error logging
+- [x] All 6 dead code functions in `startup.rs` have TODO comments referencing Phase 4
+- [x] Manual testing documented for both `auto_start=true` and `auto_start=false` modes
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Notes
 

@@ -9,7 +9,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, watch, Mutex};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::app::message::Message;
 use crate::app::state::AppState;
@@ -62,12 +62,19 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     let startup_result = startup::startup_flutter(&mut state, &settings, project_path);
 
     // Render first frame - user sees Normal mode briefly
-    let _ = term.draw(|frame| render::view(frame, &mut state));
+    if let Err(e) = term.draw(|frame| render::view(frame, &mut state)) {
+        error!("Failed to render initial frame: {}", e);
+    }
 
     // If auto-start is configured, send message to trigger it
     // This will be processed in the event loop, showing Loading screen
     if let StartupAction::AutoStart { configs } = startup_result {
-        let _ = msg_tx.send(Message::StartAutoLaunch { configs }).await;
+        if let Err(e) = msg_tx.send(Message::StartAutoLaunch { configs }).await {
+            error!(
+                "Failed to send auto-start message: {}. Auto-start will not trigger.",
+                e
+            );
+        }
     }
 
     // Start file watcher for auto-reload

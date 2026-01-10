@@ -40,6 +40,7 @@ pub enum StartupAction {
 ///
 /// Uses `tokio::select!` to tick the loading animation at ~10fps (100ms intervals)
 /// while waiting for the future to complete.
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 async fn animate_during_async<T, F>(
     state: &mut AppState,
@@ -92,6 +93,7 @@ pub fn startup_flutter(
 }
 
 /// Auto-start mode: try to launch immediately based on preferences
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 async fn auto_start_session(
     state: &mut AppState,
@@ -179,6 +181,7 @@ async fn auto_start_session(
 }
 
 /// Try to find and use an auto_start config
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 fn try_auto_start_config(
     state: &mut AppState,
@@ -217,6 +220,7 @@ fn try_auto_start_config(
 }
 
 /// Launch with validated selection from settings.local.toml
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 fn launch_with_validated_selection(
     state: &mut AppState,
@@ -232,6 +236,7 @@ fn launch_with_validated_selection(
 }
 
 /// Launch a session with optional config
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 fn launch_session(
     state: &mut AppState,
@@ -281,6 +286,7 @@ fn launch_session(
 /// Enter normal mode without starting a session (manual mode)
 ///
 /// User can press '+' to show the StartupDialog when ready.
+// TODO(phase-4): Remove after cleanup - see workflow/plans/features/startup-flow-consistency/phase-4/
 #[allow(dead_code)]
 fn enter_normal_mode_disconnected(state: &mut AppState) -> Option<UpdateAction> {
     // Don't show any dialog - stay in Normal mode
