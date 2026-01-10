@@ -88,4 +88,28 @@ Automated testing covered by Task 02.
 
 ## Completion Summary
 
-**Status:** (not started)
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Replaced session creation error handler (lines 1701-1708) to show StartupDialog with error instead of silently failing |
+
+### Notable Decisions/Tradeoffs
+
+1. **Follows existing pattern**: The fix matches the device-discovery-failure pattern at lines 1714-1721, ensuring consistency across error handling paths.
+2. **Reloads configs**: Calls `load_all_configs()` before showing the dialog to ensure fresh configuration data in case the user modified configs during the failed attempt.
+3. **Error format unchanged**: Maintains the same error message format "Failed to create session: {}" for consistency with existing error messages.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code automatically reformatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1333 unit tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **E2E tests**: Some E2E tests failed (26 failures), but these are pre-existing issues related to headless testing environments and PTY/terminal interaction, not related to this change. All unit tests pass successfully.
+2. **Manual verification pending**: Manual testing with injected session creation failures should be performed to verify the dialog appears correctly and users can retry launch.

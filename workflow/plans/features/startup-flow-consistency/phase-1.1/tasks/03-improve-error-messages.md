@@ -131,4 +131,26 @@ RUST_LOG=fdemon=warn cargo run
 
 ## Completion Summary
 
-**Status:** (not started)
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/spawn.rs` | Replaced `unwrap()` with descriptive `expect()` at line 220-222, added warning log when saved device index is out of bounds (lines 181-185), added debug log when saved selection validation fails (line 188), added warning log when configured device not found (lines 202-205) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Log Levels**: Used `tracing::warn!` for user-actionable issues (device not found) and `tracing::debug!` for expected fallthrough (validation failed), as specified in the task requirements.
+2. **Message Clarity**: Ensured warning messages are concise but informative, including context like device counts and configured device names to aid troubleshooting.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (auto-formatted long `expect()` to multiple lines)
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1336 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None. These are defensive improvements that don't change behavior, only improve debuggability when fallback scenarios occur.

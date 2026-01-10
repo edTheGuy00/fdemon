@@ -177,7 +177,15 @@ fn find_auto_launch_target(
                     device: device.clone(),
                     config: config.map(|c| c.config.clone()),
                 };
+            } else {
+                tracing::warn!(
+                    "Saved device index {} not found in {} available devices, falling back to Priority 2",
+                    validated.device_idx.unwrap_or(0),
+                    devices.len()
+                );
             }
+        } else {
+            tracing::debug!("Saved selection validation failed, falling back to Priority 2");
         }
     }
 
@@ -189,7 +197,14 @@ fn find_auto_launch_target(
         let device = if sourced.config.device == "auto" {
             devices.first()
         } else {
-            devices::find_device(devices, &sourced.config.device).or_else(|| devices.first())
+            let found = devices::find_device(devices, &sourced.config.device);
+            if found.is_none() {
+                tracing::warn!(
+                    "Configured device '{}' not found, falling back to first available device",
+                    sourced.config.device
+                );
+            }
+            found.or_else(|| devices.first())
         };
 
         if let Some(device) = device {
@@ -202,7 +217,10 @@ fn find_auto_launch_target(
 
     // Priority 3: Bare run with first device
     AutoLaunchSuccess {
-        device: devices.first().unwrap().clone(), // Safe: we checked devices.is_empty() above
+        device: devices
+            .first()
+            .expect("devices non-empty; checked at spawn_auto_launch line 137")
+            .clone(),
         config: None,
     }
 }

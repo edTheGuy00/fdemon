@@ -2195,3 +2195,65 @@ fn test_auto_launch_progress_updates_message() {
         "Detecting devices..."
     );
 }
+
+#[test]
+fn test_auto_launch_result_success_creates_session() {
+    use crate::app::message::AutoLaunchSuccess;
+
+    let mut state = AppState::new();
+    state.set_loading_phase("Testing");
+
+    let device = test_device("test-device", "Test Device");
+
+    let success = AutoLaunchSuccess {
+        device: device.clone(),
+        config: None,
+    };
+
+    let result = update(
+        &mut state,
+        Message::AutoLaunchResult {
+            result: Ok(success),
+        },
+    );
+
+    // Loading cleared
+    assert!(state.loading_state.is_none());
+    // Mode transitioned to Normal
+    assert_eq!(state.ui_mode, UiMode::Normal);
+    // Session created
+    assert_eq!(state.session_manager.len(), 1);
+    // SpawnSession action returned
+    assert!(matches!(
+        result.action,
+        Some(UpdateAction::SpawnSession { .. })
+    ));
+}
+
+#[test]
+fn test_auto_launch_result_discovery_error_shows_dialog() {
+    let mut state = AppState::new();
+    state.set_loading_phase("Testing");
+
+    let result = update(
+        &mut state,
+        Message::AutoLaunchResult {
+            result: Err("No devices found".to_string()),
+        },
+    );
+
+    // Loading cleared
+    assert!(state.loading_state.is_none());
+    // Shows startup dialog
+    assert_eq!(state.ui_mode, UiMode::StartupDialog);
+    // Error message set
+    assert!(state.startup_dialog_state.error.is_some());
+    assert!(state
+        .startup_dialog_state
+        .error
+        .as_ref()
+        .unwrap()
+        .contains("No devices"));
+    // No action returned
+    assert!(result.action.is_none());
+}

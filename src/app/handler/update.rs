@@ -1699,14 +1699,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                             })
                         }
                         Err(e) => {
-                            // Session creation failed
+                            // Session creation failed - show startup dialog with error
                             state.clear_loading();
-                            if let Some(session) = state.session_manager.selected_mut() {
-                                session.session.log_error(
-                                    LogSource::App,
-                                    format!("Failed to create session: {}", e),
-                                );
-                            }
+                            let configs = crate::config::load_all_configs(&state.project_path);
+                            state.show_startup_dialog(configs);
+                            state
+                                .startup_dialog_state
+                                .set_error(format!("Failed to create session: {}", e));
                             UpdateResult::none()
                         }
                     }
