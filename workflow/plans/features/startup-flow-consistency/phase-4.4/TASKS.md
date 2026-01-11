@@ -135,19 +135,19 @@ Message::StartAutoLaunch { configs } => {
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-fix-clear-loading-timing](tasks/01-fix-clear-loading-timing.md) | Not Started | - | 15m | `handler/update.rs` |
-| 2 | [02-add-concurrent-launch-guard](tasks/02-add-concurrent-launch-guard.md) | Not Started | 1 | 15m | `handler/update.rs`, `handler/tests.rs` |
-| 3 | [03-verification](tasks/03-verification.md) | Not Started | 2 | 15m | (verification only) |
+| 1 | [01-fix-clear-loading-timing](tasks/01-fix-clear-loading-timing.md) | Done | - | 15m | `handler/update.rs` |
+| 2 | [02-add-concurrent-launch-guard](tasks/02-add-concurrent-launch-guard.md) | Done | 1 | 15m | `handler/update.rs`, `handler/tests.rs` |
+| 3 | [03-verification](tasks/03-verification.md) | Done | 2 | 15m | (verification only) |
 
 ## Success Criteria
 
 Phase 4.4 is complete when:
 
-- [ ] `clear_loading()` moved inside each `AutoLaunchResult` match branch
-- [ ] Guard check added to prevent duplicate `StartAutoLaunch` processing
-- [ ] Test added for concurrent auto-launch guard
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
-- [ ] Manual verification confirms no regressions
+- [x] `clear_loading()` moved inside each `AutoLaunchResult` match branch
+- [x] Guard check added to prevent duplicate `StartAutoLaunch` processing
+- [x] Test added for concurrent auto-launch guard
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [ ] Manual verification confirms no regressions (optional - not automated)
 
 ## Notes
 

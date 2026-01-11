@@ -114,3 +114,33 @@ Existing tests should continue to pass. No new tests needed - this is a refactor
 - This is a code quality fix, not a bug fix
 - The app works correctly without this change due to message loop timing
 - The fix makes the intent explicit and prevents future timing-related bugs
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Moved `clear_loading()` from before the match statement to inside each branch of the AutoLaunchResult handler (lines 1661-1718) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of clear_loading()**: Added `clear_loading()` at the beginning of each branch to ensure the loading state is cleared only after examining the result. This prevents the intermediate `Normal` UI state transition that was previously masked by message loop timing.
+2. **Three clear_loading() calls**: Added calls in all three branches:
+   - Ok(success) branch (line 1665) - clears before transitioning to session
+   - Inner Err(e) branch for session creation failure (line 1695) - clears before showing error dialog
+   - Outer Err(error_msg) branch for device discovery failure (line 1709) - clears before showing error dialog
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1349 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: This is a pure refactoring that makes state transitions more explicit without changing behavior. The message loop still drains messages before rendering, so the functional behavior remains identical.

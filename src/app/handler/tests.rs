@@ -2487,4 +2487,19 @@ mod auto_launch_tests {
             error_msg
         );
     }
+
+    #[test]
+    fn test_start_auto_launch_ignored_if_already_loading() {
+        let mut state = AppState::new();
+        // Simulate already in loading mode
+        state.set_loading_phase("Already loading...");
+
+        let configs = LoadedConfigs::default();
+        let result = update(&mut state, Message::StartAutoLaunch { configs });
+
+        // Should be ignored - no action spawned
+        assert!(result.action.is_none());
+        // Still in loading mode
+        assert_eq!(state.ui_mode, UiMode::Loading);
+    }
 }

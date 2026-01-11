@@ -86,3 +86,44 @@ cargo test auto_launch
 - In normal usage, `StartAutoLaunch` is only sent once during startup
 - The guard prevents potential issues from race conditions or edge cases
 - Silent ignore (no error message) is appropriate since user won't notice
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Added guard check at line 1651-1653 to return early if already in Loading mode |
+| `src/app/handler/tests.rs` | Added test `test_start_auto_launch_ignored_if_already_loading` at line 2491-2504 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard Placement**: The guard is placed at the very start of the `StartAutoLaunch` handler, before any state modifications. This ensures that if a second auto-launch message arrives while already loading, nothing happens and the original auto-launch continues uninterrupted.
+
+2. **Silent Ignore**: The guard returns `UpdateResult::none()` without any error logging or user notification. This is intentional because:
+   - In normal operation, this should never happen
+   - If it does happen (race condition), the user won't notice since the first auto-launch is already in progress
+   - Logging would just add noise without providing actionable information
+
+3. **Test Organization**: The test was added to the `auto_launch_tests` module for better organization with other auto-launch related tests.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test test_start_auto_launch_ignored_if_already_loading` - Passed (1 test)
+- `cargo test --lib` - Passed (1347 tests, 0 failed, 3 ignored)
+- `cargo test auto_launch` - Passed (13 tests, all auto-launch tests verified)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No Race Condition Risk**: The guard is simple and effective. Since we check `ui_mode == UiMode::Loading` which is set immediately by `set_loading_phase()`, there's no race window.
+
+2. **Edge Case Coverage**: The guard specifically checks for `UiMode::Loading`. If the UI mode were set to something else between auto-launch attempts, the guard would not prevent concurrent launches. However, this is acceptable because:
+   - `set_loading_phase()` is the first thing called in the handler
+   - The only way to exit Loading mode is through `AutoLaunchResult` message
+   - Between those two messages, any duplicate `StartAutoLaunch` will be blocked
