@@ -16,6 +16,7 @@ pub fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
         UiMode::LinkHighlight => handle_key_link_highlight(key),
         UiMode::Settings => handle_key_settings(state, key),
         UiMode::StartupDialog => handle_key_startup_dialog(state, key),
+        UiMode::NewSessionDialog => handle_key_new_session_dialog(key),
     }
 }
 
@@ -670,6 +671,21 @@ fn handle_key_startup_dialog_text_input(key: KeyEvent) -> Option<Message> {
         // ─────────────────────────────────────────────────────────
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
 
+        _ => None,
+    }
+}
+
+/// Handle key events in new session dialog mode
+/// Placeholder implementation - full implementation comes in Phase 2-3
+fn handle_key_new_session_dialog(key: KeyEvent) -> Option<Message> {
+    match (key.code, key.modifiers) {
+        // Escape to close dialog
+        (KeyCode::Esc, _) => Some(Message::HideNewSessionDialog),
+
+        // Ctrl+C to quit
+        (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
+
+        // Placeholder - all other keys ignored during transition
         _ => None,
     }
 }

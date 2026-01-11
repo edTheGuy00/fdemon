@@ -2502,4 +2502,96 @@ mod auto_launch_tests {
         // Still in loading mode
         assert_eq!(state.ui_mode, UiMode::Loading);
     }
+
+    // ─────────────────────────────────────────────────────────
+    // Fuzzy Modal Handler Tests
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_open_fuzzy_modal_for_flavor() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.flavor = "existing".into();
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogOpenFuzzyModal {
+                modal_type: crate::tui::widgets::FuzzyModalType::Flavor,
+            },
+        );
+
+        assert!(state.new_session_dialog_state.fuzzy_modal.is_some());
+        let modal = state.new_session_dialog_state.fuzzy_modal.as_ref().unwrap();
+        assert_eq!(
+            modal.modal_type,
+            crate::tui::widgets::FuzzyModalType::Flavor
+        );
+    }
+
+    #[test]
+    fn test_fuzzy_confirm_sets_flavor() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.open_fuzzy_modal(
+            crate::tui::widgets::FuzzyModalType::Flavor,
+            vec!["dev".into(), "staging".into()],
+        );
+
+        // Select "staging" (index 1)
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyDown);
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyConfirm);
+
+        assert!(state.new_session_dialog_state.fuzzy_modal.is_none());
+        assert_eq!(state.new_session_dialog_state.flavor, "staging");
+    }
+
+    #[test]
+    fn test_fuzzy_custom_input() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.open_fuzzy_modal(
+            crate::tui::widgets::FuzzyModalType::Flavor,
+            vec![], // Empty list
+        );
+
+        // Type custom value
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyInput { c: 'c' });
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyInput { c: 'u' });
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyInput { c: 's' });
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyInput { c: 't' });
+        let _ = update(&mut state, Message::NewSessionDialogFuzzyConfirm);
+
+        assert_eq!(state.new_session_dialog_state.flavor, "cust");
+    }
+
+    #[test]
+    fn test_fuzzy_modal_mutual_exclusion() {
+        let mut state = AppState::new();
+
+        // Open a fuzzy modal
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogOpenFuzzyModal {
+                modal_type: crate::tui::widgets::FuzzyModalType::Flavor,
+            },
+        );
+        assert!(state.new_session_dialog_state.fuzzy_modal.is_some());
+
+        // Try to open another modal while one is open - should be ignored
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogOpenFuzzyModal {
+                modal_type: crate::tui::widgets::FuzzyModalType::Config,
+            },
+        );
+
+        // Should still be Flavor modal, not Config
+        assert!(state.new_session_dialog_state.fuzzy_modal.is_some());
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .fuzzy_modal
+                .as_ref()
+                .unwrap()
+                .modal_type,
+            crate::tui::widgets::FuzzyModalType::Flavor
+        );
+    }
 }

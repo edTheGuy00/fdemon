@@ -375,3 +375,43 @@ mod tests {
 - Tab switching triggers loading flag for bootable devices
 - Config selection populates mode/flavor/dart_defines from config
 - Modal open/close manages Option state
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/state.rs` | Added 28 state transition methods covering pane navigation, target selection, launch context management, device data updates, config selection, error handling, and modal state management. Added 10 comprehensive test cases. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Device Selection Reset on Tab Switch**: When switching between Connected and Bootable tabs, the selected device index is reset to 0. This ensures users don't see an out-of-bounds selection when switching between tabs with different device counts.
+
+2. **Lazy Loading for Bootable Devices**: The `switch_tab()` method only triggers bootable device loading when switching to the Bootable tab and the list is empty. This avoids unnecessary native tool calls (simctl/emulator) on startup.
+
+3. **Config Selection Populates Fields**: The `select_config()` method automatically populates mode, flavor, and dart-defines from the selected configuration. This provides a seamless UX where selecting a config pre-fills the launch context.
+
+4. **Modal Save Behavior**: The `close_dart_defines_modal()` method saves changes from the modal back to the main state, while `close_fuzzy_modal()` simply dismisses (selections are handled by confirmation in the modal).
+
+5. **Wrapping Navigation**: Target and config navigation use modulo arithmetic for wrapping, providing intuitive circular navigation through lists.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (1.19s)
+- `cargo test --lib new_session_dialog` - Passed (12 tests)
+- `cargo test --lib` - Passed (1361 tests, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No Validation on Device State Changes**: The `mark_device_booting()` method directly mutates device state without validation. Future implementation should ensure only Shutdown devices can transition to Booting.
+
+2. **TODO for Flavor Discovery**: The `open_fuzzy_modal()` method has a placeholder for flavor discovery. This will need to be implemented in a future task using project analysis.
+
+3. **Bounds Checking Edge Cases**: While selection reset logic handles out-of-bounds cases, rapid device list changes (e.g., device disconnects during navigation) could theoretically cause race conditions. This is mitigated by the single-threaded nature of the TUI event loop.

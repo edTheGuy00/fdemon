@@ -39,22 +39,22 @@ Create the core state structures and message types for the NewSessionDialog. Thi
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-bootable-device-type](tasks/01-bootable-device-type.md) | Not Started | - | 15m | `core/types.rs` |
-| 2 | [02-dialog-state-struct](tasks/02-dialog-state-struct.md) | Not Started | 1 | 30m | `app/state.rs`, `tui/widgets/new_session_dialog/state.rs` |
-| 3 | [03-message-types](tasks/03-message-types.md) | Not Started | 2 | 20m | `app/message.rs` |
-| 4 | [04-state-transitions](tasks/04-state-transitions.md) | Not Started | 3 | 30m | `app/state.rs` |
-| 5 | [05-ui-mode-integration](tasks/05-ui-mode-integration.md) | Not Started | 4 | 25m | `app/state.rs`, `tui/render/mod.rs` |
+| 1 | [01-bootable-device-type](tasks/01-bootable-device-type.md) | Done | - | 15m | `core/types.rs` |
+| 2 | [02-dialog-state-struct](tasks/02-dialog-state-struct.md) | Done | 1 | 30m | `app/state.rs`, `tui/widgets/new_session_dialog/state.rs` |
+| 3 | [03-message-types](tasks/03-message-types.md) | Done | 2 | 20m | `app/message.rs` |
+| 4 | [04-state-transitions](tasks/04-state-transitions.md) | Done | 3 | 30m | `app/state.rs` |
+| 5 | [05-ui-mode-integration](tasks/05-ui-mode-integration.md) | Done | 4 | 25m | `app/state.rs`, `tui/render/mod.rs` |
 
 ## Success Criteria
 
 Phase 1 is complete when:
 
-- [ ] `BootableDevice` type defined with platform, runtime, state fields
-- [ ] `NewSessionDialogState` struct with dual-pane and tabbed structure
-- [ ] All new message types defined in `Message` enum
-- [ ] State navigation methods implemented (pane switch, tab switch, up/down)
-- [ ] `UiMode::NewSessionDialog` variant added and recognized
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] `BootableDevice` type defined with platform, runtime, state fields
+- [x] `NewSessionDialogState` struct with dual-pane and tabbed structure
+- [x] All new message types defined in `Message` enum
+- [x] State navigation methods implemented (pane switch, tab switch, up/down)
+- [x] `UiMode::NewSessionDialog` variant added and recognized
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Notes
 

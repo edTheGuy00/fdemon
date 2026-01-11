@@ -60,24 +60,24 @@ Create a reusable fuzzy search modal widget that appears as an overlay. Used for
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-fuzzy-modal-state](tasks/01-fuzzy-modal-state.md) | Not Started | Phase 1 | 25m | `new_session_dialog/state.rs` |
-| 2 | [02-fuzzy-filter-algorithm](tasks/02-fuzzy-filter-algorithm.md) | Not Started | 1 | 20m | `new_session_dialog/fuzzy_modal.rs` |
-| 3 | [03-fuzzy-modal-widget](tasks/03-fuzzy-modal-widget.md) | Not Started | 2 | 40m | `new_session_dialog/fuzzy_modal.rs` |
-| 4 | [04-fuzzy-modal-messages](tasks/04-fuzzy-modal-messages.md) | Not Started | 3 | 15m | `app/message.rs`, `app/handler/update.rs` |
+| 1 | [01-fuzzy-modal-state](tasks/01-fuzzy-modal-state.md) | Done | Phase 1 | 25m | `new_session_dialog/state.rs` |
+| 2 | [02-fuzzy-filter-algorithm](tasks/02-fuzzy-filter-algorithm.md) | Done | 1 | 20m | `new_session_dialog/fuzzy_modal.rs` |
+| 3 | [03-fuzzy-modal-widget](tasks/03-fuzzy-modal-widget.md) | Done | 2 | 40m | `new_session_dialog/fuzzy_modal.rs` |
+| 4 | [04-fuzzy-modal-messages](tasks/04-fuzzy-modal-messages.md) | Done | 3 | 15m | `app/message.rs`, `app/handler/update.rs` |
 
 ## Success Criteria
 
 Phase 2 is complete when:
 
-- [ ] `FuzzyModalState` struct with query, items, filtered_indices, selected_index
-- [ ] Fuzzy/substring matching algorithm implemented
-- [ ] Modal renders as overlay with dimmed background
-- [ ] Type-to-filter updates list in real-time
-- [ ] Up/Down navigation with wrapping
-- [ ] Enter selects item OR uses custom query text
-- [ ] Esc cancels and closes modal
-- [ ] Message handlers wired up
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] `FuzzyModalState` struct with query, items, filtered_indices, selected_index
+- [x] Fuzzy/substring matching algorithm implemented
+- [x] Modal renders as overlay with dimmed background
+- [x] Type-to-filter updates list in real-time
+- [x] Up/Down navigation with wrapping
+- [x] Enter selects item OR uses custom query text
+- [x] Esc cancels and closes modal
+- [x] Message handlers wired up
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Behavior Specification
 

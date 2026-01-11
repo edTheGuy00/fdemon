@@ -1721,6 +1721,148 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
             }
         }
+
+        // ─────────────────────────────────────────────────────────
+        // NewSessionDialog Messages (Phase 1 - handlers in Phase 4)
+        // ─────────────────────────────────────────────────────────
+        Message::HideNewSessionDialog => {
+            // Task 05: Hide new session dialog
+            state.hide_new_session_dialog();
+            UpdateResult::none()
+        }
+
+        Message::ShowNewSessionDialog
+        | Message::NewSessionDialogSwitchPane
+        | Message::NewSessionDialogSwitchTab(_)
+        | Message::NewSessionDialogUp
+        | Message::NewSessionDialogDown
+        | Message::NewSessionDialogConfirm
+        | Message::NewSessionDialogBootDevice { .. }
+        | Message::NewSessionDialogDeviceBooted { .. }
+        | Message::NewSessionDialogBootFailed { .. }
+        | Message::NewSessionDialogSetConnectedDevices { .. }
+        | Message::NewSessionDialogSetBootableDevices { .. }
+        | Message::NewSessionDialogSetError { .. }
+        | Message::NewSessionDialogClearError
+        | Message::NewSessionDialogSelectConfig { .. }
+        | Message::NewSessionDialogSetMode { .. }
+        | Message::NewSessionDialogSetFlavor { .. }
+        | Message::NewSessionDialogSetDartDefines { .. } => {
+            // Handlers will be implemented in Phase 4
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // NewSessionDialog - Fuzzy Modal Handlers
+        // ─────────────────────────────────────────────────────────
+        Message::NewSessionDialogOpenFuzzyModal { modal_type } => {
+            // Prevent opening a modal when another is already open
+            if state.new_session_dialog_state.has_modal_open() {
+                warn!("Cannot open fuzzy modal while another modal is open");
+                return UpdateResult::none();
+            }
+
+            let items = match modal_type {
+                crate::tui::widgets::FuzzyModalType::Config => state
+                    .new_session_dialog_state
+                    .configs
+                    .configs
+                    .iter()
+                    .map(|c| c.display_name.clone())
+                    .collect(),
+                crate::tui::widgets::FuzzyModalType::Flavor => {
+                    // TODO: Get flavors from project analysis
+                    // For now, use any existing flavor as suggestion
+                    let mut flavors = Vec::new();
+                    if !state.new_session_dialog_state.flavor.is_empty() {
+                        flavors.push(state.new_session_dialog_state.flavor.clone());
+                    }
+                    flavors
+                }
+            };
+
+            state
+                .new_session_dialog_state
+                .open_fuzzy_modal(modal_type, items);
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogCloseFuzzyModal => {
+            state.new_session_dialog_state.close_fuzzy_modal();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyUp => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                modal.navigate_up();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyDown => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                modal.navigate_down();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyConfirm => {
+            if let Some(ref modal) = state.new_session_dialog_state.fuzzy_modal {
+                if let Some(value) = modal.selected_value() {
+                    match modal.modal_type {
+                        crate::tui::widgets::FuzzyModalType::Config => {
+                            // Find config index by name
+                            let idx = state
+                                .new_session_dialog_state
+                                .configs
+                                .configs
+                                .iter()
+                                .position(|c| c.display_name == value);
+                            state.new_session_dialog_state.select_config(idx);
+                        }
+                        crate::tui::widgets::FuzzyModalType::Flavor => {
+                            state.new_session_dialog_state.flavor = value;
+                        }
+                    }
+                }
+            }
+            state.new_session_dialog_state.close_fuzzy_modal();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyInput { c } => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                modal.input_char(c);
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyBackspace => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                modal.backspace();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogFuzzyClear => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                modal.clear_query();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogOpenDartDefinesModal
+        | Message::NewSessionDialogCloseDartDefinesModal
+        | Message::NewSessionDialogDartDefinesUp
+        | Message::NewSessionDialogDartDefinesDown
+        | Message::NewSessionDialogDartDefinesSwitchField
+        | Message::NewSessionDialogDartDefinesInput { .. }
+        | Message::NewSessionDialogDartDefinesBackspace
+        | Message::NewSessionDialogDartDefinesAdd
+        | Message::NewSessionDialogDartDefinesDelete => {
+            // Handlers will be implemented in Phase 4
+            UpdateResult::none()
+        }
     }
 }
 

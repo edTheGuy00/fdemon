@@ -620,6 +620,95 @@ impl SearchState {
     }
 }
 
+/// Platform type for bootable devices
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Platform {
+    IOS,
+    Android,
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Platform::IOS => write!(f, "iOS"),
+            Platform::Android => write!(f, "Android"),
+        }
+    }
+}
+
+/// State of a bootable device
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeviceState {
+    #[default]
+    Shutdown,
+    Booted,
+    Booting,
+    ShuttingDown,
+    Unknown,
+}
+
+impl std::fmt::Display for DeviceState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DeviceState::Shutdown => write!(f, "Shutdown"),
+            DeviceState::Booted => write!(f, "Booted"),
+            DeviceState::Booting => write!(f, "Booting"),
+            DeviceState::ShuttingDown => write!(f, "Shutting Down"),
+            DeviceState::Unknown => write!(f, "Unknown"),
+        }
+    }
+}
+
+/// A bootable device (offline simulator or AVD)
+///
+/// Unlike `Device` which represents connected/running devices from Flutter,
+/// this represents devices that can be booted but aren't currently running.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BootableDevice {
+    /// Unique identifier (UDID for iOS, AVD name for Android)
+    pub id: String,
+
+    /// Human-readable name
+    pub name: String,
+
+    /// Platform (iOS or Android)
+    pub platform: Platform,
+
+    /// Runtime version (e.g., "iOS 17.2", "API 33")
+    pub runtime: String,
+
+    /// Current state (Shutdown, Booted, etc.)
+    pub state: DeviceState,
+}
+
+impl BootableDevice {
+    /// Create a new bootable device
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        platform: Platform,
+        runtime: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            platform,
+            runtime: runtime.into(),
+            state: DeviceState::Shutdown,
+        }
+    }
+
+    /// Check if this device can be booted
+    pub fn can_boot(&self) -> bool {
+        matches!(self.state, DeviceState::Shutdown | DeviceState::Unknown)
+    }
+
+    /// Get display string for the device
+    pub fn display_string(&self) -> String {
+        format!("{} ({})", self.name, self.runtime)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1622,5 +1711,23 @@ mod tests {
         assert_eq!(state.matches[1].end, 13);
         assert_eq!(state.matches[2].start, 18);
         assert_eq!(state.matches[2].end, 22);
+    }
+
+    // BootableDevice tests
+
+    #[test]
+    fn test_bootable_device_can_boot() {
+        let device = BootableDevice::new("id", "iPhone 15", Platform::IOS, "iOS 17.2");
+        assert!(device.can_boot());
+
+        let mut booted = device.clone();
+        booted.state = DeviceState::Booted;
+        assert!(!booted.can_boot());
+    }
+
+    #[test]
+    fn test_display_string() {
+        let device = BootableDevice::new("id", "Pixel 8", Platform::Android, "API 34");
+        assert_eq!(device.display_string(), "Pixel 8 (API 34)");
     }
 }

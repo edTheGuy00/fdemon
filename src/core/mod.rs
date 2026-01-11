@@ -18,4 +18,7 @@ pub use stack_trace::{
     StackTraceFormat, ASYNC_GAP_REGEX, DART_VM_FRAME_NO_COL_REGEX, DART_VM_FRAME_REGEX,
     FRIENDLY_FRAME_REGEX, PACKAGE_PATH_REGEX,
 };
-pub use types::*;
+pub use types::{
+    AppPhase, BootableDevice, DeviceState, FilterState, LogEntry, LogLevel, LogLevelFilter,
+    LogSource, LogSourceFilter, Platform, SearchMatch, SearchState,
+};

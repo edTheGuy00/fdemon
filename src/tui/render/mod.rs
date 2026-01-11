@@ -208,7 +208,36 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             );
             frame.render_widget(dialog, area);
         }
+        UiMode::NewSessionDialog => {
+            // Placeholder for new session dialog - will be implemented in Phase 3
+            let modal_area = centered_rect(80, 70, area);
+
+            frame.render_widget(Clear, modal_area);
+            let block = Block::default()
+                .title(" New Session (Coming Soon) ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow))
+                .style(Style::default().bg(Color::DarkGray));
+            frame.render_widget(block, modal_area);
+        }
     }
+}
+
+/// Calculate centered rect (reusable helper)
+fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+    let popup_layout = Layout::vertical([
+        Constraint::Percentage((100 - percent_y) / 2),
+        Constraint::Percentage(percent_y),
+        Constraint::Percentage((100 - percent_y) / 2),
+    ])
+    .split(area);
+
+    Layout::horizontal([
+        Constraint::Percentage((100 - percent_x) / 2),
+        Constraint::Percentage(percent_x),
+        Constraint::Percentage((100 - percent_x) / 2),
+    ])
+    .split(popup_layout[1])[1]
 }
 
 /// Render loading screen during startup initialization (Task 08d)

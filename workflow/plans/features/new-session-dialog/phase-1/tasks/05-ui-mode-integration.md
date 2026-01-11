@@ -177,3 +177,38 @@ fn test_new_session_dialog_visibility() {
 - Placeholder rendering shows visual feedback that the mode is recognized
 - Actual widget rendering comes in Phase 3-4
 - Helper methods follow existing patterns (`show_startup_dialog`, etc.)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/state.rs` | Added `UiMode::NewSessionDialog` variant, `new_session_dialog_state` field to `AppState`, helper methods (`show_new_session_dialog`, `hide_new_session_dialog`, `is_new_session_dialog_visible`), and test |
+| `src/tui/render/mod.rs` | Added placeholder rendering case for `UiMode::NewSessionDialog` with `centered_rect` helper function |
+| `src/app/handler/keys.rs` | Added `handle_key_new_session_dialog` placeholder handler for key events |
+| `src/app/handler/update.rs` | Added handler for `Message::HideNewSessionDialog` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import already exists**: `NewSessionDialogState` was already exported via wildcard from `tui/widgets/mod.rs`, no additional import needed
+2. **Message already defined**: `HideNewSessionDialog` message was already defined in later tasks, used existing definition
+3. **Handler location**: Extracted `HideNewSessionDialog` from catch-all placeholder handler to implement actual functionality per task requirement
+4. **Placeholder rendering**: Simple yellow-bordered block with "Coming Soon" message to show mode is active until Phase 3 implementation
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1362 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Placeholder rendering**: Current implementation only shows a static placeholder block. Full widget implementation comes in Phase 3-4.
+2. **Key handler**: `handle_key_new_session_dialog` only supports Esc (close) and Ctrl+C (quit) for now. Full navigation implementation comes in Phase 2.
+3. **Old modes coexist**: `DeviceSelector` and `StartupDialog` remain functional during transition period, will be removed in later phases.

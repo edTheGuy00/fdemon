@@ -153,3 +153,35 @@ mod bootable_device_tests {
 - This type is separate from `daemon::Device` which comes from Flutter
 - Will be used by the native discovery functions in Phase 2
 - State tracking allows showing boot progress in the UI
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/core/types.rs` | Added `Platform` enum (iOS, Android), `DeviceState` enum (Shutdown, Booted, Booting, ShuttingDown, Unknown), and `BootableDevice` struct with helper methods. Added Display implementations for both enums. Added inline tests for `can_boot()` and `display_string()`. |
+| `src/core/mod.rs` | Updated exports to include `BootableDevice`, `DeviceState`, and `Platform` types. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Type Placement**: Added the new types to `src/core/types.rs` rather than creating a separate module, keeping all domain types in one place as per existing project structure.
+2. **Default State**: Used `DeviceState::Shutdown` as the default state for newly created `BootableDevice` instances, as this is the most common initial state for offline devices.
+3. **Display Implementations**: Implemented `Display` trait for enums to provide user-friendly string representations (e.g., "iOS" instead of "IOS", "Shutting Down" instead of "ShuttingDown").
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code automatically formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1349 passed; 0 failed; 3 ignored)
+- `cargo test bootable_device` - Passed (1 passed; 0 failed)
+- `cargo test display_string` - Passed (1 passed; 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None identified**: The implementation is straightforward with no external dependencies or complex logic. All acceptance criteria met.

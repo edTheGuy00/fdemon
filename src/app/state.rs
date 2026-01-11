@@ -9,7 +9,7 @@ use crate::config::{
 };
 use crate::core::AppPhase;
 use crate::daemon::Device;
-use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState};
+use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState, NewSessionDialogState};
 
 use super::session_manager::SessionManager;
 
@@ -45,6 +45,10 @@ pub enum UiMode {
     /// Startup dialog - comprehensive session launch UI
     /// Shows config selection, mode, flavor, dart-defines, and device list
     StartupDialog,
+
+    /// New session dialog - unified device and configuration selection
+    /// Replaces DeviceSelector and StartupDialog with a modern two-pane UI
+    NewSessionDialog,
 }
 
 /// State for the settings panel view
@@ -865,6 +869,9 @@ pub struct AppState {
     /// Startup dialog state
     pub startup_dialog_state: StartupDialogState,
 
+    /// New session dialog state (unified dialog)
+    pub new_session_dialog_state: NewSessionDialogState,
+
     /// Loading state (for initial startup loading screen)
     pub loading_state: Option<LoadingState>,
 
@@ -905,6 +912,7 @@ impl AppState {
             phase: AppPhase::Initializing,
             settings_view_state: SettingsViewState::new(),
             startup_dialog_state: StartupDialogState::new(),
+            new_session_dialog_state: NewSessionDialogState::new(),
             loading_state: None,
             device_cache: None,
             devices_last_updated: None,
@@ -962,6 +970,22 @@ impl AppState {
     /// Hide startup dialog
     pub fn hide_startup_dialog(&mut self) {
         self.ui_mode = UiMode::Normal;
+    }
+
+    /// Show the new session dialog
+    pub fn show_new_session_dialog(&mut self, configs: LoadedConfigs) {
+        self.new_session_dialog_state = NewSessionDialogState::with_configs(configs);
+        self.ui_mode = UiMode::NewSessionDialog;
+    }
+
+    /// Hide the new session dialog
+    pub fn hide_new_session_dialog(&mut self) {
+        self.ui_mode = UiMode::Normal;
+    }
+
+    /// Check if new session dialog is visible
+    pub fn is_new_session_dialog_visible(&self) -> bool {
+        self.ui_mode == UiMode::NewSessionDialog
     }
 
     /// Check if any session should prevent immediate quit
@@ -2253,5 +2277,23 @@ mod tests {
     fn test_default_new_config_selected_false() {
         let state = StartupDialogState::new();
         assert!(!state.new_config_selected);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // NewSessionDialog Tests (Task 05)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_new_session_dialog_visibility() {
+        let mut state = AppState::new();
+        assert!(!state.is_new_session_dialog_visible());
+
+        state.show_new_session_dialog(LoadedConfigs::default());
+        assert!(state.is_new_session_dialog_visible());
+        assert_eq!(state.ui_mode, UiMode::NewSessionDialog);
+
+        state.hide_new_session_dialog();
+        assert!(!state.is_new_session_dialog_visible());
+        assert_eq!(state.ui_mode, UiMode::Normal);
     }
 }

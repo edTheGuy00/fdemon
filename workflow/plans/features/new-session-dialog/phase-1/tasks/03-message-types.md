@@ -172,3 +172,35 @@ No specific tests needed - messages are tested through handler tests.
 - Old dialog messages (`ShowDeviceSelector`, `ShowStartupDialog`, etc.) are kept until Phase 7
 - Handler implementation comes in Phase 4 (state transitions)
 - Some messages carry data (`SetConnectedDevices`, `SetMode`, etc.) for async task results
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Added imports for `FlutterMode`, `BootableDevice`, and new_session_dialog types (`DartDefine`, `FuzzyModalType`, `TargetTab`). Added 34 new message variants for NewSessionDialog, organized into 4 sections: Core Dialog Messages (12), Launch Context Messages (4), Fuzzy Modal Messages (7), and Dart Defines Modal Messages (11). |
+| `src/app/handler/update.rs` | Added catch-all pattern at end of message match statement to handle all new NewSessionDialog messages with stub implementation returning `UpdateResult::none()`. Added comment indicating handlers will be implemented in Phase 4. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import via Re-export**: Used `crate::tui::widgets::{DartDefine, FuzzyModalType, TargetTab}` instead of direct module path, leveraging the public re-export from `tui/widgets/mod.rs` for cleaner imports.
+2. **Stub Handler Pattern**: Used a single multi-pattern match arm with OR patterns to handle all 34 new messages in one place, making it easy to find and replace with real implementations in Phase 4.
+3. **Message Grouping**: Organized messages into logical sections with separator comments matching the task specification, improving code readability and navigation.
+4. **Data-Carrying Messages**: Several messages carry data (devices, config, mode, etc.) to support async task results and modal state updates, following the existing pattern in the codebase.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code automatically formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1351/1351 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No Handlers Yet**: All messages are stubbed with no-op handlers. This is intentional - actual state transitions will be implemented in Phase 4 (task 04-state-transitions.md).
+2. **E2E Test Instability**: Some e2e snapshot tests failed, but these appear to be pre-existing flakiness (PTY timing issues, device discovery timing). All unit tests pass.
