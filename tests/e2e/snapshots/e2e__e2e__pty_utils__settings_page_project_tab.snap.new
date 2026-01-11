@@ -1,0 +1,6 @@
+---
+source: tests/e2e/pty_utils.rs
+assertion_line: 579
+expression: content
+---
+        │╰──────────────────────────────────────────────────────────────────────────────╯│ [Behavior]                                                                   ││▶  Auto Start               false            Skip device selector and start i..│   Confirm Quit             true             Ask before quitting with running..│                                                                              ││ [Watcher]                                                                    ││[39;
