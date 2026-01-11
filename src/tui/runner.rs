@@ -58,16 +58,16 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Initialize startup state (always enters Normal mode)
+    // Initialize startup state (determines auto-start vs manual mode)
     let startup_result = startup::startup_flutter(&mut state, &settings, project_path);
 
-    // Render first frame - user sees Normal mode briefly
+    // Render first frame - show normal UI immediately
+    // Auto-start will happen in the background after the event loop starts
     if let Err(e) = term.draw(|frame| render::view(frame, &mut state)) {
         error!("Failed to render initial frame: {}", e);
     }
 
     // If auto-start is configured, send message to trigger it
-    // This will be processed in the event loop, showing Loading screen
     if let StartupAction::AutoStart { configs } = startup_result {
         if let Err(e) = msg_tx.send(Message::StartAutoLaunch { configs }).await {
             error!(

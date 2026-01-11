@@ -204,8 +204,11 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // '+' - Start new session
         // If sessions are running: show quick device selector
         // If no sessions: show full startup dialog
+        // Don't show dialogs while loading (auto-launch in progress)
         (KeyCode::Char('+'), KeyModifiers::NONE) | (KeyCode::Char('+'), KeyModifiers::SHIFT) => {
-            if state.has_running_sessions() {
+            if state.ui_mode == UiMode::Loading {
+                None
+            } else if state.has_running_sessions() {
                 Some(Message::ShowDeviceSelector)
             } else {
                 Some(Message::ShowStartupDialog)
@@ -215,8 +218,11 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // 'd' for adding device/session (alternative to '+')
         // If sessions are running: show quick device selector
         // If no sessions: show full startup dialog
+        // Don't show dialogs while loading (auto-launch in progress)
         (KeyCode::Char('d'), KeyModifiers::NONE) => {
-            if state.has_running_sessions() {
+            if state.ui_mode == UiMode::Loading {
+                None
+            } else if state.has_running_sessions() {
                 Some(Message::ShowDeviceSelector)
             } else {
                 Some(Message::ShowStartupDialog)
@@ -920,6 +926,28 @@ mod device_selector_key_tests {
         );
 
         assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+    }
+
+    #[test]
+    fn test_plus_key_ignored_during_loading() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Loading;
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('+')));
+
+        assert!(msg.is_none());
+        assert_eq!(state.ui_mode, UiMode::Loading); // Still loading, no dialog
+    }
+
+    #[test]
+    fn test_d_key_ignored_during_loading() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Loading;
+
+        let msg = handle_key_normal(&state, key(KeyCode::Char('d')));
+
+        assert!(msg.is_none());
+        assert_eq!(state.ui_mode, UiMode::Loading); // Still loading, no dialog
     }
 
     #[test]

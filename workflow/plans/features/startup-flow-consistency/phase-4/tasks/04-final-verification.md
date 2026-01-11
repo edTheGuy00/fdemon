@@ -39,7 +39,9 @@ cargo clippy -- -D warnings
 - [ ] Delete `.fdemon/settings.local.toml` if it exists
 - [ ] Ensure `auto_start = true` in config
 - [ ] Run app with device connected
-- [ ] Verify: Normal (brief) → Loading → Session starts
+- [ ] Verify: Normal UI shown immediately with loading overlay on top
+- [ ] Verify: Loading messages cycle (every ~1.5s)
+- [ ] Verify: Session starts, overlay disappears, no device selector shown
 
 #### Scenario 2: Fresh Start without Auto-Start
 

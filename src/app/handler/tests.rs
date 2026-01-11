@@ -2162,7 +2162,7 @@ fn test_settings_toggle_bool_sets_dirty_flag() {
 // ─────────────────────────────────────────────────────────
 
 #[test]
-fn test_start_auto_launch_sets_loading() {
+fn test_start_auto_launch_shows_loading_overlay() {
     use crate::config::LoadedConfigs;
 
     let mut state = AppState::new();
@@ -2170,6 +2170,7 @@ fn test_start_auto_launch_sets_loading() {
 
     let result = update(&mut state, Message::StartAutoLaunch { configs });
 
+    // Loading overlay is shown on top of normal UI
     assert!(state.loading_state.is_some());
     assert_eq!(state.ui_mode, UiMode::Loading);
     assert!(matches!(
@@ -2183,17 +2184,20 @@ fn test_auto_launch_progress_updates_message() {
     let mut state = AppState::new();
     state.set_loading_phase("Initial");
 
-    let _ = update(
+    let result = update(
         &mut state,
         Message::AutoLaunchProgress {
             message: "Detecting devices...".to_string(),
         },
     );
 
+    // Progress updates loading message
+    assert!(state.loading_state.is_some());
     assert_eq!(
         state.loading_state.as_ref().unwrap().message,
         "Detecting devices..."
     );
+    assert!(result.action.is_none());
 }
 
 #[test]
@@ -2201,7 +2205,7 @@ fn test_auto_launch_result_success_creates_session() {
     use crate::app::message::AutoLaunchSuccess;
 
     let mut state = AppState::new();
-    state.set_loading_phase("Testing");
+    // No loading state - auto-launch is silent
 
     let device = test_device("test-device", "Test Device");
 
@@ -2217,9 +2221,7 @@ fn test_auto_launch_result_success_creates_session() {
         },
     );
 
-    // Loading cleared
-    assert!(state.loading_state.is_none());
-    // Mode transitioned to Normal
+    // Still in Normal mode
     assert_eq!(state.ui_mode, UiMode::Normal);
     // Session created
     assert_eq!(state.session_manager.len(), 1);
@@ -2233,7 +2235,7 @@ fn test_auto_launch_result_success_creates_session() {
 #[test]
 fn test_auto_launch_result_discovery_error_shows_dialog() {
     let mut state = AppState::new();
-    state.set_loading_phase("Testing");
+    // No loading state - auto-launch is silent
 
     let result = update(
         &mut state,
@@ -2242,9 +2244,7 @@ fn test_auto_launch_result_discovery_error_shows_dialog() {
         },
     );
 
-    // Loading cleared
-    assert!(state.loading_state.is_none());
-    // Shows startup dialog
+    // Shows startup dialog on error
     assert_eq!(state.ui_mode, UiMode::StartupDialog);
     // Error message set
     assert!(state.startup_dialog_state.error.is_some());
@@ -2256,4 +2256,235 @@ fn test_auto_launch_result_discovery_error_shows_dialog() {
         .contains("No devices"));
     // No action returned
     assert!(result.action.is_none());
+}
+
+// ============================================================================
+// Auto-Launch Flow Integration Tests (Phase 3 - Task 3)
+// Auto-launch happens silently in background - no loading screen
+// ============================================================================
+
+mod auto_launch_tests {
+    use super::*;
+    use crate::app::message::AutoLaunchSuccess;
+    use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_auto_launch_flow_success() {
+        let mut state = AppState::new();
+        let project_path = PathBuf::from("/tmp/test");
+        state.project_path = project_path.clone();
+
+        // Step 1: StartAutoLaunch - shows loading overlay
+        let configs = LoadedConfigs::default();
+        let result = update(&mut state, Message::StartAutoLaunch { configs });
+
+        assert_eq!(state.ui_mode, UiMode::Loading);
+        assert!(state.loading_state.is_some());
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevicesAndAutoLaunch { .. })
+        ));
+
+        // Step 2: Progress update
+        let _ = update(
+            &mut state,
+            Message::AutoLaunchProgress {
+                message: "Detecting devices...".to_string(),
+            },
+        );
+
+        assert!(state.loading_state.is_some());
+        assert_eq!(
+            state.loading_state.as_ref().unwrap().message,
+            "Detecting devices..."
+        );
+
+        // Step 3: Successful result
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        // Verify final state - loading cleared, back to normal
+        assert!(state.loading_state.is_none());
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert_eq!(state.session_manager.len(), 1); // Session created
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::SpawnSession { .. })
+        ));
+    }
+
+    #[test]
+    fn test_auto_launch_with_config() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        // No loading state - auto-launch is silent
+
+        // Skip to result with config
+        let device = test_device("test-device", "Test Device");
+        let config = LaunchConfig {
+            name: "debug".to_string(),
+            device: "auto".to_string(),
+            mode: FlutterMode::Debug,
+            flavor: Some("dev".to_string()),
+            dart_defines: std::collections::HashMap::new(),
+            entry_point: None,
+            extra_args: vec![],
+            auto_start: false,
+        };
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: Some(config.clone()),
+                }),
+            },
+        );
+
+        // Verify session was created with config
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::SpawnSession {
+                config: Some(_),
+                ..
+            })
+        ));
+
+        // Verify the config is passed through
+        if let Some(UpdateAction::SpawnSession { config: cfg, .. }) = result.action {
+            assert!(cfg.is_some());
+            let cfg = cfg.unwrap();
+            assert_eq!(cfg.name, "debug");
+            assert_eq!(cfg.flavor, Some("dev".to_string()));
+        } else {
+            panic!("Expected SpawnSession action with config");
+        }
+    }
+
+    #[test]
+    fn test_auto_launch_no_devices_shows_dialog() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        // No loading state - auto-launch is silent
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Err("No devices found".to_string()),
+            },
+        );
+
+        // Shows startup dialog on error
+        assert_eq!(state.ui_mode, UiMode::StartupDialog);
+        assert!(state.startup_dialog_state.error.is_some());
+        assert!(state
+            .startup_dialog_state
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("No devices"));
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_auto_launch_discovery_error() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        // No loading state - auto-launch is silent
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Err("Flutter SDK not found".to_string()),
+            },
+        );
+
+        assert_eq!(state.ui_mode, UiMode::StartupDialog);
+        assert!(state
+            .startup_dialog_state
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("Flutter SDK"));
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_auto_launch_progress_without_loading_is_safe() {
+        let mut state = AppState::new();
+        // No loading state set
+
+        // Should not panic - progress is a no-op
+        let result = update(
+            &mut state,
+            Message::AutoLaunchProgress {
+                message: "Testing...".to_string(),
+            },
+        );
+
+        assert!(result.action.is_none());
+        // Loading state should still be None
+        assert!(state.loading_state.is_none());
+    }
+
+    #[test]
+    fn test_auto_launch_creates_session_with_correct_device() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        // No loading state - auto-launch is silent
+
+        let device = test_device("android-123", "Pixel 5");
+
+        update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        // Verify session was created
+        assert_eq!(state.session_manager.len(), 1);
+
+        // Verify device info matches
+        let session_id = state.session_manager.selected_id().unwrap();
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.session.device_id, "android-123");
+        assert_eq!(handle.session.device_name, "Pixel 5");
+    }
+
+    #[test]
+    fn test_auto_launch_error_preserves_error_message() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        // No loading state - auto-launch is silent
+
+        let error_msg = "Device offline: emulator-5554";
+
+        update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Err(error_msg.to_string()),
+            },
+        );
+
+        // Error message should be preserved in startup dialog
+        assert_eq!(
+            state.startup_dialog_state.error.as_ref().unwrap(),
+            error_msg
+        );
+    }
 }

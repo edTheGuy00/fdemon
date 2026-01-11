@@ -61,11 +61,12 @@ If there's a diagram or description of auto-start flow, update it to show the me
 
 1. runner.rs sends Message::StartAutoLaunch after first render
 2. Handler sets UiMode::Loading, returns DiscoverDevicesAndAutoLaunch action
-3. Spawn function discovers devices asynchronously
-4. Progress messages update loading screen
-5. AutoLaunchResult message triggers session creation
-6. Handler clears loading, returns SpawnSession action
-7. Session starts, enters Normal mode with running session
+3. Loading overlay appears on top of normal UI (not full-screen)
+4. Spawn function discovers devices asynchronously
+5. Progress messages update loading overlay (messages cycle every ~1.5s)
+6. AutoLaunchResult message triggers session creation
+7. Handler clears loading, returns SpawnSession action
+8. Session starts, loading overlay disappears, session logs appear
 ```
 
 #### Check CLAUDE.md

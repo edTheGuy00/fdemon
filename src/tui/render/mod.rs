@@ -218,9 +218,6 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 /// - Animated spinner
 /// - Current loading message
 fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingState, area: Rect) {
-    // Clear the screen
-    frame.render_widget(Clear, area);
-
     // Braille spinner characters for smooth animation
     const SPINNER: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -228,26 +225,29 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     let spinner_idx = (loading.animation_frame as usize) % SPINNER.len();
     let spinner_char = SPINNER[spinner_idx];
 
-    // Create centered content box
+    // Create centered content box - smaller modal overlay
     let vertical_center = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(40),
-            Constraint::Length(8),
-            Constraint::Percentage(40),
+            Constraint::Percentage(35),
+            Constraint::Length(7),
+            Constraint::Percentage(35),
         ])
         .split(area);
 
     let horizontal_center = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(25),
-            Constraint::Percentage(50),
-            Constraint::Percentage(25),
+            Constraint::Percentage(20),
+            Constraint::Percentage(60),
+            Constraint::Percentage(20),
         ])
         .split(vertical_center[1]);
 
     let center_area = horizontal_center[1];
+
+    // Only clear the modal area, not the entire screen
+    frame.render_widget(Clear, center_area);
 
     // Build content lines
     let mut lines = vec![];

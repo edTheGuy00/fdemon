@@ -115,6 +115,17 @@ cargo test test_initial_normal_mode
 - If tests use golden files, those may need updating too
 - Document any behavioral changes observed in test output
 
+### Phase 3 Impact
+
+**Already completed during Phase 3:**
+- Loading snapshot (`flutter_demon__tui__render__tests__loading.snap`) was updated
+- Loading screen now shows as an overlay on top of normal UI (header, log area, status bar visible)
+- The snapshot shows the centered loading modal with spinner
+
+**Remaining work:**
+- Verify all other snapshot tests still pass
+- No additional changes expected since only loading behavior changed
+
 ---
 
 ## Completion Summary

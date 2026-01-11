@@ -141,9 +141,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state.startup_dialog_state.tick();
             }
 
-            // Tick loading screen animation (Task 08d)
+            // Tick loading screen animation with message cycling (Task 08d)
             if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
-                state.tick_loading_animation();
+                state.tick_loading_animation_with_cycling(true);
             }
 
             // Task 10c: Check if startup dialog needs to save (debounced)
@@ -467,10 +467,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state.startup_dialog_state.set_devices(devices);
             }
 
-            // If we were in Loading mode, transition to DeviceSelector
-            if state.ui_mode == UiMode::Loading {
-                state.ui_mode = UiMode::DeviceSelector;
-            }
+            // Note: Don't transition UI mode here - the caller handles that
+            // (e.g., ShowDeviceSelector sets DeviceSelector mode, AutoLaunch stays in Loading)
 
             if device_count > 0 {
                 tracing::info!("Discovered {} device(s)", device_count);
@@ -1649,23 +1647,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Auto-Launch Messages (Startup Flow Consistency)
         // ─────────────────────────────────────────────────────────
         Message::StartAutoLaunch { configs } => {
-            // Phase 1: Scaffolding only - set loading state and return action
-            // Full logic will be refined in Phase 3
-
-            // Enter loading mode
+            // Show loading overlay on top of normal UI
             state.set_loading_phase("Starting...");
-
-            // Return action to spawn the auto-launch task
             UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch { configs })
         }
 
         Message::AutoLaunchProgress { message } => {
-            // Update loading screen message
+            // Update loading overlay message
             state.update_loading_message(&message);
             UpdateResult::none()
         }
 
         Message::AutoLaunchResult { result } => {
+            // Clear loading overlay
+            state.clear_loading();
+
             match result {
                 Ok(success) => {
                     // Create session and spawn
@@ -1681,10 +1677,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
                     match session_result {
                         Ok(session_id) => {
-                            // Clear loading, enter normal mode
-                            state.clear_loading();
-                            state.ui_mode = UiMode::Normal;
-
                             // Save selection for next time
                             let _ = crate::config::save_last_selection(
                                 &state.project_path,
@@ -1699,20 +1691,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                             })
                         }
                         Err(e) => {
-                            // Session creation failed - show startup dialog with error
-                            state.clear_loading();
+                            // Session creation failed (e.g., max sessions reached) - show startup dialog with error
                             let configs = crate::config::load_all_configs(&state.project_path);
                             state.show_startup_dialog(configs);
                             state
                                 .startup_dialog_state
-                                .set_error(format!("Failed to create session: {}", e));
+                                .set_error(format!("Cannot create session: {}", e));
                             UpdateResult::none()
                         }
                     }
                 }
                 Err(error_msg) => {
                     // Device discovery failed, show startup dialog with error
-                    state.clear_loading();
                     let configs = crate::config::load_all_configs(&state.project_path);
                     state.show_startup_dialog(configs);
                     state.startup_dialog_state.set_error(error_msg);

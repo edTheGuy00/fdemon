@@ -180,20 +180,34 @@ If issues are found, document them here:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
 **Scenarios Tested:**
-- [ ] Scenario 1: Auto-start with device
-- [ ] Scenario 2: Auto-start no devices
-- [ ] Scenario 3: Manual start
-- [ ] Scenario 4: Device cache
-- [ ] Scenario 5: Key press during loading
-- [ ] Scenario 6: Saved selection
+- [x] Scenario 1: Auto-start with device
+- [x] Scenario 2: Auto-start no devices
+- [x] Scenario 3: Manual start
+- [x] Scenario 4: Device cache
+- [x] Scenario 5: Key press during loading
+- [x] Scenario 6: Saved selection
 
 **Issues Found:**
 
-(pending)
+| Issue | Severity | Description | Resolution |
+|-------|----------|-------------|------------|
+| Full-screen loading | Medium | Loading screen cleared entire UI instead of overlay | Fixed: Changed to centered modal overlay |
+| Messages not cycling | Low | Loading messages stayed static | Fixed: Enabled message cycling in tick handler |
+| Device selector appeared | Medium | DeviceSelector shown after auto-launch | Fixed: Removed incorrect UI transition in DevicesDiscovered handler |
+
+**Files Modified During Verification:**
+
+| File | Changes |
+|------|---------|
+| `src/tui/render/mod.rs` | Changed loading screen to only clear center modal area |
+| `src/app/handler/update.rs` | Enabled message cycling; removed Loading→DeviceSelector transition |
+| `src/tui/render/snapshots/...loading.snap` | Updated snapshot for new overlay layout |
 
 **Notes:**
 
-(pending)
+- All issues were fixed during verification
+- Final behavior: Flutter Demon UI shows first, then loading overlay appears with cycling messages
+- Session starts correctly without device selector appearing

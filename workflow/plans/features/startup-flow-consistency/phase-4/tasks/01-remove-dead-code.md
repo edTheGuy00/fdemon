@@ -152,6 +152,15 @@ cargo test
 - If any function is still referenced, trace the call and fix the caller
 - Git diff should show significant line reduction in startup.rs
 
+### Phase 3 Impact
+
+Phase 3 made the following changes that affect this task:
+- Loading screen is now a modal overlay (not full-screen) - rendered in `render_loading_screen()`
+- `DevicesDiscovered` handler no longer transitions from Loading to DeviceSelector
+- Message cycling enabled via `tick_loading_animation_with_cycling(true)`
+
+These changes don't affect the dead code in `startup.rs` - all marked functions are still dead and should be removed.
+
 ---
 
 ## Completion Summary

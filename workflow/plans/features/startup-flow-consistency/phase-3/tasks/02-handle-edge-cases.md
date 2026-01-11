@@ -172,20 +172,34 @@ fn test_auto_launch_no_devices_shows_dialog() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/tui/spawn.rs` | Improved error messages for no devices and discovery failures |
+| `src/app/handler/update.rs` | Max sessions error now shows StartupDialog with error (not silent failure) |
+| `src/app/handler/keys.rs` | Block '+' and 'd' keys during Loading mode to prevent dialog interference |
 
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- (pending)
+1. **Helpful error messages**: Added actionable context to errors (e.g., "Connect a device or start an emulator", "Check Flutter SDK installation") to guide users toward resolution.
+2. **Escape during loading**: Implemented Option A (ignore Escape during loading) as recommended in task. Loading is brief and cancellation adds complexity without clear benefit.
+3. **Consistent error display**: All auto-launch edge cases now show StartupDialog with error message, providing a consistent path forward for the user.
 
-**Notable Decisions:**
-- (pending)
+### Testing Performed
 
-**Risks/Limitations:**
-- (pending)
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --lib` - Passed (1339 tests)
+- Added tests:
+  - `test_plus_key_ignored_during_loading` - Passed
+  - `test_d_key_ignored_during_loading` - Passed
+  - `test_auto_launch_result_discovery_error_shows_dialog` - Already existed, still passing
+
+### Risks/Limitations
+
+1. **Escape during loading**: Users cannot cancel auto-launch once started. This is acceptable for brief loading times, but may be revisited if loading becomes slow (e.g., slow network).
+2. **Error message specificity**: Discovery errors show generic "Check Flutter SDK installation" message. More specific diagnostics could be added in future based on error type.

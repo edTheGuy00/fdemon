@@ -30,21 +30,21 @@ Complete the auto-launch implementation with device cache updates, edge case han
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-update-device-cache](tasks/01-update-device-cache.md) | Not Started | Phase 2 | 0.5h | `tui/spawn.rs`, `handler/update.rs` |
-| 2 | [02-handle-edge-cases](tasks/02-handle-edge-cases.md) | Not Started | Phase 2 | 1h | `tui/spawn.rs`, `handler/update.rs` |
-| 3 | [03-integration-tests](tasks/03-integration-tests.md) | Not Started | 1, 2 | 1.5h | `handler/tests.rs` |
-| 4 | [04-manual-verification](tasks/04-manual-verification.md) | Not Started | 3 | 0.5h | (verification only) |
+| 1 | [01-update-device-cache](tasks/01-update-device-cache.md) | Done | Phase 2 | 0.5h | `tui/spawn.rs`, `handler/update.rs` |
+| 2 | [02-handle-edge-cases](tasks/02-handle-edge-cases.md) | Done | Phase 2 | 1h | `tui/spawn.rs`, `handler/update.rs` |
+| 3 | [03-integration-tests](tasks/03-integration-tests.md) | Done | 1, 2 | 1.5h | `handler/tests.rs` |
+| 4 | [04-manual-verification](tasks/04-manual-verification.md) | Done | 3 | 0.5h | (verification only) |
 
 ## Success Criteria
 
 Phase 3 is complete when:
 
-- [ ] Device cache is updated during auto-launch discovery
-- [ ] Edge cases handled: no devices, discovery failure, max sessions
-- [ ] Handler tests pass for all auto-launch messages
-- [ ] Integration test verifies full flow
-- [ ] Manual testing confirms behavior matches expectations
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] Device cache is updated during auto-launch discovery
+- [x] Edge cases handled: no devices, discovery failure, max sessions
+- [x] Handler tests pass for all auto-launch messages
+- [x] Integration test verifies full flow
+- [x] Manual testing confirms behavior matches expectations
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Notes
 

@@ -122,12 +122,25 @@ pub fn spawn_auto_launch(
         let discovery_result = devices::discover_devices().await;
 
         let devices = match discovery_result {
-            Ok(result) => result.devices,
+            Ok(result) => {
+                // Update device cache for future dialogs (Phase 3, Task 01)
+                let _ = msg_tx
+                    .send(Message::DevicesDiscovered {
+                        devices: result.devices.clone(),
+                    })
+                    .await;
+
+                result.devices
+            }
             Err(e) => {
-                // Send error result
+                // Send error result with helpful context
+                let error_msg = format!(
+                    "Device discovery failed: {}. Check Flutter SDK installation.",
+                    e
+                );
                 let _ = msg_tx
                     .send(Message::AutoLaunchResult {
-                        result: Err(e.to_string()),
+                        result: Err(error_msg),
                     })
                     .await;
                 return;
@@ -137,7 +150,9 @@ pub fn spawn_auto_launch(
         if devices.is_empty() {
             let _ = msg_tx
                 .send(Message::AutoLaunchResult {
-                    result: Err("No devices found".to_string()),
+                    result: Err(
+                        "No devices found. Connect a device or start an emulator.".to_string()
+                    ),
                 })
                 .await;
             return;
