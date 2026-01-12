@@ -61,11 +61,11 @@ Create a master-detail modal for managing dart define key-value pairs. Full-scre
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-dart-defines-state](tasks/01-dart-defines-state.md) | Not Started | Phase 1 | 20m | `new_session_dialog/state.rs` |
-| 2 | [02-dart-defines-list-widget](tasks/02-dart-defines-list-widget.md) | Not Started | 1 | 25m | `new_session_dialog/dart_defines_modal.rs` |
-| 3 | [03-dart-defines-edit-widget](tasks/03-dart-defines-edit-widget.md) | Not Started | 2 | 25m | `new_session_dialog/dart_defines_modal.rs` |
-| 4 | [04-dart-defines-modal-widget](tasks/04-dart-defines-modal-widget.md) | Not Started | 3 | 20m | `new_session_dialog/dart_defines_modal.rs` |
-| 5 | [05-dart-defines-messages](tasks/05-dart-defines-messages.md) | Not Started | 4 | 15m | `app/message.rs`, `app/handler/update.rs` |
+| 1 | [01-dart-defines-state](tasks/01-dart-defines-state.md) | Done | Phase 1 | 20m | `new_session_dialog/state.rs` |
+| 2 | [02-dart-defines-list-widget](tasks/02-dart-defines-list-widget.md) | Done | 1 | 25m | `new_session_dialog/dart_defines_modal.rs` |
+| 3 | [03-dart-defines-edit-widget](tasks/03-dart-defines-edit-widget.md) | Done | 2 | 25m | `new_session_dialog/dart_defines_modal.rs` |
+| 4 | [04-dart-defines-modal-widget](tasks/04-dart-defines-modal-widget.md) | Done | 3 | 20m | `new_session_dialog/dart_defines_modal.rs` |
+| 5 | [05-dart-defines-messages](tasks/05-dart-defines-messages.md) | Done | 4 | 15m | `app/message.rs`, `app/handler/update.rs` |
 
 ## Success Criteria
 

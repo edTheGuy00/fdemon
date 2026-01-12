@@ -73,19 +73,14 @@ pub enum Message {
     // Session Reload/Restart Completion (multi-session mode)
     // ─────────────────────────────────────────────────────────
     /// Session-specific reload completed
-    SessionReloadCompleted {
-        session_id: SessionId,
-        time_ms: u64,
-    },
+    SessionReloadCompleted { session_id: SessionId, time_ms: u64 },
     /// Session-specific reload failed
     SessionReloadFailed {
         session_id: SessionId,
         reason: String,
     },
     /// Session-specific restart completed
-    SessionRestartCompleted {
-        session_id: SessionId,
-    },
+    SessionRestartCompleted { session_id: SessionId },
     /// Session-specific restart failed
     SessionRestartFailed {
         session_id: SessionId,
@@ -96,15 +91,11 @@ pub enum Message {
     // File Watcher Messages
     // ─────────────────────────────────────────────────────────
     /// Multiple files changed (debounced batch)
-    FilesChanged {
-        count: usize,
-    },
+    FilesChanged { count: usize },
     /// Auto-reload triggered by file watcher
     AutoReloadTriggered,
     /// Watcher error occurred
-    WatcherError {
-        message: String,
-    },
+    WatcherError { message: String },
 
     // ─────────────────────────────────────────────────────────
     // Device Selector Messages
@@ -118,21 +109,15 @@ pub enum Message {
     /// Navigate device selector down
     DeviceSelectorDown,
     /// Device selected from selector
-    DeviceSelected {
-        device: Device,
-    },
+    DeviceSelected { device: Device },
     /// Launch Android emulator requested
     LaunchAndroidEmulator,
     /// Launch iOS simulator requested
     LaunchIOSSimulator,
     /// Device discovery completed
-    DevicesDiscovered {
-        devices: Vec<Device>,
-    },
+    DevicesDiscovered { devices: Vec<Device> },
     /// Device discovery failed
-    DeviceDiscoveryFailed {
-        error: String,
-    },
+    DeviceDiscoveryFailed { error: String },
     /// Refresh device list
     RefreshDevices,
 
@@ -142,21 +127,13 @@ pub enum Message {
     /// Discover available emulators
     DiscoverEmulators,
     /// Emulators discovered
-    EmulatorsDiscovered {
-        emulators: Vec<Emulator>,
-    },
+    EmulatorsDiscovered { emulators: Vec<Emulator> },
     /// Emulator discovery failed
-    EmulatorDiscoveryFailed {
-        error: String,
-    },
+    EmulatorDiscoveryFailed { error: String },
     /// Launch a specific emulator by ID
-    LaunchEmulator {
-        emulator_id: String,
-    },
+    LaunchEmulator { emulator_id: String },
     /// Emulator launch completed
-    EmulatorLaunched {
-        result: EmulatorLaunchResult,
-    },
+    EmulatorLaunched { result: EmulatorLaunchResult },
 
     // ─────────────────────────────────────────────────────────
     // Session Messages
@@ -219,9 +196,7 @@ pub enum Message {
     /// Clear search completely (remove query and matches)
     ClearSearch,
     /// Update search query text
-    SearchInput {
-        text: String,
-    },
+    SearchInput { text: String },
     /// Navigate to next search match
     NextSearchMatch,
     /// Navigate to previous search match
@@ -483,35 +458,22 @@ pub enum Message {
     NewSessionDialogConfirm,
 
     /// Boot a specific bootable device
-    NewSessionDialogBootDevice {
-        device_id: String,
-    },
+    NewSessionDialogBootDevice { device_id: String },
 
     /// Device boot completed - refresh connected list
-    NewSessionDialogDeviceBooted {
-        device_id: String,
-    },
+    NewSessionDialogDeviceBooted { device_id: String },
 
     /// Device boot failed
-    NewSessionDialogBootFailed {
-        device_id: String,
-        error: String,
-    },
+    NewSessionDialogBootFailed { device_id: String, error: String },
 
     /// Set connected devices (from flutter devices discovery)
-    NewSessionDialogSetConnectedDevices {
-        devices: Vec<Device>,
-    },
+    NewSessionDialogSetConnectedDevices { devices: Vec<Device> },
 
     /// Set bootable devices (from native discovery)
-    NewSessionDialogSetBootableDevices {
-        devices: Vec<BootableDevice>,
-    },
+    NewSessionDialogSetBootableDevices { devices: Vec<BootableDevice> },
 
     /// Set error message
-    NewSessionDialogSetError {
-        error: String,
-    },
+    NewSessionDialogSetError { error: String },
 
     /// Clear error message
     NewSessionDialogClearError,
@@ -520,40 +482,28 @@ pub enum Message {
     // Launch Context Messages
     // ─────────────────────────────────────────────────────────
     /// Select a configuration by index
-    NewSessionDialogSelectConfig {
-        index: Option<usize>,
-    },
+    NewSessionDialogSelectConfig { index: Option<usize> },
 
     /// Set the build mode
-    NewSessionDialogSetMode {
-        mode: FlutterMode,
-    },
+    NewSessionDialogSetMode { mode: FlutterMode },
 
     /// Set the flavor string
-    NewSessionDialogSetFlavor {
-        flavor: String,
-    },
+    NewSessionDialogSetFlavor { flavor: String },
 
     /// Set dart defines
-    NewSessionDialogSetDartDefines {
-        defines: Vec<DartDefine>,
-    },
+    NewSessionDialogSetDartDefines { defines: Vec<DartDefine> },
 
     // ─────────────────────────────────────────────────────────
     // Fuzzy Modal Messages
     // ─────────────────────────────────────────────────────────
     /// Open fuzzy search modal
-    NewSessionDialogOpenFuzzyModal {
-        modal_type: FuzzyModalType,
-    },
+    NewSessionDialogOpenFuzzyModal { modal_type: FuzzyModalType },
 
     /// Close fuzzy search modal (cancel)
     NewSessionDialogCloseFuzzyModal,
 
     /// Fuzzy modal: input character
-    NewSessionDialogFuzzyInput {
-        c: char,
-    },
+    NewSessionDialogFuzzyInput { c: char },
 
     /// Fuzzy modal: backspace
     NewSessionDialogFuzzyBackspace,
@@ -576,27 +526,33 @@ pub enum Message {
     /// Open dart defines modal
     NewSessionDialogOpenDartDefinesModal,
 
-    /// Close dart defines modal (save and close)
+    /// Close dart defines modal (saves changes)
     NewSessionDialogCloseDartDefinesModal,
 
-    /// Dart defines modal: navigate list
+    /// Switch between list and edit panes
+    NewSessionDialogDartDefinesSwitchPane,
+
+    /// Navigate up in list
     NewSessionDialogDartDefinesUp,
+
+    /// Navigate down in list
     NewSessionDialogDartDefinesDown,
 
-    /// Dart defines modal: switch between list/key/value fields
-    NewSessionDialogDartDefinesSwitchField,
+    /// Confirm selection (edit item) or activate button
+    NewSessionDialogDartDefinesConfirm,
 
-    /// Dart defines modal: input character
-    NewSessionDialogDartDefinesInput {
-        c: char,
-    },
+    /// Move to next field in edit form
+    NewSessionDialogDartDefinesNextField,
 
-    /// Dart defines modal: backspace
+    /// Input character in active text field
+    NewSessionDialogDartDefinesInput { c: char },
+
+    /// Backspace in active text field
     NewSessionDialogDartDefinesBackspace,
 
-    /// Dart defines modal: add new define
-    NewSessionDialogDartDefinesAdd,
+    /// Save current edit
+    NewSessionDialogDartDefinesSave,
 
-    /// Dart defines modal: delete current define
+    /// Delete current item
     NewSessionDialogDartDefinesDelete,
 }

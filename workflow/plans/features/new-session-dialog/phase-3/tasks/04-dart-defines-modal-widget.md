@@ -262,3 +262,48 @@ fn test_modal_minimum_size() {
 - Footer hints are context-sensitive based on active pane
 - Consider minimum size requirements for usability
 - Background dimming applied before modal render
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/widgets/new_session_dialog/dart_defines_modal.rs` | Added `DartDefinesModal` widget struct and implementation, added `render_dart_defines_dim_overlay()` helper function, added `modal_tests` module with 6 comprehensive tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Full-screen dimmed overlay**: Implemented background dimming by iterating through all cells and setting a dimmed style. This provides clear visual separation but requires iterating through the entire buffer.
+
+2. **40/60 pane split**: Used percentage-based layout constraints for responsive sizing. The list pane gets 40% and edit pane gets 60% of the horizontal space, providing more room for editing while keeping the list visible.
+
+3. **Context-sensitive footer**: Footer hints change based on active pane (List vs Edit) to show only relevant keybindings, reducing cognitive load for users.
+
+4. **Double-line border styling**: Used `symbols::border::DOUBLE` for the outer modal border to distinguish it from the inner pane borders (which use `symbols::border::ROUNDED`), creating clear visual hierarchy.
+
+5. **Margin calculation**: Modal uses 2-cell horizontal margin and 1-cell vertical margin via `saturating_sub` to prevent underflow on small terminals.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib dart_defines_modal` - Passed (33/33 tests)
+  - `test_modal_renders_title` - Passed
+  - `test_modal_renders_both_panes` - Passed
+  - `test_modal_shows_footer_hints` - Passed
+  - `test_modal_footer_changes_by_pane` - Passed
+  - `test_modal_layout_proportions` - Passed
+  - `test_modal_minimum_size` - Passed
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Terminal size**: The modal has a minimum usable size requirement. Very small terminals (< 60x15) may have rendering issues, though the code handles this gracefully via `saturating_sub`.
+
+2. **Unicode emoji**: The header uses a 📝 emoji which may not render correctly on all terminals. Fallback handling could be added in future iterations if needed.
+
+3. **Performance**: The dimming overlay iterates through every cell in the buffer. For very large terminals, this could have a performance impact, though it should be negligible for typical terminal sizes.

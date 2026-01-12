@@ -1851,16 +1851,120 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        Message::NewSessionDialogOpenDartDefinesModal
-        | Message::NewSessionDialogCloseDartDefinesModal
-        | Message::NewSessionDialogDartDefinesUp
-        | Message::NewSessionDialogDartDefinesDown
-        | Message::NewSessionDialogDartDefinesSwitchField
-        | Message::NewSessionDialogDartDefinesInput { .. }
-        | Message::NewSessionDialogDartDefinesBackspace
-        | Message::NewSessionDialogDartDefinesAdd
-        | Message::NewSessionDialogDartDefinesDelete => {
-            // Handlers will be implemented in Phase 4
+        // ─────────────────────────────────────────────────────────
+        // NewSessionDialog - Dart Defines Modal Handlers
+        // ─────────────────────────────────────────────────────────
+        Message::NewSessionDialogOpenDartDefinesModal => {
+            // Copy current dart defines into modal state
+            state.new_session_dialog_state.open_dart_defines_modal();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogCloseDartDefinesModal => {
+            // Save changes back to main state
+            state.new_session_dialog_state.close_dart_defines_modal();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesSwitchPane => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                modal.switch_pane();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesUp => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::DartDefinesPane;
+                if modal.active_pane == DartDefinesPane::List {
+                    modal.navigate_up();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesDown => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::DartDefinesPane;
+                if modal.active_pane == DartDefinesPane::List {
+                    modal.navigate_down();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesConfirm => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::{DartDefinesEditField, DartDefinesPane};
+                match modal.active_pane {
+                    DartDefinesPane::List => {
+                        // Load selected item into edit form
+                        modal.load_selected_into_edit();
+                    }
+                    DartDefinesPane::Edit => {
+                        // Activate current button or confirm field
+                        match modal.edit_field {
+                            DartDefinesEditField::Key | DartDefinesEditField::Value => {
+                                // Move to next field
+                                modal.next_field();
+                            }
+                            DartDefinesEditField::Save => {
+                                if !modal.save_edit() {
+                                    // Save failed (key is empty) - return focus to Key field
+                                    modal.edit_field = DartDefinesEditField::Key;
+                                }
+                            }
+                            DartDefinesEditField::Delete => {
+                                modal.delete_selected();
+                            }
+                        }
+                    }
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesNextField => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::DartDefinesPane;
+                if modal.active_pane == DartDefinesPane::Edit {
+                    modal.next_field();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesInput { c } => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::DartDefinesPane;
+                if modal.active_pane == DartDefinesPane::Edit {
+                    modal.input_char(c);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesBackspace => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                use crate::tui::widgets::DartDefinesPane;
+                if modal.active_pane == DartDefinesPane::Edit {
+                    modal.backspace();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesSave => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                modal.save_edit();
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDartDefinesDelete => {
+            if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+                modal.delete_selected();
+            }
             UpdateResult::none()
         }
     }

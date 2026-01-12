@@ -2594,4 +2594,43 @@ mod auto_launch_tests {
             crate::tui::widgets::FuzzyModalType::Flavor
         );
     }
+
+    #[test]
+    fn test_dart_defines_confirm_with_empty_key_returns_focus_to_key() {
+        use crate::tui::widgets::{DartDefinesEditField, DartDefinesPane};
+
+        let mut state = AppState::new();
+
+        // Open dart defines modal
+        let _ = update(&mut state, Message::NewSessionDialogOpenDartDefinesModal);
+        assert!(state.new_session_dialog_state.dart_defines_modal.is_some());
+
+        // Switch to edit pane and navigate to Save button
+        {
+            let modal = state
+                .new_session_dialog_state
+                .dart_defines_modal
+                .as_mut()
+                .unwrap();
+            modal.active_pane = DartDefinesPane::Edit;
+            modal.edit_field = DartDefinesEditField::Save;
+            modal.editing_key = "   ".into(); // Empty/whitespace key
+            modal.editing_value = "some_value".into();
+            modal.is_new = true;
+        }
+
+        // Confirm (press Enter on Save) - should fail and return focus to Key
+        let _ = update(&mut state, Message::NewSessionDialogDartDefinesConfirm);
+
+        let modal = state
+            .new_session_dialog_state
+            .dart_defines_modal
+            .as_ref()
+            .unwrap();
+
+        // Save should have failed (no new define added)
+        assert!(modal.defines.is_empty());
+        // Focus should return to Key field
+        assert_eq!(modal.edit_field, DartDefinesEditField::Key);
+    }
 }

@@ -6,9 +6,11 @@
 //! - Fuzzy search modals for config/flavor selection
 //! - Dart defines master-detail modal
 
+mod dart_defines_modal;
 mod fuzzy_modal;
 mod state;
 
+pub use dart_defines_modal::*;
 pub use fuzzy_modal::*;
 pub use state::*;
 

@@ -309,3 +309,39 @@ fn test_edit_cursor_in_active_field() {
 - Cursor is shown as `|` character appended to value
 - Consider max length limits for inputs
 - Delete button could be styled differently (red) when focused
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/dart_defines_modal.rs` | Added `DartDefinesEditPane` widget with edit form rendering, including Key/Value inputs, Save/Delete buttons, focus styling, cursor display, and unsaved indicator. Added 9 comprehensive tests for the edit pane. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed unused `field_style` method**: Initially included a generic `field_style` helper method, but removed it since we use more specific `input_style` and `button_style` methods that better represent the different visual styles needed for inputs vs buttons.
+
+2. **Cursor implementation**: The cursor is rendered as a `|` character appended to the input value when the field is active, which is simple and effective for TUI rendering.
+
+3. **Unsaved indicator placement**: Positioned the "(unsaved)" indicator on the top border at the right side, making it clearly visible without interfering with the form content.
+
+4. **Style consistency**: Reused the existing `styles` module constants (`MODAL_BG`, `BORDER_FOCUSED`, etc.) to maintain visual consistency with the list pane.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no warnings)
+- `cargo test --lib dart_defines_modal` - Passed (27 tests including 9 new edit pane tests)
+- `cargo test` - Passed (1414 unit tests, all passing)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Input length limits**: The current implementation does not enforce maximum length limits on key/value inputs. This could be added in future if needed, but for now relies on the state management layer to handle validation.
+
+2. **Cursor position**: The cursor always appears at the end of the input text. Full cursor positioning (middle of text, selection, etc.) would require additional state tracking and is deferred to future enhancements if needed.

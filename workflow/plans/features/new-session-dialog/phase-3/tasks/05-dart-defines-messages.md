@@ -340,3 +340,35 @@ mod dart_defines_handler_tests {
 - Text input only works in Edit pane on Key/Value fields
 - Confirm behavior is context-sensitive
 - Full key binding wiring happens in Phase 7 (Integration)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Updated dart defines modal message variants to match task spec (renamed `SwitchField` to `SwitchPane`, added `Confirm`, `NextField`, `Save` messages) |
+| `src/app/handler/update.rs` | Implemented all dart defines modal message handlers (lines 1854-1968) |
+| `src/tui/widgets/new_session_dialog/state.rs` | Added helper methods: `open_dart_defines_modal()`, `close_dart_defines_modal()`, `is_dart_defines_modal_open()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Public re-exports**: Used `crate::tui::widgets::DartDefinesPane` instead of the full path through private modules, as per the public API design
+2. **Modal lifecycle**: Opening modal clones defines into a working copy; closing saves changes back, following the TEA pattern
+3. **Context-sensitive handlers**: Navigation only works in List pane, text input only in Edit pane fields, matching the spec
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test` - Passed (1420 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Key binding integration**: These handlers are wired up but key bindings will be connected in Phase 7 (Integration task)
+2. **No UI rendering**: Message handlers are ready, but full UI rendering happens in separate widget implementation tasks
