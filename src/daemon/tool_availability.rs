@@ -1,22 +1,11 @@
-# Task: Tool Availability Check
+//! Tool availability checking for device management
+//!
+//! This module provides functionality to check for the availability of external tools
+//! needed for device discovery and management, specifically `xcrun simctl` (iOS) and
+//! `emulator` (Android SDK).
 
-## Summary
-
-Create a module to check for availability of `xcrun simctl` (iOS) and `emulator` (Android) commands at app startup and cache the results.
-
-## Files
-
-| File | Action |
-|------|--------|
-| `src/daemon/tool_availability.rs` | Create |
-| `src/daemon/mod.rs` | Modify (add export) |
-
-## Implementation
-
-### 1. Create ToolAvailability struct
-
-```rust
-// src/daemon/tool_availability.rs
+use std::process::Stdio;
+use tokio::process::Command;
 
 /// Cached availability of external tools for device discovery
 #[derive(Debug, Clone, Default)]
@@ -30,11 +19,7 @@ pub struct ToolAvailability {
     /// Path to emulator command if found
     pub emulator_path: Option<String>,
 }
-```
 
-### 2. Implement availability check
-
-```rust
 impl ToolAvailability {
     /// Check tool availability (run once at startup)
     pub async fn check() -> Self {
@@ -105,23 +90,21 @@ impl ToolAvailability {
 
         paths
     }
-}
-```
 
-### 3. Add helper methods for UI messages
-
-```rust
-impl ToolAvailability {
     /// Get user-friendly message for unavailable iOS tools
     pub fn ios_unavailable_message(&self) -> Option<&'static str> {
         if self.xcrun_simctl {
             None
         } else {
             #[cfg(target_os = "macos")]
-            { Some("Xcode not installed. Install Xcode to manage iOS simulators.") }
+            {
+                Some("Xcode not installed. Install Xcode to manage iOS simulators.")
+            }
 
             #[cfg(not(target_os = "macos"))]
-            { Some("iOS simulators are only available on macOS.") }
+            {
+                Some("iOS simulators are only available on macOS.")
+            }
         }
     }
 
@@ -134,19 +117,7 @@ impl ToolAvailability {
         }
     }
 }
-```
 
-### 4. Export from daemon module
-
-```rust
-// src/daemon/mod.rs
-mod tool_availability;
-pub use tool_availability::ToolAvailability;
-```
-
-## Tests
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,6 +127,7 @@ mod tests {
         let availability = ToolAvailability::default();
         assert!(!availability.xcrun_simctl);
         assert!(!availability.android_emulator);
+        assert!(availability.emulator_path.is_none());
     }
 
     #[test]
@@ -178,49 +150,39 @@ mod tests {
         assert!(paths.iter().any(|p| p.contains("/test/android")));
         std::env::remove_var("ANDROID_HOME");
     }
+
+    #[test]
+    fn test_emulator_paths_includes_sdk_root() {
+        // Set test env var
+        std::env::set_var("ANDROID_SDK_ROOT", "/test/sdk");
+        let paths = ToolAvailability::get_emulator_paths();
+        assert!(paths.iter().any(|p| p.contains("/test/sdk")));
+        std::env::remove_var("ANDROID_SDK_ROOT");
+    }
+
+    #[test]
+    fn test_emulator_paths_includes_default() {
+        let paths = ToolAvailability::get_emulator_paths();
+        assert!(paths.contains(&"emulator".to_string()));
+    }
+
+    #[test]
+    fn test_ios_available_no_message() {
+        let availability = ToolAvailability {
+            xcrun_simctl: true,
+            android_emulator: false,
+            emulator_path: None,
+        };
+        assert!(availability.ios_unavailable_message().is_none());
+    }
+
+    #[test]
+    fn test_android_available_no_message() {
+        let availability = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: true,
+            emulator_path: Some("/path/to/emulator".to_string()),
+        };
+        assert!(availability.android_unavailable_message().is_none());
+    }
 }
-```
-
-## Verification
-
-```bash
-cargo fmt && cargo check && cargo test tool_availability && cargo clippy -- -D warnings
-```
-
-## Notes
-
-- Use `tokio::process::Command` for async execution
-- Avoid blocking the UI during startup checks
-- Cache results in `AppState` after check completes
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `src/daemon/tool_availability.rs` | Created new module with ToolAvailability struct and async check methods |
-| `src/daemon/mod.rs` | Added tool_availability module declaration and public export |
-
-### Notable Decisions/Tradeoffs
-
-1. **Platform-specific compilation**: Used `#[cfg(target_os = "macos")]` to ensure `xcrun simctl` check only runs on macOS, avoiding unnecessary failures on other platforms.
-2. **Multiple path checking**: Android emulator checks try multiple paths (PATH, ANDROID_HOME, ANDROID_SDK_ROOT) to maximize compatibility across different Android SDK installations.
-3. **Error handling**: Used `.unwrap_or(false)` for command execution results to gracefully handle failures as "tool not available" rather than propagating errors.
-4. **Comprehensive tests**: Added 8 unit tests covering default state, message generation, path discovery, and availability scenarios.
-
-### Testing Performed
-
-- `cargo fmt` - Passed
-- `cargo check` - Passed (compilation successful)
-- `cargo test tool_availability` - Passed (8/8 tests passed)
-- `cargo clippy -- -D warnings` - Passed (no warnings)
-
-### Risks/Limitations
-
-1. **Async execution overhead**: The tool availability checks are async and may add slight latency at startup. This is acceptable as checks are only run once and results are cached.
-2. **Environment variable dependency**: Android emulator discovery relies on ANDROID_HOME or ANDROID_SDK_ROOT environment variables. Users with non-standard SDK locations may need to set these variables.

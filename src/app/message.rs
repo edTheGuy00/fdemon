@@ -3,7 +3,10 @@
 use crate::app::session::SessionId;
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::core::{BootableDevice, DaemonEvent};
-use crate::daemon::{CommandSender, Device, Emulator, EmulatorLaunchResult};
+use crate::daemon::{
+    AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult, IosSimulator,
+    ToolAvailability,
+};
 use crate::tui::widgets::{DartDefine, FuzzyModalType, TargetTab};
 use crossterm::event::KeyEvent;
 
@@ -555,4 +558,28 @@ pub enum Message {
 
     /// Delete current item
     NewSessionDialogDartDefinesDelete,
+
+    // ─────────────────────────────────────────────────────────
+    // Tool Availability & Device Discovery Messages (Phase 4, Task 05)
+    // ─────────────────────────────────────────────────────────
+    /// Tool availability check completed
+    ToolAvailabilityChecked { availability: ToolAvailability },
+
+    /// Request to discover bootable devices (iOS simulators + Android AVDs)
+    DiscoverBootableDevices,
+
+    /// Bootable devices discovered
+    BootableDevicesDiscovered {
+        ios_simulators: Vec<IosSimulator>,
+        android_avds: Vec<AndroidAvd>,
+    },
+
+    /// Boot a device (simulator or AVD)
+    BootDevice { device_id: String, platform: String },
+
+    /// Device boot completed
+    DeviceBootCompleted { device_id: String },
+
+    /// Device boot failed
+    DeviceBootFailed { device_id: String, error: String },
 }

@@ -221,3 +221,38 @@ cargo fmt && cargo check && cargo test simulators && cargo clippy -- -D warnings
 - Only runs on macOS (guard with cfg attribute if needed)
 - Filter out unavailable simulators (isAvailable: false)
 - Handle simulators that are already booted (state: Booted)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/daemon/simulators.rs` | Created new module with iOS simulator discovery using xcrun simctl |
+| `src/daemon/mod.rs` | Added export for simulators module and public API exports |
+
+### Notable Decisions/Tradeoffs
+
+1. **Error handling**: Used `Error::process()` for command failures and `Error::protocol()` for JSON parsing failures, following existing patterns in devices.rs and emulators.rs
+2. **Runtime parsing logic**: Implemented a more robust parse_runtime_name function using `split_once()` to properly handle the runtime identifier format (iOS-17-2 -> iOS 17.2)
+3. **Unused field**: Prefixed `device_type_identifier` field with underscore since it's not currently used but needed for JSON deserialization
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no warnings)
+- `cargo test simulators` - Passed (4 tests)
+  - test_parse_runtime_name
+  - test_simulator_state_from_str
+  - test_parse_simctl_json
+  - test_group_simulators_by_runtime
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **macOS only**: This functionality only works on macOS systems with Xcode installed. No platform guards added yet - can be added later if needed.
+2. **No integration test**: The task includes only unit tests. An integration test would require macOS with Xcode installed.

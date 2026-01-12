@@ -4,8 +4,8 @@
 
 Implement native device discovery for iOS simulators and Android AVDs. This phase adds the ability to list and boot offline/bootable devices using platform-specific tools.
 
-**Total Tasks:** 5
-**Estimated Time:** 2 hours
+**Total Tasks:** 10 (5 implementation + 5 review fixes)
+**Estimated Time:** 3.5 hours
 
 ## Task Dependency Graph
 
@@ -29,30 +29,64 @@ Implement native device discovery for iOS simulators and Android AVDs. This phas
                  ▼
 ┌─────────────────────────────────────┐
 │  05-discovery-integration           │
+└────────────────┬────────────────────┘
+                 │
+    ┌────────────┼────────────┬─────────────────┐
+    ▼            ▼            ▼                 ▼
+┌────────┐ ┌──────────┐ ┌────────────────┐ ┌───────────────────┐
+│ 06-fix │ │ 07-fix   │ │ 08-use-tool-   │ │ 09-resolve-       │
+│ regex  │ │ avd-run  │ │ avail-cache    │ │ bootable-device   │
+└────┬───┘ └────┬─────┘ └────────────────┘ └───────────────────┘
+     │          │
+     └────┬─────┘
+          ▼
+┌─────────────────────────────────────┐
+│  10-code-quality-improvements       │
 └─────────────────────────────────────┘
 ```
 
 ## Tasks
 
+### Implementation Tasks
+
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-tool-availability](tasks/01-tool-availability.md) | Not Started | Phase 1 | 20m | `daemon/tool_availability.rs` |
-| 2 | [02-ios-simctl](tasks/02-ios-simctl.md) | Not Started | 1 | 25m | `daemon/simulators.rs` |
-| 3 | [03-android-avd](tasks/03-android-avd.md) | Not Started | 1 | 25m | `daemon/avds.rs` |
-| 4 | [04-boot-commands](tasks/04-boot-commands.md) | Not Started | 2, 3 | 20m | `daemon/simulators.rs`, `daemon/avds.rs` |
-| 5 | [05-discovery-integration](tasks/05-discovery-integration.md) | Not Started | 4 | 15m | `daemon/mod.rs`, `app/state.rs` |
+| 1 | [01-tool-availability](tasks/01-tool-availability.md) | Done | Phase 1 | 20m | `daemon/tool_availability.rs` |
+| 2 | [02-ios-simctl](tasks/02-ios-simctl.md) | Done | 1 | 25m | `daemon/simulators.rs` |
+| 3 | [03-android-avd](tasks/03-android-avd.md) | Done | 1 | 25m | `daemon/avds.rs` |
+| 4 | [04-boot-commands](tasks/04-boot-commands.md) | Done | 2, 3 | 20m | `daemon/simulators.rs`, `daemon/avds.rs` |
+| 5 | [05-discovery-integration](tasks/05-discovery-integration.md) | Done | 4 | 15m | `daemon/mod.rs`, `app/state.rs` |
+
+### Review Fix Tasks
+
+| # | Task | Status | Depends On | Est. | Modules |
+|---|------|--------|------------|------|---------|
+| 6 | [06-fix-regex-compilation](tasks/06-fix-regex-compilation.md) | Not Started | 5 | 10m | `daemon/avds.rs` |
+| 7 | [07-fix-avd-running-check](tasks/07-fix-avd-running-check.md) | Not Started | 5 | 10m | `daemon/avds.rs` |
+| 8 | [08-use-tool-availability-cache](tasks/08-use-tool-availability-cache.md) | Not Started | 5 | 20m | `tui/spawn.rs`, `app/message.rs`, `app/handler/update.rs` |
+| 9 | [09-resolve-bootable-device-types](tasks/09-resolve-bootable-device-types.md) | Not Started | 5 | 25m | `daemon/mod.rs`, `core/types.rs`, `app/handler/update.rs` |
+| 10 | [10-code-quality-improvements](tasks/10-code-quality-improvements.md) | Not Started | 6, 7 | 15m | `daemon/simulators.rs`, `daemon/avds.rs`, `daemon/tool_availability.rs`, `tui/spawn.rs` |
 
 ## Success Criteria
 
-Phase 4 is complete when:
+### Implementation Complete (Tasks 1-5)
 
-- [ ] `ToolAvailability` struct caches command availability at startup
-- [ ] `list_ios_simulators()` returns parsed simulator list from `xcrun simctl list -j`
-- [ ] `list_android_avds()` returns parsed AVD list from `emulator -list-avds`
-- [ ] `boot_simulator(udid)` boots iOS simulator
-- [ ] `boot_avd(name)` boots Android AVD
-- [ ] Discovery functions gracefully handle missing tools
-- [ ] `AppState` includes cached `ToolAvailability`
+- [x] `ToolAvailability` struct caches command availability at startup
+- [x] `list_ios_simulators()` returns parsed simulator list from `xcrun simctl list -j`
+- [x] `list_android_avds()` returns parsed AVD list from `emulator -list-avds`
+- [x] `boot_simulator(udid)` boots iOS simulator
+- [x] `boot_avd(name)` boots Android AVD
+- [x] Discovery functions gracefully handle missing tools
+- [x] `AppState` includes cached `ToolAvailability`
+
+### Review Fixes Complete (Tasks 6-10)
+
+- [ ] Regex uses static initialization via `once_cell::sync::Lazy`
+- [ ] `is_avd_running()` signature matches actual behavior
+- [ ] Spawn functions use cached `ToolAvailability` from state
+- [ ] `BootableDevice` types unified or clearly separated with documented rationale
+- [ ] Magic numbers extracted to named constants
+- [ ] Swallowed errors have debug logging
 - [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Platform Considerations

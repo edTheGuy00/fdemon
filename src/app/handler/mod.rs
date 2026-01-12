@@ -68,6 +68,15 @@ pub enum UpdateAction {
     /// Reload all running sessions (file watcher auto-reload)
     /// Contains list of (session_id, app_id) pairs to reload
     ReloadAllSessions { sessions: Vec<(SessionId, String)> },
+
+    /// Check tool availability (runs at startup)
+    CheckToolAvailability,
+
+    /// Discover bootable devices (iOS simulators + Android AVDs)
+    DiscoverBootableDevices,
+
+    /// Boot a specific device
+    BootDevice { device_id: String, platform: String },
 }
 
 /// Background tasks to spawn

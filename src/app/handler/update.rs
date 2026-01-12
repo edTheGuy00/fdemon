@@ -1967,6 +1967,103 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────────
+        // Tool Availability & Device Discovery Messages (Phase 4, Task 05)
+        // ─────────────────────────────────────────────────────────────
+        Message::ToolAvailabilityChecked { availability } => {
+            state.tool_availability = availability;
+
+            // Log availability for debugging
+            tracing::info!(
+                "Tool availability: xcrun_simctl={}, android_emulator={}",
+                state.tool_availability.xcrun_simctl,
+                state.tool_availability.android_emulator
+            );
+
+            UpdateResult::none()
+        }
+
+        Message::DiscoverBootableDevices => {
+            // Trigger action to discover bootable devices
+            UpdateResult::action(UpdateAction::DiscoverBootableDevices)
+        }
+
+        Message::BootableDevicesDiscovered {
+            ios_simulators,
+            android_avds,
+        } => {
+            // Store discovered bootable devices in the new session dialog
+            // Convert to core::BootableDevice for unified handling
+            let mut bootable_devices = Vec::new();
+
+            // Convert iOS simulators
+            for sim in ios_simulators {
+                let device = crate::core::BootableDevice::new(
+                    sim.udid,
+                    sim.name,
+                    crate::core::Platform::IOS,
+                    sim.runtime,
+                );
+                bootable_devices.push(device);
+            }
+
+            // Convert Android AVDs
+            for avd in android_avds {
+                let runtime = avd
+                    .api_level
+                    .map(|api| format!("API {}", api))
+                    .unwrap_or_else(|| "Unknown API".to_string());
+
+                let device = crate::core::BootableDevice::new(
+                    avd.name,
+                    avd.display_name,
+                    crate::core::Platform::Android,
+                    runtime,
+                );
+                bootable_devices.push(device);
+            }
+
+            // Update new session dialog state
+            if state.is_new_session_dialog_visible() {
+                state
+                    .new_session_dialog_state
+                    .set_bootable_devices(bootable_devices);
+            }
+
+            UpdateResult::none()
+        }
+
+        Message::BootDevice {
+            device_id,
+            platform,
+        } => {
+            // Trigger action to boot the device
+            UpdateResult::action(UpdateAction::BootDevice {
+                device_id,
+                platform,
+            })
+        }
+
+        Message::DeviceBootCompleted { device_id } => {
+            tracing::info!("Device boot completed: {}", device_id);
+
+            // Trigger device discovery to refresh connected devices list
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        Message::DeviceBootFailed { device_id, error } => {
+            warn!("Device boot failed: {} - {}", device_id, error);
+
+            // Show error in new session dialog if visible
+            if state.is_new_session_dialog_visible() {
+                state
+                    .new_session_dialog_state
+                    .set_error(format!("Failed to boot {}: {}", device_id, error));
+            }
+
+            UpdateResult::none()
+        }
     }
 }
 

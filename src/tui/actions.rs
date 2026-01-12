@@ -87,6 +87,21 @@ pub fn handle_action(
         UpdateAction::LaunchIOSSimulator => {
             spawn::spawn_ios_simulator_launch(msg_tx);
         }
+
+        UpdateAction::CheckToolAvailability => {
+            spawn::spawn_tool_availability_check(msg_tx);
+        }
+
+        UpdateAction::DiscoverBootableDevices => {
+            spawn::spawn_bootable_device_discovery(msg_tx);
+        }
+
+        UpdateAction::BootDevice {
+            device_id,
+            platform,
+        } => {
+            spawn::spawn_device_boot(msg_tx, device_id, platform);
+        }
     }
 }
 

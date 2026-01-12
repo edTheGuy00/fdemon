@@ -8,7 +8,7 @@ use crate::config::{
     FlutterMode, LoadedConfigs, Settings, SettingsTab, SourcedConfig, UserPreferences,
 };
 use crate::core::AppPhase;
-use crate::daemon::Device;
+use crate::daemon::{Device, ToolAvailability};
 use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState, NewSessionDialogState};
 
 use super::session_manager::SessionManager;
@@ -882,6 +882,10 @@ pub struct AppState {
     /// When devices were last discovered (for cache invalidation)
     /// Task 08e - Device Cache Sharing
     pub devices_last_updated: Option<std::time::Instant>,
+
+    /// Cached tool availability (checked at startup)
+    /// Phase 4, Task 05 - Discovery Integration
+    pub tool_availability: ToolAvailability,
 }
 
 impl Default for AppState {
@@ -916,6 +920,7 @@ impl AppState {
             loading_state: None,
             device_cache: None,
             devices_last_updated: None,
+            tool_availability: ToolAvailability::default(),
         }
     }
 

@@ -14,7 +14,7 @@ use crate::config::{
     get_first_auto_start, get_first_config, load_last_selection, validate_last_selection,
     LoadedConfigs,
 };
-use crate::daemon::{devices, emulators, Device};
+use crate::daemon::{devices, emulators, Device, ToolAvailability};
 
 /// Spawn device discovery in background
 pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
@@ -264,4 +264,78 @@ mod tests {
         assert_eq!(result.device.id, "device1");
         assert!(result.config.is_none()); // No configs = bare run
     }
+}
+
+/// Spawn tool availability check in background (Phase 4, Task 05)
+pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        let availability = ToolAvailability::check().await;
+        let _ = msg_tx
+            .send(Message::ToolAvailabilityChecked { availability })
+            .await;
+    });
+}
+
+/// Spawn bootable device discovery in background (Phase 4, Task 05)
+pub fn spawn_bootable_device_discovery(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        // Check tool availability first
+        let tool_availability = ToolAvailability::check().await;
+
+        // Discover iOS simulators and Android AVDs in parallel
+        let (ios_result, android_result) = tokio::join!(
+            crate::daemon::list_ios_simulators(),
+            crate::daemon::list_android_avds(&tool_availability)
+        );
+
+        let ios_simulators = ios_result.unwrap_or_default();
+        let android_avds = android_result.unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::BootableDevicesDiscovered {
+                ios_simulators,
+                android_avds,
+            })
+            .await;
+    });
+}
+
+/// Spawn device boot in background (Phase 4, Task 05)
+pub fn spawn_device_boot(msg_tx: mpsc::Sender<Message>, device_id: String, platform: String) {
+    tokio::spawn(async move {
+        let result = match platform.as_str() {
+            "iOS" => crate::daemon::boot_simulator(&device_id).await,
+            "Android" => {
+                let tool_availability = ToolAvailability::check().await;
+                crate::daemon::boot_avd(&device_id, &tool_availability).await
+            }
+            _ => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootFailed {
+                        device_id,
+                        error: format!("Unknown platform: {}", platform),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootCompleted {
+                        device_id: device_id.clone(),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootFailed {
+                        device_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
 }

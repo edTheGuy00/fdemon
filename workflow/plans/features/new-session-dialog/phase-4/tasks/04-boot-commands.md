@@ -305,3 +305,45 @@ cargo fmt && cargo check && cargo test boot && cargo clippy -- -D warnings
 - Android emulators take longer to boot, so we don't wait
 - The device will appear in `flutter devices` once fully booted
 - Consider adding a "Booting..." indicator in the UI
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/daemon/simulators.rs` | Added `boot_simulator()`, `is_simulator_booted()`, `wait_for_simulator_boot()`, and `shutdown_simulator()` functions |
+| `src/daemon/avds.rs` | Added `boot_avd()`, `is_avd_running()`, and `kill_all_emulators()` functions |
+| `src/daemon/mod.rs` | Added `BootableDevice` enum with methods `id()`, `display_name()`, `platform()`, `runtime_info()`, and `boot()`. Updated exports to include new boot functions and BootableDevice. Added comprehensive unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **iOS boot is synchronous**: The `boot_simulator()` function waits up to 60 seconds for the simulator to boot completely before returning. This ensures the simulator is ready for Flutter to connect.
+
+2. **Android boot is asynchronous**: The `boot_avd()` function spawns the emulator process and returns immediately after a 2-second initialization delay. This is because Android emulators take much longer to boot (30-60+ seconds) and we don't want to block the UI.
+
+3. **Unified interface with BootableDevice**: Created a platform-agnostic enum that wraps both iOS simulators and Android AVDs, providing a consistent interface for booting devices regardless of platform.
+
+4. **Error handling follows project patterns**: Used `Error::process()` constructor for process-related errors, maintaining consistency with existing daemon module error handling.
+
+5. **Idempotent boot operations**: Both boot functions check if the device is already running and return successfully without error, making them safe to call multiple times.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo test boot` - Passed (2 tests: test_bootable_device_display_name, test_bootable_device_can_boot)
+- `cargo test --lib daemon::tests` - Passed (4 tests covering BootableDevice functionality)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **iOS simulator boot timeout**: The 60-second timeout may not be sufficient for slower machines or complex simulator configurations. Users may need to adjust this value in future iterations.
+
+2. **Android AVD detection is simplistic**: The `is_avd_running()` function checks for any emulator, not a specific AVD. A more robust implementation would query the emulator console port to match AVD names to running instances.
+
+3. **macOS-only for iOS**: iOS simulator boot is only available on macOS. The implementation gracefully handles this by relying on the existing `xcrun` availability checks.

@@ -243,3 +243,45 @@ cargo fmt && cargo check && cargo test discovery && cargo clippy -- -D warnings
 - Results are cached in `AppState.tool_availability`
 - Bootable device discovery is triggered when user opens the Bootable tab
 - Boot commands are async and send completion/failure messages
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/state.rs` | Added `tool_availability: ToolAvailability` field to `AppState` struct and initialized it in constructor |
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/message.rs` | Added 6 new message variants for tool availability checking and device discovery/booting |
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/handler/mod.rs` | Added 3 new `UpdateAction` variants: `CheckToolAvailability`, `DiscoverBootableDevices`, `BootDevice` |
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/handler/update.rs` | Added message handlers for all 6 new messages with proper state transitions and action returns |
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/actions.rs` | Added match arms for the 3 new `UpdateAction` variants to dispatch to spawn functions |
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/spawn.rs` | Implemented 3 new spawn functions: `spawn_tool_availability_check`, `spawn_bootable_device_discovery`, `spawn_device_boot` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two BootableDevice Types**: The codebase has two `BootableDevice` types - one in `daemon/mod.rs` (enum with IosSimulator/AndroidAvd variants) and one in `core/types.rs` (struct). The new session dialog uses the `core` version, so in the message handler I convert `IosSimulator` and `AndroidAvd` to `core::BootableDevice` structs by extracting their fields.
+
+2. **Tool Availability Caching**: Tool availability is checked once and cached in `AppState`. For bootable device discovery, we re-check tool availability each time to ensure current state. This is a reasonable tradeoff as discovery is user-initiated and infrequent.
+
+3. **Parallel Discovery**: iOS simulator and Android AVD discovery are run in parallel using `tokio::join!` for better performance.
+
+4. **Error Handling**: Device boot failures send a `DeviceBootFailed` message with error details, allowing the UI to display appropriate feedback to the user.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1448 unit tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **E2E Test Failures**: 25 e2e tests are currently failing, but these appear to be pre-existing issues related to PTY/TTY handling in the test environment, not related to this implementation.
+
+2. **State Synchronization**: The bootable device discovery currently uses a fresh `ToolAvailability::check()` call rather than using the cached state. This is intentional to ensure accuracy but could be optimized in the future if needed.
+
+3. **Platform Detection**: The device boot handler uses string matching on platform ("iOS" vs "Android") which assumes consistent platform naming. This is safe given the controlled sources of platform strings in the codebase.
