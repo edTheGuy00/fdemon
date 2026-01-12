@@ -132,4 +132,35 @@ fn test_boot_command_to_bootable_device_ios() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/daemon/mod.rs` | Renamed `BootableDevice` enum to `BootCommand`, added doc comments, implemented `From<BootCommand> for core::BootableDevice` trait, updated all tests |
+| `/Users/ed/Dev/zabin/flutter-demon/src/core/types.rs` | Added `with_state()` builder method to `BootableDevice` struct |
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/handler/update.rs` | Simplified `BootableDevicesDiscovered` handler to use `BootCommand` with `.into()` conversion instead of manual field mapping |
+
+### Notable Decisions/Tradeoffs
+
+1. **Rename to BootCommand**: The daemon type was renamed from `BootableDevice` to `BootCommand` to clearly represent its purpose as a boot capability wrapper, distinct from `core::BootableDevice` which is the UI/state representation.
+
+2. **State Mapping**: Implemented explicit state conversion from `SimulatorState` to `DeviceState` in the `From` trait, ensuring proper state representation across layers.
+
+3. **Builder Pattern**: Added `with_state()` builder method to `core::BootableDevice` for convenient state setting during conversion, following Rust builder pattern conventions.
+
+4. **Simplified Handler**: The handler code was simplified from 26 lines of manual field mapping to 8 lines using `BootCommand` and `.into()`, reducing maintenance burden and improving readability.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1452 tests passed; 0 failed; 3 ignored)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo fmt --check` - Passed (code properly formatted)
+
+### Risks/Limitations
+
+1. **Breaking Change**: This is a breaking change if any external code depends on `daemon::BootableDevice`. However, since this is an internal type not exported in the public API, the risk is minimal.
+
+2. **State Assumptions**: AVDs are assumed to be in `Shutdown` state when discovered via `list_android_avds()`. This is accurate per the function's contract but is worth noting for future maintenance.

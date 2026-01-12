@@ -15,6 +15,7 @@ use crate::config::LaunchConfig;
 use crate::core::DaemonEvent;
 use crate::daemon::{
     protocol, CommandSender, DaemonCommand, DaemonMessage, Device, FlutterProcess, RequestTracker,
+    ToolAvailability,
 };
 
 use super::spawn;
@@ -32,6 +33,7 @@ pub fn handle_action(
     session_tasks: SessionTaskMap,
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
+    tool_availability: ToolAvailability,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
@@ -93,14 +95,14 @@ pub fn handle_action(
         }
 
         UpdateAction::DiscoverBootableDevices => {
-            spawn::spawn_bootable_device_discovery(msg_tx);
+            spawn::spawn_bootable_device_discovery(msg_tx, tool_availability);
         }
 
         UpdateAction::BootDevice {
             device_id,
             platform,
         } => {
-            spawn::spawn_device_boot(msg_tx, device_id, platform);
+            spawn::spawn_device_boot(msg_tx, device_id, platform, tool_availability);
         }
     }
 }

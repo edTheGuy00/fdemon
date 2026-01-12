@@ -5,7 +5,17 @@
 
 use crate::common::prelude::*;
 use crate::daemon::ToolAvailability;
+use regex::Regex;
+use std::sync::LazyLock;
 use tokio::process::Command;
+use tokio::time::Duration;
+
+/// Delay to wait after starting emulator for initialization
+const AVD_INIT_DELAY: Duration = Duration::from_secs(2);
+
+/// Static regex pattern for extracting API level from AVD names
+static API_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"_API_(\d+)$").expect("Invalid API pattern regex"));
 
 /// An Android Virtual Device (AVD)
 #[derive(Debug, Clone)]
@@ -77,15 +87,11 @@ fn parse_avd_list(output: &str) -> Vec<AndroidAvd> {
 /// - "Nexus_5X_API_29" -> ("Nexus 5X", Some(29))
 /// - "My_Custom_AVD" -> ("My Custom AVD", None)
 fn parse_avd_name(name: &str) -> (String, Option<u32>) {
-    // Try to extract API level from name
-    let api_pattern = regex::Regex::new(r"_API_(\d+)$").ok();
-
-    if let Some(re) = api_pattern {
-        if let Some(caps) = re.captures(name) {
-            let api_level = caps.get(1).and_then(|m| m.as_str().parse().ok());
-            let display = re.replace(name, "").replace('_', " ");
-            return (display.trim().to_string(), api_level);
-        }
+    // Try to extract API level from name using static regex
+    if let Some(caps) = API_PATTERN.captures(name) {
+        let api_level = caps.get(1).and_then(|m| m.as_str().parse().ok());
+        let display = API_PATTERN.replace(name, "").replace('_', " ");
+        return (display.trim().to_string(), api_level);
     }
 
     // No API pattern found, just replace underscores
@@ -122,19 +128,19 @@ pub async fn boot_avd(avd_name: &str, tool_availability: &ToolAvailability) -> R
     });
 
     // Wait a moment for the emulator to start initializing
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+    tokio::time::sleep(AVD_INIT_DELAY).await;
 
     Ok(())
 }
 
-/// Check if an AVD is currently running
+/// Check if any Android emulator is currently running
 ///
 /// Uses `adb devices` to check for running emulators.
-pub async fn is_avd_running(_avd_name: &str) -> Result<bool> {
-    // This is tricky because we need to map AVD name to emulator serial
-    // For now, we'll just check if any emulator is running
-    // A more complete solution would check the emulator's console port
-
+///
+/// # Returns
+/// - `Ok(true)` if at least one emulator is detected
+/// - `Ok(false)` if no emulators are running or adb fails
+pub async fn is_any_emulator_running() -> Result<bool> {
     let output = Command::new("adb")
         .args(["devices", "-l"])
         .output()
@@ -232,5 +238,25 @@ mod tests {
         assert_eq!(avd.display_name, "Pixel 6");
         assert_eq!(avd.api_level, Some(33));
         assert_eq!(avd.target, Some("android-33".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_is_any_emulator_running() {
+        // This test will check that the function runs without panicking.
+        // Actual emulator testing requires Android SDK to be installed.
+        // The function should return Ok(false) if adb is not available or no emulators running.
+        let result = is_any_emulator_running().await;
+
+        // We accept either Ok(true) or Ok(false) depending on system state
+        // An error is also acceptable if adb is not installed
+        match result {
+            Ok(_) => {
+                // Function executed successfully
+            }
+            Err(e) => {
+                // Expected if adb is not available
+                assert!(e.to_string().contains("adb"));
+            }
+        }
     }
 }

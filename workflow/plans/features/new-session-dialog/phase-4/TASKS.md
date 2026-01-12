@@ -61,11 +61,11 @@ Implement native device discovery for iOS simulators and Android AVDs. This phas
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 6 | [06-fix-regex-compilation](tasks/06-fix-regex-compilation.md) | Not Started | 5 | 10m | `daemon/avds.rs` |
-| 7 | [07-fix-avd-running-check](tasks/07-fix-avd-running-check.md) | Not Started | 5 | 10m | `daemon/avds.rs` |
-| 8 | [08-use-tool-availability-cache](tasks/08-use-tool-availability-cache.md) | Not Started | 5 | 20m | `tui/spawn.rs`, `app/message.rs`, `app/handler/update.rs` |
-| 9 | [09-resolve-bootable-device-types](tasks/09-resolve-bootable-device-types.md) | Not Started | 5 | 25m | `daemon/mod.rs`, `core/types.rs`, `app/handler/update.rs` |
-| 10 | [10-code-quality-improvements](tasks/10-code-quality-improvements.md) | Not Started | 6, 7 | 15m | `daemon/simulators.rs`, `daemon/avds.rs`, `daemon/tool_availability.rs`, `tui/spawn.rs` |
+| 6 | [06-fix-regex-compilation](tasks/06-fix-regex-compilation.md) | Done | 5 | 10m | `daemon/avds.rs` |
+| 7 | [07-fix-avd-running-check](tasks/07-fix-avd-running-check.md) | Done | 5 | 10m | `daemon/avds.rs` |
+| 8 | [08-use-tool-availability-cache](tasks/08-use-tool-availability-cache.md) | Done | 5 | 20m | `tui/spawn.rs`, `app/message.rs`, `app/handler/update.rs` |
+| 9 | [09-resolve-bootable-device-types](tasks/09-resolve-bootable-device-types.md) | Done | 5 | 25m | `daemon/mod.rs`, `core/types.rs`, `app/handler/update.rs` |
+| 10 | [10-code-quality-improvements](tasks/10-code-quality-improvements.md) | Done | 6, 7 | 15m | `daemon/simulators.rs`, `daemon/avds.rs`, `daemon/tool_availability.rs`, `tui/spawn.rs` |
 
 ## Success Criteria
 
@@ -81,13 +81,13 @@ Implement native device discovery for iOS simulators and Android AVDs. This phas
 
 ### Review Fixes Complete (Tasks 6-10)
 
-- [ ] Regex uses static initialization via `once_cell::sync::Lazy`
-- [ ] `is_avd_running()` signature matches actual behavior
-- [ ] Spawn functions use cached `ToolAvailability` from state
-- [ ] `BootableDevice` types unified or clearly separated with documented rationale
-- [ ] Magic numbers extracted to named constants
-- [ ] Swallowed errors have debug logging
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] Regex uses static initialization via `std::sync::LazyLock`
+- [x] `is_avd_running()` renamed to `is_any_emulator_running()` to match actual behavior
+- [x] Spawn functions use cached `ToolAvailability` from state
+- [x] `BootableDevice` types unified: daemon type renamed to `BootCommand` with `From` trait conversion
+- [x] Magic numbers extracted to named constants (SIMULATOR_BOOT_TIMEOUT, AVD_INIT_DELAY)
+- [x] Swallowed errors have debug logging via `inspect_err()`
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Platform Considerations
 

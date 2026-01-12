@@ -50,6 +50,7 @@ pub fn process_message(
                 session_tasks.clone(),
                 shutdown_rx.clone(),
                 project_path,
+                state.tool_availability.clone(),
             );
         }
 

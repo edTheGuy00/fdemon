@@ -6,7 +6,11 @@
 use crate::common::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap};
+use std::time::Duration;
 use tokio::process::Command;
+
+/// Maximum time to wait for iOS simulator to boot
+const SIMULATOR_BOOT_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// A bootable iOS simulator
 #[derive(Debug, Clone)]
@@ -162,7 +166,7 @@ pub async fn boot_simulator(udid: &str) -> Result<()> {
     }
 
     // Wait for simulator to be fully booted
-    wait_for_simulator_boot(udid, std::time::Duration::from_secs(60)).await?;
+    wait_for_simulator_boot(udid, SIMULATOR_BOOT_TIMEOUT).await?;
 
     // Open Simulator.app to show the UI
     let _ = Command::new("open")

@@ -75,4 +75,30 @@ async fn test_spawn_bootable_device_discovery_uses_passed_tools() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/spawn.rs` | Modified `spawn_bootable_device_discovery()` and `spawn_device_boot()` to accept `ToolAvailability` parameter instead of calling `ToolAvailability::check().await` internally |
+| `src/tui/actions.rs` | Updated `handle_action()` to accept `ToolAvailability` parameter and pass it to spawn functions |
+| `src/tui/process.rs` | Modified `process_message()` to pass `state.tool_availability.clone()` to `handle_action()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Used clone() for ToolAvailability**: `ToolAvailability` already implements `Clone` (line 10 of `src/daemon/tool_availability.rs`), so we clone it when passing from `AppState` to `handle_action()`. This is acceptable because the struct is small (2 bools + 1 Option<String>) and avoids lifetime complexity.
+
+2. **Kept spawn_tool_availability_check() unchanged**: The `spawn_tool_availability_check()` function still calls `ToolAvailability::check().await` because it's the function responsible for checking tool availability at startup and populating the cache. This is the only place where the check should occur (acceptance criterion #3).
+
+3. **Modified handle_action() signature**: Added `tool_availability: ToolAvailability` parameter to `handle_action()` rather than modifying individual UpdateAction variants. This keeps the changes localized and follows the existing pattern of passing cross-cutting concerns through function parameters.
+
+### Testing Performed
+
+- `cargo test --lib` - Passed (1448 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo check` - Passed (no compilation errors)
+
+### Risks/Limitations
+
+1. **No explicit test for passing tool availability**: While all existing tests pass, there's no specific test verifying that the cached `ToolAvailability` is correctly passed through the call chain. The existing behavior is preserved since `ToolAvailability::default()` provides safe defaults (both tools unavailable), which matches the check behavior when tools aren't installed.

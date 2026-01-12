@@ -48,6 +48,7 @@ impl ToolAvailability {
                 .status()
                 .await
                 .map(|s| s.success())
+                .inspect_err(|e| tracing::debug!("xcrun simctl check failed: {}", e))
                 .unwrap_or(false)
         }
     }
@@ -65,6 +66,9 @@ impl ToolAvailability {
                 .status()
                 .await
                 .map(|s| s.success())
+                .inspect_err(|e| {
+                    tracing::debug!("Android emulator check failed for {}: {}", path, e)
+                })
                 .unwrap_or(false)
             {
                 return (true, Some(path));

@@ -698,6 +698,12 @@ impl BootableDevice {
         }
     }
 
+    /// Set the device state (builder pattern)
+    pub fn with_state(mut self, state: DeviceState) -> Self {
+        self.state = state;
+        self
+    }
+
     /// Check if this device can be booted
     pub fn can_boot(&self) -> bool {
         matches!(self.state, DeviceState::Shutdown | DeviceState::Unknown)

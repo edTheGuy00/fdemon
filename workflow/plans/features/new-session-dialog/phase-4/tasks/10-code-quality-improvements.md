@@ -115,4 +115,30 @@ Existing tests should pass. No new tests required for these refactoring changes.
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/daemon/simulators.rs` | Added `SIMULATOR_BOOT_TIMEOUT` constant (60 seconds) at module top, updated `boot_simulator()` to use constant instead of inline Duration |
+| `src/daemon/avds.rs` | Added `AVD_INIT_DELAY` constant (2 seconds) at module top, updated `boot_avd()` to use constant instead of inline Duration |
+| `src/daemon/tool_availability.rs` | Added `.inspect_err()` calls with `tracing::debug!` logging to both `check_xcrun_simctl()` and `check_android_emulator()` for better debugging of swallowed errors |
+
+### Notable Decisions/Tradeoffs
+
+1. **Skipped Platform enum refactoring (Optional Task 4)**: The `spawn_device_boot()` function uses `platform: String` parameter which is passed through Message enum and UpdateAction enum. Converting to Platform enum would require changing multiple files (message.rs, handler/mod.rs, handler/update.rs, actions.rs, spawn.rs) and all call sites. Since this was marked optional and would be a larger refactoring affecting multiple modules, it was deferred. The string matching pattern is functional and the scope of changes outweighs the benefit for this task.
+
+2. **Constant placement**: Constants were placed at module top after imports, following Rust conventions and making them easily discoverable.
+
+3. **Debug logging pattern**: Used `.inspect_err()` pattern as recommended in task specification. This allows errors to be logged for debugging while maintaining the fallback behavior (`unwrap_or(false)`).
+
+### Testing Performed
+
+- `cargo fmt` - Passed (auto-formatted)
+- `cargo test --lib` - Passed (1455 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Debug logging only visible with debug level**: The added error logging uses `tracing::debug!` which means errors are only visible when debug logging is enabled. This is intentional as these are fallback cases where the tools are simply not available, not critical errors. Users running with info-level logging won't see noise from unavailable tools.

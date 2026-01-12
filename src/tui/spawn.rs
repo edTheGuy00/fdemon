@@ -277,11 +277,11 @@ pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
 }
 
 /// Spawn bootable device discovery in background (Phase 4, Task 05)
-pub fn spawn_bootable_device_discovery(msg_tx: mpsc::Sender<Message>) {
+pub fn spawn_bootable_device_discovery(
+    msg_tx: mpsc::Sender<Message>,
+    tool_availability: ToolAvailability,
+) {
     tokio::spawn(async move {
-        // Check tool availability first
-        let tool_availability = ToolAvailability::check().await;
-
         // Discover iOS simulators and Android AVDs in parallel
         let (ios_result, android_result) = tokio::join!(
             crate::daemon::list_ios_simulators(),
@@ -301,14 +301,16 @@ pub fn spawn_bootable_device_discovery(msg_tx: mpsc::Sender<Message>) {
 }
 
 /// Spawn device boot in background (Phase 4, Task 05)
-pub fn spawn_device_boot(msg_tx: mpsc::Sender<Message>, device_id: String, platform: String) {
+pub fn spawn_device_boot(
+    msg_tx: mpsc::Sender<Message>,
+    device_id: String,
+    platform: String,
+    tool_availability: ToolAvailability,
+) {
     tokio::spawn(async move {
         let result = match platform.as_str() {
             "iOS" => crate::daemon::boot_simulator(&device_id).await,
-            "Android" => {
-                let tool_availability = ToolAvailability::check().await;
-                crate::daemon::boot_avd(&device_id, &tool_availability).await
-            }
+            "Android" => crate::daemon::boot_avd(&device_id, &tool_availability).await,
             _ => {
                 let _ = msg_tx
                     .send(Message::DeviceBootFailed {

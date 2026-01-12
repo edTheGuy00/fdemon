@@ -1994,34 +1994,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             android_avds,
         } => {
             // Store discovered bootable devices in the new session dialog
-            // Convert to core::BootableDevice for unified handling
+            // Convert to core::BootableDevice for unified handling using BootCommand
             let mut bootable_devices = Vec::new();
 
-            // Convert iOS simulators
+            // Convert iOS simulators via BootCommand
             for sim in ios_simulators {
-                let device = crate::core::BootableDevice::new(
-                    sim.udid,
-                    sim.name,
-                    crate::core::Platform::IOS,
-                    sim.runtime,
-                );
-                bootable_devices.push(device);
+                let cmd = crate::daemon::BootCommand::IosSimulator(sim);
+                bootable_devices.push(cmd.into());
             }
 
-            // Convert Android AVDs
+            // Convert Android AVDs via BootCommand
             for avd in android_avds {
-                let runtime = avd
-                    .api_level
-                    .map(|api| format!("API {}", api))
-                    .unwrap_or_else(|| "Unknown API".to_string());
-
-                let device = crate::core::BootableDevice::new(
-                    avd.name,
-                    avd.display_name,
-                    crate::core::Platform::Android,
-                    runtime,
-                );
-                bootable_devices.push(device);
+                let cmd = crate::daemon::BootCommand::AndroidAvd(avd);
+                bootable_devices.push(cmd.into());
             }
 
             // Update new session dialog state

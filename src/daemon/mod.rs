@@ -10,7 +10,9 @@ pub mod protocol;
 pub mod simulators;
 pub mod tool_availability;
 
-pub use avds::{boot_avd, is_avd_running, kill_all_emulators, list_android_avds, AndroidAvd};
+pub use avds::{
+    boot_avd, is_any_emulator_running, kill_all_emulators, list_android_avds, AndroidAvd,
+};
 pub use commands::{
     next_request_id, CommandResponse, CommandSender, DaemonCommand, RequestTracker,
 };
@@ -37,40 +39,44 @@ pub use simulators::{
 pub use tool_availability::ToolAvailability;
 
 use crate::common::prelude::*;
+use crate::core::{DeviceState, Platform};
 
-/// Platform-agnostic bootable device
+/// Platform-specific boot command for offline devices
+///
+/// Represents the capability to boot a device (simulator/AVD) that is not currently running.
+/// This is distinct from `core::BootableDevice` which is the UI/state representation.
 #[derive(Debug, Clone)]
-pub enum BootableDevice {
+pub enum BootCommand {
     IosSimulator(IosSimulator),
     AndroidAvd(AndroidAvd),
 }
 
-impl BootableDevice {
+impl BootCommand {
     pub fn id(&self) -> &str {
         match self {
-            BootableDevice::IosSimulator(s) => &s.udid,
-            BootableDevice::AndroidAvd(a) => &a.name,
+            BootCommand::IosSimulator(s) => &s.udid,
+            BootCommand::AndroidAvd(a) => &a.name,
         }
     }
 
     pub fn display_name(&self) -> &str {
         match self {
-            BootableDevice::IosSimulator(s) => &s.name,
-            BootableDevice::AndroidAvd(a) => &a.display_name,
+            BootCommand::IosSimulator(s) => &s.name,
+            BootCommand::AndroidAvd(a) => &a.display_name,
         }
     }
 
     pub fn platform(&self) -> &'static str {
         match self {
-            BootableDevice::IosSimulator(_) => "iOS",
-            BootableDevice::AndroidAvd(_) => "Android",
+            BootCommand::IosSimulator(_) => "iOS",
+            BootCommand::AndroidAvd(_) => "Android",
         }
     }
 
     pub fn runtime_info(&self) -> String {
         match self {
-            BootableDevice::IosSimulator(s) => s.runtime.clone(),
-            BootableDevice::AndroidAvd(a) => a
+            BootCommand::IosSimulator(s) => s.runtime.clone(),
+            BootCommand::AndroidAvd(a) => a
                 .api_level
                 .map(|api| format!("API {}", api))
                 .unwrap_or_else(|| "Unknown API".to_string()),
@@ -80,8 +86,42 @@ impl BootableDevice {
     /// Boot this device
     pub async fn boot(&self, tool_availability: &ToolAvailability) -> Result<()> {
         match self {
-            BootableDevice::IosSimulator(s) => boot_simulator(&s.udid).await,
-            BootableDevice::AndroidAvd(a) => boot_avd(&a.name, tool_availability).await,
+            BootCommand::IosSimulator(s) => boot_simulator(&s.udid).await,
+            BootCommand::AndroidAvd(a) => boot_avd(&a.name, tool_availability).await,
+        }
+    }
+}
+
+/// Convert BootCommand to core::BootableDevice for UI/state representation
+impl From<BootCommand> for crate::core::BootableDevice {
+    fn from(cmd: BootCommand) -> Self {
+        match cmd {
+            BootCommand::IosSimulator(sim) => {
+                let state = match sim.state {
+                    SimulatorState::Shutdown => DeviceState::Shutdown,
+                    SimulatorState::Booted => DeviceState::Booted,
+                    SimulatorState::Booting => DeviceState::Booting,
+                    SimulatorState::Unknown => DeviceState::Unknown,
+                };
+
+                crate::core::BootableDevice::new(sim.udid, sim.name, Platform::IOS, sim.runtime)
+                    .with_state(state)
+            }
+            BootCommand::AndroidAvd(avd) => {
+                let runtime = avd
+                    .api_level
+                    .map(|api| format!("API {}", api))
+                    .unwrap_or_else(|| "Unknown API".to_string());
+
+                crate::core::BootableDevice::new(
+                    avd.name.clone(),
+                    avd.display_name,
+                    Platform::Android,
+                    runtime,
+                )
+                // AVDs discovered via list_android_avds are offline by definition
+                .with_state(DeviceState::Shutdown)
+            }
         }
     }
 }
@@ -91,7 +131,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_bootable_device_display_name() {
+    fn test_boot_command_display_name() {
         let sim = IosSimulator {
             udid: "123".to_string(),
             name: "iPhone 15 Pro".to_string(),
@@ -100,10 +140,10 @@ mod tests {
             device_type: "iPhone 15 Pro".to_string(),
         };
 
-        let device = BootableDevice::IosSimulator(sim);
-        assert_eq!(device.display_name(), "iPhone 15 Pro");
-        assert_eq!(device.platform(), "iOS");
-        assert_eq!(device.id(), "123");
+        let cmd = BootCommand::IosSimulator(sim);
+        assert_eq!(cmd.display_name(), "iPhone 15 Pro");
+        assert_eq!(cmd.platform(), "iOS");
+        assert_eq!(cmd.id(), "123");
     }
 
     #[test]
@@ -115,10 +155,10 @@ mod tests {
             target: None,
         };
 
-        let device = BootableDevice::AndroidAvd(avd);
-        assert_eq!(device.runtime_info(), "API 33");
-        assert_eq!(device.platform(), "Android");
-        assert_eq!(device.id(), "Pixel_6_API_33");
+        let cmd = BootCommand::AndroidAvd(avd);
+        assert_eq!(cmd.runtime_info(), "API 33");
+        assert_eq!(cmd.platform(), "Android");
+        assert_eq!(cmd.id(), "Pixel_6_API_33");
     }
 
     #[test]
@@ -130,8 +170,8 @@ mod tests {
             target: None,
         };
 
-        let device = BootableDevice::AndroidAvd(avd);
-        assert_eq!(device.runtime_info(), "Unknown API");
+        let cmd = BootCommand::AndroidAvd(avd);
+        assert_eq!(cmd.runtime_info(), "Unknown API");
     }
 
     #[test]
@@ -144,7 +184,65 @@ mod tests {
             device_type: "iPad Pro".to_string(),
         };
 
-        let device = BootableDevice::IosSimulator(sim);
-        assert_eq!(device.runtime_info(), "iOS 16.4");
+        let cmd = BootCommand::IosSimulator(sim);
+        assert_eq!(cmd.runtime_info(), "iOS 16.4");
+    }
+
+    #[test]
+    fn test_boot_command_to_bootable_device_ios() {
+        let cmd = BootCommand::IosSimulator(IosSimulator {
+            udid: "ABC-123".to_string(),
+            name: "iPhone 15".to_string(),
+            runtime: "iOS 17.0".to_string(),
+            state: SimulatorState::Shutdown,
+            device_type: "iPhone 15".to_string(),
+        });
+
+        let device: crate::core::BootableDevice = cmd.into();
+        assert_eq!(device.platform, Platform::IOS);
+        assert_eq!(device.id, "ABC-123");
+        assert_eq!(device.name, "iPhone 15");
+        assert_eq!(device.runtime, "iOS 17.0");
+        assert_eq!(device.state, DeviceState::Shutdown);
+    }
+
+    #[test]
+    fn test_boot_command_to_bootable_device_android() {
+        let cmd = BootCommand::AndroidAvd(AndroidAvd {
+            name: "Pixel_6_API_33".to_string(),
+            display_name: "Pixel 6 Pro".to_string(),
+            api_level: Some(33),
+            target: None,
+        });
+
+        let device: crate::core::BootableDevice = cmd.into();
+        assert_eq!(device.platform, Platform::Android);
+        assert_eq!(device.id, "Pixel_6_API_33");
+        assert_eq!(device.name, "Pixel 6 Pro");
+        assert_eq!(device.runtime, "API 33");
+        assert_eq!(device.state, DeviceState::Shutdown);
+    }
+
+    #[test]
+    fn test_boot_command_ios_state_mapping() {
+        let states = vec![
+            (SimulatorState::Shutdown, DeviceState::Shutdown),
+            (SimulatorState::Booted, DeviceState::Booted),
+            (SimulatorState::Booting, DeviceState::Booting),
+            (SimulatorState::Unknown, DeviceState::Unknown),
+        ];
+
+        for (sim_state, expected_state) in states {
+            let cmd = BootCommand::IosSimulator(IosSimulator {
+                udid: "test".to_string(),
+                name: "Test".to_string(),
+                runtime: "iOS 17".to_string(),
+                state: sim_state,
+                device_type: "iPhone".to_string(),
+            });
+
+            let device: crate::core::BootableDevice = cmd.into();
+            assert_eq!(device.state, expected_state);
+        }
     }
 }
