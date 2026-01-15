@@ -54,6 +54,9 @@ notify-debouncer-full = "0.4"
 # Async trait helpers
 trait-variant = "0.1"
 
+# File locking
+fs2 = "0.4"
+
 [dev-dependencies]
 tokio-test = "0.4"
 tempfile = "3"

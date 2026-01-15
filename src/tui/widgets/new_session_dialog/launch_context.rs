@@ -554,6 +554,132 @@ use super::state::LaunchContextState;
 use crate::config::ConfigSource;
 use ratatui::widgets::{Block, Borders};
 
+// ============================================================================
+// Shared Helper Functions
+// ============================================================================
+
+/// Check if a field should show "(from config)" suffix
+fn should_show_disabled_suffix(
+    state: &LaunchContextState,
+    field: super::state::LaunchContextField,
+) -> bool {
+    !state.is_field_editable(field)
+        && matches!(state.selected_config_source(), Some(ConfigSource::VSCode))
+}
+
+/// Render the configuration dropdown field
+fn render_config_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let config_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::Config;
+    let config_field =
+        DropdownField::new("Configuration", state.config_display()).focused(config_focused);
+    config_field.render(area, buf);
+}
+
+/// Render the mode selector (Debug/Profile/Release radio buttons)
+fn render_mode_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let mode_focused = is_focused && state.focused_field == super::state::LaunchContextField::Mode;
+    let mode_disabled = !state.is_mode_editable();
+    let mode_selector = ModeSelector::new(state.mode)
+        .focused(mode_focused)
+        .disabled(mode_disabled);
+    mode_selector.render(area, buf);
+}
+
+/// Render the flavor dropdown field
+fn render_flavor_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let flavor_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::Flavor;
+    let flavor_disabled = !state.is_flavor_editable();
+    let flavor_suffix =
+        if should_show_disabled_suffix(state, super::state::LaunchContextField::Flavor) {
+            Some("(from config)")
+        } else {
+            None
+        };
+    let mut flavor_field =
+        DropdownField::new("Flavor", state.flavor_display()).focused(flavor_focused);
+    flavor_field = flavor_field.disabled(flavor_disabled);
+    if let Some(suffix) = flavor_suffix {
+        flavor_field = flavor_field.suffix(suffix);
+    }
+    flavor_field.render(area, buf);
+}
+
+/// Render the dart defines action field
+fn render_dart_defines_field(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    let defines_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::DartDefines;
+    let defines_disabled = !state.are_dart_defines_editable();
+    let defines_field = ActionField::new("Dart Defines", state.dart_defines_display())
+        .focused(defines_focused)
+        .disabled(defines_disabled);
+    defines_field.render(area, buf);
+}
+
+/// Calculate the layout for all fields
+fn calculate_fields_layout(inner: Rect) -> [Rect; 11] {
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Config field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Mode field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Flavor field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Dart Defines field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Launch button
+        Constraint::Min(0),    // Rest (empty)
+    ])
+    .split(inner);
+
+    [
+        chunks[0], chunks[1], chunks[2], chunks[3], chunks[4], chunks[5], chunks[6], chunks[7],
+        chunks[8], chunks[9], chunks[10],
+    ]
+}
+
+/// Render the border block and return the inner area
+fn render_border(area: Rect, buf: &mut Buffer, is_focused: bool) -> Rect {
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let block = Block::default()
+        .title(" Launch Context ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+    inner
+}
+
+/// Render all common fields (config, mode, flavor, dart defines)
+fn render_common_fields(
+    chunks: &[Rect; 11],
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    render_config_field(chunks[1], buf, state, is_focused);
+    render_mode_field(chunks[3], buf, state, is_focused);
+    render_flavor_field(chunks[5], buf, state, is_focused);
+    render_dart_defines_field(chunks[7], buf, state, is_focused);
+}
+
+// ============================================================================
+// LaunchContext Widget
+// ============================================================================
+
 /// The Launch Context widget (right pane of NewSessionDialog)
 pub struct LaunchContext<'a> {
     state: &'a LaunchContextState,
@@ -565,15 +691,6 @@ impl<'a> LaunchContext<'a> {
         Self { state, is_focused }
     }
 
-    /// Check if a field should show disabled suffix
-    fn should_show_disabled_suffix(&self, field: super::state::LaunchContextField) -> bool {
-        !self.state.is_field_editable(field)
-            && matches!(
-                self.state.selected_config_source(),
-                Some(ConfigSource::VSCode)
-            )
-    }
-
     /// Calculate minimum height needed
     pub fn min_height() -> u16 {
         12 // 1 border + 10 content + 1 border
@@ -582,79 +699,10 @@ impl<'a> LaunchContext<'a> {
 
 impl Widget for LaunchContext<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Main block
-        let border_color = if self.is_focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+        let inner = render_border(area, buf, self.is_focused);
+        let chunks = calculate_fields_layout(inner);
 
-        let block = Block::default()
-            .title(" Launch Context ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        // Layout fields
-        let chunks = Layout::vertical([
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Config field
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Mode field
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Flavor field
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Dart Defines field
-            Constraint::Length(1), // Spacer
-            Constraint::Length(1), // Launch button
-            Constraint::Min(0),    // Rest (empty)
-        ])
-        .split(inner);
-
-        // Render Config dropdown
-        let config_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Config;
-        let config_field = DropdownField::new("Configuration", self.state.config_display())
-            .focused(config_focused);
-        config_field.render(chunks[1], buf);
-
-        // Render Mode selector
-        let mode_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Mode;
-        let mode_disabled = !self.state.is_mode_editable();
-        let mode_selector = ModeSelector::new(self.state.mode)
-            .focused(mode_focused)
-            .disabled(mode_disabled);
-        mode_selector.render(chunks[3], buf);
-
-        // Render Flavor dropdown
-        let flavor_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Flavor;
-        let flavor_disabled = !self.state.is_flavor_editable();
-        let flavor_suffix =
-            if self.should_show_disabled_suffix(super::state::LaunchContextField::Flavor) {
-                Some("(from config)")
-            } else {
-                None
-            };
-        let mut flavor_field =
-            DropdownField::new("Flavor", self.state.flavor_display()).focused(flavor_focused);
-        flavor_field = flavor_field.disabled(flavor_disabled);
-        if let Some(suffix) = flavor_suffix {
-            flavor_field = flavor_field.suffix(suffix);
-        }
-        flavor_field.render(chunks[5], buf);
-
-        // Render Dart Defines action field
-        let defines_focused = self.is_focused
-            && self.state.focused_field == super::state::LaunchContextField::DartDefines;
-        let defines_disabled = !self.state.are_dart_defines_editable();
-        let defines_field = ActionField::new("Dart Defines", self.state.dart_defines_display())
-            .focused(defines_focused)
-            .disabled(defines_disabled);
-        defines_field.render(chunks[7], buf);
+        render_common_fields(&chunks, buf, self.state, self.is_focused);
 
         // Render Launch button
         let launch_focused =
@@ -663,6 +711,10 @@ impl Widget for LaunchContext<'_> {
         launch_button.render(chunks[9], buf);
     }
 }
+
+// ============================================================================
+// LaunchContextWithDevice Widget
+// ============================================================================
 
 /// Launch Context with device selection awareness
 pub struct LaunchContextWithDevice<'a> {
@@ -679,92 +731,14 @@ impl<'a> LaunchContextWithDevice<'a> {
             has_device_selected,
         }
     }
-
-    /// Check if a field should show disabled suffix
-    fn should_show_disabled_suffix(&self, field: super::state::LaunchContextField) -> bool {
-        !self.state.is_field_editable(field)
-            && matches!(
-                self.state.selected_config_source(),
-                Some(ConfigSource::VSCode)
-            )
-    }
 }
 
 impl Widget for LaunchContextWithDevice<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Similar to LaunchContext but with device-aware launch button
-        let border_color = if self.is_focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+        let inner = render_border(area, buf, self.is_focused);
+        let chunks = calculate_fields_layout(inner);
 
-        let block = Block::default()
-            .title(" Launch Context ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
-
-        // Layout fields (same as LaunchContext)
-        let chunks = Layout::vertical([
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Length(1),
-            Constraint::Min(0),
-        ])
-        .split(inner);
-
-        // Render Config dropdown
-        let config_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Config;
-        let config_field = DropdownField::new("Configuration", self.state.config_display())
-            .focused(config_focused);
-        config_field.render(chunks[1], buf);
-
-        // Render Mode selector
-        let mode_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Mode;
-        let mode_disabled = !self.state.is_mode_editable();
-        let mode_selector = ModeSelector::new(self.state.mode)
-            .focused(mode_focused)
-            .disabled(mode_disabled);
-        mode_selector.render(chunks[3], buf);
-
-        // Render Flavor dropdown
-        let flavor_focused =
-            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Flavor;
-        let flavor_disabled = !self.state.is_flavor_editable();
-        let flavor_suffix =
-            if self.should_show_disabled_suffix(super::state::LaunchContextField::Flavor) {
-                Some("(from config)")
-            } else {
-                None
-            };
-        let mut flavor_field =
-            DropdownField::new("Flavor", self.state.flavor_display()).focused(flavor_focused);
-        flavor_field = flavor_field.disabled(flavor_disabled);
-        if let Some(suffix) = flavor_suffix {
-            flavor_field = flavor_field.suffix(suffix);
-        }
-        flavor_field.render(chunks[5], buf);
-
-        // Render Dart Defines action field
-        let defines_focused = self.is_focused
-            && self.state.focused_field == super::state::LaunchContextField::DartDefines;
-        let defines_disabled = !self.state.are_dart_defines_editable();
-        let defines_field = ActionField::new("Dart Defines", self.state.dart_defines_display())
-            .focused(defines_focused)
-            .disabled(defines_disabled);
-        defines_field.render(chunks[7], buf);
+        render_common_fields(&chunks, buf, self.state, self.is_focused);
 
         // Render Launch button with device awareness
         let launch_focused =

@@ -1,5 +1,15 @@
 //! Main update function - handles state transitions (TEA pattern)
 
+// TODO: This file exceeds 500 lines (currently ~2,776). Planned split:
+// - new_session/: NewSessionDialog handlers (navigation, target_selector, launch_context, fuzzy_modal, dart_defines_modal)
+// - startup_dialog.rs: StartupDialog handlers
+// - session.rs: Session lifecycle handlers
+// - scroll.rs: Scroll message handlers
+// - log_view.rs: Log filtering/search handlers
+// - device_selector.rs: Legacy device selector handlers
+// - settings.rs: Settings page handlers
+// See: workflow/plans/features/new-session-dialog/FILE_SPLITTING.md
+
 use crate::app::message::{AutoLaunchSuccess, Message};
 use crate::app::state::{AppState, UiMode};
 use crate::core::{AppPhase, LogSource};
@@ -1947,72 +1957,31 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
                 LaunchContextField::Flavor => {
                     // Check if flavor is editable based on selected config
-                    if let Some(config_idx) = state.new_session_dialog_state.selected_config {
-                        if let Some(config) = state
-                            .new_session_dialog_state
-                            .configs
-                            .configs
-                            .get(config_idx)
-                        {
-                            use crate::config::ConfigSource;
-                            // Only allow editing for FDemon, CommandLine, Default, or no config
-                            match config.source {
-                                ConfigSource::VSCode => {
-                                    // VSCode configs are read-only, skip to next field
-                                    state.new_session_dialog_state.context_down();
-                                    return UpdateResult::none();
-                                }
-                                _ => {
-                                    // Open flavor fuzzy modal
-                                    return update(
-                                        state,
-                                        Message::NewSessionDialogOpenFuzzyModal {
-                                            modal_type: FuzzyModalType::Flavor,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        // No config selected, allow editing
-                        return update(
-                            state,
-                            Message::NewSessionDialogOpenFuzzyModal {
-                                modal_type: FuzzyModalType::Flavor,
-                            },
-                        );
+                    if !state.new_session_dialog_state.is_flavor_editable() {
+                        // VSCode configs are read-only, skip to next field
+                        state.new_session_dialog_state.context_down();
+                        return UpdateResult::none();
                     }
+
+                    // Open flavor fuzzy modal
+                    return update(
+                        state,
+                        Message::NewSessionDialogOpenFuzzyModal {
+                            modal_type: FuzzyModalType::Flavor,
+                        },
+                    );
                 }
 
                 LaunchContextField::DartDefines => {
                     // Check if dart defines are editable
-                    if let Some(config_idx) = state.new_session_dialog_state.selected_config {
-                        if let Some(config) = state
-                            .new_session_dialog_state
-                            .configs
-                            .configs
-                            .get(config_idx)
-                        {
-                            use crate::config::ConfigSource;
-                            match config.source {
-                                ConfigSource::VSCode => {
-                                    // VSCode configs are read-only, skip to next field
-                                    state.new_session_dialog_state.context_down();
-                                    return UpdateResult::none();
-                                }
-                                _ => {
-                                    // Open dart defines modal
-                                    return update(
-                                        state,
-                                        Message::NewSessionDialogOpenDartDefinesModal,
-                                    );
-                                }
-                            }
-                        }
-                    } else {
-                        // No config selected, allow editing
-                        return update(state, Message::NewSessionDialogOpenDartDefinesModal);
+                    if !state.new_session_dialog_state.are_dart_defines_editable() {
+                        // VSCode configs are read-only, skip to next field
+                        state.new_session_dialog_state.context_down();
+                        return UpdateResult::none();
                     }
+
+                    // Open dart defines modal
+                    return update(state, Message::NewSessionDialogOpenDartDefinesModal);
                 }
 
                 LaunchContextField::Launch => {
@@ -2031,19 +2000,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 && state.new_session_dialog_state.active_field == LaunchContextField::Mode
             {
                 // Check if mode is editable
-                if let Some(config_idx) = state.new_session_dialog_state.selected_config {
-                    if let Some(config) = state
-                        .new_session_dialog_state
-                        .configs
-                        .configs
-                        .get(config_idx)
-                    {
-                        use crate::config::ConfigSource;
-                        if config.source == ConfigSource::VSCode {
-                            // VSCode configs are read-only
-                            return UpdateResult::none();
-                        }
-                    }
+                if !state.new_session_dialog_state.is_mode_editable() {
+                    return UpdateResult::none();
                 }
 
                 state.new_session_dialog_state.cycle_mode();
@@ -2059,7 +2017,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         use crate::config::ConfigSource;
                         if config.source == ConfigSource::FDemon {
                             return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                                config_index: config_idx,
+                                configs: state.new_session_dialog_state.configs.clone(),
                             });
                         }
                     }
@@ -2075,19 +2033,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 && state.new_session_dialog_state.active_field == LaunchContextField::Mode
             {
                 // Check if mode is editable
-                if let Some(config_idx) = state.new_session_dialog_state.selected_config {
-                    if let Some(config) = state
-                        .new_session_dialog_state
-                        .configs
-                        .configs
-                        .get(config_idx)
-                    {
-                        use crate::config::ConfigSource;
-                        if config.source == ConfigSource::VSCode {
-                            // VSCode configs are read-only
-                            return UpdateResult::none();
-                        }
-                    }
+                if !state.new_session_dialog_state.is_mode_editable() {
+                    return UpdateResult::none();
                 }
 
                 state.new_session_dialog_state.cycle_mode_reverse();
@@ -2103,7 +2050,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         use crate::config::ConfigSource;
                         if config.source == ConfigSource::FDemon {
                             return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                                config_index: config_idx,
+                                configs: state.new_session_dialog_state.configs.clone(),
                             });
                         }
                     }
@@ -2129,106 +2076,93 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::NewSessionDialogFlavorSelected { flavor } => {
             use crate::config::ConfigSource;
 
+            // Check if flavor is editable
+            if !state.new_session_dialog_state.is_flavor_editable() {
+                return UpdateResult::none();
+            }
+
             // Determine if we should auto-save (must check before mutating state)
-            let should_auto_save = if let Some(config_idx) =
-                state.new_session_dialog_state.selected_config
-            {
-                if let Some(config) = state
-                    .new_session_dialog_state
-                    .configs
-                    .configs
-                    .get(config_idx)
-                {
-                    config.source != ConfigSource::VSCode && config.source == ConfigSource::FDemon
+            let should_auto_save =
+                if let Some(config_idx) = state.new_session_dialog_state.selected_config {
+                    if let Some(config) = state
+                        .new_session_dialog_state
+                        .configs
+                        .configs
+                        .get(config_idx)
+                    {
+                        config.source == ConfigSource::FDemon
+                    } else {
+                        false
+                    }
                 } else {
                     false
-                }
-            } else {
-                false
-            };
+                };
 
-            let config_idx = state.new_session_dialog_state.selected_config;
+            state.new_session_dialog_state.flavor = flavor.unwrap_or_default();
+            state.new_session_dialog_state.close_fuzzy_modal();
 
-            // Check if flavor is editable
-            if let Some(idx) = config_idx {
-                if let Some(config) = state.new_session_dialog_state.configs.configs.get(idx) {
-                    if config.source != ConfigSource::VSCode {
-                        state.new_session_dialog_state.flavor = flavor.clone().unwrap_or_default();
-                        state.new_session_dialog_state.close_fuzzy_modal();
-
-                        // Trigger auto-save if needed
-                        if should_auto_save {
-                            return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                                config_index: idx,
-                            });
-                        }
-                    }
-                }
-            } else {
-                // No config selected, always allow
-                state.new_session_dialog_state.flavor = flavor.unwrap_or_default();
-                state.new_session_dialog_state.close_fuzzy_modal();
+            // Trigger auto-save if needed
+            if should_auto_save {
+                return UpdateResult::action(UpdateAction::AutoSaveConfig {
+                    configs: state.new_session_dialog_state.configs.clone(),
+                });
             }
+
             UpdateResult::none()
         }
 
         Message::NewSessionDialogDartDefinesUpdated { defines } => {
             use crate::config::ConfigSource;
 
+            // Check if dart defines are editable
+            if !state.new_session_dialog_state.are_dart_defines_editable() {
+                return UpdateResult::none();
+            }
+
             // Determine if we should auto-save (must check before mutating state)
-            let should_auto_save = if let Some(config_idx) =
-                state.new_session_dialog_state.selected_config
-            {
-                if let Some(config) = state
-                    .new_session_dialog_state
-                    .configs
-                    .configs
-                    .get(config_idx)
-                {
-                    config.source != ConfigSource::VSCode && config.source == ConfigSource::FDemon
+            let should_auto_save =
+                if let Some(config_idx) = state.new_session_dialog_state.selected_config {
+                    if let Some(config) = state
+                        .new_session_dialog_state
+                        .configs
+                        .configs
+                        .get(config_idx)
+                    {
+                        config.source == ConfigSource::FDemon
+                    } else {
+                        false
+                    }
                 } else {
                     false
-                }
-            } else {
-                false
-            };
+                };
 
-            let config_idx = state.new_session_dialog_state.selected_config;
+            state.new_session_dialog_state.dart_defines = defines;
+            state.new_session_dialog_state.close_dart_defines_modal();
 
-            // Check if dart defines are editable
-            if let Some(idx) = config_idx {
-                if let Some(config) = state.new_session_dialog_state.configs.configs.get(idx) {
-                    if config.source != ConfigSource::VSCode {
-                        state.new_session_dialog_state.dart_defines = defines;
-                        state.new_session_dialog_state.close_dart_defines_modal();
-
-                        // Trigger auto-save if needed
-                        if should_auto_save {
-                            return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                                config_index: idx,
-                            });
-                        }
-                    }
-                }
-            } else {
-                // No config selected, always allow
-                state.new_session_dialog_state.dart_defines = defines;
-                state.new_session_dialog_state.close_dart_defines_modal();
+            // Trigger auto-save if needed
+            if should_auto_save {
+                return UpdateResult::action(UpdateAction::AutoSaveConfig {
+                    configs: state.new_session_dialog_state.configs.clone(),
+                });
             }
+
             UpdateResult::none()
         }
 
         Message::NewSessionDialogLaunch => {
             use crate::tui::widgets::TargetTab;
 
-            // Get selected device
-            let device = if state.new_session_dialog_state.target_tab == TargetTab::Connected {
+            // Check which tab is active
+            let active_tab = state.new_session_dialog_state.target_tab;
+
+            // Get selected device based on active tab
+            let device = if active_tab == TargetTab::Connected {
                 state
                     .new_session_dialog_state
                     .selected_connected_device()
                     .cloned()
             } else {
-                None
+                None // Cannot launch bootable devices directly
             };
 
             if let Some(device) = device {
@@ -2267,10 +2201,27 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     config_name,
                 });
             } else {
-                // No device selected - show error
+                // Provide context-specific error message
+                let error_msg = match active_tab {
+                    TargetTab::Bootable => {
+                        if state.new_session_dialog_state.connected_devices.is_empty() {
+                            "No connected devices. Boot a device first, or switch to Connected tab."
+                        } else {
+                            "Switch to Connected tab to select a running device for launch."
+                        }
+                    }
+                    TargetTab::Connected => {
+                        if state.new_session_dialog_state.connected_devices.is_empty() {
+                            "No connected devices. Connect a device or start an emulator."
+                        } else {
+                            "Please select a device from the list."
+                        }
+                    }
+                };
+
                 state
                     .new_session_dialog_state
-                    .set_error("Please select a device first".to_string());
+                    .set_error(error_msg.to_string());
             }
 
             UpdateResult::none()

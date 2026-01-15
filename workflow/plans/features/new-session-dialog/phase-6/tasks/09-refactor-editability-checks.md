@@ -133,3 +133,52 @@ cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings
 - This is a refactoring task - no behavior change expected
 - Single source of truth for editability logic
 - Easier to maintain and extend (e.g., if we add new read-only config sources)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/state.rs` | Added editability methods to `NewSessionDialogState`: `is_mode_editable()`, `is_flavor_editable()`, `are_dart_defines_editable()` |
+| `src/app/handler/update.rs` | Refactored 5 handlers to use state methods instead of inline `ConfigSource::VSCode` checks |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added methods to `NewSessionDialogState`**: The task description referenced `LaunchContextState`, but the actual dialog uses `NewSessionDialogState` which stores fields directly (not nested). Added the editability methods to `NewSessionDialogState` to match the actual architecture.
+
+2. **Simplified handler logic**: Refactored handlers to use single-line editability checks instead of nested conditionals. This eliminated all inline `ConfigSource::VSCode` checks and reduced code duplication by ~60 lines.
+
+3. **Consistent early returns**: All refactored handlers now use consistent early-return pattern: check editability first, return if not editable, then proceed with logic.
+
+### Handlers Refactored
+
+1. **NewSessionDialogModeNext** - Lines 2027-2058: Uses `is_mode_editable()`
+2. **NewSessionDialogModePrev** - Lines 2060-2091: Uses `is_mode_editable()`
+3. **NewSessionDialogFlavorSelected** - Lines 2107-2144: Uses `is_flavor_editable()`
+4. **NewSessionDialogDartDefinesUpdated** - Lines 2146-2183: Uses `are_dart_defines_editable()`
+5. **LaunchContextField::Flavor activation** - Lines 1948-1963: Uses `is_flavor_editable()`
+6. **LaunchContextField::DartDefines activation** - Lines 1965-1975: Uses `are_dart_defines_editable()`
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (0.81s)
+- `cargo test --lib` - Passed (1608 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (0 warnings)
+
+### Verification
+
+All inline `ConfigSource::VSCode` checks removed from `update.rs`:
+```bash
+$ grep "ConfigSource::VSCode" src/app/handler/update.rs
+# No matches found
+```
+
+### Risks/Limitations
+
+1. **None identified**: This is a pure refactoring with no behavior change. All tests pass and logic is equivalent to the original implementation.

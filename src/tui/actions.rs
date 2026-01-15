@@ -105,11 +105,28 @@ pub fn handle_action(
             spawn::spawn_device_boot(msg_tx, device_id, platform, tool_availability);
         }
 
-        UpdateAction::AutoSaveConfig { config_index: _ } => {
-            // TODO: Implement auto-save logic in a future task
-            // This will save FDemon configs to .fdemon/launch.toml
-            // For now, we just log that auto-save was triggered
-            tracing::debug!("Auto-save config triggered (not yet implemented)");
+        UpdateAction::AutoSaveConfig { configs } => {
+            // Clone data for async task
+            let project_path = project_path.to_path_buf();
+            let tx = msg_tx.clone();
+
+            // Spawn async save task to avoid blocking UI
+            tokio::spawn(async move {
+                match crate::config::writer::save_fdemon_configs(&project_path, &configs) {
+                    Ok(()) => {
+                        tracing::debug!("Config auto-saved successfully");
+                        let _ = tx.send(Message::NewSessionDialogConfigSaved).await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Config auto-save failed: {}", e);
+                        let _ = tx
+                            .send(Message::NewSessionDialogConfigSaveFailed {
+                                error: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            });
         }
 
         UpdateAction::LaunchFlutterSession {

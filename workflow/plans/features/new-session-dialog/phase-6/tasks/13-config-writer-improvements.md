@@ -178,3 +178,37 @@ cargo fmt && cargo check && cargo test writer && cargo clippy -- -D warnings
 - Advisory locks don't prevent other processes from writing (they must also use locking)
 - Option A (write queue) is more robust but more complex
 - Option B (skip overlapping) is simpler but may drop intermediate saves
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/Cargo.toml` | Added fs2 = "0.4" dependency for cross-platform file locking |
+| `/Users/ed/Dev/zabin/flutter-demon/src/config/writer.rs` | Added file locking to save_fdemon_configs, fixed ConfigAutoSaver race condition using AtomicBool |
+
+### Notable Decisions/Tradeoffs
+
+1. **Chose Option B (AtomicBool)**: Used AtomicBool to skip overlapping saves instead of the more complex write queue approach (Option A). This is simpler and sufficient for the use case. If a save is already in progress, subsequent save requests are skipped with a debug log message. This prevents race conditions while keeping the implementation straightforward.
+
+2. **File locking implementation**: Used fs2::FileExt::lock_exclusive() which blocks until the lock is acquired. This ensures only one process can write at a time. The lock is automatically released when the file handle is dropped, ensuring proper cleanup even if an error occurs.
+
+3. **Import changes**: Removed tokio::sync::Mutex import and added std::sync::atomic::{AtomicBool, Ordering} and fs2::FileExt imports.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test writer` - Passed (16 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Advisory locking**: fs2 uses advisory file locking, which means other processes that don't use locking can still write to the file. This is acceptable since we control all code that writes to `.fdemon/launch.toml`.
+
+2. **Skip behavior in ConfigAutoSaver**: When a save is in progress and another save is requested, the new request is skipped entirely. This is intentional to prevent race conditions, but it means rapid intermediate changes might not be saved. This is acceptable for the auto-save use case since the most recent state will be saved on the next call after the current save completes.

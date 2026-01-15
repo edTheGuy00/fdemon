@@ -1,5 +1,14 @@
 //! State definitions for NewSessionDialog
 
+// TODO: This file exceeds 500 lines (currently ~2,101). Planned split:
+// - state/types.rs: Shared enums (DialogPane, TargetTab, LaunchContextField)
+// - state/dialog.rs: NewSessionDialogState
+// - state/launch_context.rs: LaunchContextState
+// - state/fuzzy_modal.rs: FuzzyModalState + FuzzyModalType
+// - state/dart_defines.rs: DartDefinesModalState + related enums
+// - state/tests/: Split tests into focused test modules
+// See: workflow/plans/features/new-session-dialog/FILE_SPLITTING.md
+
 use crate::config::{FlutterMode, LoadedConfigs};
 use crate::core::BootableDevice;
 use crate::daemon::Device;
@@ -236,41 +245,6 @@ impl LaunchContextState {
             .iter()
             .position(|c| c.display_name == name);
         self.select_config(index);
-    }
-
-    /// Move to next field (skip disabled)
-    pub fn focus_next(&mut self) {
-        self.focused_field = self
-            .focused_field
-            .next_enabled(|f| !self.is_field_editable(f));
-    }
-
-    /// Move to previous field (skip disabled)
-    pub fn focus_prev(&mut self) {
-        self.focused_field = self
-            .focused_field
-            .prev_enabled(|f| !self.is_field_editable(f));
-    }
-
-    /// Cycle mode selection (when mode field is focused)
-    pub fn cycle_mode_next(&mut self) {
-        if self.is_mode_editable() {
-            self.mode = match self.mode {
-                FlutterMode::Debug => FlutterMode::Profile,
-                FlutterMode::Profile => FlutterMode::Release,
-                FlutterMode::Release => FlutterMode::Debug,
-            };
-        }
-    }
-
-    pub fn cycle_mode_prev(&mut self) {
-        if self.is_mode_editable() {
-            self.mode = match self.mode {
-                FlutterMode::Debug => FlutterMode::Release,
-                FlutterMode::Profile => FlutterMode::Debug,
-                FlutterMode::Release => FlutterMode::Profile,
-            };
-        }
     }
 
     /// Set flavor
@@ -1084,6 +1058,49 @@ impl NewSessionDialogState {
     }
 
     // ─────────────────────────────────────────────────────────
+    // Editability Checks
+    // ─────────────────────────────────────────────────────────
+
+    /// Check if mode is editable based on config source
+    pub fn is_mode_editable(&self) -> bool {
+        use crate::config::ConfigSource;
+
+        if let Some(idx) = self.selected_config {
+            if let Some(config) = self.configs.configs.get(idx) {
+                return config.source != ConfigSource::VSCode;
+            }
+        }
+        // No config selected or invalid index = editable
+        true
+    }
+
+    /// Check if flavor is editable based on config source
+    pub fn is_flavor_editable(&self) -> bool {
+        use crate::config::ConfigSource;
+
+        if let Some(idx) = self.selected_config {
+            if let Some(config) = self.configs.configs.get(idx) {
+                return config.source != ConfigSource::VSCode;
+            }
+        }
+        // No config selected or invalid index = editable
+        true
+    }
+
+    /// Check if dart defines are editable based on config source
+    pub fn are_dart_defines_editable(&self) -> bool {
+        use crate::config::ConfigSource;
+
+        if let Some(idx) = self.selected_config {
+            if let Some(config) = self.configs.configs.get(idx) {
+                return config.source != ConfigSource::VSCode;
+            }
+        }
+        // No config selected or invalid index = editable
+        true
+    }
+
+    // ─────────────────────────────────────────────────────────
     // Error Handling
     // ─────────────────────────────────────────────────────────
 
@@ -1789,101 +1806,6 @@ mod launch_context_state_tests {
 
         // With no config selected, all fields are editable
         assert_eq!(state.focused_field, LaunchContextField::Config);
-    }
-
-    #[test]
-    fn test_focus_next_skips_disabled() {
-        let mut configs = LoadedConfigs::default();
-        configs.configs.push(SourcedConfig {
-            config: LaunchConfig::default(),
-            source: ConfigSource::VSCode,
-            display_name: "Test".to_string(),
-        });
-
-        let mut state = LaunchContextState::new(configs);
-        state.select_config(Some(0));
-
-        // Start at Config
-        state.focused_field = LaunchContextField::Config;
-
-        // Next should skip Mode, Flavor, DartDefines (all disabled for VSCode)
-        // and go straight to Launch
-        state.focus_next();
-        assert_eq!(state.focused_field, LaunchContextField::Launch);
-    }
-
-    #[test]
-    fn test_focus_prev_skips_disabled() {
-        let mut configs = LoadedConfigs::default();
-        configs.configs.push(SourcedConfig {
-            config: LaunchConfig::default(),
-            source: ConfigSource::VSCode,
-            display_name: "Test".to_string(),
-        });
-
-        let mut state = LaunchContextState::new(configs);
-        state.select_config(Some(0));
-
-        // Start at Launch
-        state.focused_field = LaunchContextField::Launch;
-
-        // Prev should skip DartDefines, Flavor, Mode (all disabled for VSCode)
-        // and go straight to Config
-        state.focus_prev();
-        assert_eq!(state.focused_field, LaunchContextField::Config);
-    }
-
-    #[test]
-    fn test_cycle_mode() {
-        let mut state = LaunchContextState::new(LoadedConfigs::default());
-        assert_eq!(state.mode, FlutterMode::Debug);
-
-        state.cycle_mode_next();
-        assert_eq!(state.mode, FlutterMode::Profile);
-
-        state.cycle_mode_next();
-        assert_eq!(state.mode, FlutterMode::Release);
-
-        state.cycle_mode_next();
-        assert_eq!(state.mode, FlutterMode::Debug);
-    }
-
-    #[test]
-    fn test_cycle_mode_prev() {
-        let mut state = LaunchContextState::new(LoadedConfigs::default());
-        assert_eq!(state.mode, FlutterMode::Debug);
-
-        state.cycle_mode_prev();
-        assert_eq!(state.mode, FlutterMode::Release);
-
-        state.cycle_mode_prev();
-        assert_eq!(state.mode, FlutterMode::Profile);
-
-        state.cycle_mode_prev();
-        assert_eq!(state.mode, FlutterMode::Debug);
-    }
-
-    #[test]
-    fn test_cycle_mode_disabled_when_vscode() {
-        let mut configs = LoadedConfigs::default();
-        configs.configs.push(SourcedConfig {
-            config: LaunchConfig {
-                mode: FlutterMode::Release,
-                ..Default::default()
-            },
-            source: ConfigSource::VSCode,
-            display_name: "Test".to_string(),
-        });
-
-        let mut state = LaunchContextState::new(configs);
-        state.select_config(Some(0));
-
-        // Mode should be Release from config
-        assert_eq!(state.mode, FlutterMode::Release);
-
-        // Cycling should have no effect because VSCode configs are read-only
-        state.cycle_mode_next();
-        assert_eq!(state.mode, FlutterMode::Release);
     }
 
     #[test]

@@ -6,9 +6,10 @@
 use super::priority::{LoadedConfigs, SourcedConfig};
 use super::types::{ConfigSource, LaunchConfig};
 use crate::common::prelude::*;
+use fs2::FileExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 /// Write updated launch configs back to .fdemon/launch.toml
 ///
@@ -38,10 +39,27 @@ pub fn save_fdemon_configs(project_path: &Path, configs: &LoadedConfigs) -> Resu
             .map_err(|e| Error::config(format!("Failed to create .fdemon directory: {}", e)))?;
     }
 
-    // Write file
-    std::fs::write(&config_path, content)
-        .map_err(|e| Error::config(format!("Failed to write launch.toml: {}", e)))?;
+    // Open file with exclusive lock for concurrent write protection
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&config_path)
+        .map_err(|e| Error::config(format!("Failed to open launch.toml: {}", e)))?;
 
+    // Acquire exclusive lock (blocks if another process has lock)
+    file.lock_exclusive()
+        .map_err(|e| Error::config(format!("Failed to lock launch.toml: {}", e)))?;
+
+    // Write content
+    use std::io::Write;
+    let mut file = file;
+    file.write_all(content.as_bytes())
+        .map_err(|e| Error::config(format!("Failed to write launch.toml: {}", e)))?;
+    file.flush()
+        .map_err(|e| Error::config(format!("Failed to flush launch.toml: {}", e)))?;
+
+    // Lock is automatically released when file is dropped
     info!("Saved launch config to {:?}", config_path);
     Ok(())
 }
@@ -203,9 +221,13 @@ pub fn update_config_mode(
 }
 
 /// Auto-saver that debounces writes to disk
+///
+/// Uses AtomicBool to skip overlapping saves and prevent race conditions.
+/// If a save is already in progress when `schedule_save` is called, the new
+/// request is skipped to avoid losing intermediate state.
 pub struct ConfigAutoSaver {
     project_path: std::path::PathBuf,
-    pending_save: Arc<Mutex<bool>>,
+    saving: Arc<AtomicBool>,
     debounce_ms: u64,
 }
 
@@ -213,32 +235,39 @@ impl ConfigAutoSaver {
     pub fn new(project_path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             project_path: project_path.into(),
-            pending_save: Arc::new(Mutex::new(false)),
+            saving: Arc::new(AtomicBool::new(false)),
             debounce_ms: 500,
         }
     }
 
     /// Schedule a save (debounced)
-    pub async fn schedule_save(&self, configs: LoadedConfigs) {
-        let pending = self.pending_save.clone();
+    ///
+    /// Skips the save if another save is already in progress to prevent
+    /// race conditions and ensure the latest state is preserved.
+    pub fn schedule_save(&self, configs: LoadedConfigs) {
+        let saving = self.saving.clone();
         let project_path = self.project_path.clone();
         let debounce_ms = self.debounce_ms;
 
-        // Mark as pending
-        *pending.lock().await = true;
+        // Skip if already saving
+        if saving
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            debug!("Skipping config save - already in progress");
+            return;
+        }
 
         // Spawn debounced save task
         tokio::spawn(async move {
             tokio::time::sleep(tokio::time::Duration::from_millis(debounce_ms)).await;
 
-            // Check if still pending (not cancelled by newer save)
-            let mut is_pending = pending.lock().await;
-            if *is_pending {
-                if let Err(e) = save_fdemon_configs(&project_path, &configs) {
-                    error!("Failed to auto-save config: {}", e);
-                }
-                *is_pending = false;
+            if let Err(e) = save_fdemon_configs(&project_path, &configs) {
+                error!("Failed to auto-save config: {}", e);
             }
+
+            // Mark save as complete
+            saving.store(false, Ordering::SeqCst);
         });
     }
 

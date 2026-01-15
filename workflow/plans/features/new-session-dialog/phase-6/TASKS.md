@@ -5,7 +5,7 @@
 Create the Launch Context widget - the right pane of the NewSessionDialog. Contains configuration selection, mode selector, flavor, dart-defines, and launch button.
 
 **Total Tasks:** 14 (5 original + 9 review fixes)
-**Status:** Implementation complete, review fixes pending
+**Status:** ✅ All tasks complete
 
 ## UI Design
 
@@ -81,15 +81,15 @@ Create the Launch Context widget - the right pane of the NewSessionDialog. Conta
 
 | # | Task | Status | Severity | Depends On | Modules |
 |---|------|--------|----------|------------|---------|
-| 6 | [06-fix-navigation-loop-bug](tasks/06-fix-navigation-loop-bug.md) | Not Started | 🔴 Critical | 5 | `new_session_dialog/state.rs` |
-| 7 | [07-handler-unit-tests](tasks/07-handler-unit-tests.md) | Not Started | 🔴 Critical | 5 | `app/handler/tests.rs` |
-| 8 | [08-implement-auto-save-action](tasks/08-implement-auto-save-action.md) | Not Started | 🔴 Critical | 5 | `tui/actions.rs` |
-| 9 | [09-refactor-editability-checks](tasks/09-refactor-editability-checks.md) | Not Started | 🟠 Major | 6 | `app/handler/update.rs` |
-| 10 | [10-improve-launch-validation](tasks/10-improve-launch-validation.md) | Not Started | 🟠 Major | 5 | `app/handler/update.rs` |
-| 11 | [11-track-file-splitting](tasks/11-track-file-splitting.md) | Not Started | 🟠 Major | 5 | `workflow/`, `update.rs`, `state.rs` |
-| 12 | [12-cleanup-unused-methods](tasks/12-cleanup-unused-methods.md) | Not Started | 🟡 Minor | 9 | `new_session_dialog/state.rs` |
-| 13 | [13-config-writer-improvements](tasks/13-config-writer-improvements.md) | Not Started | 🟡 Minor | 8 | `config/writer.rs`, `Cargo.toml` |
-| 14 | [14-consolidate-widget-rendering](tasks/14-consolidate-widget-rendering.md) | Not Started | 🟡 Minor | 5 | `new_session_dialog/launch_context.rs` |
+| 6 | [06-fix-navigation-loop-bug](tasks/06-fix-navigation-loop-bug.md) | ✅ Done | 🔴 Critical | 5 | `new_session_dialog/state.rs` |
+| 7 | [07-handler-unit-tests](tasks/07-handler-unit-tests.md) | ✅ Done | 🔴 Critical | 5 | `app/handler/tests.rs` |
+| 8 | [08-implement-auto-save-action](tasks/08-implement-auto-save-action.md) | ✅ Done | 🔴 Critical | 5 | `tui/actions.rs` |
+| 9 | [09-refactor-editability-checks](tasks/09-refactor-editability-checks.md) | ✅ Done | 🟠 Major | 6 | `app/handler/update.rs` |
+| 10 | [10-improve-launch-validation](tasks/10-improve-launch-validation.md) | ✅ Done | 🟠 Major | 5 | `app/handler/update.rs` |
+| 11 | [11-track-file-splitting](tasks/11-track-file-splitting.md) | ✅ Done | 🟠 Major | 5 | `workflow/`, `update.rs`, `state.rs` |
+| 12 | [12-cleanup-unused-methods](tasks/12-cleanup-unused-methods.md) | ✅ Done | 🟡 Minor | 9 | `new_session_dialog/state.rs` |
+| 13 | [13-config-writer-improvements](tasks/13-config-writer-improvements.md) | ✅ Done | 🟡 Minor | 8 | `config/writer.rs`, `Cargo.toml` |
+| 14 | [14-consolidate-widget-rendering](tasks/14-consolidate-widget-rendering.md) | ✅ Done | 🟡 Minor | 5 | `new_session_dialog/launch_context.rs` |
 
 ## Review Fix Dependency Graph
 
@@ -151,15 +151,15 @@ Minor (Consider)
 
 ### Review Fixes Complete (Tasks 6-14)
 
-- [ ] Infinite loop bug fixed in field navigation (Task 6)
-- [ ] Unit tests added for new handlers (Task 7)
-- [ ] AutoSaveConfig action implemented (Task 8)
-- [ ] Editability checks refactored to use state methods (Task 9)
-- [ ] Launch validation error messages improved (Task 10)
-- [ ] File splitting tracked with TODO comments (Task 11)
-- [ ] Unused LaunchContextState methods cleaned up (Task 12)
-- [ ] Config writer has file locking (Task 13)
-- [ ] Widget rendering code consolidated (Task 14)
+- [x] Infinite loop bug fixed in field navigation (Task 6)
+- [x] Unit tests added for new handlers (Task 7)
+- [x] AutoSaveConfig action implemented (Task 8)
+- [x] Editability checks refactored to use state methods (Task 9)
+- [x] Launch validation error messages improved (Task 10)
+- [x] File splitting tracked with TODO comments (Task 11)
+- [x] Unused LaunchContextState methods cleaned up (Task 12)
+- [x] Config writer has file locking (Task 13)
+- [x] Widget rendering code consolidated (Task 14)
 
 ## Field Navigation
 

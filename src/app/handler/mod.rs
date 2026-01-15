@@ -79,7 +79,7 @@ pub enum UpdateAction {
     BootDevice { device_id: String, platform: String },
 
     /// Auto-save FDemon config after field changes (Phase 6, Task 05)
-    AutoSaveConfig { config_index: usize },
+    AutoSaveConfig { configs: LoadedConfigs },
 
     /// Launch a new Flutter session from NewSessionDialog (Phase 6, Task 05)
     LaunchFlutterSession {

@@ -119,3 +119,38 @@ cargo fmt && cargo check && cargo test handler && cargo clippy -- -D warnings
 - Option B is more "helpful" but may surprise users
 - Consider UX preference when choosing approach
 - Could also add visual indicator that launch requires Connected tab
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Improved `Message::NewSessionDialogLaunch` handler with context-specific error messages based on active tab and device availability |
+
+### Notable Decisions/Tradeoffs
+
+1. **Implemented Option A (Clearer Error Messages)**: Chose the simpler approach that doesn't change state unexpectedly. This provides clear guidance without surprising the user with automatic tab switching. The error messages now differentiate between four distinct scenarios:
+   - Bootable tab with connected devices: "Switch to Connected tab to select a running device for launch."
+   - Bootable tab without connected devices: "No connected devices. Boot a device first, or switch to Connected tab."
+   - Connected tab without devices: "No connected devices. Connect a device or start an emulator."
+   - Connected tab with devices but none selected: "Please select a device from the list."
+
+2. **Added Inline Comment**: Added a comment `// Cannot launch bootable devices directly` to clarify why we return `None` for the Bootable tab case.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (compiled in 0.78s)
+- `cargo test handler` - Passed (267 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Manual Testing Required**: While the logic is sound and all automated tests pass, the improved error messages should be manually tested in the UI to ensure they appear correctly and at the right time. The acceptance criteria mention manual testing steps that should be followed to verify the user experience.
+
+2. **Error Display Method**: The implementation uses `state.new_session_dialog_state.set_error()` which should display the error in the dialog. If this method doesn't provide adequate visibility, the error display mechanism might need enhancement (outside scope of this task).

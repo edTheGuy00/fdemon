@@ -186,3 +186,50 @@ grep -n "TODO.*FILE_SPLITTING" src/tui/widgets/new_session_dialog/state.rs
 - The split should be done on a dedicated branch
 - Consider splitting after Phase 6 review fixes are complete
 - File splitting can be done incrementally (one module at a time)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/new-session-dialog/FILE_SPLITTING.md` | Created comprehensive 14KB tracking document with detailed split plan, module diagrams, phased approach, and checklist |
+| `src/app/handler/update.rs` | Added TODO comment (lines 3-11) referencing FILE_SPLITTING.md |
+| `src/tui/widgets/new_session_dialog/state.rs` | Added TODO comment (lines 3-10) referencing FILE_SPLITTING.md |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comprehensive Planning**: Created a very detailed FILE_SPLITTING.md (14KB, ~450 lines) that includes:
+   - Current structure analysis for both files
+   - Proposed module structures with ASCII diagrams
+   - Phased approach with dependency ordering
+   - Risk analysis and mitigation strategies
+   - Effort estimates (10-13 hours total)
+   - Detailed tracking checklists (40+ items)
+   - Verification commands for each phase
+
+2. **Module Structure for update.rs**: Proposed a `new_session/` subdirectory approach rather than flat files, which better organizes the 5 NewSessionDialog-related handler files (navigation, target_selector, launch_context, fuzzy_modal, dart_defines_modal)
+
+3. **state.rs Split Ordering**: Identified type dependencies and proposed bottom-up extraction (types → fuzzy_modal → dart_defines → launch_context → dialog) to minimize import churn
+
+4. **Test Organization**: Proposed moving tests to dedicated `state/tests/` directory with separate files per module, improving test organization and reducing file sizes
+
+### Testing Performed
+
+- `cargo check` - Passed (0.92s)
+- `cargo test --lib` - Passed (1608 tests, 0 failed)
+- File verification:
+  - `ls -la FILE_SPLITTING.md` - Confirmed created (14,739 bytes)
+  - `grep "FILE_SPLITTING" update.rs` - Confirmed TODO at line 11
+  - `grep "FILE_SPLITTING" state.rs` - Confirmed TODO at line 10
+
+### Risks/Limitations
+
+1. **Documentation Only**: This task creates no functional changes - actual refactoring is tracked but not implemented
+2. **Line Count Estimates**: Actual line counts (2,776 and 2,101) slightly differ from task spec (2,835 and 2,058) but proportions remain the same
+3. **Effort Estimates**: 10-13 hour estimate may vary based on unexpected import issues or test complications
+4. **Coordination Needed**: Both splits should coordinate with any parallel feature development to avoid merge conflicts
