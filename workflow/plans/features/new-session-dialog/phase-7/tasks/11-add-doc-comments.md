@@ -103,3 +103,34 @@ cargo fmt && cargo doc --no-deps && cargo clippy -- -D warnings
 - Use imperative mood ("Handles", "Opens", not "This handles")
 - Document return values and side effects where relevant
 - Don't document internal/private functions
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/navigation.rs` | Added doc comments to 3 public functions: `handle_open_new_session_dialog`, `handle_close_new_session_dialog`, `handle_new_session_dialog_escape` |
+| `src/app/handler/new_session/launch_context.rs` | Added doc comments to 8 public functions: `handle_mode_next`, `handle_mode_prev`, `handle_config_selected`, `handle_flavor_selected`, `handle_dart_defines_updated`, `handle_launch`, `handle_config_saved`, `handle_config_save_failed` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Concise but Informative**: Doc comments focus on what the function does and key side effects (e.g., "triggers device discovery", "auto-saves for FDemon configurations") without implementation details.
+2. **Imperative Mood**: All comments use imperative mood as per Rust conventions ("Handles", "Launches", "Closes").
+3. **Context-Specific Details**: Added behavioral details where relevant (e.g., priority order for Escape key handling, field-specific behaviors).
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo doc --no-deps` - Passed (documentation generates cleanly; warnings are pre-existing in other files)
+- `cargo test --lib` - Passed (1559 tests passed, 0 failed)
+- `cargo clippy` - Passed (no new warnings in modified files; pre-existing warnings in other files)
+
+### Risks/Limitations
+
+1. **None**: This is a pure documentation task with no functional changes. All tests pass and documentation generates successfully.

@@ -5,24 +5,42 @@
 use crate::app::handler::{UpdateAction, UpdateResult};
 use crate::app::state::AppState;
 
-/// Handle mode cycle forward (Right arrow on Mode field)
+/// Cycles the Flutter mode forward (Debug → Profile → Release).
+///
+/// Only applies when the Mode field is focused in the LaunchContext pane.
+/// Triggers auto-save for editable FDemon configurations.
 pub fn handle_mode_next(state: &mut AppState) -> UpdateResult {
-    use crate::tui::widgets::{DialogPane, LaunchContextField};
+    use crate::app::new_session_dialog::{DialogPane, LaunchContextField};
 
-    if state.new_session_dialog_state.active_pane == DialogPane::Right
-        && state.new_session_dialog_state.active_field == LaunchContextField::Mode
+    if state.new_session_dialog_state.focused_pane == DialogPane::LaunchContext
+        && state.new_session_dialog_state.launch_context.focused_field == LaunchContextField::Mode
     {
         // Check if mode is editable
-        if !state.new_session_dialog_state.is_mode_editable() {
+        if !state
+            .new_session_dialog_state
+            .launch_context
+            .is_mode_editable()
+        {
             return UpdateResult::none();
         }
 
-        state.new_session_dialog_state.cycle_mode();
+        // Cycle mode
+        state.new_session_dialog_state.launch_context.mode =
+            match state.new_session_dialog_state.launch_context.mode {
+                crate::config::FlutterMode::Debug => crate::config::FlutterMode::Profile,
+                crate::config::FlutterMode::Profile => crate::config::FlutterMode::Release,
+                crate::config::FlutterMode::Release => crate::config::FlutterMode::Debug,
+            };
 
         // Trigger auto-save if FDemon config
-        if let Some(config_idx) = state.new_session_dialog_state.selected_config {
+        if let Some(config_idx) = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+        {
             if let Some(config) = state
                 .new_session_dialog_state
+                .launch_context
                 .configs
                 .configs
                 .get(config_idx)
@@ -30,7 +48,11 @@ pub fn handle_mode_next(state: &mut AppState) -> UpdateResult {
                 use crate::config::ConfigSource;
                 if config.source == ConfigSource::FDemon {
                     return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                        configs: state.new_session_dialog_state.configs.clone(),
+                        configs: state
+                            .new_session_dialog_state
+                            .launch_context
+                            .configs
+                            .clone(),
                     });
                 }
             }
@@ -39,24 +61,42 @@ pub fn handle_mode_next(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Handle mode cycle backward (Left arrow on Mode field)
+/// Cycles the Flutter mode backward (Release → Profile → Debug).
+///
+/// Only applies when the Mode field is focused in the LaunchContext pane.
+/// Triggers auto-save for editable FDemon configurations.
 pub fn handle_mode_prev(state: &mut AppState) -> UpdateResult {
-    use crate::tui::widgets::{DialogPane, LaunchContextField};
+    use crate::app::new_session_dialog::{DialogPane, LaunchContextField};
 
-    if state.new_session_dialog_state.active_pane == DialogPane::Right
-        && state.new_session_dialog_state.active_field == LaunchContextField::Mode
+    if state.new_session_dialog_state.focused_pane == DialogPane::LaunchContext
+        && state.new_session_dialog_state.launch_context.focused_field == LaunchContextField::Mode
     {
         // Check if mode is editable
-        if !state.new_session_dialog_state.is_mode_editable() {
+        if !state
+            .new_session_dialog_state
+            .launch_context
+            .is_mode_editable()
+        {
             return UpdateResult::none();
         }
 
-        state.new_session_dialog_state.cycle_mode_reverse();
+        // Cycle mode backwards
+        state.new_session_dialog_state.launch_context.mode =
+            match state.new_session_dialog_state.launch_context.mode {
+                crate::config::FlutterMode::Debug => crate::config::FlutterMode::Release,
+                crate::config::FlutterMode::Profile => crate::config::FlutterMode::Debug,
+                crate::config::FlutterMode::Release => crate::config::FlutterMode::Profile,
+            };
 
         // Trigger auto-save if FDemon config
-        if let Some(config_idx) = state.new_session_dialog_state.selected_config {
+        if let Some(config_idx) = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+        {
             if let Some(config) = state
                 .new_session_dialog_state
+                .launch_context
                 .configs
                 .configs
                 .get(config_idx)
@@ -64,7 +104,11 @@ pub fn handle_mode_prev(state: &mut AppState) -> UpdateResult {
                 use crate::config::ConfigSource;
                 if config.source == ConfigSource::FDemon {
                     return UpdateResult::action(UpdateAction::AutoSaveConfig {
-                        configs: state.new_session_dialog_state.configs.clone(),
+                        configs: state
+                            .new_session_dialog_state
+                            .launch_context
+                            .configs
+                            .clone(),
                     });
                 }
             }
@@ -73,35 +117,43 @@ pub fn handle_mode_prev(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Handle config selection from fuzzy modal
+/// Handles configuration selection from the fuzzy modal.
+///
+/// Applies the selected configuration and closes the modal.
 pub fn handle_config_selected(state: &mut AppState, config_name: String) -> UpdateResult {
-    // Find config index by name
-    let idx = state
+    state
         .new_session_dialog_state
-        .configs
-        .configs
-        .iter()
-        .position(|c| c.display_name == config_name);
-
-    state.new_session_dialog_state.select_config(idx);
-    state.new_session_dialog_state.close_fuzzy_modal();
+        .launch_context
+        .select_config_by_name(&config_name);
+    state.new_session_dialog_state.close_modal();
     UpdateResult::none()
 }
 
-/// Handle flavor selection from fuzzy modal
+/// Handles flavor selection from the fuzzy modal.
+///
+/// Applies the selected flavor and closes the modal.
+/// Triggers auto-save for editable FDemon configurations.
 pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> UpdateResult {
     use crate::config::ConfigSource;
 
     // Check if flavor is editable
-    if !state.new_session_dialog_state.is_flavor_editable() {
+    if !state
+        .new_session_dialog_state
+        .launch_context
+        .is_flavor_editable()
+    {
         return UpdateResult::none();
     }
 
     // Determine if we should auto-save (must check before mutating state)
-    let should_auto_save = if let Some(config_idx) = state.new_session_dialog_state.selected_config
+    let should_auto_save = if let Some(config_idx) = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
     {
         if let Some(config) = state
             .new_session_dialog_state
+            .launch_context
             .configs
             .configs
             .get(config_idx)
@@ -114,20 +166,30 @@ pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> U
         false
     };
 
-    state.new_session_dialog_state.flavor = flavor.unwrap_or_default();
-    state.new_session_dialog_state.close_fuzzy_modal();
+    state
+        .new_session_dialog_state
+        .launch_context
+        .set_flavor(flavor);
+    state.new_session_dialog_state.close_modal();
 
     // Trigger auto-save if needed
     if should_auto_save {
         return UpdateResult::action(UpdateAction::AutoSaveConfig {
-            configs: state.new_session_dialog_state.configs.clone(),
+            configs: state
+                .new_session_dialog_state
+                .launch_context
+                .configs
+                .clone(),
         });
     }
 
     UpdateResult::none()
 }
 
-/// Handle dart defines updated from modal
+/// Handles dart defines updates from the modal.
+///
+/// Applies the updated dart defines and closes the modal.
+/// Triggers auto-save for editable FDemon configurations.
 pub fn handle_dart_defines_updated(
     state: &mut AppState,
     defines: Vec<crate::tui::widgets::DartDefine>,
@@ -135,15 +197,23 @@ pub fn handle_dart_defines_updated(
     use crate::config::ConfigSource;
 
     // Check if dart defines are editable
-    if !state.new_session_dialog_state.are_dart_defines_editable() {
+    if !state
+        .new_session_dialog_state
+        .launch_context
+        .are_dart_defines_editable()
+    {
         return UpdateResult::none();
     }
 
     // Determine if we should auto-save (must check before mutating state)
-    let should_auto_save = if let Some(config_idx) = state.new_session_dialog_state.selected_config
+    let should_auto_save = if let Some(config_idx) = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
     {
         if let Some(config) = state
             .new_session_dialog_state
+            .launch_context
             .configs
             .configs
             .get(config_idx)
@@ -156,83 +226,74 @@ pub fn handle_dart_defines_updated(
         false
     };
 
-    state.new_session_dialog_state.dart_defines = defines;
-    state.new_session_dialog_state.close_dart_defines_modal();
+    state
+        .new_session_dialog_state
+        .launch_context
+        .set_dart_defines(defines);
+    state
+        .new_session_dialog_state
+        .close_dart_defines_modal_with_changes();
 
     // Trigger auto-save if needed
     if should_auto_save {
         return UpdateResult::action(UpdateAction::AutoSaveConfig {
-            configs: state.new_session_dialog_state.configs.clone(),
+            configs: state
+                .new_session_dialog_state
+                .launch_context
+                .configs
+                .clone(),
         });
     }
 
     UpdateResult::none()
 }
 
-/// Handle launch button activation
+/// Launches a Flutter session with the current dialog configuration.
+///
+/// Validates that a device is selected and builds launch parameters
+/// from the dialog state. Returns an error to the user if validation fails.
 pub fn handle_launch(state: &mut AppState) -> UpdateResult {
-    use crate::tui::widgets::TargetTab;
-
-    // Check which tab is active
-    let active_tab = state.new_session_dialog_state.target_tab;
-
-    // Get selected device based on active tab
-    let device = if active_tab == TargetTab::Connected {
-        state
-            .new_session_dialog_state
-            .selected_connected_device()
-            .cloned()
-    } else {
-        None // Cannot launch bootable devices directly
-    };
-
-    if let Some(device) = device {
-        // Build dart_defines as Vec<String> in "key=value" format
-        let dart_defines: Vec<String> = state
-            .new_session_dialog_state
-            .dart_defines
-            .iter()
-            .map(|d| format!("{}={}", d.key, d.value))
-            .collect();
-
-        // Get config name if one is selected
-        let config_name = state
-            .new_session_dialog_state
-            .selected_config
-            .and_then(|idx| {
+    // Try to build launch params
+    if let Some(params) = state.new_session_dialog_state.build_launch_params() {
+        // Get device reference without unwrap
+        let device = match state.new_session_dialog_state.selected_device() {
+            Some(d) => d.clone(),
+            None => {
                 state
                     .new_session_dialog_state
-                    .configs
-                    .configs
-                    .get(idx)
-                    .map(|c| c.display_name.clone())
-            });
-
-        let flavor = if state.new_session_dialog_state.flavor.is_empty() {
-            None
-        } else {
-            Some(state.new_session_dialog_state.flavor.clone())
+                    .target_selector
+                    .set_error("Device no longer available".to_string());
+                return UpdateResult::none();
+            }
         };
 
         return UpdateResult::action(UpdateAction::LaunchFlutterSession {
             device,
-            mode: state.new_session_dialog_state.mode,
-            flavor,
-            dart_defines,
-            config_name,
+            mode: params.mode,
+            flavor: params.flavor,
+            dart_defines: params.dart_defines,
+            config_name: params.config_name,
         });
     } else {
         // Provide context-specific error message
+        use crate::app::new_session_dialog::TargetTab;
+        let active_tab = state.new_session_dialog_state.target_selector.active_tab;
+        let connected_count = state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .len();
+
         let error_msg = match active_tab {
             TargetTab::Bootable => {
-                if state.new_session_dialog_state.connected_devices.is_empty() {
+                if connected_count == 0 {
                     "No connected devices. Boot a device first, or switch to Connected tab."
                 } else {
                     "Switch to Connected tab to select a running device for launch."
                 }
             }
             TargetTab::Connected => {
-                if state.new_session_dialog_state.connected_devices.is_empty() {
+                if connected_count == 0 {
                     "No connected devices. Connect a device or start an emulator."
                 } else {
                     "Please select a device from the list."
@@ -242,25 +303,31 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
 
         state
             .new_session_dialog_state
+            .target_selector
             .set_error(error_msg.to_string());
     }
 
     UpdateResult::none()
 }
 
-/// Handle config auto-save success
+/// Handles successful configuration auto-save completion.
+///
+/// Called after FDemon configurations are automatically saved.
 pub fn handle_config_saved(_state: &mut AppState) -> UpdateResult {
     // Config auto-save completed successfully
     // Could add a transient notification here if desired
     UpdateResult::none()
 }
 
-/// Handle config auto-save failure
+/// Handles configuration auto-save failure.
+///
+/// Logs the error and displays an error message to the user.
 pub fn handle_config_save_failed(state: &mut AppState, error: String) -> UpdateResult {
     // Config auto-save failed
     tracing::warn!("Failed to auto-save config: {}", error);
     state
         .new_session_dialog_state
+        .target_selector
         .set_error(format!("Failed to save config: {}", error));
     UpdateResult::none()
 }

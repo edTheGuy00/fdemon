@@ -87,3 +87,35 @@ cargo fmt && cargo check && cargo clippy -- -D warnings
 - Use `tracing::info!` for expected cases (no configs)
 - Use `tracing::warn!` for unexpected failures
 - Don't show error dialogs to user for config loading - just use defaults
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/navigation.rs` | Added informational logging when no launch configurations are found (lines 159-165) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Used `tracing::info!` instead of `tracing::warn!`**: Since `load_all_configs` returns `LoadedConfigs` directly (not a `Result`), there are no loading failures to handle. An empty config list is an expected case (projects without custom launch configs), so `info!` level is appropriate rather than `warn!`.
+
+2. **No error handling for loading failures**: The function signature of `load_all_configs(&Path) -> LoadedConfigs` doesn't return a `Result`, so there are no errors to catch. The function internally handles any file reading issues and returns an empty `LoadedConfigs` on failure. This aligns with the "graceful degradation" approach - the dialog still opens with defaults.
+
+3. **Checked `configs.configs.is_empty()` instead of `configs.is_empty`**: While `LoadedConfigs` has an `is_empty` field, checking `configs.configs.is_empty()` is more explicit and doesn't rely on the field being properly updated.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (3.17s)
+- `cargo clippy -- -D warnings` - Passed (3.34s)
+
+### Risks/Limitations
+
+1. **No visibility of parsing errors**: Since `load_all_configs` doesn't return errors, if there's a malformed TOML or JSON file, the user won't see any feedback beyond the info log. This is acceptable per the task requirements ("don't show error dialogs to user for config loading - just use defaults"), but may make debugging config issues harder.
+
+2. **Log visibility**: The `tracing::info!` log is written to the log file (not visible in the TUI). Users won't see this message unless they check the log file. This is intentional per the task requirements.

@@ -950,10 +950,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         // NewSessionDialog Messages (Phase 5 - Target Selector)
         // ─────────────────────────────────────────────────────────
+        Message::OpenNewSessionDialog => new_session::handle_open_new_session_dialog(state),
+
+        Message::CloseNewSessionDialog => new_session::handle_close_new_session_dialog(state),
+
         Message::HideNewSessionDialog => {
             state.hide_new_session_dialog();
             UpdateResult::none()
         }
+
+        Message::NewSessionDialogEscape => new_session::handle_new_session_dialog_escape(state),
 
         Message::NewSessionDialogSwitchPane => new_session::handle_switch_pane(state),
 
@@ -1135,27 +1141,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             ios_simulators,
             android_avds,
         } => {
-            // Store discovered bootable devices in the new session dialog
-            // Convert to core::BootableDevice for unified handling using BootCommand
-            let mut bootable_devices = Vec::new();
-
-            // Convert iOS simulators via BootCommand
-            for sim in ios_simulators {
-                let cmd = crate::daemon::BootCommand::IosSimulator(sim);
-                bootable_devices.push(cmd.into());
-            }
-
-            // Convert Android AVDs via BootCommand
-            for avd in android_avds {
-                let cmd = crate::daemon::BootCommand::AndroidAvd(avd);
-                bootable_devices.push(cmd.into());
-            }
-
             // Update new session dialog state
             if state.is_new_session_dialog_visible() {
                 state
                     .new_session_dialog_state
-                    .set_bootable_devices(bootable_devices);
+                    .target_selector
+                    .set_bootable_devices(ios_simulators, android_avds);
             }
 
             UpdateResult::none()
@@ -1186,6 +1177,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if state.is_new_session_dialog_visible() {
                 state
                     .new_session_dialog_state
+                    .target_selector
                     .set_error(format!("Failed to boot {}: {}", device_id, error));
             }
 

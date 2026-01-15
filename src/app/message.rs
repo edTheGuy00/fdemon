@@ -1,5 +1,6 @@
 //! Message types for the application (TEA pattern)
 
+use crate::app::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::app::session::SessionId;
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::core::{BootableDevice, DaemonEvent};
@@ -7,7 +8,6 @@ use crate::daemon::{
     AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult, IosSimulator,
     ToolAvailability,
 };
-use crate::tui::widgets::{DartDefine, FuzzyModalType, TargetTab};
 use crossterm::event::KeyEvent;
 
 /// Type of device discovery (Connected or Bootable)
@@ -449,8 +449,17 @@ pub enum Message {
     /// Hide the new session dialog (cancel)
     HideNewSessionDialog,
 
+    /// Open the new session dialog
+    OpenNewSessionDialog,
+
+    /// Close the new session dialog
+    CloseNewSessionDialog,
+
     /// Switch focus between left (Target) and right (Launch) panes
     NewSessionDialogSwitchPane,
+
+    /// Cancel current modal or close dialog (context-aware Escape)
+    NewSessionDialogEscape,
 
     /// Switch between Connected and Bootable tabs (left pane)
     NewSessionDialogSwitchTab(TargetTab),

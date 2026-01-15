@@ -1,6 +1,7 @@
 /target
 /test-logs
 .DS_Store
+/tmp
 
 # License verification (personal records only)
 .licensure-summary.txt

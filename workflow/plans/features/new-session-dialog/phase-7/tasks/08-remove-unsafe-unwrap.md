@@ -91,3 +91,33 @@ cargo fmt && cargo check && cargo clippy -- -D warnings
 - This is a quick fix (15 minutes)
 - The `set_error()` method should already exist on `TargetSelectorState`
 - If `set_error()` doesn't exist, add it or use an alternative like `tracing::warn!()`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Replaced `unwrap()` call on line 244 with proper error handling using `match` expression. Device availability is now checked gracefully, showing user-friendly error via `set_error()` if device is missing. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Error Message**: Used "Device no longer available" as the error message to communicate that the device was previously selected but is now missing, which differentiates it from "No device selected".
+2. **Early Return Pattern**: Used early return with `UpdateResult::none()` on error to keep error handling clear and avoid nested code.
+
+### Testing Performed
+
+- `grep -n "unwrap()" src/app/handler/new_session/*.rs` - Passed (no unwrap calls found)
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --lib` - 1557 tests passed, 2 pre-existing test failures unrelated to this change
+
+### Risks/Limitations
+
+1. **Pre-existing Test Failures**: Two tests in `app::handler::tests::auto_launch_tests` are failing (`test_boot_started` and `test_device_discovery_failed`), but these are pre-existing failures unrelated to this change and need to be addressed separately.
+2. **None**: The change is defensive and handles an edge case that should theoretically not occur if `build_launch_params()` validates device existence, but it's better to be explicit about error handling per Rust idioms.

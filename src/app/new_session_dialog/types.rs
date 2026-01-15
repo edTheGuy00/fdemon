@@ -4,8 +4,17 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DialogPane {
     #[default]
-    Left, // Target Selector
-    Right, // Launch Context
+    TargetSelector,
+    LaunchContext,
+}
+
+impl DialogPane {
+    pub fn toggle(self) -> Self {
+        match self {
+            DialogPane::TargetSelector => DialogPane::LaunchContext,
+            DialogPane::LaunchContext => DialogPane::TargetSelector,
+        }
+    }
 }
 
 /// Tabs in the Target Selector pane
@@ -92,4 +101,62 @@ impl LaunchContextField {
         }
         prev
     }
+}
+
+/// Type of fuzzy modal
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuzzyModalType {
+    /// Configuration selection (from LoadedConfigs)
+    Config,
+    /// Flavor selection (from project + custom)
+    Flavor,
+}
+
+impl FuzzyModalType {
+    /// Get the modal title
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::Config => "Select Configuration",
+            Self::Flavor => "Select Flavor",
+        }
+    }
+
+    /// Whether custom input is allowed
+    pub fn allows_custom(&self) -> bool {
+        match self {
+            Self::Config => false, // Must select from list
+            Self::Flavor => true,  // Can type custom flavor
+        }
+    }
+}
+
+/// A single dart define key-value pair
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DartDefine {
+    pub key: String,
+    pub value: String,
+}
+
+impl DartDefine {
+    pub fn new(key: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    /// Format as command line argument
+    pub fn to_arg(&self) -> String {
+        format!("{}={}", self.key, self.value)
+    }
+}
+
+/// Parameters for launching a Flutter session
+#[derive(Debug, Clone)]
+pub struct LaunchParams {
+    pub device_id: String,
+    pub mode: crate::config::FlutterMode,
+    pub flavor: Option<String>,
+    pub dart_defines: Vec<String>,
+    pub config_name: Option<String>,
 }

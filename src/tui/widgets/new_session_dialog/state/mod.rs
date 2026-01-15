@@ -1,18 +1,8 @@
 //! State definitions for NewSessionDialog
+//!
+//! DEPRECATED: State types have been moved to `crate::app::new_session_dialog`.
+//! This module now re-exports from the App layer for backward compatibility.
+//! Direct imports from this module are deprecated and will be removed in a future version.
 
-// Submodules
-mod dart_defines;
-mod dialog;
-mod fuzzy_modal;
-mod launch_context;
-mod types;
-
-// Re-export all types for backward compatibility
-pub use dart_defines::*;
-pub use dialog::*;
-pub use fuzzy_modal::*;
-pub use launch_context::*;
-pub use types::*;
-
-#[cfg(test)]
-mod tests;
+// Re-export all types from App layer
+pub use crate::app::new_session_dialog::*;

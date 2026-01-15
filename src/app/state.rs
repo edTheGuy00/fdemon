@@ -4,12 +4,13 @@ use std::path::PathBuf;
 
 use rand::Rng;
 
+use crate::app::new_session_dialog::NewSessionDialogState;
 use crate::config::{
     FlutterMode, LoadedConfigs, Settings, SettingsTab, SourcedConfig, UserPreferences,
 };
 use crate::core::AppPhase;
 use crate::daemon::{Device, ToolAvailability};
-use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState, NewSessionDialogState};
+use crate::tui::widgets::{ConfirmDialogState, DeviceSelectorState};
 
 use super::session_manager::SessionManager;
 
@@ -916,7 +917,7 @@ impl AppState {
             phase: AppPhase::Initializing,
             settings_view_state: SettingsViewState::new(),
             startup_dialog_state: StartupDialogState::new(),
-            new_session_dialog_state: NewSessionDialogState::new(),
+            new_session_dialog_state: NewSessionDialogState::new(LoadedConfigs::default()),
             loading_state: None,
             device_cache: None,
             devices_last_updated: None,
@@ -979,7 +980,7 @@ impl AppState {
 
     /// Show the new session dialog
     pub fn show_new_session_dialog(&mut self, configs: LoadedConfigs) {
-        self.new_session_dialog_state = NewSessionDialogState::with_configs(configs);
+        self.new_session_dialog_state = NewSessionDialogState::new(configs);
         self.ui_mode = UiMode::NewSessionDialog;
     }
 

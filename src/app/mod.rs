@@ -2,6 +2,7 @@
 
 pub mod handler;
 pub mod message;
+pub mod new_session_dialog;
 pub mod session;
 pub mod session_manager;
 pub mod state;

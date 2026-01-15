@@ -4,7 +4,7 @@ mod confirm_dialog;
 mod device_selector;
 mod header;
 mod log_view;
-mod new_session_dialog;
+pub mod new_session_dialog;
 mod search_input;
 mod settings_panel;
 mod startup_dialog;

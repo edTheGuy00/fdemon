@@ -144,3 +144,34 @@ cargo fmt && cargo check && cargo clippy -- -D warnings
 - Key routing priority: Ctrl+C > Modals > Main dialog > Focused pane
 - Modal state must be checked before routing to pane handlers
 - `handle_launch_context_key` needs dialog reference to check focused field for Left/Right mode cycling
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/keys.rs` | Implemented complete keyboard routing for NewSessionDialog with modal-aware handling and pane-specific key routing |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import Scoping**: Moved `LaunchContextField` import to the `handle_launch_context_key` function to avoid scoping issues. Each helper function now imports only the types it needs.
+2. **State Parameter**: Updated `handle_key_new_session_dialog` signature to accept `&AppState` to access `new_session_dialog_state` for routing decisions.
+3. **Match Guard Pattern**: Used `_ if dialog.is_fuzzy_modal_open()` pattern to check modal state before other key handling, ensuring modals have highest priority after Ctrl+C.
+4. **Helper Functions**: Created four helper functions (`handle_fuzzy_modal_key`, `handle_dart_defines_modal_key`, `handle_target_selector_key`, `handle_launch_context_key`) for clean separation of concerns and maintainability.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- Unit tests compilation: Some existing tests fail due to outdated dialog structure from previous refactoring (not related to this task)
+
+### Risks/Limitations
+
+1. **Existing test failures**: Pre-existing tests in `src/app/handler/tests.rs` reference old dialog state structure (e.g., direct access to `connected_devices` instead of `target_selector.connected_devices`). These tests need updating but are outside the scope of this task which focuses only on key routing implementation.
+2. **Manual testing required**: Full keyboard navigation should be manually tested once the dialog UI is rendered to verify all key combinations work as expected.

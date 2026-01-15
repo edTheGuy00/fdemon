@@ -103,14 +103,14 @@ Phase 6.1 must be completed first because it restructures the files modified in 
 
 | # | Task | Status | Depends On | Est. | Modules | Priority |
 |---|------|--------|------------|------|---------|----------|
-| 5 | [05-fix-test-suite](tasks/05-fix-test-suite.md) | Not Started | 4 | 4-6h | `app/handler/tests.rs`, `new_session_dialog/state/tests/` | CRITICAL |
-| 6 | [06-fix-layer-boundaries](tasks/06-fix-layer-boundaries.md) | Not Started | 4 | 2-3h | `app/new_session_dialog/`, `tui/widgets/new_session_dialog/` | CRITICAL |
-| 7 | [07-complete-key-routing](tasks/07-complete-key-routing.md) | Not Started | 4 | 1-2h | `app/handler/keys.rs` | CRITICAL |
-| 8 | [08-remove-unsafe-unwrap](tasks/08-remove-unsafe-unwrap.md) | Not Started | 4 | 15m | `app/handler/new_session/launch_context.rs` | CRITICAL |
-| 9 | [09-modal-exclusivity](tasks/09-modal-exclusivity.md) | Not Started | 4 | 20m | `new_session_dialog/state/dialog.rs` | Major |
-| 10 | [10-config-error-handling](tasks/10-config-error-handling.md) | Not Started | 4 | 20m | `app/handler/new_session/navigation.rs` | Major |
-| 11 | [11-add-doc-comments](tasks/11-add-doc-comments.md) | Not Started | 4 | 30m | `app/handler/new_session/*.rs` | Minor |
-| 12 | [12-extract-footer-constants](tasks/12-extract-footer-constants.md) | Not Started | 4 | 15m | `tui/widgets/new_session_dialog/mod.rs` | Minor |
+| 5 | [05-fix-test-suite](tasks/05-fix-test-suite.md) | Done | 4 | 4-6h | `app/handler/tests.rs`, `new_session_dialog/state/tests/` | CRITICAL |
+| 6 | [06-fix-layer-boundaries](tasks/06-fix-layer-boundaries.md) | Done | 4 | 2-3h | `app/new_session_dialog/`, `tui/widgets/new_session_dialog/` | CRITICAL |
+| 7 | [07-complete-key-routing](tasks/07-complete-key-routing.md) | Done | 4 | 1-2h | `app/handler/keys.rs` | CRITICAL |
+| 8 | [08-remove-unsafe-unwrap](tasks/08-remove-unsafe-unwrap.md) | Done | 4 | 15m | `app/handler/new_session/launch_context.rs` | CRITICAL |
+| 9 | [09-modal-exclusivity](tasks/09-modal-exclusivity.md) | Done | 4 | 20m | `new_session_dialog/state/dialog.rs` | Major |
+| 10 | [10-config-error-handling](tasks/10-config-error-handling.md) | Done | 4 | 20m | `app/handler/new_session/navigation.rs` | Major |
+| 11 | [11-add-doc-comments](tasks/11-add-doc-comments.md) | Done | 4 | 30m | `app/handler/new_session/*.rs` | Minor |
+| 12 | [12-extract-footer-constants](tasks/12-extract-footer-constants.md) | Done | 4 | 15m | `tui/widgets/new_session_dialog/mod.rs` | Minor |
 
 ## Success Criteria
 
@@ -129,13 +129,13 @@ Phase 6.1 must be completed first because it restructures the files modified in 
 
 Phase 7 is complete when:
 
-- [ ] `cargo test --lib` compiles without errors (Task 05)
-- [ ] No TUI imports in App layer files (Task 06)
-- [ ] All keys routed correctly - dialog fully navigable (Task 07)
-- [ ] No `unwrap()` calls in handler code (Task 08)
-- [ ] Modal exclusivity assertions in place (Task 09)
-- [ ] Config loading errors handled gracefully (Task 10)
-- [ ] `cargo fmt && cargo check && cargo test --lib && cargo clippy -- -D warnings` passes
+- [x] `cargo test --lib` compiles without errors (Task 05)
+- [x] No TUI imports in App layer files (Task 06)
+- [x] All keys routed correctly - dialog fully navigable (Task 07)
+- [x] No `unwrap()` calls in handler code (Task 08)
+- [x] Modal exclusivity assertions in place (Task 09)
+- [x] Config loading errors handled gracefully (Task 10)
+- [x] `cargo fmt && cargo check && cargo test --lib && cargo clippy -- -D warnings` passes
 
 ## Pane Focus
 

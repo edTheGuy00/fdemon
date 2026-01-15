@@ -4,48 +4,44 @@
 
 use crate::app::handler::UpdateResult;
 use crate::app::message::Message;
+use crate::app::new_session_dialog::FuzzyModalType;
 use crate::app::state::AppState;
 use tracing::warn;
 
 /// Handle opening fuzzy modal
-pub fn handle_open_fuzzy_modal(
-    state: &mut AppState,
-    modal_type: crate::tui::widgets::FuzzyModalType,
-) -> UpdateResult {
+pub fn handle_open_fuzzy_modal(state: &mut AppState, modal_type: FuzzyModalType) -> UpdateResult {
     // Prevent opening a modal when another is already open
     if state.new_session_dialog_state.has_modal_open() {
         warn!("Cannot open fuzzy modal while another modal is open");
         return UpdateResult::none();
     }
 
-    let items = match modal_type {
-        crate::tui::widgets::FuzzyModalType::Config => state
-            .new_session_dialog_state
-            .configs
-            .configs
-            .iter()
-            .map(|c| c.display_name.clone())
-            .collect(),
-        crate::tui::widgets::FuzzyModalType::Flavor => {
+    match modal_type {
+        FuzzyModalType::Config => {
+            state.new_session_dialog_state.open_config_modal();
+            // Initial filter with empty query (show all)
+            apply_fuzzy_filter(state);
+        }
+        FuzzyModalType::Flavor => {
             // TODO: Get flavors from project analysis
             // For now, use any existing flavor as suggestion
             let mut flavors = Vec::new();
-            if !state.new_session_dialog_state.flavor.is_empty() {
-                flavors.push(state.new_session_dialog_state.flavor.clone());
+            if let Some(ref flavor) = state.new_session_dialog_state.launch_context.flavor {
+                if !flavor.is_empty() {
+                    flavors.push(flavor.clone());
+                }
             }
-            flavors
+            state.new_session_dialog_state.open_flavor_modal(flavors);
+            // Initial filter with empty query (show all)
+            apply_fuzzy_filter(state);
         }
     };
-
-    state
-        .new_session_dialog_state
-        .open_fuzzy_modal(modal_type, items);
     UpdateResult::none()
 }
 
 /// Handle closing fuzzy modal
 pub fn handle_close_fuzzy_modal(state: &mut AppState) -> UpdateResult {
-    state.new_session_dialog_state.close_fuzzy_modal();
+    state.new_session_dialog_state.close_modal();
     UpdateResult::none()
 }
 
@@ -73,14 +69,14 @@ pub fn handle_fuzzy_confirm(
     if let Some(ref modal) = state.new_session_dialog_state.fuzzy_modal {
         if let Some(value) = modal.selected_value() {
             match modal.modal_type {
-                crate::tui::widgets::FuzzyModalType::Config => {
+                FuzzyModalType::Config => {
                     // Use the new config selected message
                     return update_fn(
                         state,
                         Message::NewSessionDialogConfigSelected { config_name: value },
                     );
                 }
-                crate::tui::widgets::FuzzyModalType::Flavor => {
+                FuzzyModalType::Flavor => {
                     // Use the new flavor selected message which handles auto-save
                     return update_fn(
                         state,
@@ -92,7 +88,7 @@ pub fn handle_fuzzy_confirm(
             }
         }
     }
-    state.new_session_dialog_state.close_fuzzy_modal();
+    state.new_session_dialog_state.close_modal();
     UpdateResult::none()
 }
 
@@ -100,6 +96,7 @@ pub fn handle_fuzzy_confirm(
 pub fn handle_fuzzy_input(state: &mut AppState, c: char) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
         modal.input_char(c);
+        apply_fuzzy_filter(state);
     }
     UpdateResult::none()
 }
@@ -108,6 +105,7 @@ pub fn handle_fuzzy_input(state: &mut AppState, c: char) -> UpdateResult {
 pub fn handle_fuzzy_backspace(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
         modal.backspace();
+        apply_fuzzy_filter(state);
     }
     UpdateResult::none()
 }
@@ -116,6 +114,20 @@ pub fn handle_fuzzy_backspace(state: &mut AppState) -> UpdateResult {
 pub fn handle_fuzzy_clear(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
         modal.clear_query();
+        apply_fuzzy_filter(state);
     }
     UpdateResult::none()
+}
+
+/// Apply fuzzy filter to current modal state
+fn apply_fuzzy_filter(state: &mut AppState) {
+    if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+        // Import the filter function from TUI layer
+        use crate::tui::widgets::new_session_dialog::fuzzy_modal::fuzzy_filter;
+
+        let query = &modal.query;
+        let items = &modal.items;
+        let filtered = fuzzy_filter(query, items);
+        modal.update_filter(filtered);
+    }
 }

@@ -44,7 +44,7 @@ pub fn handle_dart_defines_switch_pane(state: &mut AppState) -> UpdateResult {
 /// Handle navigation up in dart defines list
 pub fn handle_dart_defines_up(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::DartDefinesPane;
+        use crate::app::new_session_dialog::DartDefinesPane;
         if modal.active_pane == DartDefinesPane::List {
             modal.navigate_up();
         }
@@ -55,7 +55,7 @@ pub fn handle_dart_defines_up(state: &mut AppState) -> UpdateResult {
 /// Handle navigation down in dart defines list
 pub fn handle_dart_defines_down(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::DartDefinesPane;
+        use crate::app::new_session_dialog::DartDefinesPane;
         if modal.active_pane == DartDefinesPane::List {
             modal.navigate_down();
         }
@@ -66,7 +66,7 @@ pub fn handle_dart_defines_down(state: &mut AppState) -> UpdateResult {
 /// Handle confirm action in dart defines modal
 pub fn handle_dart_defines_confirm(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::{DartDefinesEditField, DartDefinesPane};
+        use crate::app::new_session_dialog::{DartDefinesEditField, DartDefinesPane};
         match modal.active_pane {
             DartDefinesPane::List => {
                 // Load selected item into edit form
@@ -98,7 +98,7 @@ pub fn handle_dart_defines_confirm(state: &mut AppState) -> UpdateResult {
 /// Handle field navigation in dart defines edit pane
 pub fn handle_dart_defines_next_field(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::DartDefinesPane;
+        use crate::app::new_session_dialog::DartDefinesPane;
         if modal.active_pane == DartDefinesPane::Edit {
             modal.next_field();
         }
@@ -109,7 +109,7 @@ pub fn handle_dart_defines_next_field(state: &mut AppState) -> UpdateResult {
 /// Handle character input in dart defines edit pane
 pub fn handle_dart_defines_input(state: &mut AppState, c: char) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::DartDefinesPane;
+        use crate::app::new_session_dialog::DartDefinesPane;
         if modal.active_pane == DartDefinesPane::Edit {
             modal.input_char(c);
         }
@@ -120,7 +120,7 @@ pub fn handle_dart_defines_input(state: &mut AppState, c: char) -> UpdateResult 
 /// Handle backspace in dart defines edit pane
 pub fn handle_dart_defines_backspace(state: &mut AppState) -> UpdateResult {
     if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
-        use crate::tui::widgets::DartDefinesPane;
+        use crate::app::new_session_dialog::DartDefinesPane;
         if modal.active_pane == DartDefinesPane::Edit {
             modal.backspace();
         }

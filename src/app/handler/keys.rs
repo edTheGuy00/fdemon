@@ -16,7 +16,7 @@ pub fn handle_key(state: &AppState, key: KeyEvent) -> Option<Message> {
         UiMode::LinkHighlight => handle_key_link_highlight(key),
         UiMode::Settings => handle_key_settings(state, key),
         UiMode::StartupDialog => handle_key_startup_dialog(state, key),
-        UiMode::NewSessionDialog => handle_key_new_session_dialog(key),
+        UiMode::NewSessionDialog => handle_key_new_session_dialog(key, state),
     }
 }
 
@@ -217,14 +217,14 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         }
 
         // 'd' for adding device/session (alternative to '+')
-        // If sessions are running: show quick device selector
+        // If sessions are running: show new session dialog (unified UI)
         // If no sessions: show full startup dialog
         // Don't show dialogs while loading (auto-launch in progress)
         (KeyCode::Char('d'), KeyModifiers::NONE) => {
             if state.ui_mode == UiMode::Loading {
                 None
             } else if state.has_running_sessions() {
-                Some(Message::ShowDeviceSelector)
+                Some(Message::OpenNewSessionDialog)
             } else {
                 Some(Message::ShowStartupDialog)
             }
@@ -676,16 +676,88 @@ fn handle_key_startup_dialog_text_input(key: KeyEvent) -> Option<Message> {
 }
 
 /// Handle key events in new session dialog mode
-/// Placeholder implementation - full implementation comes in Phase 2-3
-fn handle_key_new_session_dialog(key: KeyEvent) -> Option<Message> {
-    match (key.code, key.modifiers) {
-        // Escape to close dialog
-        (KeyCode::Esc, _) => Some(Message::HideNewSessionDialog),
+fn handle_key_new_session_dialog(key: KeyEvent, state: &AppState) -> Option<Message> {
+    use crate::app::new_session_dialog::{DialogPane, TargetTab};
 
-        // Ctrl+C to quit
+    let dialog = &state.new_session_dialog_state;
+
+    match (key.code, key.modifiers) {
+        // Ctrl+C to quit (highest priority)
         (KeyCode::Char('c'), m) if m.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
 
-        // Placeholder - all other keys ignored during transition
+        // Check if modal is open first
+        _ if dialog.is_fuzzy_modal_open() => handle_fuzzy_modal_key(key),
+        _ if dialog.is_dart_defines_modal_open() => handle_dart_defines_modal_key(key),
+
+        // Main dialog keys
+        (KeyCode::Esc, _) => Some(Message::NewSessionDialogEscape),
+        (KeyCode::Tab, KeyModifiers::NONE) => Some(Message::NewSessionDialogSwitchPane),
+        (KeyCode::Char('1'), KeyModifiers::NONE) => {
+            Some(Message::NewSessionDialogSwitchTab(TargetTab::Connected))
+        }
+        (KeyCode::Char('2'), KeyModifiers::NONE) => {
+            Some(Message::NewSessionDialogSwitchTab(TargetTab::Bootable))
+        }
+
+        // Route based on focused pane
+        _ => match dialog.focused_pane {
+            DialogPane::TargetSelector => handle_target_selector_key(key),
+            DialogPane::LaunchContext => handle_launch_context_key(key, dialog),
+        },
+    }
+}
+
+fn handle_fuzzy_modal_key(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Up => Some(Message::NewSessionDialogFuzzyUp),
+        KeyCode::Down => Some(Message::NewSessionDialogFuzzyDown),
+        KeyCode::Enter => Some(Message::NewSessionDialogFuzzyConfirm),
+        KeyCode::Esc => Some(Message::NewSessionDialogCloseFuzzyModal),
+        KeyCode::Backspace => Some(Message::NewSessionDialogFuzzyBackspace),
+        KeyCode::Char(c) => Some(Message::NewSessionDialogFuzzyInput { c }),
+        _ => None,
+    }
+}
+
+fn handle_dart_defines_modal_key(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Tab => Some(Message::NewSessionDialogDartDefinesSwitchPane),
+        KeyCode::Up => Some(Message::NewSessionDialogDartDefinesUp),
+        KeyCode::Down => Some(Message::NewSessionDialogDartDefinesDown),
+        KeyCode::Enter => Some(Message::NewSessionDialogDartDefinesConfirm),
+        KeyCode::Esc => Some(Message::NewSessionDialogCloseDartDefinesModal),
+        KeyCode::Backspace => Some(Message::NewSessionDialogDartDefinesBackspace),
+        KeyCode::Char(c) => Some(Message::NewSessionDialogDartDefinesInput { c }),
+        _ => None,
+    }
+}
+
+fn handle_target_selector_key(key: KeyEvent) -> Option<Message> {
+    match key.code {
+        KeyCode::Up => Some(Message::NewSessionDialogDeviceUp),
+        KeyCode::Down => Some(Message::NewSessionDialogDeviceDown),
+        KeyCode::Enter => Some(Message::NewSessionDialogDeviceSelect),
+        KeyCode::Char('r') => Some(Message::NewSessionDialogRefreshDevices),
+        _ => None,
+    }
+}
+
+fn handle_launch_context_key(
+    key: KeyEvent,
+    dialog: &crate::app::new_session_dialog::NewSessionDialogState,
+) -> Option<Message> {
+    use crate::app::new_session_dialog::LaunchContextField;
+
+    match key.code {
+        KeyCode::Up => Some(Message::NewSessionDialogFieldPrev),
+        KeyCode::Down => Some(Message::NewSessionDialogFieldNext),
+        KeyCode::Enter => Some(Message::NewSessionDialogFieldActivate),
+        KeyCode::Left if dialog.launch_context.focused_field == LaunchContextField::Mode => {
+            Some(Message::NewSessionDialogModePrev)
+        }
+        KeyCode::Right if dialog.launch_context.focused_field == LaunchContextField::Mode => {
+            Some(Message::NewSessionDialogModeNext)
+        }
         _ => None,
     }
 }
@@ -834,7 +906,7 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('d')));
 
-        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
     }
 
     #[test]

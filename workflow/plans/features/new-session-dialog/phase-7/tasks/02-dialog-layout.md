@@ -328,3 +328,39 @@ cargo fmt && cargo check && cargo test new_session_dialog && cargo clippy -- -D 
 - Two-pane layout splits 50/50
 - Footer text changes based on context
 - Graceful handling of small terminals
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/widgets/new_session_dialog/mod.rs` | Added `NewSessionDialog` widget with two-pane layout, footer, minimum size handling, and 4 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **No separate styles module**: The task plan referenced a `styles` module, but since styling is minimal (just Color constants), I kept styles inline in the widget implementation following the pattern used by existing widgets in the codebase.
+
+2. **Widget already exported**: The `src/tui/widgets/mod.rs` already had `pub use new_session_dialog::*;` from previous phases, so no modification was needed to that file. The NewSessionDialog widget is automatically exported.
+
+3. **Reused existing child widgets**: The task correctly identified that `TargetSelector` and `LaunchContextWithDevice` widgets already exist from previous phases. The main dialog simply composes these widgets into a two-pane layout.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no errors or warnings in new code)
+- Unit tests added:
+  - `test_dialog_renders` - Verifies dialog renders with "New Session" title
+  - `test_centered_rect` - Verifies 80% width, 70% height centering calculation
+  - `test_fits_in_area` - Verifies minimum size validation (80x24)
+  - `test_too_small_message` - Verifies "too small" message renders when area is insufficient
+
+**Note**: Full test suite (`cargo test`) currently fails due to unrelated compilation errors in `src/app/handler/tests.rs` and `src/tui/widgets/new_session_dialog/state/tests/dialog_tests.rs`. These test files reference the old state API from before Task 01's refactoring (e.g., accessing `state.flavor` instead of `state.launch_context.flavor`, calling `open_fuzzy_modal()` instead of `open_flavor_modal()`, etc.). These test files need to be updated to use the new API, but that is outside the scope of this task which focuses solely on implementing the dialog layout widget.
+
+### Risks/Limitations
+
+1. **Existing tests need update**: As noted above, existing tests in other modules reference the old state structure and will need updating in a follow-up task to align with the Phase 7 refactored state structure.

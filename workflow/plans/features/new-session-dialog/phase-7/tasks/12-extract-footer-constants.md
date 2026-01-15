@@ -81,3 +81,30 @@ cargo fmt && cargo check && cargo clippy -- -D warnings
 - Group related constants together
 - Consider if context-sensitive footers (per pane) are needed
 - This is a pure refactoring task - no behavior changes
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/mod.rs` | Extracted three footer strings to module-level constants (FOOTER_MAIN, FOOTER_FUZZY_MODAL, FOOTER_DART_DEFINES) with doc comments, updated footer_text() method to use constants |
+
+### Notable Decisions/Tradeoffs
+
+1. **Implemented only used constants**: Only extracted the three footer strings that are actually used in the current implementation (FOOTER_MAIN, FOOTER_FUZZY_MODAL, FOOTER_DART_DEFINES). Did not add FOOTER_TARGET_SELECTOR and FOOTER_LAUNCH_CONTEXT mentioned in the task spec since they are not currently referenced in the code.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --test '*' --lib -- new_session_dialog` - Passed (145 tests)
+
+### Risks/Limitations
+
+1. **None identified**: This is a pure refactoring with no functional changes. All tests pass and the behavior remains identical.
