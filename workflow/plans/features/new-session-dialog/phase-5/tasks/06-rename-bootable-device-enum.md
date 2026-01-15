@@ -78,3 +78,37 @@ rg "use.*BootableDevice" --type rust
 - This is a straightforward rename with no logic changes
 - All tests should continue to pass unchanged
 - Consider adding a comment to the enum explaining its purpose vs the core type
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/device_groups.rs` | Renamed enum `BootableDevice` → `GroupedBootableDevice`, updated all internal references, added doc comment explaining distinction from core type |
+| `src/tui/widgets/new_session_dialog/device_list.rs` | Updated import to use `GroupedBootableDevice`, updated function signature and test code |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Updated import to use `GroupedBootableDevice`, updated match expressions and return type for `selected_bootable_device()` |
+| `src/tui/widgets/new_session_dialog/mod.rs` | No changes needed (wildcard re-export automatically picks up renamed type) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added clarifying doc comment**: Added documentation to `GroupedBootableDevice` explaining it's distinct from `core::BootableDevice` domain type, preventing future confusion.
+2. **Name choice**: Chose `GroupedBootableDevice` to clearly indicate this enum is for grouping bootable devices in the TUI rendering layer, distinguishing it from the core domain type.
+3. **Struct vs Enum**: Kept `BootableDeviceList` struct name unchanged - only the enum needed renaming to avoid conflict.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (1 dead_code warning for unrelated method)
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test` - 1534 passed; 1 failed (unrelated pre-existing test failure in `test_switch_tab_skips_header`)
+- Verified no ambiguous imports: All `BootableDevice` imports now correctly reference `core::BootableDevice`, TUI layer uses `GroupedBootableDevice`
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: One test (`test_switch_tab_skips_header`) was already failing from phase 5 commit (f133a63). This test failure is NOT caused by the rename - it's related to `first_selectable_target_index()` logic in state.rs which was added in that commit. The test expects selection index 1 but gets 0. This should be addressed separately.
+2. **No breaking changes**: This is an internal TUI type rename with no API surface changes - safe to merge.

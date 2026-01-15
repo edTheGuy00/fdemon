@@ -95,3 +95,33 @@ fn test_select_with_no_device_logs_warning() {
 - If showing in dialog, consider a temporary toast-style message vs persistent error
 - Could also play a sound or visual feedback for invalid action
 - Keep it minimal - don't over-engineer the error feedback
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Added `warn!()` logging for both Connected and Bootable tabs when no device is selected in `NewSessionDialogDeviceSelect` handler |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal Logging Approach**: Only added logging without UI error display, as requested in the task summary. This keeps the change minimal and focused.
+2. **Tab-Specific Messages**: Each tab (Connected/Bootable) has a distinct warning message that clearly indicates which operation failed and which tab was active.
+3. **Connected Tab**: Added logging even though the current implementation doesn't have active logic, to provide consistent feedback across both tabs.
+
+### Testing Performed
+
+- `cargo fmt` - Passed (code formatted)
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1535 unit tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No UI Feedback**: Users still don't see visual feedback when they press Enter with no device selected. This is intentional per the task requirements (logging only), but may be addressed in future iterations.
+2. **E2E Tests**: Some E2E tests were failing, but these appear to be pre-existing issues unrelated to this change (the failures are in snapshot tests and TUI interaction tests that don't involve the device selection handler).

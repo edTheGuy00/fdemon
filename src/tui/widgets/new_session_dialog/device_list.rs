@@ -12,11 +12,15 @@ use ratatui::{
 };
 
 use super::device_groups::{
-    flatten_groups, group_bootable_devices, group_connected_devices, BootableDevice, DeviceListItem,
+    flatten_groups, group_bootable_devices, group_connected_devices, DeviceListItem,
+    GroupedBootableDevice,
 };
 use crate::daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
-/// Styles for the device list
+/// Styling configuration for device list rendering.
+///
+/// Defines colors and styles for headers, devices, selection indicators,
+/// and various device states (connected, disconnected, booting).
 #[derive(Debug, Clone)]
 pub struct DeviceListStyles {
     pub header: Style,
@@ -144,7 +148,7 @@ impl<'a> BootableDeviceList<'a> {
 
     fn render_item(
         &self,
-        item: &DeviceListItem<BootableDevice>,
+        item: &DeviceListItem<GroupedBootableDevice>,
         index: usize,
     ) -> ListItem<'static> {
         match item {
@@ -432,7 +436,7 @@ mod tests {
             device_type: "iPhone 15".to_string(),
         };
 
-        let device = BootableDevice::IosSimulator(sim);
+        let device = GroupedBootableDevice::IosSimulator(sim);
         assert_eq!(device.display_name(), "iPhone 15");
         assert_eq!(device.platform(), "iOS");
         assert_eq!(device.runtime_info(), "iOS 17.2");
@@ -447,7 +451,7 @@ mod tests {
             target: None,
         };
 
-        let device = BootableDevice::AndroidAvd(avd);
+        let device = GroupedBootableDevice::AndroidAvd(avd);
         assert_eq!(device.display_name(), "Pixel 6");
         assert_eq!(device.platform(), "Android");
         assert_eq!(device.runtime_info(), "API 33");
@@ -462,7 +466,7 @@ mod tests {
             target: None,
         };
 
-        let device = BootableDevice::AndroidAvd(avd);
+        let device = GroupedBootableDevice::AndroidAvd(avd);
         assert_eq!(device.runtime_info(), "Unknown API");
     }
 

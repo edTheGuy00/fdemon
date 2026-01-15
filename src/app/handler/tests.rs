@@ -2857,19 +2857,40 @@ mod auto_launch_tests {
     #[test]
     fn test_device_discovery_failed() {
         let mut state = AppState::new();
+        // Test connected discovery failure
         state.new_session_dialog_state.loading_connected = true;
         state.new_session_dialog_state.loading_bootable = true;
 
         let _ = update(
             &mut state,
-            Message::NewSessionDialogDeviceDiscoveryFailed("Discovery error".into()),
+            Message::NewSessionDialogDeviceDiscoveryFailed {
+                error: "Connected discovery error".into(),
+                discovery_type: crate::app::message::DiscoveryType::Connected,
+            },
         );
 
         assert!(!state.new_session_dialog_state.loading_connected);
+        assert!(state.new_session_dialog_state.loading_bootable); // Should remain true!
+        assert!(state.new_session_dialog_state.error.is_some());
+
+        // Test bootable discovery failure
+        state.new_session_dialog_state.loading_connected = true;
+        state.new_session_dialog_state.loading_bootable = true;
+        state.new_session_dialog_state.error = None;
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogDeviceDiscoveryFailed {
+                error: "Bootable discovery error".into(),
+                discovery_type: crate::app::message::DiscoveryType::Bootable,
+            },
+        );
+
+        assert!(state.new_session_dialog_state.loading_connected); // Should remain true!
         assert!(!state.new_session_dialog_state.loading_bootable);
         assert_eq!(
             state.new_session_dialog_state.error,
-            Some("Discovery error".into())
+            Some("Bootable discovery error".into())
         );
     }
 

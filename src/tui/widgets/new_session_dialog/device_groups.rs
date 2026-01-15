@@ -104,27 +104,29 @@ impl BootablePlatformGroup {
     }
 }
 
-/// Bootable device wrapper for grouping
+/// Bootable device wrapper for grouping in the TUI layer.
+/// This enum wraps IosSimulator and AndroidAvd for device list rendering.
+/// Note: Distinct from `core::BootableDevice` domain type which has different structure.
 #[derive(Debug, Clone)]
-pub enum BootableDevice {
+pub enum GroupedBootableDevice {
     IosSimulator(IosSimulator),
     AndroidAvd(AndroidAvd),
 }
 
-impl BootableDevice {
+impl GroupedBootableDevice {
     /// Get the display name for this bootable device
     pub fn display_name(&self) -> &str {
         match self {
-            BootableDevice::IosSimulator(sim) => &sim.name,
-            BootableDevice::AndroidAvd(avd) => &avd.display_name,
+            GroupedBootableDevice::IosSimulator(sim) => &sim.name,
+            GroupedBootableDevice::AndroidAvd(avd) => &avd.display_name,
         }
     }
 
     /// Get runtime information as a string
     pub fn runtime_info(&self) -> String {
         match self {
-            BootableDevice::IosSimulator(sim) => sim.runtime.clone(),
-            BootableDevice::AndroidAvd(avd) => avd
+            GroupedBootableDevice::IosSimulator(sim) => sim.runtime.clone(),
+            GroupedBootableDevice::AndroidAvd(avd) => avd
                 .api_level
                 .map(|api| format!("API {}", api))
                 .unwrap_or_else(|| "Unknown API".to_string()),
@@ -134,8 +136,8 @@ impl BootableDevice {
     /// Get platform name
     pub fn platform(&self) -> &'static str {
         match self {
-            BootableDevice::IosSimulator(_) => "iOS",
-            BootableDevice::AndroidAvd(_) => "Android",
+            GroupedBootableDevice::IosSimulator(_) => "iOS",
+            GroupedBootableDevice::AndroidAvd(_) => "Android",
         }
     }
 }
@@ -144,15 +146,15 @@ impl BootableDevice {
 pub fn group_bootable_devices(
     ios_simulators: &[IosSimulator],
     android_avds: &[AndroidAvd],
-) -> Vec<DeviceGroup<BootableDevice>> {
+) -> Vec<DeviceGroup<GroupedBootableDevice>> {
     let mut groups = Vec::new();
 
     // iOS Simulators group
     if !ios_simulators.is_empty() {
-        let devices: Vec<BootableDevice> = ios_simulators
+        let devices: Vec<GroupedBootableDevice> = ios_simulators
             .iter()
             .cloned()
-            .map(BootableDevice::IosSimulator)
+            .map(GroupedBootableDevice::IosSimulator)
             .collect();
         groups.push(DeviceGroup::new(
             BootablePlatformGroup::IosSimulators.header(),
@@ -162,10 +164,10 @@ pub fn group_bootable_devices(
 
     // Android AVDs group
     if !android_avds.is_empty() {
-        let devices: Vec<BootableDevice> = android_avds
+        let devices: Vec<GroupedBootableDevice> = android_avds
             .iter()
             .cloned()
-            .map(BootableDevice::AndroidAvd)
+            .map(GroupedBootableDevice::AndroidAvd)
             .collect();
         groups.push(DeviceGroup::new(
             BootablePlatformGroup::AndroidAvds.header(),
@@ -211,6 +213,40 @@ pub fn selectable_indices<T>(items: &[DeviceListItem<T>]) -> Vec<usize> {
         .collect()
 }
 
+/// Check if an index points to a header
+fn is_header<T>(items: &[DeviceListItem<T>], index: usize) -> bool {
+    items
+        .get(index)
+        .map(|item| matches!(item, DeviceListItem::Header(_)))
+        .unwrap_or(false)
+}
+
+/// Find nearest selectable index (not a header)
+///
+/// If the current index points to a header, finds the nearest device.
+/// Tries forward first, then backward, then returns 0 as fallback.
+fn nearest_selectable<T>(items: &[DeviceListItem<T>], index: usize) -> usize {
+    let selectable = selectable_indices(items);
+    if selectable.is_empty() {
+        return 0;
+    }
+
+    // If index is already selectable, return it
+    if selectable.contains(&index) {
+        return index;
+    }
+
+    // Try forward first
+    for &i in &selectable {
+        if i >= index {
+            return i;
+        }
+    }
+
+    // Then backward (return last selectable)
+    selectable[selectable.len() - 1]
+}
+
 /// Navigate to next selectable item
 pub fn next_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize {
     let selectable = selectable_indices(items);
@@ -218,8 +254,15 @@ pub fn next_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
         return 0;
     }
 
+    // Defensive check: if current is a header, find nearest selectable first
+    let start = if is_header(items, current) {
+        nearest_selectable(items, current)
+    } else {
+        current
+    };
+
     // Find current position in selectable list
-    let current_pos = selectable.iter().position(|&i| i == current).unwrap_or(0);
+    let current_pos = selectable.iter().position(|&i| i == start).unwrap_or(0);
     let next_pos = (current_pos + 1) % selectable.len();
     selectable[next_pos]
 }
@@ -231,7 +274,14 @@ pub fn prev_selectable<T>(items: &[DeviceListItem<T>], current: usize) -> usize 
         return 0;
     }
 
-    let current_pos = selectable.iter().position(|&i| i == current).unwrap_or(0);
+    // Defensive check: if current is a header, find nearest selectable first
+    let start = if is_header(items, current) {
+        nearest_selectable(items, current)
+    } else {
+        current
+    };
+
+    let current_pos = selectable.iter().position(|&i| i == start).unwrap_or(0);
     let prev_pos = if current_pos == 0 {
         selectable.len() - 1
     } else {
@@ -612,8 +662,8 @@ mod tests {
             device_type: "iPhone 15".to_string(),
         };
 
-        let bootable = BootableDevice::IosSimulator(sim);
-        assert!(matches!(bootable, BootableDevice::IosSimulator(_)));
+        let bootable = GroupedBootableDevice::IosSimulator(sim);
+        assert!(matches!(bootable, GroupedBootableDevice::IosSimulator(_)));
     }
 
     #[test]
@@ -625,7 +675,125 @@ mod tests {
             target: None,
         };
 
-        let bootable = BootableDevice::AndroidAvd(avd);
-        assert!(matches!(bootable, BootableDevice::AndroidAvd(_)));
+        let bootable = GroupedBootableDevice::AndroidAvd(avd);
+        assert!(matches!(bootable, GroupedBootableDevice::AndroidAvd(_)));
+    }
+
+    #[test]
+    fn test_navigation_from_header_position_next() {
+        // Simulate corrupted state: selection on header
+        let items = vec![
+            DeviceListItem::Header("Group A".to_string()),
+            DeviceListItem::Device("a1"),
+            DeviceListItem::Device("a2"),
+            DeviceListItem::Header("Group B".to_string()),
+            DeviceListItem::Device("b1"),
+        ];
+
+        // Starting from header at index 0
+        // nearest_selectable(0) = 1 (first device)
+        // next_selectable from 1 = 2 (next device)
+        let result = next_selectable(&items, 0);
+        // Should return a device, not stay on header
+        assert!(!is_header(&items, result));
+        assert_eq!(result, 2); // Next device after nearest (1 -> 2)
+    }
+
+    #[test]
+    fn test_navigation_from_header_position_prev() {
+        let items = vec![
+            DeviceListItem::Header("Group A".to_string()),
+            DeviceListItem::Device("a1"),
+            DeviceListItem::Device("a2"),
+            DeviceListItem::Header("Group B".to_string()),
+            DeviceListItem::Device("b1"),
+        ];
+
+        // Starting from header at index 3
+        // nearest_selectable(3) = 4 (nearest device forward)
+        // prev_selectable from 4 = 2 (wraps around to previous device)
+        let result = prev_selectable(&items, 3);
+        // Should return a device, not stay on header
+        assert!(!is_header(&items, result));
+        assert_eq!(result, 2); // Previous device from nearest (4 -> 2)
+    }
+
+    #[test]
+    fn test_nearest_selectable_forward() {
+        let items = vec![
+            DeviceListItem::Header("H".to_string()),
+            DeviceListItem::Device("a"),
+            DeviceListItem::Device("b"),
+        ];
+
+        // From header, should go forward to first device
+        assert_eq!(nearest_selectable(&items, 0), 1);
+    }
+
+    #[test]
+    fn test_nearest_selectable_backward() {
+        let items = vec![
+            DeviceListItem::Device("a"),
+            DeviceListItem::Device("b"),
+            DeviceListItem::Header("H".to_string()),
+        ];
+
+        // From header at end, should go backward to last device
+        assert_eq!(nearest_selectable(&items, 2), 1);
+    }
+
+    #[test]
+    fn test_nearest_selectable_already_selectable() {
+        let items = vec![
+            DeviceListItem::Header("H".to_string()),
+            DeviceListItem::Device("a"),
+            DeviceListItem::Device("b"),
+        ];
+
+        // Already on a device, should return same index
+        assert_eq!(nearest_selectable(&items, 1), 1);
+        assert_eq!(nearest_selectable(&items, 2), 2);
+    }
+
+    #[test]
+    fn test_nearest_selectable_empty() {
+        let items: Vec<DeviceListItem<&str>> = vec![];
+        assert_eq!(nearest_selectable(&items, 0), 0);
+    }
+
+    #[test]
+    fn test_nearest_selectable_no_devices() {
+        let items = vec![
+            DeviceListItem::Header::<&str>("H1".to_string()),
+            DeviceListItem::Header::<&str>("H2".to_string()),
+        ];
+        assert_eq!(nearest_selectable(&items, 0), 0);
+    }
+
+    #[test]
+    fn test_is_header_true() {
+        let items = vec![
+            DeviceListItem::Header("H".to_string()),
+            DeviceListItem::Device("a"),
+        ];
+
+        assert!(is_header(&items, 0));
+    }
+
+    #[test]
+    fn test_is_header_false() {
+        let items = vec![
+            DeviceListItem::Header("H".to_string()),
+            DeviceListItem::Device("a"),
+        ];
+
+        assert!(!is_header(&items, 1));
+    }
+
+    #[test]
+    fn test_is_header_out_of_bounds() {
+        let items = vec![DeviceListItem::Device("a")];
+
+        assert!(!is_header(&items, 99));
     }
 }

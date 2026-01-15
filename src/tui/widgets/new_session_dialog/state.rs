@@ -650,12 +650,9 @@ impl NewSessionDialogState {
     pub fn switch_tab(&mut self, tab: TargetTab) {
         if self.target_tab != tab {
             self.target_tab = tab;
-            self.selected_target_index = 0; // Reset selection
-
-            // Trigger loading if switching to bootable and not loaded
-            if tab == TargetTab::Bootable && self.bootable_devices.is_empty() {
-                self.loading_bootable = true;
-            }
+            // Reset selection to first selectable device (skip headers)
+            self.selected_target_index = self.first_selectable_target_index();
+            // Note: Handler is responsible for setting loading flags
         }
     }
 
@@ -710,6 +707,34 @@ impl NewSessionDialogState {
         }
     }
 
+    /// Get the first selectable device index in the current tab
+    /// This ensures we don't select a header when switching tabs.
+    ///
+    /// The device lists are stored flat in state, but rendering groups them with headers.
+    /// When devices are grouped by platform, the first item (index 0) is always a header.
+    /// The first selectable device is at index 1 (after the first header).
+    fn first_selectable_target_index(&self) -> usize {
+        match self.target_tab {
+            TargetTab::Connected => {
+                // If we have devices, they'll be grouped with headers during rendering
+                // First header at 0, first device at 1
+                if !self.connected_devices.is_empty() {
+                    1
+                } else {
+                    0
+                }
+            }
+            TargetTab::Bootable => {
+                // Same logic for bootable devices
+                if !self.bootable_devices.is_empty() {
+                    1
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
     // ─────────────────────────────────────────────────────────
     // Launch Context Navigation (Right Pane)
     // ─────────────────────────────────────────────────────────
@@ -750,6 +775,7 @@ impl NewSessionDialogState {
     pub fn set_connected_devices(&mut self, devices: Vec<Device>) {
         self.connected_devices = devices;
         self.loading_connected = false;
+        self.error = None; // Clear error on successful load
 
         // Reset selection if out of bounds
         if self.selected_target_index >= self.connected_devices.len() {
@@ -930,7 +956,8 @@ mod tests {
 
         state.toggle_tab();
         assert_eq!(state.target_tab, TargetTab::Bootable);
-        assert!(state.loading_bootable);
+        // Handler is responsible for setting loading flags, not state methods
+        assert!(!state.loading_bootable);
     }
 
     #[test]
@@ -1025,6 +1052,29 @@ mod tests {
     }
 
     #[test]
+    fn test_set_connected_devices_clears_error() {
+        use crate::daemon::Device;
+
+        let mut state = NewSessionDialogState::new();
+        state.set_error("Previous error".to_string());
+        assert!(state.error.is_some());
+
+        let devices = vec![Device {
+            id: "d1".into(),
+            name: "Device 1".into(),
+            platform: "ios".into(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }];
+
+        state.set_connected_devices(devices);
+        assert!(state.error.is_none()); // Error should be cleared on successful load
+    }
+
+    #[test]
     fn test_error_handling() {
         let mut state = NewSessionDialogState::new();
         assert!(state.error.is_none());
@@ -1104,6 +1154,101 @@ mod tests {
         // Close saves changes
         state.close_dart_defines_modal();
         assert!(state.dart_defines_modal.is_none());
+    }
+
+    #[test]
+    fn test_switch_tab_skips_header() {
+        use crate::core::{BootableDevice, DeviceState, Platform};
+        use crate::daemon::Device;
+
+        let mut state = NewSessionDialogState::new();
+
+        // Add devices to Connected tab (will be grouped with header at index 0)
+        state.connected_devices = vec![
+            Device {
+                id: "d1".into(),
+                name: "iPhone 15".into(),
+                platform: "ios".into(),
+                emulator: false,
+                category: None,
+                platform_type: None,
+                ephemeral: false,
+                emulator_id: None,
+            },
+            Device {
+                id: "d2".into(),
+                name: "Pixel 6".into(),
+                platform: "android".into(),
+                emulator: false,
+                category: None,
+                platform_type: None,
+                ephemeral: false,
+                emulator_id: None,
+            },
+        ];
+
+        // Add devices to Bootable tab (will also be grouped with header at index 0)
+        state.bootable_devices = vec![BootableDevice {
+            id: "sim1".into(),
+            name: "iPhone 15 Simulator".into(),
+            platform: Platform::IOS,
+            runtime: "iOS 17.2".into(),
+            state: DeviceState::Shutdown,
+        }];
+
+        // Start on Connected tab
+        state.target_tab = TargetTab::Connected;
+        state.selected_target_index = 99; // Some arbitrary index
+
+        // Switch to Bootable tab
+        state.switch_tab(TargetTab::Bootable);
+
+        // Selection should be at index 1 (first device), not 0 (header)
+        // When devices are rendered with grouping, index 0 is the platform header
+        assert_eq!(state.selected_target_index, 1);
+        assert_eq!(state.target_tab, TargetTab::Bootable);
+
+        // Switch back to Connected tab
+        state.switch_tab(TargetTab::Connected);
+
+        // Again, should skip to index 1 (first device after header)
+        assert_eq!(state.selected_target_index, 1);
+        assert_eq!(state.target_tab, TargetTab::Connected);
+    }
+
+    #[test]
+    fn test_switch_tab_empty_device_list() {
+        let mut state = NewSessionDialogState::new();
+
+        // Start with no devices
+        state.target_tab = TargetTab::Connected;
+        state.selected_target_index = 0;
+
+        // Switch to Bootable tab (which is empty)
+        state.switch_tab(TargetTab::Bootable);
+
+        // With no devices, selection should be 0 (no header to skip)
+        assert_eq!(state.selected_target_index, 0);
+    }
+
+    #[test]
+    fn test_rapid_tab_switching_no_race() {
+        let mut state = NewSessionDialogState::new();
+
+        // Rapid switch: Connected -> Bootable -> Connected -> Bootable
+        state.switch_tab(TargetTab::Connected);
+        assert!(!state.loading_bootable);
+
+        state.switch_tab(TargetTab::Bootable);
+        // Handler should set flag, not switch_tab
+        assert!(!state.loading_bootable); // State method doesn't set it
+
+        // Simulate handler setting flag
+        state.loading_bootable = true;
+
+        state.switch_tab(TargetTab::Connected);
+        // Switching away shouldn't clear the flag (discovery still running)
+        assert!(state.loading_bootable);
     }
 }
 

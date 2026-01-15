@@ -142,3 +142,45 @@ fn bench_navigation_100_devices(b: &mut Bencher) {
 - Alternative: Return iterator instead of Vec (lazy evaluation)
 - Cache is per-tab, so switching tabs invalidates
 - Watch for subtle bugs where cache isn't invalidated after mutations
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added caching optimization with `cached_flat_list` field, `flat_list()` method, `invalidate_cache()` helper, and updated navigation/setter methods to use cache |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cache invalidation on tab switch**: The cache is invalidated when switching tabs because each tab has a different flattened list. This ensures correctness while still providing performance benefits during navigation within a tab.
+
+2. **Borrow checker constraint in navigation**: Had to capture `self.selected_index` into a local variable before calling `flat_list()` to avoid conflicting mutable borrows. This is a clean solution that doesn't impact performance.
+
+3. **compute_flat_list() remains for immutable contexts**: The original logic was renamed to `compute_flat_list()` and kept private for use in contexts where self is borrowed immutably (like `first_selectable_index()` and setter validation). This avoids unnecessary cache population in edge cases.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib target_selector` - Passed (21 tests)
+- `cargo test --lib` - Passed (1542 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### New Tests Added
+
+1. `test_navigation_uses_cached_list` - Verifies cache is reused across navigation calls (pointer equality check)
+2. `test_cache_invalidated_on_device_update` - Verifies cache is invalidated when connected devices change
+3. `test_cache_invalidated_on_bootable_update` - Verifies cache is invalidated when bootable devices change
+4. `test_cache_invalidated_on_tab_switch` - Verifies cache is invalidated when switching tabs
+5. `test_cache_repopulates_after_invalidation` - Verifies cache is repopulated on next access after invalidation
+
+### Risks/Limitations
+
+1. **No benchmark created**: The task suggested creating a benchmark, but Rust's built-in `#[bench]` feature requires nightly. The pointer equality test in `test_navigation_uses_cached_list()` provides strong evidence of caching behavior. Performance improvement can be measured manually if needed.
+
+2. **Memory usage**: The cache is a single `Option<Vec<DeviceListItem<String>>>` that gets replaced on invalidation, so memory usage is bounded and won't grow unbounded. Each tab maintains its own cache state implicitly through invalidation on tab switch.

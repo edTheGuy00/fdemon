@@ -95,3 +95,38 @@ fn test_rapid_tab_switching_no_race() {
 - TEA pattern: State transitions happen in handler, not in state methods
 - State methods should be pure transformations without side effects on flags
 - Consider adding comments documenting which component owns flag management
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/state.rs` | Removed `loading_bootable = true` from `switch_tab()` method (line 658), added comment documenting handler responsibility, updated `test_tab_switching` test to assert flag is NOT set by state method, added `test_rapid_tab_switching_no_race` test |
+| `src/app/handler/update.rs` | Added `state.new_session_dialog_state.loading_bootable = true` before returning `UpdateAction::DiscoverBootableDevices` in `NewSessionDialogSwitchTab` handler (line 1748) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Handler as Single Source of Truth**: Implemented Option A from the task specification. The handler now exclusively manages loading flags, ensuring TEA pattern purity. State methods remain pure transformations without side effects.
+2. **Flag Setting Location**: The handler sets the loading flag AFTER calling `switch_tab()` but BEFORE dispatching the discovery action. This ensures the flag accurately reflects that discovery has been initiated.
+3. **Comment Added**: Added inline comment in `switch_tab()` to document that handler is responsible for loading flags, preventing future regressions.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1536 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Test Changes
+
+1. **Updated existing test**: Modified `test_tab_switching` to assert that `loading_bootable` is FALSE after tab switch, confirming state method doesn't set the flag
+2. **Added new test**: Implemented `test_rapid_tab_switching_no_race` as specified in task requirements, verifying that rapid tab switching doesn't cause inconsistent flag state
+
+### Risks/Limitations
+
+None identified. The change eliminates the race condition by ensuring loading flags are only set/cleared by the handler when actual discovery actions are dispatched.

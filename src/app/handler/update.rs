@@ -1745,6 +1745,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             // Trigger bootable device discovery if switching to Bootable tab and not loaded
             if needs_bootable_discovery {
+                state.new_session_dialog_state.loading_bootable = true;
                 return UpdateResult::action(UpdateAction::DiscoverBootableDevices);
             }
             UpdateResult::none()
@@ -1771,6 +1772,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 TargetTab::Connected => {
                     // Select device for launch - actual launch happens in Launch Context
                     // For now, just acknowledge the selection
+                    if state
+                        .new_session_dialog_state
+                        .selected_connected_device()
+                        .is_none()
+                    {
+                        warn!("Cannot select device: no device selected on Connected tab");
+                    }
                     UpdateResult::none()
                 }
                 TargetTab::Bootable => {
@@ -1784,6 +1792,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                             platform,
                         });
                     }
+                    warn!("Cannot boot device: no device selected on Bootable tab");
                     UpdateResult::none()
                 }
             }
@@ -1833,10 +1842,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        Message::NewSessionDialogDeviceDiscoveryFailed(error) => {
+        Message::NewSessionDialogDeviceDiscoveryFailed {
+            error,
+            discovery_type,
+        } => {
+            use crate::app::message::DiscoveryType;
+
+            // Only clear the loading flag for the type that failed
+            match discovery_type {
+                DiscoveryType::Connected => {
+                    state.new_session_dialog_state.loading_connected = false;
+                }
+                DiscoveryType::Bootable => {
+                    state.new_session_dialog_state.loading_bootable = false;
+                }
+            }
             state.new_session_dialog_state.set_error(error);
-            state.new_session_dialog_state.loading_connected = false;
-            state.new_session_dialog_state.loading_bootable = false;
             UpdateResult::none()
         }
 

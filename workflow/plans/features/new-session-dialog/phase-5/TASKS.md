@@ -91,13 +91,13 @@ Create the Target Selector widget - the left pane of the NewSessionDialog. Featu
 
 | # | Task | Status | Priority | Depends On | Modules |
 |---|------|--------|----------|------------|---------|
-| 6 | [06-rename-bootable-device-enum](tasks/06-rename-bootable-device-enum.md) | Not Started | Critical | 5 | `device_groups.rs`, `device_list.rs`, `target_selector.rs`, `mod.rs` |
-| 7 | [07-fix-selection-index-reset](tasks/07-fix-selection-index-reset.md) | Not Started | Critical | 5 | `state.rs` |
-| 8 | [08-consolidate-loading-flags](tasks/08-consolidate-loading-flags.md) | Not Started | Major | 5 | `update.rs`, `state.rs` |
-| 9 | [09-standardize-error-clearing](tasks/09-standardize-error-clearing.md) | Not Started | Major | 5 | `state.rs`, `target_selector.rs`, `update.rs`, `message.rs` |
-| 10 | [10-add-error-feedback-empty-selection](tasks/10-add-error-feedback-empty-selection.md) | Not Started | Major | 5 | `update.rs` |
-| 11 | [11-optimize-navigation-performance](tasks/11-optimize-navigation-performance.md) | Not Started | Major | 5 | `target_selector.rs`, `device_groups.rs` |
-| 12 | [12-minor-cleanup](tasks/12-minor-cleanup.md) | Not Started | Minor | 5 | `target_selector.rs`, `device_list.rs`, `device_groups.rs` |
+| 6 | [06-rename-bootable-device-enum](tasks/06-rename-bootable-device-enum.md) | Done | Critical | 5 | `device_groups.rs`, `device_list.rs`, `target_selector.rs`, `mod.rs` |
+| 7 | [07-fix-selection-index-reset](tasks/07-fix-selection-index-reset.md) | Done | Critical | 5 | `state.rs` |
+| 8 | [08-consolidate-loading-flags](tasks/08-consolidate-loading-flags.md) | Done | Major | 5 | `update.rs`, `state.rs` |
+| 9 | [09-standardize-error-clearing](tasks/09-standardize-error-clearing.md) | Done | Major | 5 | `state.rs`, `target_selector.rs`, `update.rs`, `message.rs` |
+| 10 | [10-add-error-feedback-empty-selection](tasks/10-add-error-feedback-empty-selection.md) | Done | Major | 5 | `update.rs` |
+| 11 | [11-optimize-navigation-performance](tasks/11-optimize-navigation-performance.md) | Done | Major | 5 | `target_selector.rs`, `device_groups.rs` |
+| 12 | [12-minor-cleanup](tasks/12-minor-cleanup.md) | Done | Minor | 5 | `target_selector.rs`, `device_list.rs`, `device_groups.rs` |
 
 ## Success Criteria
 
@@ -122,14 +122,14 @@ Create the Target Selector widget - the left pane of the NewSessionDialog. Featu
 
 Phase 5 is fully complete when review fixes are done:
 
-- [ ] **Critical:** No type name conflict - TUI enum renamed to `GroupedBootableDevice`
-- [ ] **Critical:** Tab switching selects first device, never a header
-- [ ] **Major:** Single source of truth for loading flag management
-- [ ] **Major:** Consistent error clearing across all state methods
-- [ ] **Major:** Empty device selection logged/reported
-- [ ] **Major:** Navigation performance optimized (cached flat list)
-- [ ] **Minor:** No dead code warnings, public items documented
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] **Critical:** No type name conflict - TUI enum renamed to `GroupedBootableDevice`
+- [x] **Critical:** Tab switching selects first device, never a header
+- [x] **Major:** Single source of truth for loading flag management
+- [x] **Major:** Consistent error clearing across all state methods
+- [x] **Major:** Empty device selection logged/reported
+- [x] **Major:** Navigation performance optimized (cached flat list)
+- [x] **Minor:** No dead code warnings, public items documented
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 - [ ] Re-review passes with no blocking issues
 
 ## Platform Grouping

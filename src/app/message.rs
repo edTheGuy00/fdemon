@@ -10,6 +10,15 @@ use crate::daemon::{
 use crate::tui::widgets::{DartDefine, FuzzyModalType, TargetTab};
 use crossterm::event::KeyEvent;
 
+/// Type of device discovery (Connected or Bootable)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiscoveryType {
+    /// Connected/running devices (from flutter devices)
+    Connected,
+    /// Bootable/offline devices (simulators, AVDs)
+    Bootable,
+}
+
 /// Successful auto-launch discovery result
 #[derive(Debug, Clone)]
 pub struct AutoLaunchSuccess {
@@ -506,7 +515,10 @@ pub enum Message {
     },
 
     /// Device discovery failed
-    NewSessionDialogDeviceDiscoveryFailed(String),
+    NewSessionDialogDeviceDiscoveryFailed {
+        error: String,
+        discovery_type: DiscoveryType,
+    },
 
     /// Set error message
     NewSessionDialogSetError { error: String },

@@ -142,3 +142,48 @@ fn test_navigation_from_header_position() {
 - These are minor polish items, can be done quickly
 - Prefer removing dead code over documenting for "future use"
 - Doc comments should be concise but informative
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Removed unused `scroll_offset` field and all references to it. Added comprehensive doc comment to `TargetSelectorState::new()` method. |
+| `src/tui/widgets/new_session_dialog/device_list.rs` | Added doc comment to `DeviceListStyles` struct explaining its purpose and usage. `calculate_scroll_offset()` already had documentation. |
+| `src/tui/widgets/new_session_dialog/device_groups.rs` | Added defensive navigation checks to `next_selectable()` and `prev_selectable()`. Implemented `is_header()` and `nearest_selectable()` helper functions. Added 11 new tests for header navigation edge cases. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed scroll_offset entirely**: Chose to remove the unused field rather than document it for future use, following code standards preference for removing dead code over documenting speculative features.
+
+2. **Defensive navigation implementation**: When navigation functions receive a header index, they now find the nearest selectable device first, then perform the navigation. This prevents navigation from getting stuck or producing unpredictable results if the state becomes corrupted.
+
+3. **Test coverage**: Added comprehensive tests for navigation from header positions, testing both forward and backward navigation, as well as edge cases like empty lists and lists with only headers.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1552 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+All new tests pass:
+- `test_navigation_from_header_position_next` - Verifies next navigation from header
+- `test_navigation_from_header_position_prev` - Verifies previous navigation from header
+- `test_nearest_selectable_forward` - Tests finding nearest device forward
+- `test_nearest_selectable_backward` - Tests finding nearest device backward
+- `test_nearest_selectable_already_selectable` - Tests when already on device
+- `test_nearest_selectable_empty` - Tests empty list edge case
+- `test_nearest_selectable_no_devices` - Tests list with only headers
+- `test_is_header_true/false/out_of_bounds` - Tests header detection
+
+### Risks/Limitations
+
+1. **Navigation behavior change**: The navigation functions now perform an extra step when starting from a header, finding the nearest device before navigating. This could theoretically change behavior if any code was relying on the previous behavior, but since starting from a header was an invalid/corrupted state, this is an improvement.
+
+2. **No actual scrolling implementation**: While `calculate_scroll_offset()` exists and is documented, scrolling is not yet implemented in the target selector widget. This will need to be addressed in a future phase when device lists grow long enough to require scrolling.

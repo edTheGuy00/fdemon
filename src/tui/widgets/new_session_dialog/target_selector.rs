@@ -11,7 +11,7 @@ use ratatui::{
 
 use super::device_groups::{
     flatten_groups, group_bootable_devices, group_connected_devices, next_selectable,
-    prev_selectable, BootableDevice, DeviceListItem,
+    prev_selectable, DeviceListItem, GroupedBootableDevice,
 };
 use super::device_list::{BootableDeviceList, ConnectedDeviceList};
 use super::tab_bar::TabBar;
@@ -36,9 +36,6 @@ pub struct TargetSelectorState {
     /// Selected index in current tab's flattened list
     pub selected_index: usize,
 
-    /// Scroll offset for long lists
-    pub scroll_offset: usize,
-
     /// Loading state for device discovery
     pub loading: bool,
 
@@ -47,6 +44,9 @@ pub struct TargetSelectorState {
 
     /// Error message if discovery failed
     pub error: Option<String>,
+
+    /// Cached flattened device list, invalidated on device updates
+    cached_flat_list: Option<Vec<DeviceListItem<String>>>,
 }
 
 impl Default for TargetSelectorState {
@@ -57,16 +57,19 @@ impl Default for TargetSelectorState {
             ios_simulators: Vec::new(),
             android_avds: Vec::new(),
             selected_index: 0,
-            scroll_offset: 0,
             loading: true,
             bootable_loading: false,
             error: None,
+            cached_flat_list: None,
         }
     }
 }
 
 impl TargetSelectorState {
-    /// Create a new target selector state
+    /// Creates a new TargetSelectorState with default settings.
+    ///
+    /// Starts on the Connected tab with no devices loaded.
+    /// Selection is initially at index 0 (will be adjusted when devices load).
     pub fn new() -> Self {
         Self::default()
     }
@@ -75,8 +78,8 @@ impl TargetSelectorState {
     pub fn set_tab(&mut self, tab: TargetTab) {
         if self.active_tab != tab {
             self.active_tab = tab;
+            self.invalidate_cache();
             self.selected_index = self.first_selectable_index();
-            self.scroll_offset = 0;
         }
     }
 
@@ -87,23 +90,25 @@ impl TargetSelectorState {
 
     /// Move selection down
     pub fn select_next(&mut self) {
-        let items = self.current_flat_list();
+        let current = self.selected_index;
+        let items = self.flat_list();
         if !items.is_empty() {
-            self.selected_index = next_selectable(&items, self.selected_index);
+            self.selected_index = next_selectable(items, current);
         }
     }
 
     /// Move selection up
     pub fn select_previous(&mut self) {
-        let items = self.current_flat_list();
+        let current = self.selected_index;
+        let items = self.flat_list();
         if !items.is_empty() {
-            self.selected_index = prev_selectable(&items, self.selected_index);
+            self.selected_index = prev_selectable(items, current);
         }
     }
 
     /// Get first selectable index in current tab
     fn first_selectable_index(&self) -> usize {
-        let items = self.current_flat_list();
+        let items = self.compute_flat_list();
         items
             .iter()
             .enumerate()
@@ -114,8 +119,21 @@ impl TargetSelectorState {
             .unwrap_or(0)
     }
 
-    /// Get flattened list for current tab
-    fn current_flat_list(&self) -> Vec<DeviceListItem<String>> {
+    /// Returns cached flat list, computing if necessary
+    pub fn flat_list(&mut self) -> &[DeviceListItem<String>] {
+        if self.cached_flat_list.is_none() {
+            self.cached_flat_list = Some(self.compute_flat_list());
+        }
+        self.cached_flat_list.as_ref().unwrap()
+    }
+
+    /// Invalidate the cached flat list
+    fn invalidate_cache(&mut self) {
+        self.cached_flat_list = None;
+    }
+
+    /// Compute flattened list for current tab (internal helper)
+    fn compute_flat_list(&self) -> Vec<DeviceListItem<String>> {
         match self.active_tab {
             TargetTab::Connected => {
                 let groups = group_connected_devices(&self.connected_devices);
@@ -134,10 +152,10 @@ impl TargetSelectorState {
                     .map(|item| match item {
                         DeviceListItem::Header(h) => DeviceListItem::Header(h),
                         DeviceListItem::Device(d) => match d {
-                            BootableDevice::IosSimulator(sim) => {
+                            GroupedBootableDevice::IosSimulator(sim) => {
                                 DeviceListItem::Device(sim.udid.clone())
                             }
-                            BootableDevice::AndroidAvd(avd) => {
+                            GroupedBootableDevice::AndroidAvd(avd) => {
                                 DeviceListItem::Device(avd.name.clone())
                             }
                         },
@@ -163,7 +181,7 @@ impl TargetSelectorState {
     }
 
     /// Get currently selected bootable device
-    pub fn selected_bootable_device(&self) -> Option<BootableDevice> {
+    pub fn selected_bootable_device(&self) -> Option<GroupedBootableDevice> {
         if self.active_tab != TargetTab::Bootable {
             return None;
         }
@@ -182,10 +200,11 @@ impl TargetSelectorState {
         self.connected_devices = devices;
         self.loading = false;
         self.error = None;
+        self.invalidate_cache();
 
         // Reset selection if it's now invalid
         if self.active_tab == TargetTab::Connected {
-            let max_index = self.current_flat_list().len().saturating_sub(1);
+            let max_index = self.compute_flat_list().len().saturating_sub(1);
             if self.selected_index > max_index {
                 self.selected_index = self.first_selectable_index();
             }
@@ -201,10 +220,11 @@ impl TargetSelectorState {
         self.ios_simulators = ios_simulators;
         self.android_avds = android_avds;
         self.bootable_loading = false;
+        self.invalidate_cache();
 
         // Reset selection if on bootable tab
         if self.active_tab == TargetTab::Bootable {
-            let max_index = self.current_flat_list().len().saturating_sub(1);
+            let max_index = self.compute_flat_list().len().saturating_sub(1);
             if self.selected_index > max_index {
                 self.selected_index = self.first_selectable_index();
             }
@@ -604,5 +624,143 @@ mod tests {
 
         // Should still render, just with different border color
         assert!(content.contains("Target Selector"));
+    }
+
+    #[test]
+    fn test_navigation_uses_cached_list() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        // Create 10 devices
+        let devices: Vec<Device> = (0..10)
+            .map(|i| test_device_full(&format!("id{}", i), &format!("Device {}", i), "ios", false))
+            .collect();
+
+        state.set_connected_devices(devices);
+
+        // First access computes cache
+        let list1 = state.flat_list();
+        let ptr1 = list1.as_ptr();
+
+        // Navigation uses cache (same pointer)
+        state.select_next();
+        let list2 = state.flat_list();
+        let ptr2 = list2.as_ptr();
+
+        assert_eq!(ptr1, ptr2, "Should use cached list, not reallocate");
+
+        // Another navigation still uses cache
+        state.select_previous();
+        let list3 = state.flat_list();
+        let ptr3 = list3.as_ptr();
+
+        assert_eq!(ptr1, ptr3, "Should still use cached list");
+    }
+
+    #[test]
+    fn test_cache_invalidated_on_device_update() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        let devices = vec![test_device_full("1", "iPhone", "ios", false)];
+        state.set_connected_devices(devices);
+
+        // Populate cache
+        let _ = state.flat_list();
+        assert!(state.cached_flat_list.is_some());
+
+        // Update devices should invalidate cache
+        state.set_connected_devices(vec![test_device_full("2", "Pixel", "android", false)]);
+        assert!(
+            state.cached_flat_list.is_none(),
+            "Cache should be invalidated after device update"
+        );
+    }
+
+    #[test]
+    fn test_cache_invalidated_on_bootable_update() {
+        use crate::daemon::SimulatorState;
+
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.active_tab = TargetTab::Bootable;
+
+        let ios_sims = vec![IosSimulator {
+            udid: "123".to_string(),
+            name: "iPhone 15".to_string(),
+            runtime: "iOS 17.2".to_string(),
+            state: SimulatorState::Shutdown,
+            device_type: "iPhone 15".to_string(),
+        }];
+
+        state.set_bootable_devices(ios_sims, vec![]);
+
+        // Populate cache
+        let _ = state.flat_list();
+        assert!(state.cached_flat_list.is_some());
+
+        // Update bootable devices should invalidate cache
+        state.set_bootable_devices(vec![], vec![]);
+        assert!(
+            state.cached_flat_list.is_none(),
+            "Cache should be invalidated after bootable device update"
+        );
+    }
+
+    #[test]
+    fn test_cache_invalidated_on_tab_switch() {
+        use crate::daemon::SimulatorState;
+
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        // Set up both connected and bootable devices
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.set_bootable_devices(
+            vec![IosSimulator {
+                udid: "123".to_string(),
+                name: "iPhone 15".to_string(),
+                runtime: "iOS 17.2".to_string(),
+                state: SimulatorState::Shutdown,
+                device_type: "iPhone 15".to_string(),
+            }],
+            vec![],
+        );
+
+        // Start on Connected tab
+        state.active_tab = TargetTab::Connected;
+        let _ = state.flat_list();
+        assert!(state.cached_flat_list.is_some());
+
+        // Switch to Bootable tab should invalidate cache
+        state.set_tab(TargetTab::Bootable);
+        assert!(
+            state.cached_flat_list.is_none(),
+            "Cache should be invalidated after tab switch"
+        );
+    }
+
+    #[test]
+    fn test_cache_repopulates_after_invalidation() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        let devices = vec![test_device_full("1", "iPhone", "ios", false)];
+        state.set_connected_devices(devices);
+
+        // First access
+        let _ = state.flat_list();
+        assert!(state.cached_flat_list.is_some());
+
+        // Invalidate
+        state.set_connected_devices(vec![test_device_full("2", "Pixel", "android", false)]);
+        assert!(state.cached_flat_list.is_none());
+
+        // Access again should repopulate
+        let _ = state.flat_list();
+        assert!(
+            state.cached_flat_list.is_some(),
+            "Cache should be repopulated on next access"
+        );
     }
 }
