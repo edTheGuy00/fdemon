@@ -542,6 +542,42 @@ pub enum Message {
     NewSessionDialogSetDartDefines { defines: Vec<DartDefine> },
 
     // ─────────────────────────────────────────────────────────
+    // Launch Context Field Navigation Messages (Phase 6, Task 05)
+    // ─────────────────────────────────────────────────────────
+    /// Move focus to next field in Launch Context
+    NewSessionDialogFieldNext,
+
+    /// Move focus to previous field in Launch Context
+    NewSessionDialogFieldPrev,
+
+    /// Activate current field (Enter key - opens modals or triggers launch)
+    NewSessionDialogFieldActivate,
+
+    /// Change mode to next (right arrow on mode field)
+    NewSessionDialogModeNext,
+
+    /// Change mode to previous (left arrow on mode field)
+    NewSessionDialogModePrev,
+
+    /// Config selected from fuzzy modal
+    NewSessionDialogConfigSelected { config_name: String },
+
+    /// Flavor selected from fuzzy modal
+    NewSessionDialogFlavorSelected { flavor: Option<String> },
+
+    /// Dart defines updated from modal
+    NewSessionDialogDartDefinesUpdated { defines: Vec<DartDefine> },
+
+    /// Trigger launch action
+    NewSessionDialogLaunch,
+
+    /// Config auto-save completed
+    NewSessionDialogConfigSaved,
+
+    /// Config auto-save failed
+    NewSessionDialogConfigSaveFailed { error: String },
+
+    // ─────────────────────────────────────────────────────────
     // Fuzzy Modal Messages
     // ─────────────────────────────────────────────────────────
     /// Open fuzzy search modal

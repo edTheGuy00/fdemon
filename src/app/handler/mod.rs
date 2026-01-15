@@ -77,6 +77,18 @@ pub enum UpdateAction {
 
     /// Boot a specific device
     BootDevice { device_id: String, platform: String },
+
+    /// Auto-save FDemon config after field changes (Phase 6, Task 05)
+    AutoSaveConfig { config_index: usize },
+
+    /// Launch a new Flutter session from NewSessionDialog (Phase 6, Task 05)
+    LaunchFlutterSession {
+        device: Device,
+        mode: crate::config::FlutterMode,
+        flavor: Option<String>,
+        dart_defines: Vec<String>,
+        config_name: Option<String>,
+    },
 }
 
 /// Background tasks to spawn

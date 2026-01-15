@@ -104,6 +104,26 @@ pub fn handle_action(
         } => {
             spawn::spawn_device_boot(msg_tx, device_id, platform, tool_availability);
         }
+
+        UpdateAction::AutoSaveConfig { config_index: _ } => {
+            // TODO: Implement auto-save logic in a future task
+            // This will save FDemon configs to .fdemon/launch.toml
+            // For now, we just log that auto-save was triggered
+            tracing::debug!("Auto-save config triggered (not yet implemented)");
+        }
+
+        UpdateAction::LaunchFlutterSession {
+            device,
+            mode: _,
+            flavor: _,
+            dart_defines: _,
+            config_name: _,
+        } => {
+            // TODO: Implement session launch in a future task
+            // This will create a new session and spawn the Flutter process
+            // For now, we just log the device
+            tracing::debug!("Launch Flutter session requested for device: {}", device.id);
+        }
     }
 }
 

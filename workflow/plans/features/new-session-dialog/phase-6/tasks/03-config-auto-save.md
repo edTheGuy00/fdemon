@@ -363,3 +363,58 @@ cargo fmt && cargo check && cargo test config_writer && cargo clippy -- -D warni
 - TOML strings are properly escaped
 - Save preserves config order
 - Comments are added for human readability
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/config/writer.rs` | Created complete config writer module with save functions, update helpers, and auto-saver |
+| `src/config/mod.rs` | Added writer module declaration and exported public API |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field name discrepancies**: The task specification used field names (`device_id`, `program`, `args`, `dart_defines: Vec<String>`) that don't match the actual codebase types (`device`, `entry_point`, `extra_args`, `dart_defines: HashMap<String, String>`). Implemented according to actual codebase types to ensure compatibility with existing load/parse functions.
+
+2. **TOML formatting**: Generated TOML uses TOML table syntax for `dart_defines` (HashMap) rather than array syntax, matching the codebase's existing implementation in launch.rs.
+
+3. **Error handling**: All fmt::Write errors are properly mapped to Error::config for consistent error handling throughout the module.
+
+4. **Device field**: Always writes the `device` field even if it's the default value "auto" to ensure explicit configuration visibility.
+
+5. **Mode field**: Only writes non-default modes (profile/release) to keep config files clean, as debug is the default.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib config::writer` - Passed (16/16 tests)
+- `cargo test --lib config` - Passed (245/245 tests, including integration)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Test Coverage
+
+Added comprehensive unit tests covering:
+- TOML string escaping (special chars, quotes, newlines, tabs, backslashes)
+- Single and multiple config TOML generation
+- Dart defines as HashMap serialization
+- Extra args array serialization
+- VSCode config filtering (read-only protection)
+- Mixed FDemon/VSCode config handling
+- Config update functions (flavor, dart_defines, mode)
+- Update protection for non-FDemon configs
+- Round-trip save/load verification
+- Entry point and auto_start handling
+
+### Risks/Limitations
+
+1. **ConfigAutoSaver debouncing**: The async debounce implementation spawns a tokio task. If multiple rapid saves occur, only the last one will complete, which is intentional but could lead to unexpected behavior if external code assumes immediate saves.
+
+2. **No validation**: The writer does not validate config values (e.g., device existence, mode validity) - it assumes the input LoadedConfigs are already valid.
+
+3. **File ordering**: The save function preserves config order from LoadedConfigs, but does not sort or reorder configs in any specific way.

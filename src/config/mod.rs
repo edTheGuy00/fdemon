@@ -10,6 +10,7 @@ pub mod priority;
 pub mod settings;
 pub mod types;
 pub mod vscode;
+pub mod writer;
 
 pub use launch::{
     add_launch_config, create_default_launch_config, delete_launch_config, find_config_by_name,
@@ -29,3 +30,7 @@ pub use settings::{
 };
 pub use types::*;
 pub use vscode::load_vscode_configs;
+pub use writer::{
+    save_fdemon_configs, update_config_dart_defines, update_config_flavor, update_config_mode,
+    ConfigAutoSaver,
+};
