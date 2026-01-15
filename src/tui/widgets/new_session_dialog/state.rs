@@ -20,6 +20,30 @@ pub enum TargetTab {
     Bootable, // Offline simulators/AVDs
 }
 
+impl TargetTab {
+    pub fn label(&self) -> &'static str {
+        match self {
+            TargetTab::Connected => "1 Connected",
+            TargetTab::Bootable => "2 Bootable",
+        }
+    }
+
+    pub fn shortcut(&self) -> char {
+        match self {
+            TargetTab::Connected => '1',
+            TargetTab::Bootable => '2',
+        }
+    }
+
+    /// Get the other tab
+    pub fn toggle(&self) -> Self {
+        match self {
+            TargetTab::Connected => TargetTab::Bootable,
+            TargetTab::Bootable => TargetTab::Connected,
+        }
+    }
+}
+
 /// Which field is focused in the Launch Context pane
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum LaunchContextField {

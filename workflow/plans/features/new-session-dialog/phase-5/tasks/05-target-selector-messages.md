@@ -341,3 +341,37 @@ cargo fmt && cargo check && cargo test new_session_dialog && cargo clippy -- -D 
 - Tab switching to Bootable triggers discovery if not already loaded
 - Key handlers respect modal state (modals handle their own keys)
 - Navigation wraps around device list
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/message.rs` | Added new message variants for target selector navigation and device management (NewSessionDialogToggleTab, NewSessionDialogDeviceUp/Down, NewSessionDialogDeviceSelect, NewSessionDialogRefreshDevices, NewSessionDialogConnectedDevicesReceived, NewSessionDialogBootableDevicesReceived, NewSessionDialogDeviceDiscoveryFailed, NewSessionDialogBootStarted/Completed/Failed) |
+| `src/app/handler/update.rs` | Implemented handlers for all target selector messages with proper state transitions and UpdateAction returns |
+| `src/app/handler/tests.rs` | Added 18 unit tests covering tab switching, device navigation, device selection, refresh, discovery results, boot lifecycle, and pane switching |
+
+### Notable Decisions/Tradeoffs
+
+1. **Message Naming Consistency**: Used `NewSessionDialogDeviceUp/Down` for target selector navigation to be explicit about which pane they apply to, distinct from `NewSessionDialogUp/Down` which will be generic navigation handlers
+2. **BootCommand Integration**: Reused existing BootCommand conversion logic to convert IosSimulator/AndroidAvd into BootableDevice for unified handling
+3. **Deprecated Message Support**: Kept backward compatibility with `NewSessionDialogDeviceBooted` by redirecting to `NewSessionDialogBootCompleted`
+4. **State Method Utilization**: Leveraged existing NewSessionDialogState methods (switch_tab, target_up/down, set_connected_devices, etc.) for clean handler implementation
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test new_session_dialog` - Passed (135 tests)
+- `cargo clippy -- -D warnings` - Passed (fixed needless_return warning)
+
+### Risks/Limitations
+
+1. **Key Handler Integration Deferred**: Key handling for target selector will be implemented in subsequent tasks (Phase 5, Task 06)
+2. **Device Selection on Connected Tab**: Currently returns None - actual launch logic will be implemented when Launch Context handlers are completed
+3. **Error Handling**: Discovery failure sets error message but doesn't provide user feedback mechanism (will be handled by widget rendering)

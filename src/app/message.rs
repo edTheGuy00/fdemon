@@ -446,11 +446,20 @@ pub enum Message {
     /// Switch between Connected and Bootable tabs (left pane)
     NewSessionDialogSwitchTab(TargetTab),
 
+    /// Toggle between Connected and Bootable tabs
+    NewSessionDialogToggleTab,
+
     /// Navigate up in current list/field
     NewSessionDialogUp,
 
     /// Navigate down in current list/field
     NewSessionDialogDown,
+
+    /// Navigate up in device list (Target Selector)
+    NewSessionDialogDeviceUp,
+
+    /// Navigate down in device list (Target Selector)
+    NewSessionDialogDeviceDown,
 
     /// Select current item / confirm action
     /// - On Connected device: launch session
@@ -460,20 +469,44 @@ pub enum Message {
     /// - On Launch button: launch session
     NewSessionDialogConfirm,
 
+    /// Select current device or boot device (Target Selector specific)
+    NewSessionDialogDeviceSelect,
+
+    /// Refresh device list for current tab
+    NewSessionDialogRefreshDevices,
+
     /// Boot a specific bootable device
     NewSessionDialogBootDevice { device_id: String },
 
+    /// Device boot started
+    NewSessionDialogBootStarted { device_id: String },
+
     /// Device boot completed - refresh connected list
-    NewSessionDialogDeviceBooted { device_id: String },
+    NewSessionDialogBootCompleted { device_id: String },
 
     /// Device boot failed
     NewSessionDialogBootFailed { device_id: String, error: String },
 
+    /// Device boot completed (deprecated - use NewSessionDialogBootCompleted)
+    NewSessionDialogDeviceBooted { device_id: String },
+
     /// Set connected devices (from flutter devices discovery)
     NewSessionDialogSetConnectedDevices { devices: Vec<Device> },
 
+    /// Connected devices received (from discovery)
+    NewSessionDialogConnectedDevicesReceived(Vec<Device>),
+
     /// Set bootable devices (from native discovery)
     NewSessionDialogSetBootableDevices { devices: Vec<BootableDevice> },
+
+    /// Bootable devices received (from discovery)
+    NewSessionDialogBootableDevicesReceived {
+        ios_simulators: Vec<IosSimulator>,
+        android_avds: Vec<AndroidAvd>,
+    },
+
+    /// Device discovery failed
+    NewSessionDialogDeviceDiscoveryFailed(String),
 
     /// Set error message
     NewSessionDialogSetError { error: String },

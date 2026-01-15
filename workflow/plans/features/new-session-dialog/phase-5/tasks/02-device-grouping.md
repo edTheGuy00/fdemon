@@ -332,3 +332,49 @@ cargo fmt && cargo check && cargo test device_groups && cargo clippy -- -D warni
 - Headers are not selectable in navigation
 - Navigation wraps around the selectable items
 - Group order is consistent (uses BTreeMap for sorting)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/device_groups.rs` | Created new module with device grouping logic: `DeviceGroup<T>` struct, `PlatformGroup` and `BootablePlatformGroup` enums, `BootableDevice` enum wrapper, grouping functions (`group_connected_devices`, `group_bootable_devices`), and navigation helpers (`flatten_groups`, `selectable_indices`, `next_selectable`, `prev_selectable`). Includes 28 comprehensive unit tests. |
+| `src/tui/widgets/new_session_dialog/mod.rs` | Added `device_groups` module declaration and public exports. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local BootableDevice enum**: Created a local `BootableDevice` enum in the `device_groups` module to wrap `IosSimulator` and `AndroidAvd` for grouping purposes. This is distinct from `core::BootableDevice` (which is a struct) and `daemon::BootCommand` (which has similar variants but different purpose). The TUI layer needs its own representation for UI grouping.
+
+2. **Platform detection robustness**: Enhanced `PlatformGroup::from_device()` to handle platform string variants (e.g., "ios_x64", "android-arm64", "web-javascript", "darwin") in addition to base platforms, ensuring correct grouping regardless of platform string format.
+
+3. **BTreeMap for consistent ordering**: Used `BTreeMap` in `group_connected_devices()` to ensure consistent group ordering based on the `Ord` implementation of `PlatformGroup` enum variants.
+
+4. **Edge case handling**: Added comprehensive edge case handling in navigation functions (`next_selectable`, `prev_selectable`) to handle empty lists, single items, and wrap-around behavior.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test device_groups` - Passed (28 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Test Coverage
+
+All functionality is fully tested:
+- Platform detection for all device types and variants (6 tests)
+- Connected device grouping with various scenarios (3 tests)
+- Bootable device grouping with various scenarios (4 tests)
+- Group flattening and empty group handling (3 tests)
+- Selectable indices extraction (3 tests)
+- Next/previous navigation with edge cases (6 tests)
+- Header string validation (2 tests)
+- BootableDevice enum variant construction (2 tests)
+
+### Risks/Limitations
+
+None identified. The implementation follows the task specification exactly and handles all edge cases appropriately.

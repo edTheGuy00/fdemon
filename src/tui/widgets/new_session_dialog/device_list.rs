@@ -1,34 +1,23 @@
-# Task: Device List Widget
-
-## Summary
-
-Create a device list widget that renders grouped devices with headers, selection state, and scrolling support.
-
-## Files
-
-| File | Action |
-|------|--------|
-| `src/tui/widgets/new_session_dialog/device_list.rs` | Create |
-| `src/tui/widgets/new_session_dialog/mod.rs` | Modify (add export) |
-
-## Implementation
-
-### 1. Device list widget
-
-```rust
-// src/tui/widgets/new_session_dialog/device_list.rs
+//! Device list widgets for rendering grouped devices with selection
+//!
+//! This module provides rendering widgets for connected and bootable device lists
+//! with headers, selection state, and scrolling support.
 
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, StatefulWidget, Widget},
+    widgets::{List, ListItem, Widget},
 };
 
-use super::device_groups::DeviceListItem;
+use super::device_groups::{
+    flatten_groups, group_bootable_devices, group_connected_devices, BootableDevice, DeviceListItem,
+};
+use crate::daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
 /// Styles for the device list
+#[derive(Debug, Clone)]
 pub struct DeviceListStyles {
     pub header: Style,
     pub device_normal: Style,
@@ -53,13 +42,6 @@ impl Default for DeviceListStyles {
         }
     }
 }
-```
-
-### 2. Connected device list
-
-```rust
-use crate::daemon::Device;
-use super::device_groups::{group_connected_devices, flatten_groups, DeviceListItem};
 
 /// Widget for rendering connected devices with grouping
 pub struct ConnectedDeviceList<'a> {
@@ -81,12 +63,10 @@ impl<'a> ConnectedDeviceList<'a> {
 
     fn render_item(&self, item: &DeviceListItem<&Device>, index: usize) -> ListItem<'static> {
         match item {
-            DeviceListItem::Header(header) => {
-                ListItem::new(Line::from(vec![
-                    Span::styled("  ", self.styles.device_normal),
-                    Span::styled(header.clone(), self.styles.header),
-                ]))
-            }
+            DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
+                Span::styled("  ", self.styles.device_normal),
+                Span::styled(header.clone(), self.styles.header),
+            ])),
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
@@ -99,7 +79,11 @@ impl<'a> ConnectedDeviceList<'a> {
 
                 let indicator = if is_selected { "▶ " } else { "  " };
                 let device_type = if device.emulator {
-                    device.emulator_type()
+                    device
+                        .emulator_id
+                        .as_ref()
+                        .map(|_| "emulator")
+                        .unwrap_or("simulator")
                 } else {
                     "physical"
                 };
@@ -129,13 +113,6 @@ impl Widget for ConnectedDeviceList<'_> {
         list.render(area, buf);
     }
 }
-```
-
-### 3. Bootable device list
-
-```rust
-use crate::daemon::{BootableDevice, IosSimulator, AndroidAvd, ToolAvailability};
-use super::device_groups::{group_bootable_devices, flatten_groups};
 
 /// Widget for rendering bootable devices with grouping
 pub struct BootableDeviceList<'a> {
@@ -165,14 +142,16 @@ impl<'a> BootableDeviceList<'a> {
         }
     }
 
-    fn render_item(&self, item: &DeviceListItem<BootableDevice>, index: usize) -> ListItem<'static> {
+    fn render_item(
+        &self,
+        item: &DeviceListItem<BootableDevice>,
+        index: usize,
+    ) -> ListItem<'static> {
         match item {
-            DeviceListItem::Header(header) => {
-                ListItem::new(Line::from(vec![
-                    Span::styled("  ", self.styles.device_normal),
-                    Span::styled(header.clone(), self.styles.header),
-                ]))
-            }
+            DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
+                Span::styled("  ", self.styles.device_normal),
+                Span::styled(header.clone(), self.styles.header),
+            ])),
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
@@ -196,8 +175,8 @@ impl<'a> BootableDeviceList<'a> {
     }
 
     fn render_unavailable_message(&self, area: Rect, buf: &mut Buffer) {
-        use ratatui::widgets::Paragraph;
         use ratatui::layout::Alignment;
+        use ratatui::widgets::Paragraph;
 
         let mut messages = Vec::new();
 
@@ -240,8 +219,8 @@ impl Widget for BootableDeviceList<'_> {
 
         if items.is_empty() {
             // No devices found
-            use ratatui::widgets::Paragraph;
             use ratatui::layout::Alignment;
+            use ratatui::widgets::Paragraph;
 
             let msg = Paragraph::new("No bootable devices found")
                 .alignment(Alignment::Center)
@@ -260,12 +239,16 @@ impl Widget for BootableDeviceList<'_> {
         list.render(area, buf);
     }
 }
-```
 
-### 4. Scrolling support
-
-```rust
 /// Calculate scroll offset to keep selection visible
+///
+/// # Arguments
+/// * `selected_index` - The currently selected item index
+/// * `visible_height` - Number of items that can fit on screen
+/// * `current_offset` - Current scroll offset
+///
+/// # Returns
+/// The new scroll offset that keeps the selection visible
 pub fn calculate_scroll_offset(
     selected_index: usize,
     visible_height: usize,
@@ -288,16 +271,12 @@ pub fn calculate_scroll_offset(
     // Selection is visible, keep current offset
     current_offset
 }
-```
 
-## Tests
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ratatui::{backend::TestBackend, Terminal};
-    use crate::tui::test_utils::test_device_full;
+    use crate::daemon::SimulatorState;
+    use crate::tui::test_utils::{test_device_full, TestTerminal};
 
     #[test]
     fn test_connected_device_list_renders() {
@@ -306,18 +285,14 @@ mod tests {
             test_device_full("2", "Pixel 8", "android", false),
         ];
 
-        let backend = TestBackend::new(50, 10);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = TestTerminal::new();
 
-        terminal
-            .draw(|f| {
-                let list = ConnectedDeviceList::new(&devices, 0, true);
-                f.render_widget(list, f.area());
-            })
-            .unwrap();
+        terminal.draw_with(|f| {
+            let list = ConnectedDeviceList::new(&devices, 0, true);
+            f.render_widget(list, f.area());
+        });
 
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        let content = terminal.content();
 
         assert!(content.contains("iPhone 15"));
         assert!(content.contains("Pixel 8"));
@@ -347,96 +322,154 @@ mod tests {
             emulator_path: None,
         };
 
-        let backend = TestBackend::new(50, 10);
-        let mut terminal = Terminal::new(backend).unwrap();
+        let mut terminal = TestTerminal::new();
 
-        terminal
-            .draw(|f| {
-                let list = BootableDeviceList::new(
-                    &ios_sims,
-                    &android_avds,
-                    0,
-                    true,
-                    &tool_availability,
-                );
-                f.render_widget(list, f.area());
-            })
-            .unwrap();
+        terminal.draw_with(|f| {
+            let list =
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+            f.render_widget(list, f.area());
+        });
 
-        let buffer = terminal.backend().buffer();
-        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+        let content = terminal.content();
 
         assert!(content.contains("iPhone 15 Pro"));
         assert!(content.contains("Pixel 6"));
     }
 
     #[test]
-    fn test_calculate_scroll_offset() {
-        // Selection visible
+    fn test_bootable_device_list_unavailable_tools() {
+        let ios_sims = vec![];
+        let android_avds = vec![];
+
+        let tool_availability = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+        };
+
+        let mut terminal = TestTerminal::new();
+
+        terminal.draw_with(|f| {
+            let list =
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+
+        // Should show unavailable message
+        assert!(content.contains("Android SDK") || content.contains("Xcode"));
+    }
+
+    #[test]
+    fn test_bootable_device_list_empty() {
+        let ios_sims = vec![];
+        let android_avds = vec![];
+
+        let tool_availability = ToolAvailability {
+            xcrun_simctl: true,
+            android_emulator: true,
+            emulator_path: None,
+        };
+
+        let mut terminal = TestTerminal::new();
+
+        terminal.draw_with(|f| {
+            let list =
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+            f.render_widget(list, f.area());
+        });
+
+        let content = terminal.content();
+
+        // Should show empty state message
+        assert!(content.contains("No bootable devices found"));
+    }
+
+    #[test]
+    fn test_calculate_scroll_offset_selection_visible() {
+        // Selection visible, no scroll needed
         assert_eq!(calculate_scroll_offset(5, 10, 0), 0);
+    }
 
-        // Selection above visible area
+    #[test]
+    fn test_calculate_scroll_offset_selection_above() {
+        // Selection above visible area, scroll up
         assert_eq!(calculate_scroll_offset(2, 10, 5), 2);
+    }
 
-        // Selection below visible area
+    #[test]
+    fn test_calculate_scroll_offset_selection_below() {
+        // Selection below visible area, scroll down
         assert_eq!(calculate_scroll_offset(15, 10, 0), 6);
     }
+
+    #[test]
+    fn test_calculate_scroll_offset_zero_height() {
+        // Zero height should return 0
+        assert_eq!(calculate_scroll_offset(5, 0, 3), 0);
+    }
+
+    #[test]
+    fn test_calculate_scroll_offset_at_bottom_edge() {
+        // Selection at bottom edge of visible area
+        assert_eq!(calculate_scroll_offset(9, 10, 0), 0);
+    }
+
+    #[test]
+    fn test_calculate_scroll_offset_at_top_edge() {
+        // Selection at top edge of visible area
+        assert_eq!(calculate_scroll_offset(5, 10, 5), 5);
+    }
+
+    #[test]
+    fn test_bootable_device_display_name_ios() {
+        let sim = IosSimulator {
+            udid: "123".to_string(),
+            name: "iPhone 15".to_string(),
+            runtime: "iOS 17.2".to_string(),
+            state: SimulatorState::Shutdown,
+            device_type: "iPhone 15".to_string(),
+        };
+
+        let device = BootableDevice::IosSimulator(sim);
+        assert_eq!(device.display_name(), "iPhone 15");
+        assert_eq!(device.platform(), "iOS");
+        assert_eq!(device.runtime_info(), "iOS 17.2");
+    }
+
+    #[test]
+    fn test_bootable_device_display_name_android() {
+        let avd = AndroidAvd {
+            name: "Pixel_6_API_33".to_string(),
+            display_name: "Pixel 6".to_string(),
+            api_level: Some(33),
+            target: None,
+        };
+
+        let device = BootableDevice::AndroidAvd(avd);
+        assert_eq!(device.display_name(), "Pixel 6");
+        assert_eq!(device.platform(), "Android");
+        assert_eq!(device.runtime_info(), "API 33");
+    }
+
+    #[test]
+    fn test_bootable_device_android_no_api() {
+        let avd = AndroidAvd {
+            name: "Custom".to_string(),
+            display_name: "Custom AVD".to_string(),
+            api_level: None,
+            target: None,
+        };
+
+        let device = BootableDevice::AndroidAvd(avd);
+        assert_eq!(device.runtime_info(), "Unknown API");
+    }
+
+    #[test]
+    fn test_device_list_styles_default() {
+        let styles = DeviceListStyles::default();
+        assert_eq!(styles.header.fg, Some(Color::Yellow));
+        assert_eq!(styles.device_selected_focused.bg, Some(Color::Cyan));
+    }
 }
-```
-
-## Verification
-
-```bash
-cargo fmt && cargo check && cargo test device_list && cargo clippy -- -D warnings
-```
-
-## Notes
-
-- Headers are rendered but not selectable
-- Selection wraps around at list boundaries
-- Scroll offset adjusts to keep selection visible
-- Different styling for focused vs unfocused selection
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `src/tui/widgets/new_session_dialog/device_list.rs` | Created device list widget module with ConnectedDeviceList and BootableDeviceList widgets, DeviceListStyles, and calculate_scroll_offset function |
-| `src/tui/widgets/new_session_dialog/device_groups.rs` | Added impl block for BootableDevice with display_name(), runtime_info(), and platform() methods |
-| `src/tui/widgets/new_session_dialog/mod.rs` | Added device_list module export |
-
-### Notable Decisions/Tradeoffs
-
-1. **BootableDevice methods placement**: Added methods directly to the existing BootableDevice enum in device_groups.rs rather than creating a separate trait, maintaining consistency with the existing module structure.
-
-2. **Widget design**: ConnectedDeviceList and BootableDeviceList are separate widgets rather than a generic DeviceList because they have different data sources (Device vs IosSimulator/AndroidAvd) and different empty state handling (BootableDeviceList checks ToolAvailability).
-
-3. **Styling approach**: DeviceListStyles uses a single struct with different style fields rather than per-widget styling, allowing consistent appearance across both widgets and easier future theming.
-
-4. **Empty state handling**: BootableDeviceList distinguishes between "tools unavailable" (shows tool installation message) and "no devices found" (shows generic empty message), providing better user feedback.
-
-### Testing Performed
-
-- `cargo fmt` - Passed
-- `cargo check` - Passed (no compilation errors)
-- `cargo test device_list` - Passed (16 tests total)
-  - All scroll offset calculation tests passed
-  - Connected device list rendering test passed
-  - Bootable device list rendering tests passed (with data, empty, unavailable tools)
-  - BootableDevice method tests passed
-  - DeviceListStyles default test passed
-- `cargo clippy -- -D warnings` - Passed (no warnings)
-
-### Risks/Limitations
-
-1. **Performance with large device lists**: The current implementation creates new Vec allocations for list items on every render. For typical device counts (< 50), this is negligible, but could be optimized with caching if needed.
-
-2. **ToolAvailability assumptions**: The widget assumes ToolAvailability state is accurate. If tools become available/unavailable at runtime, the widget must be re-rendered with updated ToolAvailability.
-
-3. **Scroll offset calculation**: The calculate_scroll_offset function is a pure calculation utility that must be called by the consuming code. It doesn't maintain state itself, so the caller is responsible for storing and updating the offset.

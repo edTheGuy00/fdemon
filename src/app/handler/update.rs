@@ -1723,23 +1723,153 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
-        // NewSessionDialog Messages (Phase 1 - handlers in Phase 4)
+        // NewSessionDialog Messages (Phase 5 - Target Selector)
         // ─────────────────────────────────────────────────────────
         Message::HideNewSessionDialog => {
-            // Task 05: Hide new session dialog
             state.hide_new_session_dialog();
             UpdateResult::none()
         }
 
+        Message::NewSessionDialogSwitchPane => {
+            state.new_session_dialog_state.switch_pane();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogSwitchTab(tab) => {
+            // Check if we need to trigger discovery BEFORE switch_tab modifies state
+            let needs_bootable_discovery = tab == crate::tui::widgets::TargetTab::Bootable
+                && state.new_session_dialog_state.bootable_devices.is_empty()
+                && !state.new_session_dialog_state.loading_bootable;
+
+            state.new_session_dialog_state.switch_tab(tab);
+
+            // Trigger bootable device discovery if switching to Bootable tab and not loaded
+            if needs_bootable_discovery {
+                return UpdateResult::action(UpdateAction::DiscoverBootableDevices);
+            }
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogToggleTab => {
+            let new_tab = state.new_session_dialog_state.target_tab.toggle();
+            update(state, Message::NewSessionDialogSwitchTab(new_tab))
+        }
+
+        Message::NewSessionDialogDeviceUp => {
+            state.new_session_dialog_state.target_up();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDeviceDown => {
+            state.new_session_dialog_state.target_down();
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDeviceSelect => {
+            use crate::tui::widgets::TargetTab;
+            match state.new_session_dialog_state.target_tab {
+                TargetTab::Connected => {
+                    // Select device for launch - actual launch happens in Launch Context
+                    // For now, just acknowledge the selection
+                    UpdateResult::none()
+                }
+                TargetTab::Bootable => {
+                    // Boot the selected device
+                    if let Some(device) = state.new_session_dialog_state.selected_bootable_device()
+                    {
+                        let device_id = device.id.clone();
+                        let platform = device.platform.to_string();
+                        return UpdateResult::action(UpdateAction::BootDevice {
+                            device_id,
+                            platform,
+                        });
+                    }
+                    UpdateResult::none()
+                }
+            }
+        }
+
+        Message::NewSessionDialogRefreshDevices => {
+            use crate::tui::widgets::TargetTab;
+            match state.new_session_dialog_state.target_tab {
+                TargetTab::Connected => {
+                    state.new_session_dialog_state.loading_connected = true;
+                    UpdateResult::action(UpdateAction::DiscoverDevices)
+                }
+                TargetTab::Bootable => {
+                    state.new_session_dialog_state.loading_bootable = true;
+                    UpdateResult::action(UpdateAction::DiscoverBootableDevices)
+                }
+            }
+        }
+
+        Message::NewSessionDialogConnectedDevicesReceived(devices) => {
+            state
+                .new_session_dialog_state
+                .set_connected_devices(devices);
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogBootableDevicesReceived {
+            ios_simulators,
+            android_avds,
+        } => {
+            // Convert to BootableDevice using BootCommand
+            let mut bootable_devices = Vec::new();
+
+            for sim in ios_simulators {
+                let cmd = crate::daemon::BootCommand::IosSimulator(sim);
+                bootable_devices.push(cmd.into());
+            }
+
+            for avd in android_avds {
+                let cmd = crate::daemon::BootCommand::AndroidAvd(avd);
+                bootable_devices.push(cmd.into());
+            }
+
+            state
+                .new_session_dialog_state
+                .set_bootable_devices(bootable_devices);
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogDeviceDiscoveryFailed(error) => {
+            state.new_session_dialog_state.set_error(error);
+            state.new_session_dialog_state.loading_connected = false;
+            state.new_session_dialog_state.loading_bootable = false;
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogBootStarted { device_id } => {
+            state
+                .new_session_dialog_state
+                .mark_device_booting(&device_id);
+            UpdateResult::none()
+        }
+
+        Message::NewSessionDialogBootCompleted { .. } => {
+            // Switch to Connected tab and trigger device refresh
+            state.new_session_dialog_state.handle_device_booted();
+            UpdateResult::action(UpdateAction::DiscoverDevices)
+        }
+
+        Message::NewSessionDialogBootFailed { device_id, error } => {
+            state
+                .new_session_dialog_state
+                .set_error(format!("Failed to boot device {}: {}", device_id, error));
+            UpdateResult::none()
+        }
+
+        // Deprecated - redirect to new message
+        Message::NewSessionDialogDeviceBooted { device_id } => {
+            update(state, Message::NewSessionDialogBootCompleted { device_id })
+        }
+
         Message::ShowNewSessionDialog
-        | Message::NewSessionDialogSwitchPane
-        | Message::NewSessionDialogSwitchTab(_)
         | Message::NewSessionDialogUp
         | Message::NewSessionDialogDown
         | Message::NewSessionDialogConfirm
         | Message::NewSessionDialogBootDevice { .. }
-        | Message::NewSessionDialogDeviceBooted { .. }
-        | Message::NewSessionDialogBootFailed { .. }
         | Message::NewSessionDialogSetConnectedDevices { .. }
         | Message::NewSessionDialogSetBootableDevices { .. }
         | Message::NewSessionDialogSetError { .. }
@@ -1748,7 +1878,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::NewSessionDialogSetMode { .. }
         | Message::NewSessionDialogSetFlavor { .. }
         | Message::NewSessionDialogSetDartDefines { .. } => {
-            // Handlers will be implemented in Phase 4
+            // Handlers for these will be implemented in subsequent tasks
             UpdateResult::none()
         }
 

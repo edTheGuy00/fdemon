@@ -2633,4 +2633,358 @@ mod auto_launch_tests {
         // Focus should return to Key field
         assert_eq!(modal.edit_field, DartDefinesEditField::Key);
     }
+
+    // ─────────────────────────────────────────────────────────────
+    // Target Selector Message Tests (Phase 5, Task 05)
+    // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_switch_tab_to_connected() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Bootable;
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogSwitchTab(TargetTab::Connected),
+        );
+
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Connected
+        );
+        assert_eq!(state.new_session_dialog_state.selected_target_index, 0);
+    }
+
+    #[test]
+    fn test_switch_tab_to_bootable_triggers_discovery() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Connected;
+        state.new_session_dialog_state.bootable_devices = vec![]; // Empty
+        state.new_session_dialog_state.loading_bootable = false;
+
+        let result = update(
+            &mut state,
+            Message::NewSessionDialogSwitchTab(TargetTab::Bootable),
+        );
+
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Bootable
+        );
+        assert!(state.new_session_dialog_state.loading_bootable);
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverBootableDevices)
+        ));
+    }
+
+    #[test]
+    fn test_toggle_tab_switches_between_tabs() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Connected;
+
+        let _ = update(&mut state, Message::NewSessionDialogToggleTab);
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Bootable
+        );
+
+        // Avoid triggering discovery for clean test
+        state.new_session_dialog_state.loading_bootable = false;
+        state.new_session_dialog_state.bootable_devices = vec![]; // Add dummy to prevent discovery
+
+        let _ = update(&mut state, Message::NewSessionDialogToggleTab);
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Connected
+        );
+    }
+
+    #[test]
+    fn test_device_navigation_up_down() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.connected_devices = vec![
+            test_device("d1", "Device 1"),
+            test_device("d2", "Device 2"),
+            test_device("d3", "Device 3"),
+        ];
+        state.new_session_dialog_state.selected_target_index = 0;
+
+        // Navigate down
+        let _ = update(&mut state, Message::NewSessionDialogDeviceDown);
+        assert_eq!(state.new_session_dialog_state.selected_target_index, 1);
+
+        let _ = update(&mut state, Message::NewSessionDialogDeviceDown);
+        assert_eq!(state.new_session_dialog_state.selected_target_index, 2);
+
+        // Wrap to start
+        let _ = update(&mut state, Message::NewSessionDialogDeviceDown);
+        assert_eq!(state.new_session_dialog_state.selected_target_index, 0);
+
+        // Navigate up - wrap to end
+        let _ = update(&mut state, Message::NewSessionDialogDeviceUp);
+        assert_eq!(state.new_session_dialog_state.selected_target_index, 2);
+    }
+
+    #[test]
+    fn test_device_select_on_connected_tab() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Connected;
+        state.new_session_dialog_state.connected_devices = vec![test_device("d1", "Device 1")];
+
+        let result = update(&mut state, Message::NewSessionDialogDeviceSelect);
+
+        // For now, just returns none (actual launch happens in Launch Context)
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_device_select_on_bootable_tab_triggers_boot() {
+        use crate::core::{BootableDevice, DeviceState, Platform};
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Bootable;
+        state.new_session_dialog_state.bootable_devices = vec![BootableDevice {
+            id: "sim-123".into(),
+            name: "iPhone 15 Pro".into(),
+            platform: Platform::IOS,
+            runtime: "iOS 17.2".into(),
+            state: DeviceState::Shutdown,
+        }];
+        state.new_session_dialog_state.selected_target_index = 0;
+
+        let result = update(&mut state, Message::NewSessionDialogDeviceSelect);
+
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::BootDevice { .. })
+        ));
+    }
+
+    #[test]
+    fn test_refresh_devices_on_connected_tab() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Connected;
+
+        let result = update(&mut state, Message::NewSessionDialogRefreshDevices);
+
+        assert!(state.new_session_dialog_state.loading_connected);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+    }
+
+    #[test]
+    fn test_refresh_devices_on_bootable_tab() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Bootable;
+
+        let result = update(&mut state, Message::NewSessionDialogRefreshDevices);
+
+        assert!(state.new_session_dialog_state.loading_bootable);
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverBootableDevices)
+        ));
+    }
+
+    #[test]
+    fn test_connected_devices_received() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.loading_connected = true;
+
+        let devices = vec![test_device("d1", "Device 1"), test_device("d2", "Device 2")];
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogConnectedDevicesReceived(devices.clone()),
+        );
+
+        assert_eq!(state.new_session_dialog_state.connected_devices.len(), 2);
+        assert!(!state.new_session_dialog_state.loading_connected);
+        assert_eq!(state.new_session_dialog_state.connected_devices[0].id, "d1");
+    }
+
+    #[test]
+    fn test_bootable_devices_received() {
+        use crate::daemon::{AndroidAvd, IosSimulator, SimulatorState};
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.loading_bootable = true;
+
+        let ios_sims = vec![IosSimulator {
+            udid: "sim-1".into(),
+            name: "iPhone 15".into(),
+            state: SimulatorState::Shutdown,
+            runtime: "iOS 17.2".into(),
+            device_type: "iPhone 15 Pro".into(),
+        }];
+
+        let android_avds = vec![AndroidAvd {
+            name: "Pixel_8".into(),
+            display_name: "Pixel 8 API 34".into(),
+            api_level: Some(34),
+            target: Some("android-34".into()),
+        }];
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogBootableDevicesReceived {
+                ios_simulators: ios_sims,
+                android_avds,
+            },
+        );
+
+        assert_eq!(state.new_session_dialog_state.bootable_devices.len(), 2);
+        assert!(!state.new_session_dialog_state.loading_bootable);
+        assert_eq!(
+            state.new_session_dialog_state.bootable_devices[0].id,
+            "sim-1"
+        );
+    }
+
+    #[test]
+    fn test_device_discovery_failed() {
+        let mut state = AppState::new();
+        state.new_session_dialog_state.loading_connected = true;
+        state.new_session_dialog_state.loading_bootable = true;
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogDeviceDiscoveryFailed("Discovery error".into()),
+        );
+
+        assert!(!state.new_session_dialog_state.loading_connected);
+        assert!(!state.new_session_dialog_state.loading_bootable);
+        assert_eq!(
+            state.new_session_dialog_state.error,
+            Some("Discovery error".into())
+        );
+    }
+
+    #[test]
+    fn test_boot_started() {
+        use crate::core::{BootableDevice, DeviceState, Platform};
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.bootable_devices = vec![BootableDevice {
+            id: "sim-123".into(),
+            name: "iPhone 15".into(),
+            platform: Platform::IOS,
+            runtime: "iOS 17.2".into(),
+            state: DeviceState::Shutdown,
+        }];
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogBootStarted {
+                device_id: "sim-123".into(),
+            },
+        );
+
+        assert_eq!(
+            state.new_session_dialog_state.bootable_devices[0].state,
+            DeviceState::Booting
+        );
+    }
+
+    #[test]
+    fn test_boot_completed_switches_tab_and_triggers_refresh() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Bootable;
+
+        let result = update(
+            &mut state,
+            Message::NewSessionDialogBootCompleted {
+                device_id: "sim-123".into(),
+            },
+        );
+
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Connected
+        );
+        assert!(state.new_session_dialog_state.loading_connected);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+    }
+
+    #[test]
+    fn test_boot_failed_sets_error() {
+        let mut state = AppState::new();
+
+        let _ = update(
+            &mut state,
+            Message::NewSessionDialogBootFailed {
+                device_id: "sim-123".into(),
+                error: "Boot timeout".into(),
+            },
+        );
+
+        assert!(state.new_session_dialog_state.error.is_some());
+        assert!(state
+            .new_session_dialog_state
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("sim-123"));
+        assert!(state
+            .new_session_dialog_state
+            .error
+            .as_ref()
+            .unwrap()
+            .contains("Boot timeout"));
+    }
+
+    #[test]
+    fn test_device_booted_redirects_to_boot_completed() {
+        use crate::tui::widgets::TargetTab;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.target_tab = TargetTab::Bootable;
+
+        // Use deprecated message - should redirect
+        let result = update(
+            &mut state,
+            Message::NewSessionDialogDeviceBooted {
+                device_id: "sim-123".into(),
+            },
+        );
+
+        // Should have same effect as NewSessionDialogBootCompleted
+        assert_eq!(
+            state.new_session_dialog_state.target_tab,
+            TargetTab::Connected
+        );
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+    }
+
+    #[test]
+    fn test_switch_pane() {
+        use crate::tui::widgets::DialogPane;
+
+        let mut state = AppState::new();
+        state.new_session_dialog_state.active_pane = DialogPane::Left;
+
+        let _ = update(&mut state, Message::NewSessionDialogSwitchPane);
+        assert_eq!(
+            state.new_session_dialog_state.active_pane,
+            DialogPane::Right
+        );
+
+        let _ = update(&mut state, Message::NewSessionDialogSwitchPane);
+        assert_eq!(state.new_session_dialog_state.active_pane, DialogPane::Left);
+    }
 }
