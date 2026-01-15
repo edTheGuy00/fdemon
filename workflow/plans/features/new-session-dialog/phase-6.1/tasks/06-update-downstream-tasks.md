@@ -202,3 +202,34 @@ grep -r "new_session_dialog/state.rs" workflow/plans/features/new-session-dialog
 - Task files are documentation, not code - no cargo commands needed
 - Preserves the intent of original tasks while updating file locations
 - If any task file has additional stale references, update those too
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/new-session-dialog/phase-7/tasks/01-dialog-state.md` | Updated Files table and code comments to reference `state/dialog.rs` instead of `state.rs`, updated import statements to use new module structure |
+| `workflow/plans/features/new-session-dialog/phase-7/tasks/04-dialog-messages.md` | Updated Files table to reference `handler/new_session/navigation.rs` and `handler/new_session/mod.rs` instead of `handler/update.rs`, updated code comments |
+| `workflow/plans/features/new-session-dialog/phase-8/tasks/02-startup-flow.md` | Updated Files table to reference `handler/session.rs` and `handler/new_session/launch_context.rs` instead of `handler/update.rs`, updated code comments in sections 2 and 6 |
+| `workflow/plans/features/new-session-dialog/phase-8/tasks/03-remove-old-dialogs.md` | Updated Files to Modify table to reference `handler/mod.rs` instead of `handler/update.rs`, added new "Files to Delete (Handler Modules)" table listing `startup_dialog.rs` and `device_selector.rs`, updated section 4 to show proper module removal |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import Path Strategy**: In Phase 7 Task 01, updated the import examples to show both relative imports (`super::super::`) and fully qualified imports from `state/mod.rs` re-exports to demonstrate best practices for the new module structure.
+2. **Handler Module Documentation**: In Phase 8 Task 03, restructured the documentation to clearly separate widget deletions from handler module deletions, making it clearer which files belong to which layer.
+
+### Testing Performed
+
+- Verified no references to old `state.rs` path remain in phase-7 or phase-8 task files
+- Verified no references to old monolithic `handler/update.rs` path remain in updated task files
+- Checked that all four specified task files were correctly updated
+- References in TASKS.md summary files are intentionally left as they document the split itself
+
+### Risks/Limitations
+
+1. **Task 01 UI Mode Integration**: Phase 8 Task 01 (not in scope for this task) still contains a reference to `handler/update.rs` in a code comment. This is acceptable as it shows conceptual transition functions and wasn't in the task specification to update.

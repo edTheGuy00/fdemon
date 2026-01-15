@@ -9,7 +9,8 @@ Add message types and handlers for the main NewSessionDialog, including pane swi
 | File | Action |
 |------|--------|
 | `src/app/message.rs` | Modify (add messages) |
-| `src/app/handler/update.rs` | Modify (add handlers) |
+| `src/app/handler/new_session/navigation.rs` | Modify (add pane switching handlers) |
+| `src/app/handler/new_session/mod.rs` | Modify (add dialog open/close handlers) |
 | `src/app/handler/keys.rs` | Modify (add key routing) |
 
 ## Implementation
@@ -44,7 +45,7 @@ pub enum Message {
 ### 2. Handle dialog open/close
 
 ```rust
-// src/app/handler/update.rs
+// src/app/handler/new_session/mod.rs
 
 fn handle_open_new_session_dialog(state: &mut AppState) -> Option<UpdateAction> {
     // Create dialog state with loaded configs
@@ -76,6 +77,8 @@ fn handle_close_new_session_dialog(state: &mut AppState) -> Option<UpdateAction>
 ### 3. Handle pane switching
 
 ```rust
+// src/app/handler/new_session/navigation.rs
+
 fn handle_new_session_dialog_switch_pane(state: &mut AppState) -> Option<UpdateAction> {
     if let Some(ref mut dialog) = state.new_session_dialog {
         dialog.toggle_pane_focus();

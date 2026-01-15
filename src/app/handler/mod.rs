@@ -3,15 +3,30 @@
 //! Organized into submodules:
 //! - `update`: Main update() function and message dispatch
 //! - `daemon`: Multi-session daemon event handling
-//! - `session`: Session lifecycle handlers
+//! - `session`: Session state helpers
+//! - `session_lifecycle`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
 //! - `helpers`: Utility functions
+//! - `new_session`: NewSessionDialog handlers
+//! - `startup_dialog_handlers`: StartupDialog handlers
+//! - `settings`: Settings helpers
+//! - `settings_handlers`: Settings page handlers
+//! - `device_selector`: Legacy device selector handlers
+//! - `scroll`: Scroll handlers
+//! - `log_view`: Log view operation handlers
 
 pub mod daemon;
+pub mod device_selector;
 pub mod helpers;
 pub mod keys;
+pub mod log_view;
+pub mod new_session;
+pub mod scroll;
 pub mod session;
+pub mod session_lifecycle;
 pub mod settings;
+pub mod settings_handlers;
+pub mod startup_dialog_handlers;
 pub mod update;
 
 #[cfg(test)]

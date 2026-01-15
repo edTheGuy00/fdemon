@@ -8,14 +8,14 @@ Create the main `NewSessionDialogState` that combines Target Selector, Launch Co
 
 | File | Action |
 |------|--------|
-| `src/tui/widgets/new_session_dialog/state.rs` | Modify (add main state) |
+| `src/tui/widgets/new_session_dialog/state/dialog.rs` | Modify (add main state) |
 
 ## Implementation
 
 ### 1. Define dialog pane enum
 
 ```rust
-// src/tui/widgets/new_session_dialog/state.rs
+// src/tui/widgets/new_session_dialog/state/dialog.rs
 
 /// Which pane is currently focused
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -38,9 +38,12 @@ impl DialogPane {
 ### 2. Main dialog state
 
 ```rust
-use super::target_selector::TargetSelectorState;
-use super::fuzzy_modal::FuzzyModalState;
-use super::dart_defines_modal::DartDefinesModalState;
+use super::super::target_selector::TargetSelectorState;
+use crate::tui::widgets::new_session_dialog::state::{
+    FuzzyModalState,
+    DartDefinesModalState,
+    LaunchContextState,
+};
 use crate::config::LoadedConfigs;
 
 /// State for the NewSessionDialog

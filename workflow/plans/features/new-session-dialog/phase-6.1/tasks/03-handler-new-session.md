@@ -147,3 +147,48 @@ cargo clippy -- -D warnings
 - If a helper is shared, put it in `new_session/mod.rs`
 - Message routing stays in `update.rs`, only handler logic moves
 - Verify no behavior changes through tests
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/mod.rs` | Created module with re-exports for all handler submodules |
+| `src/app/handler/new_session/navigation.rs` | Created (122 lines) - Pane/tab/field navigation handlers |
+| `src/app/handler/new_session/target_selector.rs` | Created (146 lines) - Device list, boot, discovery handlers |
+| `src/app/handler/new_session/launch_context.rs` | Created (266 lines) - Config/mode/flavor selection, launch handlers |
+| `src/app/handler/new_session/fuzzy_modal.rs` | Created (121 lines) - Fuzzy search modal handlers |
+| `src/app/handler/new_session/dart_defines_modal.rs` | Created (145 lines) - Key-value editor modal handlers |
+| `src/app/handler/mod.rs` | Added new_session module declaration |
+| `src/app/handler/update.rs` | Reduced from 2786 to 2211 lines (575 lines removed) - Replaced inline handler code with module delegation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Function Pointer Pattern**: Some handlers (`handle_field_activate`, `handle_fuzzy_confirm`, `handle_close_dart_defines_modal`) need to recursively call `update()` for sub-messages. These accept a function pointer `fn(&mut AppState, Message) -> UpdateResult` to avoid circular dependencies.
+
+2. **Handler Organization**: Organized handlers by functional area rather than message type prefix, improving cohesion:
+   - navigation: UI navigation (panes, tabs, fields)
+   - target_selector: Device management (selection, booting, discovery)
+   - launch_context: Launch configuration (config, mode, flavor, dart defines, launch)
+   - fuzzy_modal: Fuzzy search modal interactions
+   - dart_defines_modal: Key-value editor modal interactions
+
+3. **Import Cleanup**: Removed unused imports identified by compiler warnings to maintain code quality.
+
+4. **TODO Update**: Updated the file-splitting TODO comment in `update.rs` to mark this task as complete and reflect the new line count.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1603 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None identified. All tests pass and handler logic is preserved exactly as before. The extraction is purely organizational with no behavior changes.

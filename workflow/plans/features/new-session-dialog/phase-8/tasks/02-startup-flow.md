@@ -9,7 +9,8 @@ Wire up the app startup flow to use NewSessionDialog. Trigger tool availability 
 | File | Action |
 |------|--------|
 | `src/main.rs` | Modify (startup sequence) |
-| `src/app/handler/update.rs` | Modify (add handlers) |
+| `src/app/handler/session.rs` | Modify (add launch success handler) |
+| `src/app/handler/new_session/launch_context.rs` | Modify (add auto-launch handler) |
 
 ## Implementation
 
@@ -71,7 +72,7 @@ async fn run_app(project_path: PathBuf) -> Result<()> {
 ### 2. Spawn tool availability check
 
 ```rust
-// src/app/handler/update.rs
+// src/app/handler/session.rs (for spawn_tool_availability_check, spawn_device_discovery)
 
 use crate::daemon::ToolAvailability;
 
@@ -161,6 +162,7 @@ fn handle_normal_mode_key(key: KeyEvent, state: &AppState) -> Option<Message> {
 ### 6. Handle auto-launch from config
 
 ```rust
+// src/app/handler/new_session/launch_context.rs (for auto-launch logic)
 // If a config has auto_launch=true, launch immediately after device discovery
 
 fn handle_connected_devices_received_with_auto_launch(

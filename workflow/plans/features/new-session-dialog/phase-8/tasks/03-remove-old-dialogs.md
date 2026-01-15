@@ -19,8 +19,15 @@ Remove the old DeviceSelector and StartupDialog implementations now that NewSess
 | `src/tui/widgets/mod.rs` | Remove old exports |
 | `src/app/state.rs` | Remove old state types |
 | `src/app/message.rs` | Remove old messages |
-| `src/app/handler/update.rs` | Remove old handlers |
+| `src/app/handler/mod.rs` | Remove module exports for startup_dialog, device_selector |
 | `src/app/handler/keys.rs` | Remove old key handlers |
+
+## Files to Delete (Handler Modules)
+
+| File | Reason |
+|------|--------|
+| `src/app/handler/startup_dialog.rs` | Replaced by new_session handlers |
+| `src/app/handler/device_selector.rs` | Replaced by new_session handlers |
 
 ## Implementation
 
@@ -101,20 +108,24 @@ pub mod status_bar;
 // Keep NewSessionDialog messages (added in previous phases)
 ```
 
-### 4. Update app/handler/update.rs
+### 4. Remove handler modules
 
 ```rust
-// src/app/handler/update.rs
+// src/app/handler/mod.rs
 
-// Remove these handler functions:
-// fn handle_startup_dialog_xxx(...) { ... }
-// fn handle_device_selector_xxx(...) { ... }
+// Remove these module declarations:
+// mod startup_dialog;
+// mod device_selector;
 
-// Remove from match statement in update():
-// Message::StartupDialogXxx => handle_startup_dialog_xxx(...),
-// Message::DeviceSelectorXxx => handle_device_selector_xxx(...),
+// Remove these re-exports:
+// pub use startup_dialog::*;
+// pub use device_selector::*;
+```
 
-// Keep NewSessionDialog handlers
+Then delete the files:
+```bash
+rm src/app/handler/startup_dialog.rs
+rm src/app/handler/device_selector.rs
 ```
 
 ### 5. Update app/handler/keys.rs

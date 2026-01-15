@@ -60,12 +60,12 @@ This intermediate phase is necessary because:
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-state-types-and-modals](tasks/01-state-types-and-modals.md) | Not Started | Phase 6 | 90m | `new_session_dialog/state/` |
-| 2 | [02-state-main-types](tasks/02-state-main-types.md) | Not Started | 1 | 90m | `new_session_dialog/state/` |
-| 3 | [03-handler-new-session](tasks/03-handler-new-session.md) | Not Started | 1, 2 | 90m | `app/handler/new_session/` |
-| 4 | [04-handler-remaining](tasks/04-handler-remaining.md) | Not Started | 3 | 90m | `app/handler/` |
-| 5 | [05-cleanup-verification](tasks/05-cleanup-verification.md) | Not Started | 4 | 60m | Multiple |
-| 6 | [06-update-downstream-tasks](tasks/06-update-downstream-tasks.md) | Not Started | 5 | 30m | `workflow/plans/` (docs only) |
+| 1 | [01-state-types-and-modals](tasks/01-state-types-and-modals.md) | Done | Phase 6 | 90m | `new_session_dialog/state/` |
+| 2 | [02-state-main-types](tasks/02-state-main-types.md) | Done | 1 | 90m | `new_session_dialog/state/` |
+| 3 | [03-handler-new-session](tasks/03-handler-new-session.md) | Done | 1, 2 | 90m | `app/handler/new_session/` |
+| 4 | [04-handler-remaining](tasks/04-handler-remaining.md) | Done | 3 | 90m | `app/handler/` |
+| 5 | [05-cleanup-verification](tasks/05-cleanup-verification.md) | Done | 4 | 60m | Multiple |
+| 6 | [06-update-downstream-tasks](tasks/06-update-downstream-tasks.md) | Done | 5 | 30m | `workflow/plans/` (docs only) |
 
 ## Target Module Structures
 
@@ -119,15 +119,15 @@ src/app/handler/
 
 Phase 6.1 is complete when:
 
-- [ ] `state.rs` split into `state/` module with 5+ submodules
-- [ ] All state types re-exported correctly from `state/mod.rs`
-- [ ] `update.rs` split into handler modules
-- [ ] NewSessionDialog handlers in dedicated `handler/new_session/` module
-- [ ] All imports updated throughout codebase
-- [ ] No files exceed 500 lines (guideline)
-- [ ] All existing tests pass without modification
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
-- [ ] Phase 7 and Phase 8 task files updated with new file paths
+- [x] `state.rs` split into `state/` module with 5+ submodules
+- [x] All state types re-exported correctly from `state/mod.rs`
+- [x] `update.rs` split into handler modules
+- [x] NewSessionDialog handlers in dedicated `handler/new_session/` module
+- [x] All imports updated throughout codebase
+- [x] No files exceed 500 lines (guideline)
+- [x] All existing tests pass without modification
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] Phase 7 and Phase 8 task files updated with new file paths
 
 ## Verification Commands
 

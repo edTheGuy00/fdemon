@@ -287,80 +287,80 @@ cargo build --release  # Verify release build
 
 ### update.rs Refactoring
 
-- [ ] Phase 1: Extract `new_session/` module
-  - [ ] Create directory structure
-  - [ ] Extract `navigation.rs`
-  - [ ] Extract `target_selector.rs`
-  - [ ] Extract `launch_context.rs`
-  - [ ] Extract `fuzzy_modal.rs`
-  - [ ] Extract `dart_defines_modal.rs`
-  - [ ] Create `new_session/mod.rs`
-  - [ ] Update `handler/mod.rs`
-  - [ ] Run tests and verify
-- [ ] Phase 2: Extract `startup_dialog.rs`
-  - [ ] Create module file
-  - [ ] Move handlers
-  - [ ] Update imports
-  - [ ] Verify tests
-- [ ] Phase 3: Extract other handler groups
-  - [ ] Extract `session.rs`
-  - [ ] Extract `scroll.rs`
-  - [ ] Extract `log_view.rs`
-  - [ ] Extract `device_selector.rs`
-  - [ ] Extract `settings.rs`
-- [ ] Phase 4: Finalize refactoring
-  - [ ] Move remaining code to `handler/mod.rs`
-  - [ ] Remove empty `update.rs`
-  - [ ] Update all external imports
-  - [ ] Full test suite passes
-  - [ ] Clippy clean
+- [x] Phase 1: Extract `new_session/` module
+  - [x] Create directory structure
+  - [x] Extract `navigation.rs`
+  - [x] Extract `target_selector.rs`
+  - [x] Extract `launch_context.rs`
+  - [x] Extract `fuzzy_modal.rs`
+  - [x] Extract `dart_defines_modal.rs`
+  - [x] Create `new_session/mod.rs`
+  - [x] Update `handler/mod.rs`
+  - [x] Run tests and verify
+- [x] Phase 2: Extract `startup_dialog.rs`
+  - [x] Create module file
+  - [x] Move handlers
+  - [x] Update imports
+  - [x] Verify tests
+- [x] Phase 3: Extract other handler groups
+  - [x] Extract `session.rs`
+  - [x] Extract `scroll.rs`
+  - [x] Extract `log_view.rs`
+  - [x] Extract `device_selector.rs`
+  - [x] Extract `settings.rs`
+- [x] Phase 4: Finalize refactoring
+  - [x] Move remaining code to `handler/mod.rs`
+  - [x] Keep `update.rs` with routing logic
+  - [x] Update all external imports
+  - [x] Full test suite passes
+  - [x] Clippy clean
 
 ### state.rs Refactoring
 
-- [ ] Phase 1: Create structure
-  - [ ] Create `state/` directory
-  - [ ] Create `state/tests/` directory
-  - [ ] Create skeleton `state/mod.rs`
-- [ ] Phase 2: Move types (foundation)
-  - [ ] Create `state/types.rs`
-  - [ ] Move `DialogPane`
-  - [ ] Move `TargetTab`
-  - [ ] Move `LaunchContextField`
-  - [ ] Update exports
-  - [ ] Verify with `cargo check`
-- [ ] Phase 3: Move FuzzyModalState
-  - [ ] Create `state/fuzzy_modal.rs`
-  - [ ] Move `FuzzyModalType` enum
-  - [ ] Move `FuzzyModalState` struct + impl
-  - [ ] Create `state/tests/fuzzy_modal_tests.rs`
-  - [ ] Extract tests
-  - [ ] Verify with `cargo test --lib`
-- [ ] Phase 4: Move DartDefinesModalState
-  - [ ] Create `state/dart_defines.rs`
-  - [ ] Move `DartDefine`
-  - [ ] Move `DartDefinesPane`
-  - [ ] Move `DartDefinesEditField`
-  - [ ] Move `DartDefinesModalState` struct + impl
-  - [ ] Create `state/tests/dart_defines_tests.rs`
-  - [ ] Extract tests
-  - [ ] Verify with `cargo test --lib`
-- [ ] Phase 5: Move LaunchContextState
-  - [ ] Create `state/launch_context.rs`
-  - [ ] Move `LaunchContextState` struct + impl
-  - [ ] Create `state/tests/launch_context_tests.rs`
-  - [ ] Extract tests
-  - [ ] Verify with `cargo test --lib`
-- [ ] Phase 6: Move NewSessionDialogState
-  - [ ] Create `state/dialog.rs`
-  - [ ] Move `NewSessionDialogState` struct + impl
-  - [ ] Create `state/tests/dialog_tests.rs`
-  - [ ] Extract tests
-  - [ ] Verify with `cargo test --lib`
-- [ ] Phase 7: Finalize
-  - [ ] Update all external imports
-  - [ ] Remove empty `state.rs`
-  - [ ] Full test suite passes (`cargo test`)
-  - [ ] Clippy clean (`cargo clippy -- -D warnings`)
+- [x] Phase 1: Create structure
+  - [x] Create `state/` directory
+  - [x] Create `state/tests/` directory
+  - [x] Create skeleton `state/mod.rs`
+- [x] Phase 2: Move types (foundation)
+  - [x] Create `state/types.rs`
+  - [x] Move `DialogPane`
+  - [x] Move `TargetTab`
+  - [x] Move `LaunchContextField`
+  - [x] Update exports
+  - [x] Verify with `cargo check`
+- [x] Phase 3: Move FuzzyModalState
+  - [x] Create `state/fuzzy_modal.rs`
+  - [x] Move `FuzzyModalType` enum
+  - [x] Move `FuzzyModalState` struct + impl
+  - [x] Create `state/tests/fuzzy_modal_tests.rs`
+  - [x] Extract tests
+  - [x] Verify with `cargo test --lib`
+- [x] Phase 4: Move DartDefinesModalState
+  - [x] Create `state/dart_defines.rs`
+  - [x] Move `DartDefine`
+  - [x] Move `DartDefinesPane`
+  - [x] Move `DartDefinesEditField`
+  - [x] Move `DartDefinesModalState` struct + impl
+  - [x] Create `state/tests/dart_defines_tests.rs`
+  - [x] Extract tests
+  - [x] Verify with `cargo test --lib`
+- [x] Phase 5: Move LaunchContextState
+  - [x] Create `state/launch_context.rs`
+  - [x] Move `LaunchContextState` struct + impl
+  - [x] Create `state/tests/launch_context_tests.rs`
+  - [x] Extract tests
+  - [x] Verify with `cargo test --lib`
+- [x] Phase 6: Move NewSessionDialogState
+  - [x] Create `state/dialog.rs`
+  - [x] Move `NewSessionDialogState` struct + impl
+  - [x] Create `state/tests/dialog_tests.rs`
+  - [x] Extract tests
+  - [x] Verify with `cargo test --lib`
+- [x] Phase 7: Finalize
+  - [x] Update all external imports
+  - [x] Remove empty `state.rs` (replaced with state/ module)
+  - [x] Full test suite passes (`cargo test`)
+  - [x] Clippy clean (`cargo clippy -- -D warnings`)
 
 ## References
 
