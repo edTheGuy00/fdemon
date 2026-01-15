@@ -222,7 +222,7 @@ DartDefinesModalState (dart_defines.rs)
 
 ## Priority
 
-**Medium** - Not blocking current Phase 6 work, but should be addressed before Phase 7.
+**High** - Phase 6.1 has been created to address this before Phase 7.
 
 The files are functional but difficult to maintain and review. Splitting improves:
 - Reviewability (smaller diffs, focused changes)
@@ -230,11 +230,23 @@ The files are functional but difficult to maintain and review. Splitting improve
 - Test organization (co-located with implementation)
 - Compile times (smaller compilation units)
 
+## Implementation
+
+**Phase 6.1 Task Plan Created:** See [phase-6.1/TASKS.md](phase-6.1/TASKS.md)
+
+The file splitting has been formalized as Phase 6.1 with 6 tasks:
+1. Split state.rs types and modals
+2. Split state.rs main types (complete the state/ module)
+3. Extract handler/new_session/ module
+4. Extract remaining handler modules
+5. Cleanup and verification
+6. Update Phase 7 and Phase 8 task files with new file paths
+
 ## Dependencies
 
-- Complete Phase 6 review fixes first
-- Coordinate with any parallel development on feature branches
-- Should be done as a dedicated refactoring task/PR
+- Complete Phase 6 review fixes first (done)
+- Phase 6.1 must complete before Phase 7 begins
+- Phase 7 and Phase 8 TASKS.md have been updated with new file paths
 
 ## Risks and Mitigation
 

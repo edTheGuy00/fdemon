@@ -162,10 +162,13 @@ Triggered when pressing Enter on Dart Defines field. Master-detail layout for ma
 | 4 | Native Device Discovery | Implement `xcrun simctl` and `emulator -list-avds` discovery | 2h |
 | 5 | Target Selector Widget | Tabbed device list (Connected/Bootable) with boot action | 3h |
 | 6 | Launch Context Widget | Right pane with config/mode/flavor/dart-defines fields | 2h |
+| **6.1** | **File Splitting Refactoring** | **Split oversized `state.rs` and `update.rs` into modules** | **6-8h** |
 | 7 | Main Dialog Assembly | Combine all widgets, wire up modal triggers | 2h |
 | 8 | Integration & Cleanup | Update handlers, remove old dialogs, update tests | 3h |
 
-**Total Estimated Time:** 18 hours
+**Total Estimated Time:** 24-26 hours
+
+**Note:** Phase 6.1 was added post-review to address oversized files (2,100+ lines in `state.rs`, 2,700+ lines in `update.rs`) before Phase 7 modifies them further. See [FILE_SPLITTING.md](FILE_SPLITTING.md) for details.
 
 ## Phase Details
 

@@ -7,6 +7,14 @@ Final integration phase: wire up the NewSessionDialog to the app, remove old dia
 **Total Tasks:** 5
 **Estimated Time:** 3 hours
 
+## Prerequisites
+
+**Depends on:** Phase 6.1 (File Splitting Refactoring), Phase 7
+
+Phase 6.1 restructures the handler files that are modified/removed in this phase:
+- `app/handler/update.rs` → `app/handler/` modules (including `startup_dialog.rs`, `device_selector.rs`)
+- `new_session_dialog/state.rs` → `new_session_dialog/state/` module
+
 ## Task Dependency Graph
 
 ```
@@ -40,8 +48,8 @@ Final integration phase: wire up the NewSessionDialog to the app, remove old dia
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
 | 1 | [01-ui-mode-integration](tasks/01-ui-mode-integration.md) | Not Started | Phase 7 | 35m | `app/state.rs`, `tui/render/mod.rs` |
-| 2 | [02-startup-flow](tasks/02-startup-flow.md) | Not Started | 1 | 30m | `app/handler/update.rs`, `main.rs` |
-| 3 | [03-remove-old-dialogs](tasks/03-remove-old-dialogs.md) | Not Started | 2 | 35m | Multiple files |
+| 2 | [02-startup-flow](tasks/02-startup-flow.md) | Not Started | 1 | 30m | `app/handler/session.rs`, `main.rs` |
+| 3 | [03-remove-old-dialogs](tasks/03-remove-old-dialogs.md) | Not Started | 2 | 35m | `app/handler/startup_dialog.rs`, `app/handler/device_selector.rs`, widgets |
 | 4 | [04-update-tests](tasks/04-update-tests.md) | Not Started | 3 | 40m | Test files |
 | 5 | [05-documentation](tasks/05-documentation.md) | Not Started | 4 | 20m | `docs/KEYBINDINGS.md` |
 
@@ -67,10 +75,14 @@ Phase 8 is complete when:
 
 ## Files to Modify
 
+After Phase 6.1, the handler structure is modular:
+
 - `src/app/state.rs` - Remove old state types
 - `src/app/message.rs` - Remove old message types
-- `src/app/handler/update.rs` - Remove old handlers
+- `src/app/handler/startup_dialog.rs` - **DELETE** (replaces old code in update.rs)
+- `src/app/handler/device_selector.rs` - **DELETE** (replaces old code in update.rs)
 - `src/app/handler/keys.rs` - Remove old key handlers
+- `src/app/handler/mod.rs` - Update exports (remove deleted modules)
 - `src/tui/render/mod.rs` - Update rendering
 - `src/tui/widgets/mod.rs` - Update exports
 

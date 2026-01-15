@@ -7,6 +7,14 @@ Combine Target Selector and Launch Context into the main NewSessionDialog widget
 **Total Tasks:** 4
 **Estimated Time:** 2 hours
 
+## Prerequisites
+
+**Depends on:** Phase 6.1 (File Splitting Refactoring)
+
+Phase 6.1 must be completed first because it restructures the files modified in this phase:
+- `new_session_dialog/state.rs` → `new_session_dialog/state/dialog.rs`
+- `app/handler/update.rs` → `app/handler/new_session/` module
+
 ## UI Design
 
 ```
@@ -62,10 +70,10 @@ Combine Target Selector and Launch Context into the main NewSessionDialog widget
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-dialog-state](tasks/01-dialog-state.md) | Not Started | Phase 5, 6 | 25m | `new_session_dialog/state.rs` |
+| 1 | [01-dialog-state](tasks/01-dialog-state.md) | Not Started | Phase 5, 6, 6.1 | 25m | `new_session_dialog/state/dialog.rs` |
 | 2 | [02-dialog-layout](tasks/02-dialog-layout.md) | Not Started | 1 | 30m | `new_session_dialog/mod.rs` |
 | 3 | [03-modal-overlay](tasks/03-modal-overlay.md) | Not Started | 2 | 25m | `new_session_dialog/mod.rs` |
-| 4 | [04-dialog-messages](tasks/04-dialog-messages.md) | Not Started | 3 | 20m | `app/message.rs`, `app/handler/update.rs` |
+| 4 | [04-dialog-messages](tasks/04-dialog-messages.md) | Not Started | 3 | 20m | `app/message.rs`, `app/handler/new_session/` |
 
 ## Success Criteria
 
