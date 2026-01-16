@@ -242,3 +242,34 @@ cargo fmt && cargo check && cargo test ui_mode && cargo clippy -- -D warnings
 - The difference is context: Startup means no sessions yet
 - NewSessionDialog overlay renders on top of normal view when adding device
 - Old dialog types will be removed in task 03
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/state.rs` | Updated UiMode enum: Changed default to Startup, moved NewSessionDialog up, marked StartupDialog and DeviceSelector as legacy |
+| `/Users/ed/Dev/zabin/flutter-demon/src/tui/render/mod.rs` | Updated rendering to handle Startup and NewSessionDialog modes with NewSessionDialog widget, removed unused centered_rect helper |
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/handler/keys.rs` | Updated handle_key to route Startup and NewSessionDialog modes to handle_key_new_session_dialog |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept legacy modes**: StartupDialog and DeviceSelector modes were marked as legacy but not removed yet per task instructions. This allows for gradual migration without breaking existing code paths.
+2. **Combined mode handling**: Both UiMode::Startup and UiMode::NewSessionDialog use the same rendering logic and key handler, simplifying the implementation.
+3. **Default mode changed**: UiMode::default() now returns Startup instead of Normal, aligning with the new startup flow.
+
+### Testing Performed
+
+- `cargo check` - Passed (no compilation errors)
+- `cargo test --lib` - Passed (1559 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Existing state fields not removed**: AppState still contains startup_dialog_state and device_selector fields. These will be removed in task 03 after handler migration is complete.
+2. **Legacy mode paths still active**: Code paths using StartupDialog and DeviceSelector modes still exist and function. Task 02 will migrate handlers to use the new modes.

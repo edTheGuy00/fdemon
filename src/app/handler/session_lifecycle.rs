@@ -3,7 +3,7 @@
 //! Handles session creation, switching, and closing.
 
 use crate::app::session::SessionId;
-use crate::app::state::{AppState, UiMode};
+use crate::app::state::AppState;
 use crate::core::{AppPhase, LogSource};
 use crate::daemon::CommandSender;
 
@@ -55,8 +55,9 @@ pub fn handle_session_spawn_failed(
     // Remove the failed session from manager
     state.session_manager.remove_session(session_id);
 
-    // Show device selector again so user can retry
-    state.ui_mode = UiMode::DeviceSelector;
+    // Show new session dialog again so user can retry
+    let configs = crate::config::load_all_configs(&state.project_path);
+    state.show_new_session_dialog(configs);
     UpdateResult::none()
 }
 
@@ -139,10 +140,11 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
             state.session_manager.remove_session(current_session_id);
         }
 
-        // If no sessions left after removal, show device selector
+        // If no sessions left after removal, show new session dialog
         if state.session_manager.is_empty() {
-            state.ui_mode = UiMode::DeviceSelector;
-            state.device_selector.show_loading();
+            let configs = crate::config::load_all_configs(&state.project_path);
+            state.show_new_session_dialog(configs);
+            // Trigger device discovery
             return UpdateResult::action(UpdateAction::DiscoverDevices);
         }
     }

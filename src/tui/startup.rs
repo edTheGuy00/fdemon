@@ -72,24 +72,22 @@ where
 
 /// Initialize startup state
 ///
-/// Always enters Normal mode. Returns whether auto-start should be triggered.
-/// The caller is responsible for sending the auto-start message if needed.
+/// Shows NewSessionDialog at startup. Device discovery and tool availability
+/// checks will be triggered by the runner after the first render.
 pub fn startup_flutter(
     state: &mut AppState,
-    settings: &config::Settings,
+    _settings: &config::Settings,
     project_path: &Path,
 ) -> StartupAction {
-    // Load configs upfront (needed for auto-start path)
+    // Load configs upfront
     let configs = load_all_configs(project_path);
 
-    // Always enter Normal mode first
-    state.ui_mode = UiMode::Normal;
+    // Show NewSessionDialog at startup (Startup mode)
+    state.show_new_session_dialog(configs.clone());
+    state.ui_mode = UiMode::Startup; // Override to Startup mode
 
-    if settings.behavior.auto_start {
-        StartupAction::AutoStart { configs }
-    } else {
-        StartupAction::Ready
-    }
+    // Return Ready - the runner will trigger tool availability and device discovery
+    StartupAction::Ready
 }
 
 /// Auto-start mode: try to launch immediately based on preferences
@@ -140,9 +138,12 @@ async fn auto_start_session(
                 );
             }
             Err(e) => {
-                // Device discovery failed, show startup dialog with error
-                state.show_startup_dialog(configs.clone());
-                state.startup_dialog_state.set_error(e.to_string());
+                // Device discovery failed, show new session dialog with error
+                state.show_new_session_dialog(configs.clone());
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .set_error(e.to_string());
                 return None;
             }
         }
@@ -171,10 +172,13 @@ async fn auto_start_session(
             )
         }
         Err(e) => {
-            // Device discovery failed, show startup dialog with error
+            // Device discovery failed, show new session dialog with error
             state.clear_loading();
-            state.show_startup_dialog(configs.clone());
-            state.startup_dialog_state.set_error(e.to_string());
+            state.show_new_session_dialog(configs.clone());
+            state
+                .new_session_dialog_state
+                .target_selector
+                .set_error(e.to_string());
             None
         }
     }
@@ -213,8 +217,8 @@ fn try_auto_start_config(
         return launch_session(state, None, device, project_path);
     }
 
-    // No devices at all, show startup dialog
-    state.show_startup_dialog(configs.clone());
+    // No devices at all, show new session dialog
+    state.show_new_session_dialog(configs.clone());
     spawn::spawn_device_discovery(msg_tx);
     None
 }
@@ -351,7 +355,20 @@ mod tests {
     use crate::config::Settings;
 
     #[test]
-    fn test_startup_flutter_auto_start_returns_configs() {
+    fn test_startup_flutter_shows_new_session_dialog() {
+        let mut state = AppState::new();
+        let settings = Settings::default();
+        let project_path = Path::new("/tmp/test");
+
+        let result = startup_flutter(&mut state, &settings, project_path);
+
+        // Should always show NewSessionDialog in Startup mode
+        assert_eq!(state.ui_mode, UiMode::Startup);
+        assert!(matches!(result, StartupAction::Ready));
+    }
+
+    #[test]
+    fn test_startup_flutter_ignores_auto_start_setting() {
         let mut state = AppState::new();
         let mut settings = Settings::default();
         settings.behavior.auto_start = true;
@@ -359,20 +376,8 @@ mod tests {
 
         let result = startup_flutter(&mut state, &settings, project_path);
 
-        assert_eq!(state.ui_mode, UiMode::Normal);
-        assert!(matches!(result, StartupAction::AutoStart { .. }));
-    }
-
-    #[test]
-    fn test_startup_flutter_no_auto_start_returns_ready() {
-        let mut state = AppState::new();
-        let mut settings = Settings::default();
-        settings.behavior.auto_start = false;
-        let project_path = Path::new("/tmp/test");
-
-        let result = startup_flutter(&mut state, &settings, project_path);
-
-        assert_eq!(state.ui_mode, UiMode::Normal);
+        // auto_start setting is ignored - always show NewSessionDialog
+        assert_eq!(state.ui_mode, UiMode::Startup);
         assert!(matches!(result, StartupAction::Ready));
     }
 }

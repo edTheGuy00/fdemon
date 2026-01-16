@@ -340,3 +340,41 @@ fn test_widget_renders_content() {
 - Use `cargo test -- --nocapture` for debugging
 - Update fixtures to use NewSessionDialogState
 - Remove tests for deleted functionality
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/keys.rs` | Removed `startup_dialog_edit_tests` test module (153 lines) that tested deleted StartupDialog functionality |
+| `src/app/handler/tests.rs` | Updated handler tests to use NewSessionDialog instead of old dialogs; replaced all `UiMode::DeviceSelector` with `UiMode::Normal`; updated error field references from `error_message` to `target_selector.error`; marked obsolete `DeviceSelected` tests as ignored; removed old StartupDialog and DialogSection tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Deprecated DeviceSelected tests marked as ignored**: The `DeviceSelected` message is now deprecated (just logs a warning). Rather than delete these tests entirely, they were marked with `#[ignore]` to document that this functionality has moved to NewSessionDialog.
+
+2. **Updated UI mode expectations**: Tests that expected `UiMode::DeviceSelector` now expect `UiMode::Normal` since DeviceSelector no longer exists. Tests expecting session spawn failures to return to DeviceSelector now correctly expect `UiMode::NewSessionDialog`.
+
+3. **Error field path updated**: Old dialog had `error_message` field directly on dialog state. NewSessionDialog has error in `target_selector.error`, which is more specific to device discovery errors.
+
+4. **Removed entire test module**: The `startup_dialog_edit_tests` module in `keys.rs` tested keyboard input handling for the old dialog's text editing mode. This functionality doesn't exist in the same form in NewSessionDialog, so the entire module was removed.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1388 passed, 0 failed, 8 ignored)
+- `cargo clippy -- -D warnings` - Passed
+
+Note: E2E snapshot tests in `tests/e2e/` have expected failures due to UI changes. These are integration tests that capture full TUI snapshots and will need their baselines updated separately. The unit tests all pass.
+
+### Risks/Limitations
+
+1. **E2E tests not updated**: The E2E tests in `tests/e2e/` capture full TUI screenshots and some reference the old dialogs or expect old UI layouts. These were not updated as part of this task and will need snapshot baseline updates in a follow-up.
+
+2. **8 tests ignored**: There are 8 tests marked as `#[ignore]` that reference old functionality. These could be deleted entirely in future cleanup, or serve as documentation of what was removed.

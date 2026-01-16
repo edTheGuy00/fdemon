@@ -19,7 +19,6 @@ use crate::core::LogSource;
 use crate::watcher::{FileWatcher, WatcherConfig};
 
 use super::actions::SessionTaskMap;
-use super::startup::StartupAction;
 use super::{event, process, render, startup, terminal};
 
 /// Run the TUI application with a Flutter project
@@ -58,24 +57,19 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Shutdown signal for background tasks
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    // Initialize startup state (determines auto-start vs manual mode)
-    let startup_result = startup::startup_flutter(&mut state, &settings, project_path);
+    // Initialize startup state - shows NewSessionDialog
+    let _startup_result = startup::startup_flutter(&mut state, &settings, project_path);
 
-    // Render first frame - show normal UI immediately
-    // Auto-start will happen in the background after the event loop starts
+    // Render first frame - show NewSessionDialog
     if let Err(e) = term.draw(|frame| render::view(frame, &mut state)) {
         error!("Failed to render initial frame: {}", e);
     }
 
-    // If auto-start is configured, send message to trigger it
-    if let StartupAction::AutoStart { configs } = startup_result {
-        if let Err(e) = msg_tx.send(Message::StartAutoLaunch { configs }).await {
-            error!(
-                "Failed to send auto-start message: {}. Auto-start will not trigger.",
-                e
-            );
-        }
-    }
+    // Trigger tool availability check at startup (async, non-blocking)
+    super::spawn::spawn_tool_availability_check(msg_tx.clone());
+
+    // Trigger device discovery at startup (async, non-blocking)
+    super::spawn::spawn_device_discovery(msg_tx.clone());
 
     // Start file watcher for auto-reload
     let mut file_watcher = FileWatcher::new(

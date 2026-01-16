@@ -385,7 +385,8 @@ pub enum Message {
     StartupDialogRefreshDevices,
 
     /// Jump directly to a dialog section (1=Configs, 2=Mode, 3=Flavor, 4=DartDefines, 5=Devices)
-    StartupDialogJumpToSection(crate::app::state::DialogSection),
+    /// DEPRECATED: Old startup dialog removed - this message is no longer used
+    StartupDialogJumpToSection(String),
 
     /// Enter edit mode for current text field (Flavor or DartDefines)
     StartupDialogEnterEdit,

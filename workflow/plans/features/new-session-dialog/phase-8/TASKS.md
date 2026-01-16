@@ -47,24 +47,85 @@ Phase 6.1 restructures the handler files that are modified/removed in this phase
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-ui-mode-integration](tasks/01-ui-mode-integration.md) | Not Started | Phase 7 | 35m | `app/state.rs`, `tui/render/mod.rs` |
-| 2 | [02-startup-flow](tasks/02-startup-flow.md) | Not Started | 1 | 30m | `app/handler/session.rs`, `main.rs` |
-| 3 | [03-remove-old-dialogs](tasks/03-remove-old-dialogs.md) | Not Started | 2 | 35m | `app/handler/startup_dialog.rs`, `app/handler/device_selector.rs`, widgets |
-| 4 | [04-update-tests](tasks/04-update-tests.md) | Not Started | 3 | 40m | Test files |
-| 5 | [05-documentation](tasks/05-documentation.md) | Not Started | 4 | 20m | `docs/KEYBINDINGS.md` |
+| 1 | [01-ui-mode-integration](tasks/01-ui-mode-integration.md) | Done | Phase 7 | 35m | `app/state.rs`, `tui/render/mod.rs` |
+| 2 | [02-startup-flow](tasks/02-startup-flow.md) | Done | 1 | 30m | `app/handler/session.rs`, `main.rs` |
+| 3 | [03-remove-old-dialogs](tasks/03-remove-old-dialogs.md) | Done | 2 | 35m | `app/handler/startup_dialog.rs`, `app/handler/device_selector.rs`, widgets |
+| 4 | [04-update-tests](tasks/04-update-tests.md) | Done | 3 | 40m | Test files |
+| 5 | [05-documentation](tasks/05-documentation.md) | Done | 4 | 20m | `docs/KEYBINDINGS.md` |
+
+---
+
+## Review Follow-up Tasks
+
+Based on the [Phase 8 Review](../../../../reviews/features/new-session-dialog-phase-8/REVIEW.md), the following critical and major issues must be addressed:
+
+| # | Task | Status | Depends On | Est. | Modules | Priority |
+|---|------|--------|------------|------|---------|----------|
+| 6 | [06-fix-key-handlers](tasks/06-fix-key-handlers.md) | Not Started | 5 | 15m | `app/handler/keys.rs` | 🔴 Critical |
+| 7 | [07-remove-deprecated-messages](tasks/07-remove-deprecated-messages.md) | Not Started | 6 | 20m | `app/message.rs` | 🔴 Critical |
+| 8 | [08-remove-deprecated-handlers](tasks/08-remove-deprecated-handlers.md) | Not Started | 7 | 15m | `app/handler/update.rs` | 🔴 Critical |
+| 9 | [09-fix-handler-tests](tasks/09-fix-handler-tests.md) | Not Started | 8 | 25m | `app/handler/tests.rs`, `app/handler/keys.rs` | 🟠 Major |
+| 10 | [10-fix-render-tests](tasks/10-fix-render-tests.md) | Not Started | 8 | 30m | `tui/render/tests.rs` | 🟠 Major |
+| 11 | [11-update-e2e-snapshots](tasks/11-update-e2e-snapshots.md) | Not Started | 10 | 20m | `tests/e2e/` | 🟠 Major |
+| 12 | [12-minor-cleanup](tasks/12-minor-cleanup.md) | Not Started | 11 | 25m | Various | 🟡 Minor |
+
+### Follow-up Dependency Graph
+
+```
+┌─────────────────────────────────────┐
+│  06-fix-key-handlers               │  ← Critical: '+' and 'd' keys broken
+└────────────────┬────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────┐
+│  07-remove-deprecated-messages     │  ← Critical: Clean message.rs
+└────────────────┬────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────┐
+│  08-remove-deprecated-handlers     │  ← Critical: Clean update.rs
+└────────────────┬────────────────────┘
+                 │
+         ┌───────┴───────┐
+         ▼               ▼
+┌─────────────────┐  ┌─────────────────┐
+│09-fix-handler   │  │10-fix-render    │  ← Major: Fix test compilation
+│    tests        │  │    tests        │
+└────────┬────────┘  └────────┬────────┘
+         │                    │
+         └────────┬───────────┘
+                  ▼
+┌─────────────────────────────────────┐
+│  11-update-e2e-snapshots           │  ← Major: E2E coverage
+└────────────────┬────────────────────┘
+                 │
+                 ▼
+┌─────────────────────────────────────┐
+│  12-minor-cleanup                  │  ← Minor: Polish
+└─────────────────────────────────────┘
+```
 
 ## Success Criteria
 
 Phase 8 is complete when:
 
-- [ ] `UiMode::NewSessionDialog` replaces `StartupDialog` and `DeviceSelector`
-- [ ] App startup shows NewSessionDialog when no sessions exist
-- [ ] 'd' key opens NewSessionDialog to add session
-- [ ] Old `DeviceSelectorState` and `StartupDialogState` removed
-- [ ] Old widget files deleted
-- [ ] All references updated
-- [ ] All tests pass
-- [ ] Documentation updated
+### Original Tasks (1-5)
+- [x] `UiMode::NewSessionDialog` replaces `StartupDialog` and `DeviceSelector`
+- [x] App startup shows NewSessionDialog when no sessions exist
+- [x] 'd' key opens NewSessionDialog to add session
+- [x] Old `DeviceSelectorState` and `StartupDialogState` removed
+- [x] Old widget files deleted
+- [x] All references updated
+- [x] Documentation updated
+
+### Review Follow-up Tasks (6-12)
+- [ ] `+` and `d` keys work correctly without sessions (Task 6)
+- [ ] All deprecated message variants removed from `message.rs` (Task 7)
+- [ ] All deprecated handlers removed from `update.rs` (Task 8)
+- [ ] Handler tests compile and pass (Task 9)
+- [ ] Render tests compile and pass (Task 10)
+- [ ] E2E snapshots updated (Task 11)
+- [ ] Minor cleanup completed (Task 12)
 - [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Files to Delete

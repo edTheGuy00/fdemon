@@ -62,12 +62,17 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
     // Render modal overlays based on UI mode
     match state.ui_mode {
-        UiMode::DeviceSelector => {
-            // Render device selector modal with session awareness
-            let has_sessions = state.session_manager.has_running_sessions();
-            let selector =
-                widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
-            frame.render_widget(selector, area);
+        UiMode::Startup | UiMode::NewSessionDialog => {
+            // Render NewSessionDialog for both startup (no sessions) and add session cases
+            let dialog = widgets::NewSessionDialog::new(
+                &state.new_session_dialog_state,
+                &state.tool_availability,
+            );
+            frame.render_widget(dialog, area);
+        }
+        // Legacy DeviceSelector removed - use NewSessionDialog instead
+        UiMode::EmulatorSelector => {
+            // Legacy EmulatorSelector - not rendered
         }
         UiMode::Loading => {
             // Render loading screen (Task 08d)
@@ -81,13 +86,6 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 let dialog = widgets::ConfirmDialog::new(dialog_state);
                 frame.render_widget(dialog, area);
             }
-        }
-        UiMode::EmulatorSelector => {
-            // Render emulator selector with session awareness
-            let has_sessions = state.session_manager.has_running_sessions();
-            let selector =
-                widgets::DeviceSelector::with_session_state(&state.device_selector, has_sessions);
-            frame.render_widget(selector, area);
         }
         UiMode::SearchInput => {
             // Render search input at bottom of log area
@@ -198,46 +196,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Full-screen settings panel
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
             frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
-        }
-        UiMode::StartupDialog => {
-            // Startup dialog widget with session awareness
-            let has_sessions = state.session_manager.has_running_sessions();
-            let dialog = widgets::StartupDialog::with_session_state(
-                &state.startup_dialog_state,
-                has_sessions,
-            );
-            frame.render_widget(dialog, area);
-        }
-        UiMode::NewSessionDialog => {
-            // Placeholder for new session dialog - will be implemented in Phase 3
-            let modal_area = centered_rect(80, 70, area);
-
-            frame.render_widget(Clear, modal_area);
-            let block = Block::default()
-                .title(" New Session (Coming Soon) ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Yellow))
-                .style(Style::default().bg(Color::DarkGray));
-            frame.render_widget(block, modal_area);
-        }
+        } // Legacy StartupDialog removed - use NewSessionDialog instead
     }
-}
-
-/// Calculate centered rect (reusable helper)
-fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
-    let popup_layout = Layout::vertical([
-        Constraint::Percentage((100 - percent_y) / 2),
-        Constraint::Percentage(percent_y),
-        Constraint::Percentage((100 - percent_y) / 2),
-    ])
-    .split(area);
-
-    Layout::horizontal([
-        Constraint::Percentage((100 - percent_x) / 2),
-        Constraint::Percentage(percent_x),
-        Constraint::Percentage((100 - percent_x) / 2),
-    ])
-    .split(popup_layout[1])[1]
 }
 
 /// Render loading screen during startup initialization (Task 08d)

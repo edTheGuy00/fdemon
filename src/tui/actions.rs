@@ -130,16 +130,16 @@ pub fn handle_action(
         }
 
         UpdateAction::LaunchFlutterSession {
-            device,
+            device: _,
             mode: _,
             flavor: _,
             dart_defines: _,
             config_name: _,
         } => {
-            // TODO: Implement session launch in a future task
-            // This will create a new session and spawn the Flutter process
-            // For now, we just log the device
-            tracing::debug!("Launch Flutter session requested for device: {}", device.id);
+            // NOTE: This action is no longer used - handle_launch now creates
+            // the session and returns SpawnSession directly.
+            // Kept for backward compatibility, but this branch should never execute.
+            tracing::warn!("LaunchFlutterSession action reached - this should not happen");
         }
     }
 }

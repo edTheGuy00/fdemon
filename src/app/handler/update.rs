@@ -2,11 +2,9 @@
 //!
 //! Handler implementations have been extracted to:
 //! - `new_session/`: NewSessionDialog handlers (Phase 6.1, Task 03)
-//! - `startup_dialog_handlers`: StartupDialog handlers (Phase 6.1, Task 04)
 //! - `session_lifecycle`: Session lifecycle handlers (Phase 6.1, Task 04)
 //! - `scroll`: Scroll message handlers (Phase 6.1, Task 04)
 //! - `log_view`: Log filtering/search handlers (Phase 6.1, Task 04)
-//! - `device_selector`: Legacy device selector handlers (Phase 6.1, Task 04)
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
 use crate::app::message::{AutoLaunchSuccess, Message};
@@ -15,9 +13,8 @@ use crate::core::{AppPhase, LogSource};
 use tracing::warn;
 
 use super::{
-    daemon::handle_session_daemon_event, device_selector, keys::handle_key, log_view, new_session,
-    scroll, session_lifecycle, settings_handlers, startup_dialog_handlers, Task, UpdateAction,
-    UpdateResult,
+    daemon::handle_session_daemon_event, keys::handle_key, log_view, new_session, scroll,
+    session_lifecycle, settings_handlers, Task, UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state
@@ -72,29 +69,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ScrollToLineEnd => scroll::handle_scroll_to_line_end(state),
 
         Message::Tick => {
-            // Advance device selector animation when visible and loading or refreshing
-            if state.device_selector.visible
-                && (state.device_selector.loading || state.device_selector.refreshing)
-            {
-                state.device_selector.tick();
-            }
-
-            // Also tick startup dialog when visible and loading/refreshing
-            if state.ui_mode == UiMode::StartupDialog
-                && (state.startup_dialog_state.loading || state.startup_dialog_state.refreshing)
-            {
-                state.startup_dialog_state.tick();
-            }
-
             // Tick loading screen animation with message cycling (Task 08d)
             if state.ui_mode == UiMode::Loading && state.loading_state.is_some() {
                 state.tick_loading_animation_with_cycling(true);
             }
 
-            // Task 10c: Check if startup dialog needs to save (debounced)
-            if state.ui_mode == UiMode::StartupDialog && state.startup_dialog_state.should_save() {
-                return UpdateResult::message(Message::SaveStartupDialogConfig);
-            }
+            // Note: NewSessionDialog doesn't have animation frames to tick
 
             UpdateResult::none()
         }
@@ -293,24 +273,36 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
-        // Device Selector Messages
+        // Device Selector Messages (DEPRECATED - use NewSessionDialog)
         // ─────────────────────────────────────────────────────────
-        Message::ShowDeviceSelector => device_selector::handle_show_device_selector(state),
+        Message::ShowDeviceSelector => {
+            warn!("ShowDeviceSelector is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::HideDeviceSelector => device_selector::handle_hide_device_selector(state),
+        Message::HideDeviceSelector => {
+            warn!("HideDeviceSelector is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::DeviceSelectorUp => device_selector::handle_device_selector_up(state),
+        Message::DeviceSelectorUp => {
+            warn!("DeviceSelectorUp is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::DeviceSelectorDown => device_selector::handle_device_selector_down(state),
+        Message::DeviceSelectorDown => {
+            warn!("DeviceSelectorDown is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::DeviceSelected { device } => {
-            device_selector::handle_device_selected(state, device)
+        Message::DeviceSelected { device: _ } => {
+            warn!("DeviceSelected is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::LaunchAndroidEmulator => {
-            tracing::info!("Discovering Android emulators...");
-            state.ui_mode = UiMode::EmulatorSelector;
-            UpdateResult::action(UpdateAction::DiscoverEmulators)
+            warn!("LaunchAndroidEmulator is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::LaunchIOSSimulator => {
@@ -324,16 +316,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Update global cache FIRST (Task 08e)
             state.set_device_cache(devices.clone());
 
-            // Update device_selector (for add-session use case)
-            state.device_selector.set_devices(devices.clone());
-
-            // ALSO update startup_dialog_state (for initial startup)
-            if state.ui_mode == UiMode::StartupDialog {
-                state.startup_dialog_state.set_devices(devices);
+            // Update new_session_dialog_state (for Startup mode - Phase 8)
+            if state.ui_mode == UiMode::Startup || state.ui_mode == UiMode::NewSessionDialog {
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .set_connected_devices(devices);
             }
 
             // Note: Don't transition UI mode here - the caller handles that
-            // (e.g., ShowDeviceSelector sets DeviceSelector mode, AutoLaunch stays in Loading)
 
             if device_count > 0 {
                 tracing::info!("Discovered {} device(s)", device_count);
@@ -345,17 +336,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::DeviceDiscoveryFailed { error } => {
-            // Update device_selector
-            state.device_selector.set_error(error.clone());
-
-            // ALSO update startup_dialog_state
-            if state.ui_mode == UiMode::StartupDialog {
-                state.startup_dialog_state.set_error(error.clone());
-            }
-
-            // If we were in Loading mode, transition to DeviceSelector to show error
-            if state.ui_mode == UiMode::Loading {
-                state.ui_mode = UiMode::DeviceSelector;
+            // Update new_session_dialog_state if visible
+            if state.ui_mode == UiMode::Startup || state.ui_mode == UiMode::NewSessionDialog {
+                // Set error on target selector
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .set_error(error.clone());
             }
 
             tracing::error!("Device discovery failed: {}", error);
@@ -363,8 +350,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::RefreshDevices => {
-            state.device_selector.show_loading();
-            UpdateResult::action(UpdateAction::DiscoverDevices)
+            warn!("RefreshDevices is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         // ─────────────────────────────────────────────────────────
@@ -383,15 +370,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             } else {
                 tracing::info!("No emulators available");
             }
-            // For now, go back to device selector - emulator selector UI is Task 09
-            state.ui_mode = UiMode::DeviceSelector;
+            // Emulator UI deprecated - use NewSessionDialog instead
+            warn!("Emulator UI is deprecated");
             UpdateResult::none()
         }
 
         Message::EmulatorDiscoveryFailed { error } => {
             tracing::error!("Emulator discovery failed: {}", error);
-            // Go back to device selector on failure
-            state.ui_mode = UiMode::DeviceSelector;
+            // Emulator UI deprecated - use NewSessionDialog instead
+            warn!("Emulator UI is deprecated");
             UpdateResult::none()
         }
 
@@ -408,9 +395,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     result.elapsed
                 );
                 // After launching, refresh devices to pick up the new emulator
-                // Go back to device selector to see the new device
-                state.ui_mode = UiMode::DeviceSelector;
-                state.device_selector.show_loading();
                 UpdateResult::action(UpdateAction::DiscoverDevices)
             } else {
                 let error_msg = result
@@ -421,8 +405,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     result.emulator_id,
                     error_msg
                 );
-                // Go back to device selector on failure
-                state.ui_mode = UiMode::DeviceSelector;
                 UpdateResult::none()
             }
         }
@@ -709,78 +691,106 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::ForceHideSettings => settings_handlers::handle_force_hide_settings(state),
 
         // ─────────────────────────────────────────────────────────
-        // Startup Dialog Messages (Phase 5)
+        // Startup Dialog Messages (DEPRECATED - use NewSessionDialog)
         // ─────────────────────────────────────────────────────────
-        Message::ShowStartupDialog => startup_dialog_handlers::handle_show_startup_dialog(state),
+        Message::ShowStartupDialog => {
+            warn!("ShowStartupDialog is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::HideStartupDialog => startup_dialog_handlers::handle_hide_startup_dialog(state),
+        Message::HideStartupDialog => {
+            warn!("HideStartupDialog is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::StartupDialogUp => startup_dialog_handlers::handle_startup_dialog_up(state),
+        Message::StartupDialogUp => {
+            warn!("StartupDialogUp is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
-        Message::StartupDialogDown => startup_dialog_handlers::handle_startup_dialog_down(state),
+        Message::StartupDialogDown => {
+            warn!("StartupDialogDown is deprecated - use NewSessionDialog");
+            UpdateResult::none()
+        }
 
         Message::StartupDialogNextSection => {
-            startup_dialog_handlers::handle_startup_dialog_next_section(state)
+            warn!("StartupDialogNextSection is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogPrevSection => {
-            startup_dialog_handlers::handle_startup_dialog_prev_section(state)
+            warn!("StartupDialogPrevSection is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogNextSectionSkipDisabled => {
-            startup_dialog_handlers::handle_startup_dialog_next_section_skip_disabled(state)
+            warn!("StartupDialogNextSectionSkipDisabled is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogPrevSectionSkipDisabled => {
-            startup_dialog_handlers::handle_startup_dialog_prev_section_skip_disabled(state)
+            warn!("StartupDialogPrevSectionSkipDisabled is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
-        Message::StartupDialogSelectConfig(idx) => {
-            startup_dialog_handlers::handle_startup_dialog_select_config(state, idx)
+        Message::StartupDialogSelectConfig(_) => {
+            warn!("StartupDialogSelectConfig is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
-        Message::StartupDialogSelectDevice(idx) => {
-            startup_dialog_handlers::handle_startup_dialog_select_device(state, idx)
+        Message::StartupDialogSelectDevice(_) => {
+            warn!("StartupDialogSelectDevice is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
-        Message::StartupDialogSetMode(mode) => {
-            startup_dialog_handlers::handle_startup_dialog_set_mode(state, mode)
+        Message::StartupDialogSetMode(_) => {
+            warn!("StartupDialogSetMode is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
-        Message::StartupDialogCharInput(c) => {
-            startup_dialog_handlers::handle_startup_dialog_char_input(state, c)
+        Message::StartupDialogCharInput(_) => {
+            warn!("StartupDialogCharInput is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogBackspace => {
-            startup_dialog_handlers::handle_startup_dialog_backspace(state)
+            warn!("StartupDialogBackspace is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogClearInput => {
-            startup_dialog_handlers::handle_startup_dialog_clear_input(state)
+            warn!("StartupDialogClearInput is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogConfirm => {
-            startup_dialog_handlers::handle_startup_dialog_confirm(state)
+            warn!("StartupDialogConfirm is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::SaveStartupDialogConfig => {
-            startup_dialog_handlers::handle_save_startup_dialog_config(state)
+            warn!("SaveStartupDialogConfig is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogRefreshDevices => {
-            startup_dialog_handlers::handle_startup_dialog_refresh_devices(state)
+            warn!("StartupDialogRefreshDevices is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
-        Message::StartupDialogJumpToSection(section) => {
-            startup_dialog_handlers::handle_startup_dialog_jump_to_section(state, section)
+        Message::StartupDialogJumpToSection(_) => {
+            warn!("StartupDialogJumpToSection is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogEnterEdit => {
-            startup_dialog_handlers::handle_startup_dialog_enter_edit(state)
+            warn!("StartupDialogEnterEdit is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         Message::StartupDialogExitEdit => {
-            startup_dialog_handlers::handle_startup_dialog_exit_edit(state)
+            warn!("StartupDialogExitEdit is deprecated - use NewSessionDialog");
+            UpdateResult::none()
         }
 
         // ─────────────────────────────────────────────────────────
@@ -924,11 +934,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                             // Clear loading before showing error dialog
                             state.clear_loading();
 
-                            // Session creation failed (e.g., max sessions reached) - show startup dialog with error
+                            // Session creation failed (e.g., max sessions reached) - show new session dialog with error
                             let configs = crate::config::load_all_configs(&state.project_path);
-                            state.show_startup_dialog(configs);
+                            state.show_new_session_dialog(configs);
                             state
-                                .startup_dialog_state
+                                .new_session_dialog_state
+                                .target_selector
                                 .set_error(format!("Cannot create session: {}", e));
                             UpdateResult::none()
                         }
@@ -938,10 +949,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     // Clear loading before showing error dialog
                     state.clear_loading();
 
-                    // Device discovery failed, show startup dialog with error
+                    // Device discovery failed, show new session dialog with error
                     let configs = crate::config::load_all_configs(&state.project_path);
-                    state.show_startup_dialog(configs);
-                    state.startup_dialog_state.set_error(error_msg);
+                    state.show_new_session_dialog(configs);
+                    state
+                        .new_session_dialog_state
+                        .target_selector
+                        .set_error(error_msg);
                     UpdateResult::none()
                 }
             }

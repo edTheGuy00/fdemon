@@ -253,6 +253,8 @@ pub fn handle_dart_defines_updated(
 /// Validates that a device is selected and builds launch parameters
 /// from the dialog state. Returns an error to the user if validation fails.
 pub fn handle_launch(state: &mut AppState) -> UpdateResult {
+    use crate::config::LaunchConfig;
+
     // Try to build launch params
     if let Some(params) = state.new_session_dialog_state.build_launch_params() {
         // Get device reference without unwrap
@@ -267,13 +269,88 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
             }
         };
 
-        return UpdateResult::action(UpdateAction::LaunchFlutterSession {
-            device,
-            mode: params.mode,
-            flavor: params.flavor,
-            dart_defines: params.dart_defines,
-            config_name: params.config_name,
-        });
+        // Check if device already has a running session
+        if state
+            .session_manager
+            .find_by_device_id(&device.id)
+            .is_some()
+        {
+            state
+                .new_session_dialog_state
+                .target_selector
+                .set_error(format!(
+                    "Device '{}' already has an active session",
+                    device.name
+                ));
+            return UpdateResult::none();
+        }
+
+        // Build launch config if we have parameters
+        let config = if params.config_name.is_some()
+            || params.flavor.is_some()
+            || !params.dart_defines.is_empty()
+        {
+            let mut cfg = LaunchConfig {
+                name: params.config_name.unwrap_or_else(|| "Session".to_string()),
+                device: device.id.clone(),
+                mode: params.mode,
+                flavor: params.flavor,
+                ..Default::default()
+            };
+
+            // Parse dart_defines into HashMap
+            for define in params.dart_defines {
+                if let Some((key, value)) = define.split_once('=') {
+                    cfg.dart_defines.insert(key.to_string(), value.to_string());
+                }
+            }
+
+            Some(cfg)
+        } else {
+            None
+        };
+
+        // Create session in manager
+        let session_result = if let Some(ref cfg) = config {
+            state
+                .session_manager
+                .create_session_with_config(&device, cfg.clone())
+        } else {
+            state.session_manager.create_session(&device)
+        };
+
+        match session_result {
+            Ok(session_id) => {
+                tracing::info!(
+                    "Session created for {} (id: {}, device: {})",
+                    device.name,
+                    session_id,
+                    device.id
+                );
+
+                // Auto-switch to the newly created session
+                state.session_manager.select_by_id(session_id);
+
+                // Close the dialog and switch to Normal mode
+                state.hide_new_session_dialog();
+                state.ui_mode = crate::app::state::UiMode::Normal;
+
+                // Return action to spawn session
+                return UpdateResult::action(UpdateAction::SpawnSession {
+                    session_id,
+                    device,
+                    config: config.map(Box::new),
+                });
+            }
+            Err(e) => {
+                // Max sessions reached or other error
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .set_error(format!("Failed to create session: {}", e));
+                return UpdateResult::none();
+            }
+        }
     } else {
         // Provide context-specific error message
         use crate::app::new_session_dialog::TargetTab;

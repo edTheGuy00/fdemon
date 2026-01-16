@@ -198,7 +198,7 @@ pub fn handle_close_new_session_dialog(state: &mut AppState) -> UpdateResult {
 /// 1. Close fuzzy modal if open
 /// 2. Close dart defines modal if open (saves changes)
 /// 3. Close dialog if sessions exist
-/// 4. Do nothing if no sessions (nowhere to go)
+/// 4. Quit if no sessions (in Startup mode, nowhere else to go)
 pub fn handle_new_session_dialog_escape(state: &mut AppState) -> UpdateResult {
     // Priority 1: Close fuzzy modal
     if state.new_session_dialog_state.is_fuzzy_modal_open() {
@@ -219,6 +219,7 @@ pub fn handle_new_session_dialog_escape(state: &mut AppState) -> UpdateResult {
         return UpdateResult::message(Message::CloseNewSessionDialog);
     }
 
-    // No sessions: don't close, nowhere to go
-    UpdateResult::none()
+    // Priority 4: No sessions in Startup mode - quit immediately
+    // There's nowhere else to go, so Escape should exit the app
+    UpdateResult::message(Message::Quit)
 }

@@ -193,3 +193,46 @@ rg "DartDefines" src/
 - Update screenshots if using them
 - Consider adding a "What's New" section for major changes
 - Ensure README quick start reflects new dialog flow
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Replaced "Startup Dialog" and "Device Selector Mode" sections with comprehensive "New Session Dialog" section covering two-pane layout, Target Selector, Launch Context, Fuzzy Search Modal, and Dart Defines Modal |
+| `README.md` | Added "Quick Start" section explaining New Session Dialog workflow; updated "Beautiful TUI" feature list to reference New Session Dialog instead of device/emulator selection modal |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comprehensive keybinding documentation**: Documented all dialog modes (General Navigation, Target Selector, Launch Context, Fuzzy Search Modal, Dart Defines Modal) with detailed tables matching actual implementation in `src/app/handler/keys.rs`.
+
+2. **Config editability table**: Added table explaining how Mode, Flavor, and Dart Defines behave differently based on config source (VSCode=read-only, FDemon=auto-save, None=transient).
+
+3. **Quick Start placement**: Added Quick Start section before Basic Usage in README to immediately orient users to the new dialog workflow.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1388 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Verification
+
+Verified keybindings match implementation by reviewing:
+- `src/app/handler/keys.rs::handle_key_new_session_dialog()` - Main dialog routing
+- `src/app/handler/keys.rs::handle_fuzzy_modal_key()` - Fuzzy search modal keys
+- `src/app/handler/keys.rs::handle_dart_defines_modal_key()` - Dart defines modal keys
+- `src/app/handler/keys.rs::handle_target_selector_key()` - Target selector keys
+- `src/app/handler/keys.rs::handle_launch_context_key()` - Launch context keys
+
+All documented keybindings match the actual implementation.
+
+### Risks/Limitations
+
+None. Documentation accurately reflects the current implementation of the New Session Dialog.

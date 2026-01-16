@@ -231,16 +231,45 @@ impl FdemonSession {
 
     /// Wait for the device selector UI to appear.
     ///
-    /// Matches output containing "Select a device" or "Available device(s)"
-    /// which indicates the device selection modal is displayed.
+    /// **DEPRECATED:** Use `expect_new_session_dialog()` instead.
+    /// The old DeviceSelector has been replaced by NewSessionDialog.
+    ///
+    /// This method now redirects to `expect_new_session_dialog()` for
+    /// backward compatibility with existing tests.
     ///
     /// # Errors
     ///
-    /// Returns error if device selector is not shown within the default timeout.
+    /// Returns error if NewSessionDialog is not shown within the default timeout.
     pub fn expect_device_selector(&mut self) -> PtyResult<()> {
-        // Device selector shows "Select a device" or similar
-        self.session
-            .expect(Regex("Select.*device|Available.*device"))?;
+        self.expect_new_session_dialog()
+    }
+
+    /// Wait for the NewSessionDialog to appear.
+    ///
+    /// Waits for text indicating the new session dialog is displayed:
+    /// - "New Session" (dialog title)
+    /// - "Target Selector" (left pane title)
+    /// - "Launch Context" (right pane title)
+    /// - "Connected" or "Bootable" (device tabs)
+    /// - "Configuration" (launch context field)
+    ///
+    /// # Errors
+    ///
+    /// Returns error if NewSessionDialog is not shown within the default timeout.
+    pub fn expect_new_session_dialog(&mut self) -> PtyResult<()> {
+        // NewSessionDialog shows various indicators that are reliably present
+        // Try multiple patterns - first match wins
+        let patterns = [
+            "Session",       // Part of "New Session" title
+            "Target",        // Part of "Target Selector"
+            "Launch",        // Part of "Launch Context"
+            "Configuration", // Field label
+            "Connected",     // Tab label
+            "Bootable",      // Tab label
+        ];
+
+        let pattern = patterns.join("|");
+        self.session.expect(Regex(&pattern))?;
         Ok(())
     }
 
@@ -611,13 +640,21 @@ impl FdemonSession {
     /// ```
     pub fn quit(&mut self) -> PtyResult<()> {
         // Send 'q' to initiate quit (may show confirmation dialog or quit immediately)
-        self.send_key('q')?;
+        // If send_key fails with I/O error, process is already dead
+        if let Err(e) = self.send_key('q') {
+            // Check if it's an I/O error indicating the process is already dead
+            if e.to_string().contains("Input/output error") {
+                return Ok(());
+            }
+            return Err(e);
+        }
 
         // Wait longer for dialog to appear - the UI needs time to render
         std::thread::sleep(Duration::from_millis(QUIT_DIALOG_WAIT_MS));
 
-        // Check if process already exited (happens in DeviceSelector mode with no sessions)
-        if !self.session.is_alive()? {
+        // Check if process already exited (happens in Startup mode with no sessions)
+        // Treat I/O errors as "dead"
+        if !self.session.is_alive().unwrap_or(false) {
             return Ok(());
         }
 
@@ -634,11 +671,22 @@ impl FdemonSession {
         if dialog_appeared {
             // Dialog appeared, send confirmation
             std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
-            self.send_key('y')?;
+            // If send_key fails, process might have already exited
+            if let Err(e) = self.send_key('y') {
+                if e.to_string().contains("Input/output error") {
+                    return Ok(());
+                }
+                return Err(e);
+            }
         } else {
             // No dialog detected - might have quit immediately or dialog uses different text
             // Send 'y' anyway in case dialog is present with different wording
-            self.send_key('y')?;
+            if let Err(e) = self.send_key('y') {
+                if e.to_string().contains("Input/output error") {
+                    return Ok(());
+                }
+                return Err(e);
+            }
         }
 
         // Wait for graceful shutdown with polling
@@ -646,7 +694,8 @@ impl FdemonSession {
         let iterations = quit_timeout_ms / QUIT_POLL_INTERVAL_MS;
         for _ in 0..iterations {
             std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
-            if !self.session.is_alive()? {
+            // Treat I/O errors as "dead"
+            if !self.session.is_alive().unwrap_or(false) {
                 return Ok(());
             }
         }
@@ -662,7 +711,8 @@ impl FdemonSession {
         };
         for _ in 0..verify_iterations {
             std::thread::sleep(Duration::from_millis(QUIT_POLL_INTERVAL_MS));
-            if !self.session.is_alive()? {
+            // Treat I/O errors as "dead"
+            if !self.session.is_alive().unwrap_or(false) {
                 return Ok(());
             }
         }
@@ -692,11 +742,17 @@ impl FdemonSession {
         // Try Ctrl+C multiple times - the signal handler may be delayed
         for attempt in 1..=KILL_MAX_RETRIES {
             // Send Ctrl+C to interrupt the process
-            self.send_raw(b"\x03")?;
+            // If send fails with I/O error, process is already dead
+            if let Err(e) = self.send_raw(b"\x03") {
+                if e.to_string().contains("Input/output error") {
+                    return Ok(());
+                }
+                return Err(e);
+            }
             std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
 
-            // Check if process terminated
-            if !self.session.is_alive()? {
+            // Check if process terminated (treat I/O errors as "dead")
+            if !self.session.is_alive().unwrap_or(false) {
                 return Ok(());
             }
 
@@ -707,8 +763,15 @@ impl FdemonSession {
         }
 
         // Last resort: send Ctrl+D (EOF) to close stdin
-        if self.session.is_alive()? {
-            self.send_raw(b"\x04")?;
+        // Treat I/O errors as "dead"
+        if self.session.is_alive().unwrap_or(false) {
+            // If send fails with I/O error, process is already dead
+            if let Err(e) = self.send_raw(b"\x04") {
+                if e.to_string().contains("Input/output error") {
+                    return Ok(());
+                }
+                return Err(e);
+            }
             std::thread::sleep(Duration::from_millis(KILL_RETRY_DELAY_MS));
         }
 

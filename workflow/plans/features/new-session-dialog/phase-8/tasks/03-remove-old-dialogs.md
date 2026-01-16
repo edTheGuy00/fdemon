@@ -241,3 +241,69 @@ cargo build
 - Some utility functions may need to be moved (e.g., `truncate_string`)
 - Test files may need significant updates
 - Keep a backup branch in case of issues
+
+---
+
+## Completion Summary
+
+**Status:** Blocked
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/mod.rs` | Removed old exports for device_selector and startup_dialog |
+| `src/app/handler/mod.rs` | Removed old handler module declarations |
+| `src/app/state.rs` | Removed UiMode variants (DeviceSelector, StartupDialog), removed DialogSection enum, removed StartupDialogState struct and implementations, removed device_selector and startup_dialog_state fields from AppState, removed old helper methods |
+| `src/app/handler/keys.rs` | Removed old key handler functions and match arms |
+| `src/app/handler/update.rs` | Removed old handler imports |
+
+### Files Deleted
+
+| File | Status |
+|------|--------|
+| `src/tui/widgets/device_selector.rs` | Deleted |
+| `src/tui/widgets/startup_dialog/` | Deleted (directory) |
+| `src/app/handler/device_selector.rs` | Deleted |
+| `src/app/handler/startup_dialog_handlers.rs` | Deleted |
+
+### Notable Decisions/Tradeoffs
+
+1. **Incremental Deletion Strategy**: Deleted files and types first, exposing compilation errors that need systematic fixing
+2. **State Field Removal**: Removed `device_selector` and `startup_dialog_state` fields from AppState as they're replaced by NewSessionDialog
+3. **UiMode Cleanup**: Removed old variants while keeping `Startup` mode which shows NewSessionDialog
+
+### Remaining Work
+
+The following compilation errors remain and need to be fixed:
+
+1. **render/mod.rs** (lines 77, 97, 213): References to deleted DeviceSelector and StartupDialog widgets need to be replaced with NewSessionDialog
+2. **message.rs** (line 388): DialogSection type reference needs to be removed
+3. **startup.rs** (lines 142-175): References to show_startup_dialog and startup_dialog_state need to be updated to use NewSessionDialog
+4. **session_lifecycle.rs** (lines 59, 144-145): References to DeviceSelector UI mode and device_selector field need to be updated
+5. **update.rs**: Old message handlers for DeviceSelector and StartupDialog messages need to be removed (lines 296-792)
+6. **message.rs**: Old message variants need to be removed (DeviceSelectorUp/Down, StartupDialog*, etc.)
+7. **tests**: Multiple test files reference old types and need updates
+
+### Testing Performed
+
+- `cargo fmt` - Not run (blocked on compilation errors)
+- `cargo check` - Failed (expected - incomplete migration)
+- `cargo test` - Not run (blocked on compilation errors)
+- `cargo clippy` - Not run (blocked on compilation errors)
+
+### Risks/Limitations
+
+1. **Incomplete Migration**: The codebase references old dialog types in multiple locations that need systematic replacement
+2. **Test Coverage**: Many tests reference old types and will need updates
+3. **Functionality Gap**: Some places call old methods (show_device_selector, show_startup_dialog) that need to be replaced with NewSessionDialog equivalents
+
+### Next Steps
+
+1. Fix render/mod.rs to use NewSessionDialog instead of old widgets
+2. Remove old message variants from message.rs
+3. Remove old message handlers from update.rs
+4. Fix startup.rs to use NewSessionDialog
+5. Fix session_lifecycle.rs to use NewSessionDialog or appropriate replacement
+6. Update all test files
+7. Run full verification suite

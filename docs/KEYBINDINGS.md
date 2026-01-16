@@ -17,8 +17,12 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Error Navigation](#error-navigation)
   - [Stack Trace Interaction](#stack-trace-interaction)
   - [Link Navigation](#link-navigation)
-- [Startup Dialog](#startup-dialog)
-- [Device Selector Mode](#device-selector-mode)
+- [New Session Dialog](#new-session-dialog)
+  - [General Navigation](#general-navigation)
+  - [Target Selector (Left Pane)](#target-selector-left-pane)
+  - [Launch Context (Right Pane)](#launch-context-right-pane)
+  - [Fuzzy Search Modal](#fuzzy-search-modal)
+  - [Dart Defines Modal](#dart-defines-modal)
 - [Search Input Mode](#search-input-mode)
 - [Link Highlight Mode](#link-highlight-mode)
 - [Settings Panel Mode](#settings-panel-mode)
@@ -160,53 +164,100 @@ Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for
 
 ---
 
-## Startup Dialog
+## New Session Dialog
 
-The startup dialog appears when `auto_start = false` or when pressing `d` without running sessions.
+The New Session Dialog is the central interface for launching Flutter sessions. It appears when starting Flutter Demon (if `auto_start = false`) or when pressing `d` to add a new session.
 
-| Key | Action | Description |
-|-----|--------|-------------|
-| `j` / `↓` | Navigate Down | Navigate down in current section |
-| `k` / `↑` | Navigate Up | Navigate up in current section |
-| `Tab` | Next Section | Move to next section |
-| `Shift+Tab` | Previous Section | Move to previous section |
-| `Enter` | Confirm | Confirm and launch session |
-| `Esc` | Cancel | Cancel dialog |
-| `r` | Refresh Devices | Refresh device list |
-| `1` | Jump to Config | Jump to Configuration section |
-| `2` | Jump to Mode | Jump to Mode section |
-| `3` | Jump to Flavor | Jump to Flavor input (edit mode) |
-| `4` | Jump to Dart Defines | Jump to Dart Defines input (edit mode) |
-| `5` | Jump to Device | Jump to Device section |
+The dialog has a two-pane layout:
+- **Target Selector** (left): Choose a device or boot an emulator
+- **Launch Context** (right): Configure launch settings (configuration, mode, flavor, dart-defines)
 
-### Text Input (Flavor / Dart Defines)
-
-When editing Flavor or Dart Defines fields:
+### General Navigation
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| Any character | Add to Input | Add character to the input field |
-| `Backspace` | Delete Character | Delete last character |
-| `Delete` / `Ctrl+U` | Clear Field | Clear entire field |
-| `Enter` | Exit Edit Mode | Exit edit mode and keep changes |
-| `Esc` | Exit Edit Mode | Exit edit mode and keep changes |
-| `Tab` | Next Section | Exit edit mode and move to next section |
-
----
-
-## Device Selector Mode
-
-The device selector allows you to choose a device or launch an emulator/simulator.
-
-| Key | Action | Description |
-|-----|--------|-------------|
-| `↑` / `k` | Move Up | Navigate up in the device list |
-| `↓` / `j` | Move Down | Navigate down in the device list |
-| `Enter` | Select | Select the highlighted device or launch option |
-| `r` | Refresh | Refresh the list of available devices |
-| `Esc` | Close | Close the device selector (only if sessions are running) |
-| `q` | Quit | Quit Flutter Demon |
+| `Tab` | Switch Pane | Switch focus between Target Selector and Launch Context |
+| `1` | Connected Tab | Switch to Connected devices tab |
+| `2` | Bootable Tab | Switch to Bootable devices tab |
+| `Esc` | Close | Close modal (if open), or close dialog (if sessions exist) |
 | `Ctrl+C` | Force Quit | Emergency exit |
+
+### Target Selector (Left Pane)
+
+When the Target Selector pane is focused:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `↑` / `k` | Navigate Up | Move up in device list |
+| `↓` / `j` | Navigate Down | Move down in device list |
+| `Enter` | Select/Boot | Select device (Connected tab) or Boot device (Bootable tab) |
+| `r` | Refresh | Refresh device list |
+
+### Launch Context (Right Pane)
+
+When the Launch Context pane is focused:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `↑` / `k` | Previous Field | Navigate to previous field |
+| `↓` / `j` | Next Field | Navigate to next field |
+| `Enter` | Activate/Launch | Open selector modal for current field, or Launch if on Launch button |
+| `←` | Previous Mode | Change to previous mode (when Mode field focused) |
+| `→` | Next Mode | Change to next mode (when Mode field focused) |
+
+**Fields:**
+- **Configuration**: Opens fuzzy search modal to select or create a launch configuration
+- **Mode**: Cycles through Debug → Profile → Release
+- **Flavor**: Opens fuzzy search modal to select or enter custom flavor
+- **Dart Defines**: Opens Dart Defines modal for key-value editing
+
+### Fuzzy Search Modal
+
+The fuzzy search modal appears when selecting Configuration or Flavor. Type to filter items or enter a custom value.
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Type | Filter/Input | Filter existing items or enter custom value |
+| `↑` | Previous Item | Navigate to previous filtered result |
+| `↓` | Next Item | Navigate to next filtered result |
+| `Enter` | Confirm | Select highlighted item or use custom text |
+| `Esc` | Cancel | Close modal without changes |
+| `Backspace` | Delete Char | Delete last character from query |
+
+### Dart Defines Modal
+
+The Dart Defines modal appears when editing Dart Defines. It has two panes: List (left) and Edit (right).
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Switch Pane | Switch between List and Edit panes |
+| `↑` | Previous Item | Navigate up in list (List pane) |
+| `↓` | Next Item | Navigate down in list (List pane) |
+| `Enter` | Action | Load item for editing (List) / Save (Edit) / Delete (Edit) |
+| `Esc` | Save & Close | Save all changes and close modal |
+
+**In Edit Pane:**
+
+The Edit pane has a focus cycle: Key field → Value field → Save button → Delete button
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Next Focus | Cycle through: Key → Value → Save → Delete |
+| Type | Input | Edit Key or Value field (when focused) |
+| `Enter` | Next/Activate | Move to next field or activate button |
+| `Backspace` | Delete Char | Delete last character (when editing field) |
+
+### Config Editability
+
+The editability of fields depends on the configuration source:
+
+| Config Source | Mode | Flavor | Dart Defines |
+|---------------|------|--------|--------------|
+| **VSCode** | Read-only | Read-only | Read-only |
+| **FDemon** | Editable (auto-saves) | Editable (auto-saves) | Editable (auto-saves) |
+| **None** | Editable (transient) | Editable (transient) | Editable (transient) |
+
+When a VSCode config is selected, fields show "(from config)" and cannot be modified. When an FDemon config is selected, changes are automatically saved to `.fdemon/launch.toml`.
 
 ---
 

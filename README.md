@@ -72,9 +72,19 @@ Clean, responsive terminal interface built with [ratatui](https://github.com/rat
 - Search match highlighting with current match indicator
 - Session tabs for multi-device development
 - Status bar with reload count and timing
-- Device/emulator selection modal
+- New Session Dialog for device selection and launch configuration
 
 ## Usage
+
+### Quick Start
+
+1. Run `fdemon` in your Flutter project directory
+2. The **New Session Dialog** appears automatically (if `auto_start = false`)
+3. Select a device from the **Target Selector** (left pane)
+4. Configure launch settings in **Launch Context** (right pane) if needed
+5. Press `Enter` to launch
+
+**Adding More Sessions:** Press `d` to open the New Session Dialog and add another device.
 
 ### Basic Usage
 
