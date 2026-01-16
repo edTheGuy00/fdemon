@@ -61,13 +61,13 @@ Based on the [Phase 8 Review](../../../../reviews/features/new-session-dialog-ph
 
 | # | Task | Status | Depends On | Est. | Modules | Priority |
 |---|------|--------|------------|------|---------|----------|
-| 6 | [06-fix-key-handlers](tasks/06-fix-key-handlers.md) | Not Started | 5 | 15m | `app/handler/keys.rs` | 🔴 Critical |
-| 7 | [07-remove-deprecated-messages](tasks/07-remove-deprecated-messages.md) | Not Started | 6 | 20m | `app/message.rs` | 🔴 Critical |
-| 8 | [08-remove-deprecated-handlers](tasks/08-remove-deprecated-handlers.md) | Not Started | 7 | 15m | `app/handler/update.rs` | 🔴 Critical |
-| 9 | [09-fix-handler-tests](tasks/09-fix-handler-tests.md) | Not Started | 8 | 25m | `app/handler/tests.rs`, `app/handler/keys.rs` | 🟠 Major |
-| 10 | [10-fix-render-tests](tasks/10-fix-render-tests.md) | Not Started | 8 | 30m | `tui/render/tests.rs` | 🟠 Major |
-| 11 | [11-update-e2e-snapshots](tasks/11-update-e2e-snapshots.md) | Not Started | 10 | 20m | `tests/e2e/` | 🟠 Major |
-| 12 | [12-minor-cleanup](tasks/12-minor-cleanup.md) | Not Started | 11 | 25m | Various | 🟡 Minor |
+| 6 | [06-fix-key-handlers](tasks/06-fix-key-handlers.md) | Done | 5 | 15m | `app/handler/keys.rs` | 🔴 Critical |
+| 7 | [07-remove-deprecated-messages](tasks/07-remove-deprecated-messages.md) | Done | 6 | 20m | `app/message.rs` | 🔴 Critical |
+| 8 | [08-remove-deprecated-handlers](tasks/08-remove-deprecated-handlers.md) | Done | 7 | 15m | `app/handler/update.rs` | 🔴 Critical |
+| 9 | [09-fix-handler-tests](tasks/09-fix-handler-tests.md) | Done | 8 | 25m | `app/handler/tests.rs`, `app/handler/keys.rs` | 🟠 Major |
+| 10 | [10-fix-render-tests](tasks/10-fix-render-tests.md) | Done | 8 | 30m | `tui/render/tests.rs` | 🟠 Major |
+| 11 | [11-update-e2e-snapshots](tasks/11-update-e2e-snapshots.md) | Done | 10 | 20m | `tests/e2e/` | 🟠 Major |
+| 12 | [12-minor-cleanup](tasks/12-minor-cleanup.md) | Done | 11 | 25m | Various | 🟡 Minor |
 
 ### Follow-up Dependency Graph
 
@@ -119,14 +119,14 @@ Phase 8 is complete when:
 - [x] Documentation updated
 
 ### Review Follow-up Tasks (6-12)
-- [ ] `+` and `d` keys work correctly without sessions (Task 6)
-- [ ] All deprecated message variants removed from `message.rs` (Task 7)
-- [ ] All deprecated handlers removed from `update.rs` (Task 8)
-- [ ] Handler tests compile and pass (Task 9)
-- [ ] Render tests compile and pass (Task 10)
-- [ ] E2E snapshots updated (Task 11)
-- [ ] Minor cleanup completed (Task 12)
-- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+- [x] `+` and `d` keys work correctly without sessions (Task 6)
+- [x] All deprecated message variants removed from `message.rs` (Task 7)
+- [x] All deprecated handlers removed from `update.rs` (Task 8)
+- [x] Handler tests compile and pass (Task 9)
+- [x] Render tests compile and pass (Task 10)
+- [x] E2E snapshots updated (Task 11)
+- [x] Minor cleanup completed (Task 12)
+- [x] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ## Files to Delete
 

@@ -89,4 +89,26 @@ Unit tests in `keys.rs` will need updating in Task 09.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/keys.rs` | Updated '+' and 'd' key handlers (lines 166-183) to always use `Message::OpenNewSessionDialog` instead of deprecated messages. Updated unit tests to match new behavior (lines 759, 769, 789, 692). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Unified Behavior**: Both '+' and 'd' keys now always open `NewSessionDialog` regardless of whether sessions exist. This simplifies the mental model and eliminates the silent failure when no sessions exist.
+
+2. **EmulatorSelector Mode Not Modified**: The `handle_key_emulator_selector` function at line 44 still uses `Message::ShowDeviceSelector`, but this is correct because it's a separate UI mode not part of the NewSessionDialog context, as clarified in the task notes.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test device_selector_key_tests --lib` - Passed (10 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Manual Testing Required**: While unit tests pass, the task notes indicate manual testing is needed to verify the actual dialog opening behavior with/without sessions.

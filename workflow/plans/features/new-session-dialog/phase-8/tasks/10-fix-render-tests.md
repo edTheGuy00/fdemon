@@ -94,4 +94,51 @@ cargo insta review  # Accept/reject snapshot changes
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/render/tests.rs` | Removed all tests referencing deleted `UiMode::DeviceSelector` and `device_selector` field; removed unused imports (`LoadingState`, `ConfirmDialogState`); cleaned up file to only contain active Normal mode snapshot tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Complete removal vs conversion**: Chose to completely remove all disabled tests rather than convert them to NewSessionDialog equivalents because:
+   - NewSessionDialog already has comprehensive widget-level tests in `src/tui/widgets/new_session_dialog/mod.rs`
+   - The old tests were already disabled via `#[cfg(feature = "test_old_dialogs")]` feature flag
+   - Duplicate coverage would not add value
+   - Cleaner codebase with focused tests
+
+2. **Removed test categories**:
+   - Device Selector snapshots (empty and with devices)
+   - Confirm Dialog snapshots
+   - Loading mode snapshots
+   - Compact terminal snapshots for device selector
+   - Settings mode snapshot
+   - Search input mode snapshot
+   - Edge case snapshots (no project name, long project name)
+   - All UI mode transition tests involving DeviceSelector
+   - All tests that referenced `state.device_selector.set_devices()` or `UiMode::DeviceSelector`
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo test render` - Passed (45 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Verification
+
+```bash
+# Confirmed no references remain
+grep -rn "UiMode::DeviceSelector" src/tui/render/tests.rs  # No matches
+grep -rn "device_selector" src/tui/render/tests.rs        # No matches
+```
+
+### Risks/Limitations
+
+1. **Reduced snapshot coverage**: The file now only contains 4 basic Normal mode snapshot tests. However, this is acceptable because:
+   - The NewSessionDialog has its own comprehensive tests
+   - The remaining tests cover the essential Normal mode rendering
+   - Widget-level tests provide more focused coverage than full-screen snapshots

@@ -76,4 +76,41 @@ cargo test --test e2e
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+No files were modified. All E2E snapshots were already updated in previous commits (faa58ee and 20d9d41).
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/snapshots/e2e__e2e__pty_utils__device_selector.snap` | Already shows NewSessionDialog with "Launch Session" title, Configuration section, and Device section |
+| `tests/e2e/snapshots/e2e__e2e__pty_utils__session_tabs_single.snap` | Already shows "Press + to start a new session" message |
+| `tests/e2e/snapshots/e2e__e2e__tui_interaction__quit_confirmation.snap` | Already shows "Press + to start a new session" message |
+| `tests/e2e/snapshots/e2e__e2e__pty_utils__startup_screen.snap` | Already reflects new UI |
+| `tests/e2e/snapshots/e2e__e2e__pty_utils__quit_confirmation.snap` | Already reflects new UI |
+
+### Notable Decisions/Tradeoffs
+
+1. **No updates required**: The snapshots were already updated in commits faa58ee and 20d9d41. All snapshots correctly reflect the NewSessionDialog UI with no references to the old DeviceSelector or StartupDialog components.
+
+2. **Ignored tests remain ignored**: Tests `golden_device_selector`, `golden_quit_confirmation`, and `golden_session_tabs_single` remain marked as `#[ignore]` due to inherent PTY timing instability. These tests are documented as flaky and are intentionally excluded from CI.
+
+3. **Snapshot verification**: Manually verified all snapshot content shows the new UI:
+   - "Launch Session" dialog title
+   - Configuration section (Mode, Flavor, Dart Defines)
+   - Device section with discovery state
+   - "Press + to start a new session" in appropriate contexts
+
+### Testing Performed
+
+- `cargo test --test e2e` - Passed (104 passed, 38 ignored, 0 failed)
+- `cargo insta pending-snapshots` - No pending snapshots
+- Manual review of all snapshot files - All reflect NewSessionDialog UI
+- Grep verification - No references to "DeviceSelector" or "StartupDialog" in snapshots
+
+### Risks/Limitations
+
+1. **E2E test flakiness**: One intermittent failure in `test_device_selector_enter_selects` observed during testing, but passed on retry. This is expected behavior per task notes about E2E flakiness.
+
+2. **PTY stability**: Some snapshot tests are intentionally ignored due to PTY timing variations. These tests work locally but are unsuitable for CI environments.

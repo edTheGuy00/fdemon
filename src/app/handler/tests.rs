@@ -857,7 +857,11 @@ fn test_auto_reload_triggers_all_sessions() {
         assert!(sessions.iter().any(|(id, _)| *id == session1));
         assert!(sessions.iter().any(|(id, _)| *id == session2));
     } else {
-        panic!("Expected ReloadAllSessions action, got {:?}", result.action);
+        assert!(
+            matches!(result.action, Some(UpdateAction::ReloadAllSessions { .. })),
+            "Expected ReloadAllSessions action, got {:?}",
+            result.action
+        );
     }
 }
 
@@ -915,7 +919,11 @@ fn test_auto_reload_skips_sessions_without_app_id() {
         assert_eq!(sessions.len(), 1);
         assert_eq!(sessions[0].0, session1);
     } else {
-        panic!("Expected ReloadAllSessions action");
+        assert!(
+            matches!(result.action, Some(UpdateAction::ReloadAllSessions { .. })),
+            "Expected ReloadAllSessions action, got {:?}",
+            result.action
+        );
     }
 }
 
@@ -979,7 +987,14 @@ fn test_manual_reload_still_uses_selected_session() {
         assert_eq!(session_id, session2);
         assert_eq!(app_id, "app-2");
     } else {
-        panic!("Expected SpawnTask Reload action");
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::SpawnTask(Task::Reload { .. }))
+            ),
+            "Expected SpawnTask Reload action, got {:?}",
+            result.action
+        );
     }
 }
 
@@ -1923,7 +1938,11 @@ mod auto_launch_tests {
             assert_eq!(cfg.name, "debug");
             assert_eq!(cfg.flavor, Some("dev".to_string()));
         } else {
-            panic!("Expected SpawnSession action with config");
+            assert!(
+                matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+                "Expected SpawnSession action with config, got {:?}",
+                result.action
+            );
         }
     }
 

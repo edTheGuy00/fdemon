@@ -112,26 +112,12 @@ pub enum Message {
     // ─────────────────────────────────────────────────────────
     // Device Selector Messages
     // ─────────────────────────────────────────────────────────
-    /// Show the device selector modal
-    ShowDeviceSelector,
-    /// Hide the device selector modal
-    HideDeviceSelector,
-    /// Navigate device selector up
-    DeviceSelectorUp,
-    /// Navigate device selector down
-    DeviceSelectorDown,
-    /// Device selected from selector
-    DeviceSelected { device: Device },
-    /// Launch Android emulator requested
-    LaunchAndroidEmulator,
     /// Launch iOS simulator requested
     LaunchIOSSimulator,
     /// Device discovery completed
     DevicesDiscovered { devices: Vec<Device> },
     /// Device discovery failed
     DeviceDiscoveryFailed { error: String },
-    /// Refresh device list
-    RefreshDevices,
 
     // ─────────────────────────────────────────────────────────
     // Emulator Messages
@@ -334,67 +320,6 @@ pub enum Message {
     ForceHideSettings,
 
     // ─────────────────────────────────────────────────────────────
-    // Startup Dialog Messages (Phase 5)
-    // ─────────────────────────────────────────────────────────────
-    /// Show startup dialog
-    ShowStartupDialog,
-
-    /// Hide startup dialog (cancel)
-    HideStartupDialog,
-
-    /// Navigate up in current section
-    StartupDialogUp,
-
-    /// Navigate down in current section
-    StartupDialogDown,
-
-    /// Move to next section (Tab)
-    StartupDialogNextSection,
-
-    /// Move to previous section (Shift+Tab)
-    StartupDialogPrevSection,
-
-    /// Move to next section, skipping disabled fields (Task 10b)
-    StartupDialogNextSectionSkipDisabled,
-
-    /// Move to previous section, skipping disabled fields (Task 10b)
-    StartupDialogPrevSectionSkipDisabled,
-
-    /// Select specific config by index
-    StartupDialogSelectConfig(usize),
-
-    /// Select specific device by index
-    StartupDialogSelectDevice(usize),
-
-    /// Set build mode
-    StartupDialogSetMode(crate::config::FlutterMode),
-
-    /// Character input for flavor/dart-defines
-    StartupDialogCharInput(char),
-
-    /// Backspace in input field
-    StartupDialogBackspace,
-
-    /// Clear input field
-    StartupDialogClearInput,
-
-    /// Confirm and launch session
-    StartupDialogConfirm,
-
-    /// Refresh device list
-    StartupDialogRefreshDevices,
-
-    /// Jump directly to a dialog section (1=Configs, 2=Mode, 3=Flavor, 4=DartDefines, 5=Devices)
-    /// DEPRECATED: Old startup dialog removed - this message is no longer used
-    StartupDialogJumpToSection(String),
-
-    /// Enter edit mode for current text field (Flavor or DartDefines)
-    StartupDialogEnterEdit,
-
-    /// Exit edit mode without changing section
-    StartupDialogExitEdit,
-
-    // ─────────────────────────────────────────────────────────────
     // Launch Config Editing Messages (Phase 5, Task 07)
     // ─────────────────────────────────────────────────────────────
     /// Create a new launch configuration
@@ -409,12 +334,6 @@ pub enum Message {
         field: String,
         value: String,
     },
-
-    // ─────────────────────────────────────────────────────────────
-    // FDemon Config Auto-save (Phase 5, Task 10c)
-    // ─────────────────────────────────────────────────────────────
-    /// Save FDemon config edits (flavor, dart_defines) after debounce
-    SaveStartupDialogConfig,
 
     // ─────────────────────────────────────────────────────────────
     // Auto-Launch Messages (Startup Flow Consistency)

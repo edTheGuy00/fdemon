@@ -273,38 +273,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
-        // Device Selector Messages (DEPRECATED - use NewSessionDialog)
+        // Device Selector Messages
         // ─────────────────────────────────────────────────────────
-        Message::ShowDeviceSelector => {
-            warn!("ShowDeviceSelector is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::HideDeviceSelector => {
-            warn!("HideDeviceSelector is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::DeviceSelectorUp => {
-            warn!("DeviceSelectorUp is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::DeviceSelectorDown => {
-            warn!("DeviceSelectorDown is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::DeviceSelected { device: _ } => {
-            warn!("DeviceSelected is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::LaunchAndroidEmulator => {
-            warn!("LaunchAndroidEmulator is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
         Message::LaunchIOSSimulator => {
             tracing::info!("Launching iOS Simulator...");
             UpdateResult::action(UpdateAction::LaunchIOSSimulator)
@@ -346,11 +316,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
 
             tracing::error!("Device discovery failed: {}", error);
-            UpdateResult::none()
-        }
-
-        Message::RefreshDevices => {
-            warn!("RefreshDevices is deprecated - use NewSessionDialog");
             UpdateResult::none()
         }
 
@@ -689,109 +654,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::SettingsSaveAndClose => settings_handlers::handle_settings_save_and_close(state),
 
         Message::ForceHideSettings => settings_handlers::handle_force_hide_settings(state),
-
-        // ─────────────────────────────────────────────────────────
-        // Startup Dialog Messages (DEPRECATED - use NewSessionDialog)
-        // ─────────────────────────────────────────────────────────
-        Message::ShowStartupDialog => {
-            warn!("ShowStartupDialog is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::HideStartupDialog => {
-            warn!("HideStartupDialog is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogUp => {
-            warn!("StartupDialogUp is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogDown => {
-            warn!("StartupDialogDown is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogNextSection => {
-            warn!("StartupDialogNextSection is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogPrevSection => {
-            warn!("StartupDialogPrevSection is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogNextSectionSkipDisabled => {
-            warn!("StartupDialogNextSectionSkipDisabled is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogPrevSectionSkipDisabled => {
-            warn!("StartupDialogPrevSectionSkipDisabled is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogSelectConfig(_) => {
-            warn!("StartupDialogSelectConfig is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogSelectDevice(_) => {
-            warn!("StartupDialogSelectDevice is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogSetMode(_) => {
-            warn!("StartupDialogSetMode is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogCharInput(_) => {
-            warn!("StartupDialogCharInput is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogBackspace => {
-            warn!("StartupDialogBackspace is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogClearInput => {
-            warn!("StartupDialogClearInput is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogConfirm => {
-            warn!("StartupDialogConfirm is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::SaveStartupDialogConfig => {
-            warn!("SaveStartupDialogConfig is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogRefreshDevices => {
-            warn!("StartupDialogRefreshDevices is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogJumpToSection(_) => {
-            warn!("StartupDialogJumpToSection is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogEnterEdit => {
-            warn!("StartupDialogEnterEdit is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
-
-        Message::StartupDialogExitEdit => {
-            warn!("StartupDialogExitEdit is deprecated - use NewSessionDialog");
-            UpdateResult::none()
-        }
 
         // ─────────────────────────────────────────────────────────
         // Launch Config Editing Messages (Phase 5, Task 07)

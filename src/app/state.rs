@@ -332,7 +332,7 @@ pub struct AppState {
     /// Loading state (for initial startup loading screen)
     pub loading_state: Option<LoadingState>,
 
-    /// Global device cache (shared between DeviceSelector and StartupDialog)
+    /// Global device cache (used by NewSessionDialog)
     /// Task 08e - Device Cache Sharing
     pub device_cache: Option<Vec<Device>>,
 

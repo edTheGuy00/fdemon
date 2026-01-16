@@ -41,7 +41,7 @@ fn handle_key_confirm_dialog(key: KeyEvent) -> Option<Message> {
 /// Handle key events in emulator selector mode (placeholder)
 fn handle_key_emulator_selector(key: KeyEvent) -> Option<Message> {
     match key.code {
-        KeyCode::Esc => Some(Message::ShowDeviceSelector), // Go back to device selector
+        KeyCode::Esc => Some(Message::OpenNewSessionDialog), // Go back to new session dialog
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Some(Message::Quit),
         _ => None,
     }
@@ -160,31 +160,25 @@ fn handle_key_normal(state: &AppState, key: KeyEvent) -> Option<Message> {
         // ─────────────────────────────────────────────────────────
         // Session Management
         // ─────────────────────────────────────────────────────────
-        // '+' - Start new session
-        // If sessions are running: show quick device selector
-        // If no sessions: show full startup dialog
+        // '+' - Start new session (unified handler)
+        // Always opens NewSessionDialog, regardless of existing sessions
         // Don't show dialogs while loading (auto-launch in progress)
         (KeyCode::Char('+'), KeyModifiers::NONE) | (KeyCode::Char('+'), KeyModifiers::SHIFT) => {
             if state.ui_mode == UiMode::Loading {
                 None
-            } else if state.has_running_sessions() {
-                Some(Message::ShowDeviceSelector)
             } else {
-                Some(Message::ShowStartupDialog)
+                Some(Message::OpenNewSessionDialog)
             }
         }
 
         // 'd' for adding device/session (alternative to '+')
-        // If sessions are running: show new session dialog (unified UI)
-        // If no sessions: show full startup dialog
+        // Always opens NewSessionDialog, regardless of existing sessions
         // Don't show dialogs while loading (auto-launch in progress)
         (KeyCode::Char('d'), KeyModifiers::NONE) => {
             if state.ui_mode == UiMode::Loading {
                 None
-            } else if state.has_running_sessions() {
-                Some(Message::OpenNewSessionDialog)
             } else {
-                Some(Message::ShowStartupDialog)
+                Some(Message::OpenNewSessionDialog)
             }
         }
 
@@ -695,7 +689,7 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('d')));
 
-        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
     }
 
     #[test]
@@ -762,7 +756,7 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('+')));
 
-        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
     }
 
     #[test]
@@ -772,7 +766,7 @@ mod device_selector_key_tests {
 
         let msg = handle_key_normal(&state, key(KeyCode::Char('+')));
 
-        assert!(matches!(msg, Some(Message::ShowStartupDialog)));
+        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
     }
 
     #[test]
@@ -792,7 +786,7 @@ mod device_selector_key_tests {
             KeyEvent::new(KeyCode::Char('+'), KeyModifiers::SHIFT),
         );
 
-        assert!(matches!(msg, Some(Message::ShowDeviceSelector)));
+        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
     }
 
     #[test]
