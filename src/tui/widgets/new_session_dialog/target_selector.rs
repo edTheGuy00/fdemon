@@ -5,7 +5,8 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
+    text::Line,
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
@@ -45,6 +46,9 @@ pub struct TargetSelectorState {
     /// Error message if discovery failed
     pub error: Option<String>,
 
+    /// Scroll offset for device list (number of items scrolled past)
+    pub scroll_offset: usize,
+
     /// Cached flattened device list, invalidated on device updates
     cached_flat_list: Option<Vec<DeviceListItem<String>>>,
 }
@@ -60,6 +64,7 @@ impl Default for TargetSelectorState {
             loading: true,
             bootable_loading: false,
             error: None,
+            scroll_offset: 0,
             cached_flat_list: None,
         }
     }
@@ -80,6 +85,7 @@ impl TargetSelectorState {
             self.active_tab = tab;
             self.invalidate_cache();
             self.selected_index = self.first_selectable_index();
+            self.scroll_offset = 0; // Reset scroll when switching tabs
         }
     }
 
@@ -201,6 +207,7 @@ impl TargetSelectorState {
         self.loading = false;
         self.error = None;
         self.invalidate_cache();
+        self.scroll_offset = 0; // Reset scroll when devices change
 
         // Reset selection if it's now invalid
         if self.active_tab == TargetTab::Connected {
@@ -221,6 +228,7 @@ impl TargetSelectorState {
         self.android_avds = android_avds;
         self.bootable_loading = false;
         self.invalidate_cache();
+        self.scroll_offset = 0; // Reset scroll when devices change
 
         // Reset selection if on bootable tab
         if self.active_tab == TargetTab::Bootable {
@@ -236,6 +244,73 @@ impl TargetSelectorState {
         self.error = Some(error);
         self.loading = false;
     }
+
+    /// Adjust scroll offset to keep selected item visible
+    ///
+    /// # Arguments
+    /// * `visible_height` - Number of items that can be displayed
+    pub fn adjust_scroll(&mut self, visible_height: usize) {
+        if visible_height == 0 {
+            return;
+        }
+
+        self.scroll_offset = super::device_list::calculate_scroll_offset(
+            self.selected_index,
+            visible_height,
+            self.scroll_offset,
+        );
+    }
+
+    /// Reset scroll offset (called when switching tabs or updating device list)
+    pub fn reset_scroll(&mut self) {
+        self.scroll_offset = 0;
+    }
+
+    // Selection Preservation Helpers (Task 04 - Device Cache Usage)
+    // ─────────────────────────────────────────────────────────────
+
+    /// Get the currently selected device ID (if any)
+    ///
+    /// Returns the device ID of the currently selected item in the Connected tab.
+    /// Returns None if on Bootable tab or no device is selected.
+    pub fn selected_device_id(&self) -> Option<String> {
+        if self.active_tab != TargetTab::Connected {
+            return None;
+        }
+
+        let groups = group_connected_devices(&self.connected_devices);
+        let items = flatten_groups(&groups);
+
+        items.get(self.selected_index).and_then(|item| match item {
+            DeviceListItem::Device(d) => Some(d.id.clone()),
+            DeviceListItem::Header(_) => None,
+        })
+    }
+
+    /// Select device by ID if it exists in the list
+    ///
+    /// Searches the connected devices list for a device with the given ID
+    /// and updates the selection index if found.
+    ///
+    /// Returns true if the device was found and selected, false otherwise.
+    pub fn select_device_by_id(&mut self, device_id: &str) -> bool {
+        if self.active_tab != TargetTab::Connected {
+            return false;
+        }
+
+        let groups = group_connected_devices(&self.connected_devices);
+        let items = flatten_groups(&groups);
+
+        for (index, item) in items.iter().enumerate() {
+            if let DeviceListItem::Device(d) = item {
+                if d.id == device_id {
+                    self.selected_index = index;
+                    return true;
+                }
+            }
+        }
+        false
+    }
 }
 
 /// The Target Selector widget (left pane of NewSessionDialog)
@@ -243,6 +318,7 @@ pub struct TargetSelector<'a> {
     state: &'a TargetSelectorState,
     tool_availability: &'a ToolAvailability,
     is_focused: bool,
+    compact: bool,
 }
 
 impl<'a> TargetSelector<'a> {
@@ -255,12 +331,30 @@ impl<'a> TargetSelector<'a> {
             state,
             tool_availability,
             is_focused,
+            compact: false,
         }
+    }
+
+    /// Enable compact mode for narrow terminals
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
     }
 }
 
 impl Widget for TargetSelector<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.compact {
+            self.render_compact(area, buf);
+        } else {
+            self.render_full(area, buf);
+        }
+    }
+}
+
+impl TargetSelector<'_> {
+    /// Render full (horizontal layout) mode
+    fn render_full(&self, area: Rect, buf: &mut Buffer) {
         // Main block
         let border_color = if self.is_focused {
             Color::Cyan
@@ -300,6 +394,7 @@ impl Widget for TargetSelector<'_> {
                         &self.state.connected_devices,
                         self.state.selected_index,
                         self.is_focused,
+                        self.state.scroll_offset,
                     );
                     list.render(chunks[1], buf);
                 }
@@ -309,6 +404,7 @@ impl Widget for TargetSelector<'_> {
                         &self.state.android_avds,
                         self.state.selected_index,
                         self.is_focused,
+                        self.state.scroll_offset,
                         self.tool_availability,
                     );
                     list.render(chunks[1], buf);
@@ -318,6 +414,99 @@ impl Widget for TargetSelector<'_> {
 
         // Render footer
         self.render_footer(chunks[2], buf);
+    }
+
+    /// Render compact (vertical layout) mode - no border, tighter spacing
+    fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Compact mode: smaller tab bar, tighter spacing, no footer
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // Compact tab bar (single line)
+            Constraint::Min(3),    // Device list
+        ])
+        .split(area);
+
+        // Render compact tab bar
+        self.render_tabs_compact(chunks[0], buf);
+
+        // Render content based on active tab
+        if self.state.loading {
+            self.render_loading(chunks[1], buf);
+        } else if let Some(ref error) = self.state.error {
+            self.render_error(chunks[1], buf, error);
+        } else {
+            match self.state.active_tab {
+                TargetTab::Connected => {
+                    let list = ConnectedDeviceList::new(
+                        &self.state.connected_devices,
+                        self.state.selected_index,
+                        self.is_focused,
+                        self.state.scroll_offset,
+                    );
+                    list.render(chunks[1], buf);
+                }
+                TargetTab::Bootable => {
+                    let list = BootableDeviceList::new(
+                        &self.state.ios_simulators,
+                        &self.state.android_avds,
+                        self.state.selected_index,
+                        self.is_focused,
+                        self.state.scroll_offset,
+                        self.tool_availability,
+                    );
+                    list.render(chunks[1], buf);
+                }
+            }
+        }
+    }
+
+    /// Render compact tab bar (abbreviated labels, single line)
+    fn render_tabs_compact(&self, area: Rect, buf: &mut Buffer) {
+        use ratatui::text::Span;
+
+        let connected_active = self.state.active_tab == TargetTab::Connected;
+        let bootable_active = self.state.active_tab == TargetTab::Bootable;
+
+        let style_active = if self.is_focused {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Gray)
+                .add_modifier(Modifier::BOLD)
+        };
+        let style_inactive = Style::default().fg(Color::DarkGray);
+
+        let tabs = vec![
+            Span::styled(
+                if connected_active {
+                    "[1]Connected"
+                } else {
+                    " 1 Connected"
+                },
+                if connected_active {
+                    style_active
+                } else {
+                    style_inactive
+                },
+            ),
+            Span::raw("  "),
+            Span::styled(
+                if bootable_active {
+                    "[2]Bootable"
+                } else {
+                    " 2 Bootable"
+                },
+                if bootable_active {
+                    style_active
+                } else {
+                    style_inactive
+                },
+            ),
+        ];
+
+        let paragraph = Paragraph::new(Line::from(tabs)).alignment(Alignment::Center);
+        paragraph.render(area, buf);
     }
 }
 
@@ -762,5 +951,89 @@ mod tests {
             state.cached_flat_list.is_some(),
             "Cache should be repopulated on next access"
         );
+    }
+
+    #[test]
+    fn test_scroll_offset_default() {
+        let state = TargetSelectorState::default();
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_adjust_scroll_keeps_selection_visible() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        // Add 20 devices
+        let devices: Vec<Device> = (0..20)
+            .map(|i| test_device_full(&format!("id{}", i), &format!("Device {}", i), "ios", false))
+            .collect();
+        state.set_connected_devices(devices);
+
+        state.selected_index = 15;
+        state.scroll_offset = 0;
+
+        state.adjust_scroll(10); // 10 visible items
+
+        // Selection at 15 should require scroll offset of at least 6
+        assert!(state.scroll_offset >= 6);
+        assert!(state.scroll_offset <= 15);
+    }
+
+    #[test]
+    fn test_scroll_resets_on_tab_switch() {
+        let mut state = TargetSelectorState::default();
+        state.scroll_offset = 5;
+        state.set_tab(TargetTab::Bootable);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_resets_on_connected_devices_update() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.scroll_offset = 10;
+
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_scroll_resets_on_bootable_devices_update() {
+        use crate::daemon::SimulatorState;
+
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.scroll_offset = 10;
+
+        let ios_sims = vec![IosSimulator {
+            udid: "123".to_string(),
+            name: "iPhone 15".to_string(),
+            runtime: "iOS 17.2".to_string(),
+            state: SimulatorState::Shutdown,
+            device_type: "iPhone 15".to_string(),
+        }];
+
+        state.set_bootable_devices(ios_sims, vec![]);
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_reset_scroll() {
+        let mut state = TargetSelectorState::default();
+        state.scroll_offset = 15;
+
+        state.reset_scroll();
+        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_adjust_scroll_zero_height() {
+        let mut state = TargetSelectorState::default();
+        state.scroll_offset = 5;
+
+        state.adjust_scroll(0);
+        // Should not change when visible_height is 0
+        assert_eq!(state.scroll_offset, 5);
     }
 }

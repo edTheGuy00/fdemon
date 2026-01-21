@@ -585,7 +585,10 @@ pub enum Message {
     },
 
     /// Boot a device (simulator or AVD)
-    BootDevice { device_id: String, platform: String },
+    BootDevice {
+        device_id: String,
+        platform: crate::core::Platform,
+    },
 
     /// Device boot completed
     DeviceBootCompleted { device_id: String },

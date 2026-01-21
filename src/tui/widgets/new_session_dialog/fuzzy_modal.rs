@@ -38,11 +38,18 @@ impl<'a> FuzzyModal<'a> {
 
     /// Calculate modal area (bottom 45% of screen)
     fn modal_rect(area: Rect) -> Rect {
-        let height = (area.height * 45 / 100).max(10);
+        // In narrow terminals, use more of the width and height
+        let width_percent = if area.width < 60 { 95 } else { 80 };
+        let height_percent = if area.height < 30 { 70 } else { 50 };
+
+        let height = (area.height * height_percent / 100).max(10);
+        let width = (area.width * width_percent / 100).max(30);
+        let x_margin = (area.width.saturating_sub(width)) / 2;
+
         Rect {
-            x: area.x + 2,
+            x: area.x + x_margin,
             y: area.y + area.height - height - 1,
-            width: area.width.saturating_sub(4),
+            width,
             height,
         }
     }
@@ -80,7 +87,8 @@ impl<'a> FuzzyModal<'a> {
         if !self.state.has_results() {
             // No matches
             let msg = if self.state.modal_type.allows_custom() {
-                format!("No matches. Press Enter to use \"{}\"", self.state.query)
+                let query_truncated = super::truncate_with_ellipsis(&self.state.query, 20);
+                format!("No matches. Press Enter to use \"{}\"", query_truncated)
             } else {
                 "No matches found".to_string()
             };
@@ -96,6 +104,9 @@ impl<'a> FuzzyModal<'a> {
         let start = self.state.scroll_offset;
         let end = (start + visible_height).min(self.state.filtered_indices.len());
 
+        // Calculate available width for items (accounting for indicator)
+        let max_item_width = (area.width as usize).saturating_sub(4); // "▶ " + padding
+
         let items: Vec<ListItem> = self.state.filtered_indices[start..end]
             .iter()
             .enumerate()
@@ -104,7 +115,15 @@ impl<'a> FuzzyModal<'a> {
                 let is_selected = display_idx + start == self.state.selected_index;
 
                 let indicator = if is_selected { "▶ " } else { "  " };
-                let text = format!("{}{}", indicator, item_text);
+
+                // Truncate item text if needed
+                let truncated = if max_item_width > 0 {
+                    super::truncate_with_ellipsis(item_text, max_item_width)
+                } else {
+                    item_text.clone()
+                };
+
+                let text = format!("{}{}", indicator, truncated);
 
                 let style = if is_selected {
                     Style::default()

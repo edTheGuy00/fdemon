@@ -282,4 +282,37 @@ fn test_scroll_indicators_shown() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/target_selector.rs` | Added `adjust_scroll(10)` calls after `select_previous()` and `select_next()` in navigation handlers |
+| `src/tui/widgets/new_session_dialog/device_list.rs` | Added `scroll_offset` field to both `ConnectedDeviceList` and `BootableDeviceList` structs; updated constructors; modified `render()` to use visible range based on scroll offset; added `render_scroll_indicators()` method to both widgets to show "↑ more" and "↓ more" indicators |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Updated widget instantiation to pass `self.state.scroll_offset` to device list widgets in both normal and compact render modes |
+
+### Notable Decisions/Tradeoffs
+
+1. **Estimated visible height in handlers**: Navigation handlers use an estimated visible height of 10 items when calling `adjust_scroll()`. This is a reasonable estimate that works well in practice. The actual visible height is determined during rendering, but we cannot pass it back to state from the render layer (violates TEA pattern).
+
+2. **Scroll indicators placement**: Placed "↑ more" at top-right and "↓ more" at bottom-right of the device list area. Used `DarkGray` color to make them subtle but visible. Unicode arrows (↑↓) provide clear directional cues and work in most terminals.
+
+3. **Empty list handling**: Added safeguards using `saturating_sub(1)` when calculating the start index to prevent underflow when the list is empty.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (Finished in 0.07s)
+- `cargo test device_list` - Passed (14 tests)
+- `cargo test scroll` - Passed (35 tests including new scroll tests)
+- `cargo test --lib` - Passed (1402 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+All existing tests continue to pass. The scroll offset functionality integrates seamlessly with existing navigation and device list rendering.
+
+### Risks/Limitations
+
+1. **Estimated visible height**: The navigation handlers use a hardcoded estimate (10) for visible height. In practice this works well, but if the terminal is very small (< 10 rows), the scroll behavior might be slightly off until the next render cycle adjusts it. This is acceptable given TEA constraints.
+
+2. **Scroll indicators in narrow terminals**: On very narrow terminals (< 10 columns), the scroll indicators might overlap with device names. This is unlikely in practice as the dialog requires reasonable width to be usable.

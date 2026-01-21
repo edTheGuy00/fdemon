@@ -608,6 +608,55 @@ impl<'a> DartDefinesModal<'a> {
             .alignment(Alignment::Center)
             .render(area, buf);
     }
+
+    /// Render horizontal layout (list pane left, edit pane right)
+    fn render_horizontal(&self, inner: Rect, buf: &mut Buffer) {
+        // Layout: header | content | footer
+        let vertical = Layout::vertical([
+            Constraint::Length(2), // Header
+            Constraint::Min(10),   // Content (panes)
+            Constraint::Length(1), // Footer
+        ])
+        .split(inner);
+
+        self.render_header(vertical[0], buf);
+
+        // Content: list pane (40%) | edit pane (60%)
+        let panes = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(vertical[1]);
+
+        // Render both panes
+        let list_pane = DartDefinesListPane::new(self.state);
+        list_pane.render(panes[0], buf);
+
+        let edit_pane = DartDefinesEditPane::new(self.state);
+        edit_pane.render(panes[1], buf);
+
+        self.render_footer(vertical[2], buf);
+    }
+
+    /// Render vertical layout (list pane top, edit pane bottom)
+    fn render_vertical(&self, inner: Rect, buf: &mut Buffer) {
+        // Layout: header | list pane | edit pane | footer
+        let vertical = Layout::vertical([
+            Constraint::Length(2),      // Header
+            Constraint::Percentage(40), // List pane
+            Constraint::Min(8),         // Edit pane (needs min height for form)
+            Constraint::Length(1),      // Footer
+        ])
+        .split(inner);
+
+        self.render_header(vertical[0], buf);
+
+        // Render both panes stacked vertically
+        let list_pane = DartDefinesListPane::new(self.state);
+        list_pane.render(vertical[1], buf);
+
+        let edit_pane = DartDefinesEditPane::new(self.state);
+        edit_pane.render(vertical[2], buf);
+
+        self.render_footer(vertical[3], buf);
+    }
 }
 
 impl Widget for DartDefinesModal<'_> {
@@ -634,28 +683,12 @@ impl Widget for DartDefinesModal<'_> {
         let inner = outer_block.inner(modal_area);
         outer_block.render(modal_area, buf);
 
-        // Layout: header | content | footer
-        let vertical = Layout::vertical([
-            Constraint::Length(2), // Header
-            Constraint::Min(10),   // Content (panes)
-            Constraint::Length(1), // Footer
-        ])
-        .split(inner);
-
-        self.render_header(vertical[0], buf);
-
-        // Content: list pane (40%) | edit pane (60%)
-        let panes = Layout::horizontal([Constraint::Percentage(40), Constraint::Percentage(60)])
-            .split(vertical[1]);
-
-        // Render both panes
-        let list_pane = DartDefinesListPane::new(self.state);
-        list_pane.render(panes[0], buf);
-
-        let edit_pane = DartDefinesEditPane::new(self.state);
-        edit_pane.render(panes[1], buf);
-
-        self.render_footer(vertical[2], buf);
+        // Decide layout based on modal width
+        if modal_area.width < 60 {
+            self.render_vertical(inner, buf);
+        } else {
+            self.render_horizontal(inner, buf);
+        }
     }
 }
 

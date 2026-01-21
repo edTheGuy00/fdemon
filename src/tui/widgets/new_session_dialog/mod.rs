@@ -34,6 +34,35 @@ use ratatui::{
 
 use crate::daemon::ToolAvailability;
 
+// ============================================================================
+// Text Truncation Utilities
+// ============================================================================
+
+/// Truncate text to fit within max_width, adding ellipsis if needed
+pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.len() <= max_width {
+        text.to_string()
+    } else if max_width <= 3 {
+        ".".repeat(max_width)
+    } else {
+        format!("{}...", &text[..max_width - 3])
+    }
+}
+
+/// Truncate text from the middle, preserving start and end
+pub fn truncate_middle(text: &str, max_width: usize) -> String {
+    if text.len() <= max_width {
+        text.to_string()
+    } else if max_width <= 5 {
+        truncate_with_ellipsis(text, max_width)
+    } else {
+        let half = (max_width - 3) / 2;
+        let start = &text[..half];
+        let end = &text[text.len() - half..];
+        format!("{}...{}", start, end)
+    }
+}
+
 /// Footer text shown when no modal is open
 const FOOTER_MAIN: &str = "[1/2] Tab  [Tab] Pane  [↑↓] Navigate  [Enter] Select  [Esc] Close";
 
@@ -43,6 +72,38 @@ const FOOTER_FUZZY_MODAL: &str = "[↑↓] Navigate  [Enter] Select  [Esc] Cance
 /// Footer text shown when dart defines modal is open
 const FOOTER_DART_DEFINES: &str = "[Tab] Pane  [↑↓] Navigate  [Enter] Edit  [Esc] Save & Close";
 
+/// Minimum terminal width for horizontal (two-pane) layout
+const MIN_HORIZONTAL_WIDTH: u16 = 70;
+
+/// Minimum terminal height for horizontal (two-pane) layout
+const MIN_HORIZONTAL_HEIGHT: u16 = 20;
+
+/// Minimum terminal width for vertical (stacked) layout
+const MIN_VERTICAL_WIDTH: u16 = 40;
+
+/// Minimum terminal height for vertical (stacked) layout
+const MIN_VERTICAL_HEIGHT: u16 = 20;
+
+/// Absolute minimum dimensions (below this shows "too small" message)
+const MIN_WIDTH: u16 = 40;
+const MIN_HEIGHT: u16 = 20;
+
+/// Layout mode for NewSessionDialog based on terminal size
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayoutMode {
+    /// Two-pane horizontal layout (Target Selector | Launch Context)
+    /// Requires width >= 70
+    Horizontal,
+
+    /// Stacked vertical layout (Target Selector above Launch Context)
+    /// For narrow terminals (width 40-69)
+    Vertical,
+
+    /// Terminal too small to render dialog meaningfully
+    /// Below 40x20
+    TooSmall,
+}
+
 /// The main NewSessionDialog widget
 pub struct NewSessionDialog<'a> {
     state: &'a NewSessionDialogState,
@@ -50,17 +111,33 @@ pub struct NewSessionDialog<'a> {
 }
 
 impl<'a> NewSessionDialog<'a> {
-    /// Minimum terminal width for dialog
-    pub const MIN_WIDTH: u16 = 80;
+    /// Minimum terminal width for dialog (updated to match MIN_WIDTH constant)
+    pub const MIN_WIDTH: u16 = MIN_WIDTH;
 
-    /// Minimum terminal height for dialog
-    pub const MIN_HEIGHT: u16 = 24;
+    /// Minimum terminal height for dialog (updated to match MIN_HEIGHT constant)
+    pub const MIN_HEIGHT: u16 = MIN_HEIGHT;
 
     pub fn new(state: &'a NewSessionDialogState, tool_availability: &'a ToolAvailability) -> Self {
         Self {
             state,
             tool_availability,
         }
+    }
+
+    /// Determine the appropriate layout mode for the given area
+    pub fn layout_mode(area: Rect) -> LayoutMode {
+        if area.width >= MIN_HORIZONTAL_WIDTH && area.height >= MIN_HORIZONTAL_HEIGHT {
+            LayoutMode::Horizontal
+        } else if area.width >= MIN_VERTICAL_WIDTH && area.height >= MIN_VERTICAL_HEIGHT {
+            LayoutMode::Vertical
+        } else {
+            LayoutMode::TooSmall
+        }
+    }
+
+    /// Check if area supports at least vertical layout
+    pub fn fits_in_area(area: Rect) -> bool {
+        Self::layout_mode(area) != LayoutMode::TooSmall
     }
 
     /// Calculate centered dialog area (80% width, 70% height)
@@ -152,21 +229,13 @@ impl<'a> NewSessionDialog<'a> {
         dart_defines_modal.render(dialog_area, buf);
     }
 
-    /// Check if terminal is large enough
-    pub fn fits_in_area(area: Rect) -> bool {
-        area.width >= Self::MIN_WIDTH && area.height >= Self::MIN_HEIGHT
-    }
-
     /// Render a "terminal too small" message
     fn render_too_small(area: Rect, buf: &mut Buffer) {
         Clear.render(area, buf);
 
         let message = format!(
             "Terminal too small. Need at least {}x{} (current: {}x{})",
-            Self::MIN_WIDTH,
-            Self::MIN_HEIGHT,
-            area.width,
-            area.height
+            MIN_WIDTH, MIN_HEIGHT, area.width, area.height
         );
 
         let paragraph = Paragraph::new(message)
@@ -178,18 +247,15 @@ impl<'a> NewSessionDialog<'a> {
         let centered = Rect::new(area.x, y, area.width, 1);
         paragraph.render(centered, buf);
     }
-}
 
-impl Widget for NewSessionDialog<'_> {
-    fn render(self, area: Rect, buf: &mut Buffer) {
-        if !Self::fits_in_area(area) {
-            Self::render_too_small(area, buf);
-            return;
-        }
+    /// Render horizontal (two-pane) layout
+    fn render_horizontal(&self, area: Rect, buf: &mut Buffer) {
+        // Clear background
+        Clear.render(area, buf);
 
         let dialog_area = Self::centered_rect(area);
 
-        // Clear background
+        // Clear dialog area
         Clear.render(dialog_area, buf);
 
         // Main dialog block
@@ -221,6 +287,127 @@ impl Widget for NewSessionDialog<'_> {
             self.render_dart_defines_modal(dialog_area, buf);
         } else if self.state.is_fuzzy_modal_open() {
             self.render_fuzzy_modal_overlay(dialog_area, buf);
+        }
+    }
+
+    /// Render vertical (stacked) layout for narrow terminals
+    fn render_vertical(&self, area: Rect, buf: &mut Buffer) {
+        // Clear background
+        Clear.render(area, buf);
+
+        // Use more of the available space in vertical mode (90% width, 85% height)
+        let dialog_area = Self::centered_rect_custom(90, 85, area);
+
+        // Clear dialog area
+        Clear.render(dialog_area, buf);
+
+        // Main dialog block
+        let block = Block::default()
+            .title(" New Session ")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_set(symbols::border::ROUNDED)
+            .style(Style::default().bg(Color::DarkGray));
+
+        let inner = block.inner(dialog_area);
+        block.render(dialog_area, buf);
+
+        // Vertical split: Target Selector (55%) | Separator | Launch Context (min 10 lines) | Footer
+        let chunks = Layout::vertical([
+            Constraint::Percentage(55), // Target Selector (top)
+            Constraint::Length(1),      // Separator line
+            Constraint::Min(10),        // Launch Context (bottom)
+            Constraint::Length(1),      // Footer
+        ])
+        .split(inner);
+
+        // Render Target Selector (top, compact mode)
+        let target_focused = self.state.is_target_selector_focused();
+        let target_selector = TargetSelector::new(
+            &self.state.target_selector,
+            self.tool_availability,
+            target_focused,
+        )
+        .compact(true);
+        target_selector.render(chunks[0], buf);
+
+        // Render separator line
+        let separator = "─".repeat(chunks[1].width as usize);
+        buf.set_string(
+            chunks[1].x,
+            chunks[1].y,
+            &separator,
+            Style::default().fg(Color::DarkGray),
+        );
+
+        // Render Launch Context (bottom, compact mode)
+        let launch_focused = self.state.is_launch_context_focused();
+        let has_device = self.state.is_ready_to_launch();
+        let launch_context =
+            LaunchContextWithDevice::new(&self.state.launch_context, launch_focused, has_device)
+                .compact(true);
+        launch_context.render(chunks[2], buf);
+
+        // Render compact footer
+        self.render_footer_compact(chunks[3], buf);
+
+        // Render modal overlay if any
+        if self.state.is_dart_defines_modal_open() {
+            self.render_dart_defines_modal(dialog_area, buf);
+        } else if self.state.is_fuzzy_modal_open() {
+            self.render_fuzzy_modal_overlay(dialog_area, buf);
+        }
+    }
+
+    /// Calculate centered dialog area with custom percentages
+    fn centered_rect_custom(width_percent: u16, height_percent: u16, area: Rect) -> Rect {
+        let v_margin = (100 - height_percent) / 2;
+        let popup_layout = Layout::vertical([
+            Constraint::Percentage(v_margin),
+            Constraint::Percentage(height_percent),
+            Constraint::Percentage(v_margin),
+        ])
+        .split(area);
+
+        let h_margin = (100 - width_percent) / 2;
+        Layout::horizontal([
+            Constraint::Percentage(h_margin),
+            Constraint::Percentage(width_percent),
+            Constraint::Percentage(h_margin),
+        ])
+        .split(popup_layout[1])[1]
+    }
+
+    /// Render footer with abbreviated keybindings (for vertical layout)
+    fn render_footer_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Shorter keybinding hints for narrow terminals
+        let hints = if self.state.is_fuzzy_modal_open() {
+            "[↑↓]Nav [Enter]Select [Esc]Cancel"
+        } else if self.state.is_dart_defines_modal_open() {
+            "[Tab]Pane [↑↓]Nav [Enter]Edit [Esc]Close"
+        } else {
+            "[1/2]Tab [Tab]Pane [↑↓]Nav [Enter]Select [Esc]Close"
+        };
+
+        let paragraph = Paragraph::new(hints)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Center);
+        paragraph.render(area, buf);
+    }
+}
+
+impl Widget for NewSessionDialog<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        match Self::layout_mode(area) {
+            LayoutMode::TooSmall => {
+                Self::render_too_small(area, buf);
+            }
+            LayoutMode::Horizontal => {
+                self.render_horizontal(area, buf);
+            }
+            LayoutMode::Vertical => {
+                self.render_vertical(area, buf);
+            }
         }
     }
 }
@@ -266,9 +453,56 @@ mod tests {
 
     #[test]
     fn test_fits_in_area() {
+        // Should fit with horizontal layout
         assert!(NewSessionDialog::fits_in_area(Rect::new(0, 0, 100, 40)));
         assert!(NewSessionDialog::fits_in_area(Rect::new(0, 0, 80, 24)));
-        assert!(!NewSessionDialog::fits_in_area(Rect::new(0, 0, 60, 20)));
+        // Should fit with vertical layout
+        assert!(NewSessionDialog::fits_in_area(Rect::new(0, 0, 60, 20)));
+        assert!(NewSessionDialog::fits_in_area(Rect::new(0, 0, 40, 20)));
+        // Should not fit (too small)
+        assert!(!NewSessionDialog::fits_in_area(Rect::new(0, 0, 30, 15)));
+    }
+
+    #[test]
+    fn test_layout_mode_horizontal() {
+        let area = Rect::new(0, 0, 100, 40);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::Horizontal);
+    }
+
+    #[test]
+    fn test_layout_mode_vertical() {
+        let area = Rect::new(0, 0, 50, 30);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::Vertical);
+    }
+
+    #[test]
+    fn test_layout_mode_too_small() {
+        let area = Rect::new(0, 0, 30, 15);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::TooSmall);
+    }
+
+    #[test]
+    fn test_layout_mode_boundary_horizontal() {
+        let area = Rect::new(0, 0, 70, 20);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::Horizontal);
+    }
+
+    #[test]
+    fn test_layout_mode_boundary_vertical() {
+        let area = Rect::new(0, 0, 69, 20);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::Vertical);
+    }
+
+    #[test]
+    fn test_layout_mode_boundary_too_small_width() {
+        let area = Rect::new(0, 0, 39, 20);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::TooSmall);
+    }
+
+    #[test]
+    fn test_layout_mode_boundary_too_small_height() {
+        let area = Rect::new(0, 0, 70, 19);
+        assert_eq!(NewSessionDialog::layout_mode(area), LayoutMode::TooSmall);
     }
 
     #[test]
@@ -338,5 +572,60 @@ mod tests {
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
         assert!(content.contains("Manage Dart Defines"));
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_no_truncation() {
+        let result = truncate_with_ellipsis("short", 10);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_exact_fit() {
+        let result = truncate_with_ellipsis("exactly10!", 10);
+        assert_eq!(result, "exactly10!");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_truncates() {
+        let result = truncate_with_ellipsis("this is a very long text", 10);
+        assert_eq!(result, "this is...");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_very_short() {
+        let result = truncate_with_ellipsis("text", 3);
+        assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_minimal() {
+        let result = truncate_with_ellipsis("text", 2);
+        assert_eq!(result, "..");
+    }
+
+    #[test]
+    fn test_truncate_middle_no_truncation() {
+        let result = truncate_middle("short", 10);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn test_truncate_middle_truncates() {
+        let result = truncate_middle("this_is_a_very_long_device_name", 15);
+        assert_eq!(result, "this_i...e_name");
+    }
+
+    #[test]
+    fn test_truncate_middle_very_short() {
+        let result = truncate_middle("longtext", 5);
+        // Should fallback to truncate_with_ellipsis
+        assert_eq!(result, "lo...");
+    }
+
+    #[test]
+    fn test_truncate_middle_minimal() {
+        let result = truncate_middle("text", 3);
+        assert_eq!(result, "...");
     }
 }

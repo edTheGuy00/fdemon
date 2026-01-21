@@ -49,6 +49,10 @@ pub enum UpdateAction {
     /// Discover available devices
     DiscoverDevices,
 
+    /// Refresh devices in background (no loading spinner)
+    /// Used when cache is fresh but we want to update in background
+    RefreshDevicesBackground,
+
     /// Discover devices and auto-launch a session
     /// Used when auto_start=true to run device discovery in background
     /// and automatically launch with the best available config/device
@@ -87,7 +91,10 @@ pub enum UpdateAction {
     DiscoverBootableDevices,
 
     /// Boot a specific device
-    BootDevice { device_id: String, platform: String },
+    BootDevice {
+        device_id: String,
+        platform: crate::core::Platform,
+    },
 
     /// Auto-save FDemon config after field changes (Phase 6, Task 05)
     AutoSaveConfig { configs: LoadedConfigs },

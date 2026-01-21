@@ -14,12 +14,22 @@ pub fn handle_device_up(state: &mut AppState) -> UpdateResult {
         .new_session_dialog_state
         .target_selector
         .select_previous();
+    // Adjust scroll - use estimated visible height (will be refined by render)
+    state
+        .new_session_dialog_state
+        .target_selector
+        .adjust_scroll(10);
     UpdateResult::none()
 }
 
 /// Handle device list navigation down
 pub fn handle_device_down(state: &mut AppState) -> UpdateResult {
     state.new_session_dialog_state.target_selector.select_next();
+    // Adjust scroll - use estimated visible height (will be refined by render)
+    state
+        .new_session_dialog_state
+        .target_selector
+        .adjust_scroll(10);
     UpdateResult::none()
 }
 
@@ -47,14 +57,11 @@ pub fn handle_device_select(state: &mut AppState) -> UpdateResult {
                 .target_selector
                 .selected_bootable_device()
             {
+                use crate::core::Platform;
                 use crate::tui::widgets::GroupedBootableDevice;
                 let (device_id, platform) = match device {
-                    GroupedBootableDevice::IosSimulator(sim) => {
-                        (sim.udid.clone(), "ios".to_string())
-                    }
-                    GroupedBootableDevice::AndroidAvd(avd) => {
-                        (avd.name.clone(), "android".to_string())
-                    }
+                    GroupedBootableDevice::IosSimulator(sim) => (sim.udid.clone(), Platform::IOS),
+                    GroupedBootableDevice::AndroidAvd(avd) => (avd.name.clone(), Platform::Android),
                 };
                 return UpdateResult::action(UpdateAction::BootDevice {
                     device_id,
@@ -161,4 +168,290 @@ pub fn handle_boot_failed(state: &mut AppState, device_id: String, error: String
         .target_selector
         .set_error(format!("Failed to boot device {}: {}", device_id, error));
     UpdateResult::none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::new_session_dialog::TargetTab;
+    use crate::app::state::{AppState, UiMode};
+    use crate::config::LoadedConfigs;
+    use crate::core::Platform;
+    use crate::daemon::{AndroidAvd, IosSimulator, SimulatorState};
+    use std::path::PathBuf;
+
+    fn test_app_state() -> AppState {
+        let mut state = AppState::with_settings(
+            PathBuf::from("/test/project"),
+            crate::config::Settings::default(),
+        );
+        state.project_name = Some("TestProject".to_string());
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.show_new_session_dialog(LoadedConfigs::default());
+        state
+    }
+
+    fn test_app_state_with_bootable_devices() -> AppState {
+        let mut state = test_app_state();
+
+        // Add iOS simulators
+        let ios_sims = vec![
+            IosSimulator {
+                udid: "ios-sim-1".to_string(),
+                name: "iPhone 15 Pro".to_string(),
+                runtime: "iOS 17.2".to_string(),
+                state: SimulatorState::Shutdown,
+                device_type: "iPhone 15 Pro".to_string(),
+            },
+            IosSimulator {
+                udid: "ios-sim-2".to_string(),
+                name: "iPhone 14".to_string(),
+                runtime: "iOS 17.0".to_string(),
+                state: SimulatorState::Shutdown,
+                device_type: "iPhone 14".to_string(),
+            },
+        ];
+
+        // Add Android AVDs
+        let android_avds = vec![
+            AndroidAvd {
+                name: "Pixel_6_API_33".to_string(),
+                display_name: "Pixel 6".to_string(),
+                api_level: Some(33),
+                target: None,
+            },
+            AndroidAvd {
+                name: "Pixel_7_API_34".to_string(),
+                display_name: "Pixel 7".to_string(),
+                api_level: Some(34),
+                target: None,
+            },
+        ];
+
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_bootable_devices(ios_sims, android_avds);
+        state
+    }
+
+    #[test]
+    fn test_boot_ios_simulator_uses_platform_enum() {
+        let mut state = test_app_state_with_bootable_devices();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+        // Index 0 is header "iOS Simulators", first device is at index 1
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_device_select(&mut state);
+
+        if let Some(UpdateAction::BootDevice {
+            device_id: _,
+            platform,
+        }) = result.action
+        {
+            assert_eq!(platform, Platform::IOS);
+        } else {
+            panic!("Expected BootDevice action with Platform::IOS");
+        }
+    }
+
+    #[test]
+    fn test_boot_android_avd_uses_platform_enum() {
+        let mut state = test_app_state_with_bootable_devices();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+        // Flat list: [iOS Header, iOS1, iOS2, Android Header, Android1, Android2]
+        // Select first Android AVD (at index 4)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 4;
+
+        let result = handle_device_select(&mut state);
+
+        if let Some(UpdateAction::BootDevice {
+            device_id: _,
+            platform,
+        }) = result.action
+        {
+            assert_eq!(platform, Platform::Android);
+        } else {
+            panic!("Expected BootDevice action with Platform::Android");
+        }
+    }
+
+    #[test]
+    fn test_boot_device_id_correct() {
+        let mut state = test_app_state_with_bootable_devices();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+        // Index 1 is first iOS simulator (index 0 is header)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_device_select(&mut state);
+
+        if let Some(UpdateAction::BootDevice {
+            device_id,
+            platform: _,
+        }) = result.action
+        {
+            assert_eq!(device_id, "ios-sim-1");
+        } else {
+            panic!("Expected BootDevice action");
+        }
+    }
+
+    #[test]
+    fn test_device_select_on_connected_tab_no_action() {
+        let mut state = test_app_state();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Connected);
+
+        let result = handle_device_select(&mut state);
+
+        assert!(
+            result.action.is_none(),
+            "Should not trigger boot action on Connected tab"
+        );
+    }
+
+    #[test]
+    fn test_refresh_devices_connected_tab() {
+        let mut state = test_app_state();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Connected);
+        state.new_session_dialog_state.target_selector.loading = false;
+
+        let result = handle_refresh_devices(&mut state);
+
+        assert!(state.new_session_dialog_state.target_selector.loading);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+    }
+
+    #[test]
+    fn test_refresh_devices_bootable_tab() {
+        let mut state = test_app_state();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading = false;
+
+        let result = handle_refresh_devices(&mut state);
+
+        assert!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .bootable_loading
+        );
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverBootableDevices)
+        ));
+    }
+
+    #[test]
+    fn test_boot_completed_switches_to_connected_tab() {
+        let mut state = test_app_state();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_tab(TargetTab::Bootable);
+
+        let result = handle_boot_completed(&mut state);
+
+        assert_eq!(
+            state.new_session_dialog_state.target_selector.active_tab,
+            TargetTab::Connected
+        );
+        assert!(state.new_session_dialog_state.target_selector.loading);
+        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+    }
+
+    #[test]
+    fn test_boot_failed_sets_error() {
+        let mut state = test_app_state();
+
+        handle_boot_failed(&mut state, "test-device".to_string(), "timeout".to_string());
+
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_some());
+        let error = state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .unwrap();
+        assert!(error.contains("test-device"));
+        assert!(error.contains("timeout"));
+    }
+
+    #[test]
+    fn test_device_discovery_failed_connected() {
+        let mut state = test_app_state();
+        state.new_session_dialog_state.target_selector.loading = true;
+
+        handle_device_discovery_failed(
+            &mut state,
+            "Discovery failed".to_string(),
+            crate::app::message::DiscoveryType::Connected,
+        );
+
+        assert!(!state.new_session_dialog_state.target_selector.loading);
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_some());
+    }
+
+    #[test]
+    fn test_device_discovery_failed_bootable() {
+        let mut state = test_app_state();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading = true;
+
+        handle_device_discovery_failed(
+            &mut state,
+            "Discovery failed".to_string(),
+            crate::app::message::DiscoveryType::Bootable,
+        );
+
+        assert!(
+            !state
+                .new_session_dialog_state
+                .target_selector
+                .bootable_loading
+        );
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_some());
+    }
 }

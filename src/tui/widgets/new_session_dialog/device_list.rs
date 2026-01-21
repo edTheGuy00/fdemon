@@ -52,20 +52,32 @@ pub struct ConnectedDeviceList<'a> {
     devices: &'a [Device],
     selected_index: usize,
     is_focused: bool,
+    scroll_offset: usize,
     styles: DeviceListStyles,
 }
 
 impl<'a> ConnectedDeviceList<'a> {
-    pub fn new(devices: &'a [Device], selected_index: usize, is_focused: bool) -> Self {
+    pub fn new(
+        devices: &'a [Device],
+        selected_index: usize,
+        is_focused: bool,
+        scroll_offset: usize,
+    ) -> Self {
         Self {
             devices,
             selected_index,
             is_focused,
+            scroll_offset,
             styles: DeviceListStyles::default(),
         }
     }
 
-    fn render_item(&self, item: &DeviceListItem<&Device>, index: usize) -> ListItem<'static> {
+    fn render_item(
+        &self,
+        item: &DeviceListItem<&Device>,
+        index: usize,
+        area_width: u16,
+    ) -> ListItem<'static> {
         match item {
             DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
                 Span::styled("  ", self.styles.device_normal),
@@ -92,12 +104,59 @@ impl<'a> ConnectedDeviceList<'a> {
                     "physical"
                 };
 
+                // Calculate available width for device name
+                // Format: "▶ <name> (<type>)"
+                let type_suffix = format!(" ({})", device_type);
+                let reserved = indicator.len() + type_suffix.len();
+                let available_width = (area_width as usize).saturating_sub(reserved);
+
+                // Truncate device name if needed
+                let name = if available_width > 0 {
+                    super::truncate_with_ellipsis(&device.name, available_width)
+                } else {
+                    device.name.clone()
+                };
+
                 ListItem::new(Line::from(vec![
                     Span::styled(indicator, style),
-                    Span::styled(device.name.clone(), style),
-                    Span::styled(format!(" ({})", device_type), self.styles.info),
+                    Span::styled(name, style),
+                    Span::styled(type_suffix, self.styles.info),
                 ]))
             }
+        }
+    }
+
+    fn render_scroll_indicators(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        start: usize,
+        end: usize,
+        total: usize,
+    ) {
+        // Use shorter indicators in narrow terminals
+        let (up_indicator, down_indicator) = if area.width < 50 {
+            ("↑", "↓")
+        } else {
+            ("↑ more", "↓ more")
+        };
+
+        // Show up indicator if scrolled down
+        if start > 0 {
+            let x = area.right().saturating_sub(up_indicator.len() as u16 + 1);
+            buf.set_string(
+                x,
+                area.top(),
+                up_indicator,
+                Style::default().fg(Color::DarkGray),
+            );
+        }
+
+        // Show down indicator if more items below
+        if end < total {
+            let x = area.right().saturating_sub(down_indicator.len() as u16 + 1);
+            let y = area.bottom().saturating_sub(1);
+            buf.set_string(x, y, down_indicator, Style::default().fg(Color::DarkGray));
         }
     }
 }
@@ -107,14 +166,26 @@ impl Widget for ConnectedDeviceList<'_> {
         let groups = group_connected_devices(self.devices);
         let items = flatten_groups(&groups);
 
-        let list_items: Vec<ListItem> = items
+        // Calculate visible range
+        let visible_height = area.height as usize;
+        let start = self.scroll_offset.min(items.len().saturating_sub(1));
+        let end = (start + visible_height).min(items.len());
+
+        // Create list items only for visible range
+        let list_items: Vec<ListItem> = items[start..end]
             .iter()
             .enumerate()
-            .map(|(i, item)| self.render_item(item, i))
+            .map(|(visible_idx, item)| {
+                let actual_idx = start + visible_idx;
+                self.render_item(item, actual_idx, area.width)
+            })
             .collect();
 
         let list = List::new(list_items);
         list.render(area, buf);
+
+        // Render scroll indicators
+        self.render_scroll_indicators(area, buf, start, end, items.len());
     }
 }
 
@@ -124,6 +195,7 @@ pub struct BootableDeviceList<'a> {
     android_avds: &'a [AndroidAvd],
     selected_index: usize,
     is_focused: bool,
+    scroll_offset: usize,
     tool_availability: &'a ToolAvailability,
     styles: DeviceListStyles,
 }
@@ -134,6 +206,7 @@ impl<'a> BootableDeviceList<'a> {
         android_avds: &'a [AndroidAvd],
         selected_index: usize,
         is_focused: bool,
+        scroll_offset: usize,
         tool_availability: &'a ToolAvailability,
     ) -> Self {
         Self {
@@ -141,6 +214,7 @@ impl<'a> BootableDeviceList<'a> {
             android_avds,
             selected_index,
             is_focused,
+            scroll_offset,
             tool_availability,
             styles: DeviceListStyles::default(),
         }
@@ -150,6 +224,7 @@ impl<'a> BootableDeviceList<'a> {
         &self,
         item: &DeviceListItem<GroupedBootableDevice>,
         index: usize,
+        area_width: u16,
     ) -> ListItem<'static> {
         match item {
             DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
@@ -169,10 +244,23 @@ impl<'a> BootableDeviceList<'a> {
                 let indicator = if is_selected { "▶ " } else { "  " };
                 let runtime = device.runtime_info();
 
+                // Calculate available width for device name
+                // Format: "▶ <name> (<runtime>)"
+                let runtime_suffix = format!(" ({})", runtime);
+                let reserved = indicator.len() + runtime_suffix.len();
+                let available_width = (area_width as usize).saturating_sub(reserved);
+
+                // Truncate device name if needed
+                let name = if available_width > 0 {
+                    super::truncate_with_ellipsis(device.display_name(), available_width)
+                } else {
+                    device.display_name().to_string()
+                };
+
                 ListItem::new(Line::from(vec![
                     Span::styled(indicator, style),
-                    Span::styled(device.display_name().to_string(), style),
-                    Span::styled(format!(" ({})", runtime), self.styles.info),
+                    Span::styled(name, style),
+                    Span::styled(runtime_suffix, self.styles.info),
                 ]))
             }
         }
@@ -204,6 +292,40 @@ impl<'a> BootableDeviceList<'a> {
             paragraph.render(area, buf);
         }
     }
+
+    fn render_scroll_indicators(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        start: usize,
+        end: usize,
+        total: usize,
+    ) {
+        // Use shorter indicators in narrow terminals
+        let (up_indicator, down_indicator) = if area.width < 50 {
+            ("↑", "↓")
+        } else {
+            ("↑ more", "↓ more")
+        };
+
+        // Show up indicator if scrolled down
+        if start > 0 {
+            let x = area.right().saturating_sub(up_indicator.len() as u16 + 1);
+            buf.set_string(
+                x,
+                area.top(),
+                up_indicator,
+                Style::default().fg(Color::DarkGray),
+            );
+        }
+
+        // Show down indicator if more items below
+        if end < total {
+            let x = area.right().saturating_sub(down_indicator.len() as u16 + 1);
+            let y = area.bottom().saturating_sub(1);
+            buf.set_string(x, y, down_indicator, Style::default().fg(Color::DarkGray));
+        }
+    }
 }
 
 impl Widget for BootableDeviceList<'_> {
@@ -233,14 +355,26 @@ impl Widget for BootableDeviceList<'_> {
             return;
         }
 
-        let list_items: Vec<ListItem> = items
+        // Calculate visible range
+        let visible_height = area.height as usize;
+        let start = self.scroll_offset.min(items.len().saturating_sub(1));
+        let end = (start + visible_height).min(items.len());
+
+        // Create list items only for visible range
+        let list_items: Vec<ListItem> = items[start..end]
             .iter()
             .enumerate()
-            .map(|(i, item)| self.render_item(item, i))
+            .map(|(visible_idx, item)| {
+                let actual_idx = start + visible_idx;
+                self.render_item(item, actual_idx, area.width)
+            })
             .collect();
 
         let list = List::new(list_items);
         list.render(area, buf);
+
+        // Render scroll indicators
+        self.render_scroll_indicators(area, buf, start, end, items.len());
     }
 }
 
@@ -292,7 +426,7 @@ mod tests {
         let mut terminal = TestTerminal::new();
 
         terminal.draw_with(|f| {
-            let list = ConnectedDeviceList::new(&devices, 0, true);
+            let list = ConnectedDeviceList::new(&devices, 0, true, 0);
             f.render_widget(list, f.area());
         });
 
@@ -330,7 +464,7 @@ mod tests {
 
         terminal.draw_with(|f| {
             let list =
-                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, 0, &tool_availability);
             f.render_widget(list, f.area());
         });
 
@@ -355,7 +489,7 @@ mod tests {
 
         terminal.draw_with(|f| {
             let list =
-                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, 0, &tool_availability);
             f.render_widget(list, f.area());
         });
 
@@ -380,7 +514,7 @@ mod tests {
 
         terminal.draw_with(|f| {
             let list =
-                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, &tool_availability);
+                BootableDeviceList::new(&ios_sims, &android_avds, 0, true, 0, &tool_availability);
             f.render_widget(list, f.area());
         });
 

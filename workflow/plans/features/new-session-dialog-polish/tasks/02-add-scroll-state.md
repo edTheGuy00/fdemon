@@ -218,4 +218,30 @@ fn test_scroll_resets_on_tab_switch() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added `scroll_offset` field, implemented `adjust_scroll()` and `reset_scroll()` methods, updated `set_tab()`, `set_connected_devices()`, and `set_bootable_devices()` to reset scroll, added 8 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Scroll reset on device list updates**: Reset scroll offset to 0 whenever devices are updated to prevent confusion if the list shrinks or changes significantly. This is a conservative approach that prioritizes correctness over preserving scroll position.
+2. **Delegated scroll calculation**: Used existing `calculate_scroll_offset()` function from `device_list.rs` rather than duplicating logic, promoting code reuse and maintainability.
+3. **Zero-height guard**: Added early return in `adjust_scroll()` when `visible_height` is 0 to prevent division by zero and invalid scroll calculations.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1402 tests)
+- `cargo test target_selector` - Passed (28 tests)
+- `cargo test scroll` - Passed (35 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No automatic scroll adjustment on navigation**: The `select_next()` and `select_previous()` methods don't call `adjust_scroll()` - this will be handled in Task 03 when scrolling is actually used in rendering.
+2. **Task dependencies**: This task implements the state layer only. The scroll offset won't be used until Task 03 implements the rendering logic that uses it.

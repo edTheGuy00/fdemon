@@ -325,4 +325,32 @@ cargo test compact
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/mod.rs` | Added `render_vertical()` method with stacked layout, `centered_rect_custom()` helper, and `render_footer_compact()` for abbreviated keybindings |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added `compact` field and `compact()` builder method, split rendering into `render_full()` and `render_compact()`, added `render_tabs_compact()` for single-line tab bar |
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Added `compact` field and `compact()` builder method to `LaunchContextWithDevice`, split rendering into `render_full()` and `render_compact()`, added `render_mode_inline()` for inline mode selector with abbreviated labels |
+
+### Notable Decisions/Tradeoffs
+
+1. **Vertical layout uses 90% width vs 80% for horizontal**: More space efficiency in narrow terminals
+2. **Compact mode removes borders from sub-widgets**: Target Selector and Launch Context render without individual borders in vertical mode to save vertical space
+3. **Tab bar abbreviated to single line**: "Connected" and "Bootable" rendered inline with number indicators instead of boxed tabs
+4. **Mode selector inline with abbreviated labels**: "(●)Dbg (○)Prof (○)Rel" instead of vertical radio buttons to save vertical space
+5. **Footer keybindings abbreviated**: Shorter hints to fit narrow terminal width
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1402 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Manual testing required**: Vertical layout should be tested manually at 50x30 terminal size to verify visual appearance and usability
+2. **Layout transition**: Users resizing terminals will experience layout switches between horizontal and vertical modes at 70-column boundary

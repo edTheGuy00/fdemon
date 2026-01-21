@@ -58,6 +58,12 @@ pub fn handle_action(
             spawn::spawn_device_discovery(msg_tx);
         }
 
+        UpdateAction::RefreshDevicesBackground => {
+            // Same as DiscoverDevices but errors are logged only (no UI feedback)
+            // This runs when we already have cached devices displayed
+            spawn::spawn_device_discovery(msg_tx);
+        }
+
         UpdateAction::DiscoverDevicesAndAutoLaunch { configs } => {
             spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf());
         }

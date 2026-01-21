@@ -258,4 +258,34 @@ cargo test responsive
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/mod.rs` | Added `truncate_with_ellipsis()` and `truncate_middle()` utility functions for text truncation; added comprehensive tests for truncation functions |
+| `src/tui/widgets/new_session_dialog/device_list.rs` | Updated `ConnectedDeviceList::render_item()` and `BootableDeviceList::render_item()` to accept `area_width` parameter and truncate device names; updated scroll indicators to use shorter versions ("↑"/"↓") in narrow terminals (width < 50) |
+| `src/tui/widgets/new_session_dialog/fuzzy_modal.rs` | Updated `modal_rect()` to use 95% width in narrow terminals (< 60) and 70% height in short terminals (< 30); added truncation to fuzzy modal list items with `truncate_with_ellipsis()` |
+| `src/tui/widgets/new_session_dialog/dart_defines_modal.rs` | Refactored `DartDefinesModal::render()` to choose between horizontal and vertical layouts based on modal width (< 60); added `render_horizontal()` and `render_vertical()` methods for different layout modes |
+
+### Notable Decisions/Tradeoffs
+
+1. **Truncation Placement**: Used `truncate_with_ellipsis()` for most text (device names, list items) to preserve the beginning of text which is usually more informative; provided `truncate_middle()` for future use cases where both start and end are important
+2. **Scroll Indicator Responsiveness**: Chose width threshold of 50 for shorter indicators to avoid clutter in narrow terminals while still providing useful information
+3. **Modal Width Thresholds**: Used 60 characters as the breakpoint for fuzzy modal width adaptation and dart defines modal layout switching, balancing usability with graceful degradation
+4. **Dart Defines Vertical Layout**: Stacks list pane (40%) above edit pane (min 8 lines) to maintain form usability while maximizing list visibility in narrow terminals
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no compilation errors)
+- `cargo test truncate` - Passed (18 tests including 11 new truncation utility tests)
+- `cargo test --lib` - Passed (1411 tests, 0 failed, 8 ignored)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Character-based Truncation**: Truncation functions operate on byte indices which could cause issues with multi-byte UTF-8 characters; however, this is mitigated by the test suite and common device names use ASCII
+2. **Fixed Thresholds**: Width thresholds (50, 60) are hardcoded based on typical terminal sizes; may need adjustment based on user feedback
+3. **No Dynamic Font Metrics**: Truncation is based on character count, not actual pixel width; this works well for monospace terminals but assumes consistent character widths

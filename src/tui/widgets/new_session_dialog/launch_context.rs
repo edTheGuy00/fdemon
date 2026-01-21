@@ -721,6 +721,7 @@ pub struct LaunchContextWithDevice<'a> {
     state: &'a LaunchContextState,
     is_focused: bool,
     has_device_selected: bool,
+    compact: bool,
 }
 
 impl<'a> LaunchContextWithDevice<'a> {
@@ -729,12 +730,30 @@ impl<'a> LaunchContextWithDevice<'a> {
             state,
             is_focused,
             has_device_selected,
+            compact: false,
         }
+    }
+
+    /// Enable compact mode for narrow terminals
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
     }
 }
 
 impl Widget for LaunchContextWithDevice<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.compact {
+            self.render_compact(area, buf);
+        } else {
+            self.render_full(area, buf);
+        }
+    }
+}
+
+impl LaunchContextWithDevice<'_> {
+    /// Render full (horizontal layout) mode
+    fn render_full(&self, area: Rect, buf: &mut Buffer) {
         let inner = render_border(area, buf, self.is_focused);
         let chunks = calculate_fields_layout(inner);
 
@@ -747,6 +766,111 @@ impl Widget for LaunchContextWithDevice<'_> {
             .focused(launch_focused)
             .enabled(self.has_device_selected);
         launch_button.render(chunks[9], buf);
+    }
+
+    /// Render compact (vertical layout) mode - tighter spacing, inline mode selector
+    fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Compact layout: fewer spacers, inline mode
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // Config field
+            Constraint::Length(1), // Mode inline
+            Constraint::Length(1), // Flavor field
+            Constraint::Length(1), // Dart Defines field
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Launch button
+            Constraint::Min(0),    // Rest
+        ])
+        .split(area);
+
+        // Render config field
+        render_config_field(chunks[0], buf, self.state, self.is_focused);
+
+        // Render mode inline (abbreviated)
+        self.render_mode_inline(chunks[1], buf);
+
+        // Render flavor field
+        render_flavor_field(chunks[2], buf, self.state, self.is_focused);
+
+        // Render dart defines field
+        render_dart_defines_field(chunks[3], buf, self.state, self.is_focused);
+
+        // Render launch button
+        let launch_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
+        let launch_button = LaunchButton::new()
+            .focused(launch_focused)
+            .enabled(self.has_device_selected);
+        launch_button.render(chunks[5], buf);
+    }
+
+    /// Render mode selector as inline radio buttons with abbreviated labels
+    fn render_mode_inline(&self, area: Rect, buf: &mut Buffer) {
+        let mode_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Mode;
+        let mode_disabled = !self.state.is_mode_editable();
+
+        let style_selected = if mode_disabled {
+            Style::default().fg(Color::DarkGray)
+        } else if mode_focused {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        };
+
+        let style_unselected = Style::default().fg(Color::DarkGray);
+
+        let style_label = Style::default().fg(Color::Gray);
+
+        use crate::config::FlutterMode;
+        let mode_str = vec![
+            ratatui::text::Span::styled("  Mode: ", style_label),
+            ratatui::text::Span::styled(
+                if self.state.mode == FlutterMode::Debug {
+                    "(●)Dbg"
+                } else {
+                    "(○)Dbg"
+                },
+                if self.state.mode == FlutterMode::Debug {
+                    style_selected
+                } else {
+                    style_unselected
+                },
+            ),
+            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::styled(
+                if self.state.mode == FlutterMode::Profile {
+                    "(●)Prof"
+                } else {
+                    "(○)Prof"
+                },
+                if self.state.mode == FlutterMode::Profile {
+                    style_selected
+                } else {
+                    style_unselected
+                },
+            ),
+            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::styled(
+                if self.state.mode == FlutterMode::Release {
+                    "(●)Rel"
+                } else {
+                    "(○)Rel"
+                },
+                if self.state.mode == FlutterMode::Release {
+                    style_selected
+                } else {
+                    style_unselected
+                },
+            ),
+        ];
+
+        let paragraph = Paragraph::new(Line::from(mode_str));
+        paragraph.render(area, buf);
     }
 }
 

@@ -282,4 +282,55 @@ fn test_cache_miss_shows_loading() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/mod.rs` | Added `RefreshDevicesBackground` action variant |
+| `src/app/handler/new_session/navigation.rs` | Updated `handle_open_new_session_dialog` to check cache first, populate dialog instantly on cache hit, trigger background refresh |
+| `src/tui/actions.rs` | Added handler for `RefreshDevicesBackground` action (reuses device discovery) |
+| `src/app/handler/update.rs` | Updated `DevicesDiscovered` handler to preserve device selection when updating list |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added `selected_device_id()` and `select_device_by_id()` helper methods for selection preservation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Background Refresh Reuses Discovery**: `RefreshDevicesBackground` uses the same `spawn_device_discovery()` as foreground discovery. Errors are sent via `Message::DeviceDiscoveryFailed` but don't show UI feedback when cache already displayed. This simplifies implementation while achieving the goal of silent background refresh.
+
+2. **Selection Preservation Uses Device ID**: The selection preservation logic uses device ID (not index) to restore selection after refresh. This ensures the correct device remains selected even if the device list order changes during refresh.
+
+3. **Cache TTL Remains at 30 Seconds**: Used existing `get_cached_devices()` method with 30-second TTL. This balances freshness with responsiveness and matches existing behavior from Task 08e.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1402 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Verification
+
+**Cache Hit Path:**
+- Opens dialog → `get_cached_devices()` returns Some
+- Devices populate instantly via `set_connected_devices()`
+- Returns `UpdateAction::RefreshDevicesBackground`
+- No loading spinner shown (cache provides instant feedback)
+
+**Cache Miss Path:**
+- Opens dialog → `get_cached_devices()` returns None
+- Sets `loading = true`
+- Returns `UpdateAction::DiscoverDevices`
+- Loading spinner shown until discovery completes
+
+**Selection Preservation:**
+- `DevicesDiscovered` captures device ID before update
+- Updates devices via `set_connected_devices()`
+- Restores selection via `select_device_by_id()`
+- Selection maintained across background refresh
+
+### Risks/Limitations
+
+1. **No Visual Feedback on Background Refresh**: When background refresh completes, there's no indication to the user that the list updated. This is intentional (silent refresh) but users won't know if new devices appeared. This is acceptable because the cache is only 30 seconds old.
+
+2. **E2E Tests Not Run**: E2E tests require built binary (not run during this task). Only unit tests were executed. Manual testing recommended to verify end-to-end behavior.

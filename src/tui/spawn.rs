@@ -304,22 +304,14 @@ pub fn spawn_bootable_device_discovery(
 pub fn spawn_device_boot(
     msg_tx: mpsc::Sender<Message>,
     device_id: String,
-    platform: String,
+    platform: crate::core::Platform,
     tool_availability: ToolAvailability,
 ) {
     tokio::spawn(async move {
-        let result = match platform.as_str() {
-            "iOS" => crate::daemon::boot_simulator(&device_id).await,
-            "Android" => crate::daemon::boot_avd(&device_id, &tool_availability).await,
-            _ => {
-                let _ = msg_tx
-                    .send(Message::DeviceBootFailed {
-                        device_id,
-                        error: format!("Unknown platform: {}", platform),
-                    })
-                    .await;
-                return;
-            }
+        use crate::core::Platform;
+        let result = match platform {
+            Platform::IOS => crate::daemon::boot_simulator(&device_id).await,
+            Platform::Android => crate::daemon::boot_avd(&device_id, &tool_availability).await,
         };
 
         match result {
