@@ -38,27 +38,73 @@ use crate::daemon::ToolAvailability;
 // Text Truncation Utilities
 // ============================================================================
 
-/// Truncate text to fit within max_width, adding ellipsis if needed
+/// Truncates a string to fit within `max_width` characters, adding "..." suffix if truncated.
+///
+/// # Behavior
+/// - Returns the original string if it fits within `max_width`
+/// - For `max_width <= 3`, returns dots only (no meaningful text fits)
+/// - For longer strings, truncates and adds "..." suffix
+///
+/// # Character Handling
+/// Uses character count, not byte length, to safely handle multi-byte UTF-8
+/// characters (emoji, CJK, etc.) without panicking.
+///
+/// # Examples
+/// ```
+/// # use flutter_demon::tui::widgets::new_session_dialog::truncate_with_ellipsis;
+/// assert_eq!(truncate_with_ellipsis("Hello", 10), "Hello");
+/// assert_eq!(truncate_with_ellipsis("Hello World", 8), "Hello...");
+/// assert_eq!(truncate_with_ellipsis("Test", 3), "...");
+/// assert_eq!(truncate_with_ellipsis("iPhone 🔥", 9), "iPhone 🔥");
+/// ```
 pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
-    if text.len() <= max_width {
+    let char_count = text.chars().count();
+    if char_count <= max_width {
         text.to_string()
     } else if max_width <= 3 {
         ".".repeat(max_width)
     } else {
-        format!("{}...", &text[..max_width - 3])
+        let truncated: String = text.chars().take(max_width - 3).collect();
+        format!("{}...", truncated)
     }
 }
 
-/// Truncate text from the middle, preserving start and end
+/// Truncates a string by removing middle characters, keeping start and end visible.
+///
+/// Useful for paths or identifiers where both prefix and suffix are meaningful.
+/// The result format is: `<start>...<end>`
+///
+/// # Behavior
+/// - Returns the original string if it fits within `max_width`
+/// - For `max_width <= 3`, returns dots only (no meaningful text fits)
+/// - For longer strings, keeps roughly equal parts from start and end
+/// - If odd number of available chars, extra char goes to the start
+///
+/// # Character Handling
+/// Uses character count, not byte length, to safely handle multi-byte UTF-8
+/// characters (emoji, CJK, etc.) without panicking.
+///
+/// # Examples
+/// ```
+/// # use flutter_demon::tui::widgets::new_session_dialog::truncate_middle;
+/// assert_eq!(truncate_middle("Hello World", 11), "Hello World");
+/// assert_eq!(truncate_middle("Hello World", 9), "Hel...rld");
+/// assert_eq!(truncate_middle("abcdef", 3), "...");
+/// ```
 pub fn truncate_middle(text: &str, max_width: usize) -> String {
-    if text.len() <= max_width {
+    let char_count = text.chars().count();
+    if char_count <= max_width {
         text.to_string()
-    } else if max_width <= 5 {
-        truncate_with_ellipsis(text, max_width)
+    } else if max_width <= 3 {
+        ".".repeat(max_width)
     } else {
-        let half = (max_width - 3) / 2;
-        let start = &text[..half];
-        let end = &text[text.len() - half..];
+        // Reserve space for "..." (3 chars)
+        let available = max_width - 3;
+        let half = available / 2;
+        let extra = available % 2; // Give extra char to start
+
+        let start: String = text.chars().take(half + extra).collect();
+        let end: String = text.chars().skip(char_count - half).collect();
         format!("{}...{}", start, end)
     }
 }
@@ -627,5 +673,32 @@ mod tests {
     fn test_truncate_middle_minimal() {
         let result = truncate_middle("text", 3);
         assert_eq!(result, "...");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_utf8() {
+        // Emoji (4 bytes per char) - "iPhone 🔥" is 8 chars, fits at width 8
+        assert_eq!(truncate_with_ellipsis("iPhone 🔥", 7), "iPho...");
+        assert_eq!(truncate_with_ellipsis("iPhone 🔥", 8), "iPhone 🔥");
+        assert_eq!(truncate_with_ellipsis("iPhone 🔥", 9), "iPhone 🔥");
+
+        // Multi-byte chars (3 bytes per char) - "日本語テスト" is 6 chars
+        assert_eq!(truncate_with_ellipsis("日本語テスト", 6), "日本語テスト");
+        assert_eq!(truncate_with_ellipsis("日本語テスト", 5), "日本...");
+
+        // Mixed ASCII and emoji - "Test 🚀 Device" is 13 chars
+        assert_eq!(truncate_with_ellipsis("Test 🚀 Device", 10), "Test 🚀 ...");
+        assert_eq!(truncate_with_ellipsis("Test 🚀 Device", 9), "Test 🚀...");
+    }
+
+    #[test]
+    fn test_truncate_middle_utf8() {
+        // Emoji in name - "🔥Hot🔥Device🔥" is 12 chars
+        assert_eq!(truncate_middle("🔥Hot🔥Device🔥", 10), "🔥Hot...ce🔥");
+        assert_eq!(truncate_middle("🔥Hot🔥Device🔥", 8), "🔥Ho...e🔥");
+
+        // Multi-byte chars - "日本語デバイス" is 7 chars
+        assert_eq!(truncate_middle("日本語デバイス", 7), "日本語デバイス");
+        assert_eq!(truncate_middle("日本語デバイス", 6), "日本...ス");
     }
 }

@@ -2748,4 +2748,215 @@ mod auto_launch_tests {
             DialogPane::TargetSelector
         );
     }
+
+    // ─────────────────────────────────────────────────────────
+    // Device Selection Preservation Tests (Task 10)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_selection_preserved_on_background_refresh() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+
+        // Initial devices
+        let initial_devices = vec![
+            test_device("device-a", "iPhone"),
+            test_device("device-b", "Pixel"),
+        ];
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(initial_devices);
+
+        // Select second device
+        state.new_session_dialog_state.target_selector.select_next();
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .selected_device_id(),
+            Some("device-b".to_string())
+        );
+
+        // Background refresh returns devices in different order with new device
+        let refreshed_devices = vec![
+            test_device("device-c", "iPad"),
+            test_device("device-b", "Pixel"), // Same device, different position
+            test_device("device-a", "iPhone"),
+        ];
+
+        // Simulate DevicesDiscovered message
+        let _ = update(
+            &mut state,
+            Message::DevicesDiscovered {
+                devices: refreshed_devices,
+            },
+        );
+
+        // Selection should still be device-b (Pixel), not device-c (iPad)
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .selected_device_id(),
+            Some("device-b".to_string())
+        );
+    }
+
+    #[test]
+    fn test_selection_resets_when_device_removed() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+
+        // Initial devices
+        let initial_devices = vec![
+            test_device("device-a", "iPhone"),
+            test_device("device-b", "Pixel"),
+        ];
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(initial_devices);
+
+        // Select second device
+        state.new_session_dialog_state.target_selector.select_next();
+
+        // Refresh without the selected device
+        let refreshed_devices = vec![
+            test_device("device-a", "iPhone"),
+            test_device("device-c", "iPad"),
+        ];
+
+        let _ = update(
+            &mut state,
+            Message::DevicesDiscovered {
+                devices: refreshed_devices,
+            },
+        );
+
+        // Selection should fall back to first device since device-b is gone
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .selected_device_id(),
+            Some("device-a".to_string())
+        );
+    }
+
+    #[test]
+    fn test_background_discovery_error_is_silent() {
+        // Background errors should not show error UI when cached devices exist
+        let mut state = AppState::new();
+
+        // Set up cached devices
+        state.set_device_cache(vec![test_device("cached-1", "Cached Phone")]);
+
+        // Show new session dialog with cached devices
+        let configs = crate::config::LoadedConfigs::default();
+        state.show_new_session_dialog(configs);
+
+        // Simulate background discovery failure
+        let _ = update(
+            &mut state,
+            Message::DeviceDiscoveryFailed {
+                error: "Network error".to_string(),
+                is_background: true,
+            },
+        );
+
+        // Cached devices should still be available
+        assert!(!state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .is_empty());
+
+        // No error should be shown to user
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_none());
+    }
+
+    #[test]
+    fn test_foreground_discovery_error_shows_ui() {
+        // Foreground errors should show error UI to user
+        let mut state = AppState::new();
+
+        // Show new session dialog
+        let configs = crate::config::LoadedConfigs::default();
+        state.show_new_session_dialog(configs);
+
+        // Simulate foreground discovery failure
+        let _ = update(
+            &mut state,
+            Message::DeviceDiscoveryFailed {
+                error: "Flutter SDK not found".to_string(),
+                is_background: false,
+            },
+        );
+
+        // Error should be shown to user
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_some());
+        assert_eq!(
+            state.new_session_dialog_state.target_selector.error,
+            Some("Flutter SDK not found".to_string())
+        );
+    }
+
+    #[test]
+    fn test_foreground_discovery_error_shows_ui_startup_mode() {
+        // Foreground errors should show error UI in Startup mode
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+
+        // Simulate foreground discovery failure
+        let _ = update(
+            &mut state,
+            Message::DeviceDiscoveryFailed {
+                error: "Connection timeout".to_string(),
+                is_background: false,
+            },
+        );
+
+        // Error should be shown to user
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_some());
+        assert_eq!(
+            state.new_session_dialog_state.target_selector.error,
+            Some("Connection timeout".to_string())
+        );
+    }
+
+    #[test]
+    fn test_background_error_does_not_show_ui_normal_mode() {
+        // Background errors should not show error UI even when not in dialog mode
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Simulate background discovery failure
+        let _ = update(
+            &mut state,
+            Message::DeviceDiscoveryFailed {
+                error: "Background refresh failed".to_string(),
+                is_background: true,
+            },
+        );
+
+        // No error should be shown to user
+        assert!(state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .is_none());
+    }
 }

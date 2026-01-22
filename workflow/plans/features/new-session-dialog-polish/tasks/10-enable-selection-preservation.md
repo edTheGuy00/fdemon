@@ -169,19 +169,48 @@ fn test_selection_resets_when_device_removed() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
-(pending)
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Uncommented and enabled selection preservation logic in `Message::DevicesDiscovered` handler (lines 291-316) |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added public `reset_selection_to_first()` method to reset selection to first selectable device (lines 315-320) |
+| `src/app/handler/tests.rs` | Added two tests: `test_selection_preserved_on_background_refresh()` and `test_selection_resets_when_device_removed()` (lines 2752-2845) |
 
-**Testing Performed:**
-(pending)
+### Implementation Details
 
-**Notable Decisions:**
-(pending)
+1. **Uncommented selection preservation code**: The code that was commented out with "TODO: missing methods" has been uncommented and updated with proper comment referencing Task 10.
 
-**Risks/Limitations:**
-(pending)
+2. **Added reset helper method**: Added `reset_selection_to_first()` public method to `TargetSelectorState` to properly reset selection when device is not found. This was necessary because `first_selectable_index()` is private and cannot be accessed from the handler.
+
+3. **Selection restoration flow**:
+   - Before updating devices, capture the currently selected device ID
+   - Update the device list with `set_connected_devices()`
+   - Attempt to restore selection by ID using `select_device_by_id()`
+   - If restoration fails (device no longer available), reset to first selectable device using `reset_selection_to_first()`
+
+4. **Fixed race condition**: The implementation now preserves user's device selection by ID rather than by index position, preventing the bug where device list reordering would cause wrong device to be selected.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib test_selection_preserved_on_background_refresh` - Passed
+- `cargo test --lib test_selection_resets_when_device_removed` - Passed
+- `cargo fmt` - Passed (no formatting changes needed)
+- `cargo clippy --lib` - Passed (no warnings in modified code)
+
+### Notable Decisions/Tradeoffs
+
+1. **Added helper method**: While the task focused on uncommenting existing code, I added `reset_selection_to_first()` as a public helper method because `first_selectable_index()` is private. This ensures proper selection reset when device grouping headers are present (e.g., "Android Devices", "iOS Devices" headers precede actual devices in the flattened list).
+
+2. **Selection reset behavior**: When the previously selected device is no longer available, the selection resets to the first selectable device (not index 0, which might be a header). This matches user expectations and prevents selecting non-device items.
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: The test `test_background_discovery_error_is_silent` was found to be failing, but this is unrelated to this task. The test incorrectly calls `state.show_new_session_dialog()` directly instead of using `handle_open_new_session_dialog()`, which would properly load cached devices into the dialog.
+
+2. **Device grouping dependency**: The implementation relies on device grouping logic (devices grouped by platform with headers). If grouping logic changes significantly, the reset behavior would need to be retested.
+
+3. **No validation of selected_device_id persistence**: The implementation assumes device IDs remain stable across discovery calls. If device IDs change between discoveries (unlikely but possible), the selection might reset unnecessarily.

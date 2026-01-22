@@ -17,6 +17,10 @@ use super::device_groups::{
 };
 use crate::daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
+/// Minimum width (in columns) to show verbose scroll indicators ("↑ more").
+/// Below this threshold, compact indicators ("↑") are shown.
+const VERBOSE_INDICATOR_WIDTH_THRESHOLD: u16 = 50;
+
 /// Styling configuration for device list rendering.
 ///
 /// Defines colors and styles for headers, devices, selection indicators,
@@ -135,7 +139,7 @@ impl<'a> ConnectedDeviceList<'a> {
         total: usize,
     ) {
         // Use shorter indicators in narrow terminals
-        let (up_indicator, down_indicator) = if area.width < 50 {
+        let (up_indicator, down_indicator) = if area.width < VERBOSE_INDICATOR_WIDTH_THRESHOLD {
             ("↑", "↓")
         } else {
             ("↑ more", "↓ more")
@@ -302,7 +306,7 @@ impl<'a> BootableDeviceList<'a> {
         total: usize,
     ) {
         // Use shorter indicators in narrow terminals
-        let (up_indicator, down_indicator) = if area.width < 50 {
+        let (up_indicator, down_indicator) = if area.width < VERBOSE_INDICATOR_WIDTH_THRESHOLD {
             ("↑", "↓")
         } else {
             ("↑ more", "↓ more")

@@ -81,19 +81,30 @@ cargo test scroll
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
-(pending)
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/target_selector.rs` | Added `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` constant and replaced both magic number usages with the constant |
 
-**Testing Performed:**
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Notable Decisions:**
-(pending)
+1. **Constant Placement**: Placed the constant at module level (after imports, before functions) following Rust conventions for module-level constants.
+2. **Documentation**: Provided comprehensive doc comment explaining why this is an estimate and the TEA pattern constraint that necessitates it.
+3. **Naming**: Used `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` to be explicit about both the default nature and the estimation aspect of the value.
 
-**Risks/Limitations:**
-(pending)
+### Testing Performed
+
+- `cargo check` - Passed (after clean build)
+- `cargo test target_selector` - Passed (38 tests)
+- `cargo test scroll` - Passed (35 tests)
+- `cargo clippy` - Passed (no warnings)
+- `cargo fmt -- --check` - Passed (code already formatted)
+
+### Risks/Limitations
+
+1. **No Functional Change**: This is a pure refactoring with zero functional impact - the behavior is identical before and after.
+2. **Value Still Hardcoded**: The value is still hardcoded, just with a better name. Future enhancement could pass actual viewport height from render layer.
+3. **Pre-existing Build Issues**: During testing, encountered stale build artifacts that caused false compilation errors, resolved with `cargo clean`.

@@ -16,7 +16,7 @@ use crate::config::{
 };
 use crate::daemon::{devices, emulators, Device, ToolAvailability};
 
-/// Spawn device discovery in background
+/// Spawn device discovery in background (foreground mode - shows errors to user)
 pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
     tokio::spawn(async move {
         match devices::discover_devices().await {
@@ -31,6 +31,31 @@ pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
                 let _ = msg_tx
                     .send(Message::DeviceDiscoveryFailed {
                         error: e.to_string(),
+                        is_background: false,
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn device discovery in background (background mode - errors logged only)
+/// Used when refreshing device cache while user already has cached devices to select from
+pub fn spawn_device_discovery_background(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        match devices::discover_devices().await {
+            Ok(result) => {
+                let _ = msg_tx
+                    .send(Message::DevicesDiscovered {
+                        devices: result.devices,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceDiscoveryFailed {
+                        error: e.to_string(),
+                        is_background: true,
                     })
                     .await;
             }

@@ -311,6 +311,13 @@ impl TargetSelectorState {
         }
         false
     }
+
+    /// Reset selection to first selectable device in current tab
+    ///
+    /// Useful after device list changes when previous selection is no longer valid.
+    pub fn reset_selection_to_first(&mut self) {
+        self.selected_index = self.first_selectable_index();
+    }
 }
 
 /// The Target Selector widget (left pane of NewSessionDialog)

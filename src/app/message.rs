@@ -117,7 +117,7 @@ pub enum Message {
     /// Device discovery completed
     DevicesDiscovered { devices: Vec<Device> },
     /// Device discovery failed
-    DeviceDiscoveryFailed { error: String },
+    DeviceDiscoveryFailed { error: String, is_background: bool },
 
     // ─────────────────────────────────────────────────────────
     // Emulator Messages

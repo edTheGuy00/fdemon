@@ -8,6 +8,11 @@ use crate::app::state::AppState;
 use crate::daemon::Device;
 use tracing::warn;
 
+/// Default estimated visible height for scroll calculations.
+/// Used when actual render height is unavailable (TEA pattern constraint).
+/// This is an approximation that works well for typical terminal sizes.
+const DEFAULT_ESTIMATED_VISIBLE_HEIGHT: usize = 10;
+
 /// Handle device list navigation up
 pub fn handle_device_up(state: &mut AppState) -> UpdateResult {
     state
@@ -18,7 +23,7 @@ pub fn handle_device_up(state: &mut AppState) -> UpdateResult {
     state
         .new_session_dialog_state
         .target_selector
-        .adjust_scroll(10);
+        .adjust_scroll(DEFAULT_ESTIMATED_VISIBLE_HEIGHT);
     UpdateResult::none()
 }
 
@@ -29,7 +34,7 @@ pub fn handle_device_down(state: &mut AppState) -> UpdateResult {
     state
         .new_session_dialog_state
         .target_selector
-        .adjust_scroll(10);
+        .adjust_scroll(DEFAULT_ESTIMATED_VISIBLE_HEIGHT);
     UpdateResult::none()
 }
 

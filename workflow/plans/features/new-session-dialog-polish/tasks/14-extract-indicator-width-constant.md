@@ -78,19 +78,29 @@ cargo test scroll_indicator
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (pending)
+### Files Modified
 
-**Implementation Details:**
-(pending)
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/device_list.rs` | Added module-level constant `VERBOSE_INDICATOR_WIDTH_THRESHOLD` and replaced both hardcoded `50` values with the constant |
 
-**Testing Performed:**
-(pending)
+### Notable Decisions/Tradeoffs
 
-**Notable Decisions:**
-(pending)
+1. **Single constant definition**: Defined the constant once at module level (line 22) and used it in both `ConnectedDeviceList::render_scroll_indicators` (line 142) and `BootableDeviceList::render_scroll_indicators` (line 309)
+2. **Doc comment clarity**: Added comprehensive documentation explaining that the constant controls the threshold for switching between compact and verbose scroll indicators
+3. **No behavioral change**: This is a pure refactoring - the value and logic remain identical, only improving code maintainability
 
-**Risks/Limitations:**
-(pending)
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo build` - Passed (6.88s)
+- `cargo test device_list` - Passed (14/14 tests)
+- `cargo test scroll_indicator` - Passed (3/3 tests)
+- `cargo clippy` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None identified**: This is a straightforward refactoring with no functional changes
+2. **Constant location**: The constant is scoped to the module since it's only used within device_list.rs. If this threshold needs to be shared across other widgets in the future, it could be moved to a shared constants module

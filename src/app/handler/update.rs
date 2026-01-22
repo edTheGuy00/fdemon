@@ -288,25 +288,32 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             // Update new_session_dialog_state (for Startup mode - Phase 8)
             if state.ui_mode == UiMode::Startup || state.ui_mode == UiMode::NewSessionDialog {
-                // TODO: Preserve selection if possible (Task 04 - Device Cache Usage)
-                // Temporarily commented out due to missing methods - WIP code
-                // let previous_selection = state
-                //     .new_session_dialog_state
-                //     .target_selector
-                //     .selected_device_id();
+                // Preserve selection if possible (Task 10 - Selection Preservation)
+                let previous_selection = state
+                    .new_session_dialog_state
+                    .target_selector
+                    .selected_device_id();
 
                 state
                     .new_session_dialog_state
                     .target_selector
                     .set_connected_devices(devices);
 
-                // Restore selection if device still exists
-                // if let Some(device_id) = previous_selection {
-                //     state
-                //         .new_session_dialog_state
-                //         .target_selector
-                //         .select_device_by_id(&device_id);
-                // }
+                // Restore selection if device still exists, otherwise reset to first
+                if let Some(device_id) = previous_selection {
+                    let restored = state
+                        .new_session_dialog_state
+                        .target_selector
+                        .select_device_by_id(&device_id);
+
+                    // If device not found, reset to first selectable device
+                    if !restored {
+                        state
+                            .new_session_dialog_state
+                            .target_selector
+                            .reset_selection_to_first();
+                    }
+                }
             }
 
             // Note: Don't transition UI mode here - the caller handles that
@@ -320,17 +327,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        Message::DeviceDiscoveryFailed { error } => {
-            // Update new_session_dialog_state if visible
-            if state.ui_mode == UiMode::Startup || state.ui_mode == UiMode::NewSessionDialog {
-                // Set error on target selector
-                state
-                    .new_session_dialog_state
-                    .target_selector
-                    .set_error(error.clone());
+        Message::DeviceDiscoveryFailed {
+            error,
+            is_background,
+        } => {
+            if is_background {
+                // Background refresh - log error but don't show to user
+                // User can still select from cached devices
+                tracing::warn!("Background device refresh failed: {}", error);
+            } else {
+                // Foreground discovery - show error to user
+                // Update new_session_dialog_state if visible
+                if state.ui_mode == UiMode::Startup || state.ui_mode == UiMode::NewSessionDialog {
+                    // Set error on target selector
+                    state
+                        .new_session_dialog_state
+                        .target_selector
+                        .set_error(error.clone());
+                }
+
+                tracing::error!("Device discovery failed: {}", error);
             }
 
-            tracing::error!("Device discovery failed: {}", error);
             UpdateResult::none()
         }
 

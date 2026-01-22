@@ -88,12 +88,12 @@ Fix four issues identified after NewSessionDialog implementation: responsive lay
 
 | # | Task | Status | Depends On | Est. | Priority | Issue |
 |---|------|--------|------------|------|----------|-------|
-| 9 | [09-fix-utf8-truncation](tasks/09-fix-utf8-truncation.md) | Not Started | - | 20m | Critical | Review #1 |
-| 10 | [10-enable-selection-preservation](tasks/10-enable-selection-preservation.md) | Not Started | - | 15m | Critical | Review #2 |
-| 11 | [11-extract-scroll-height-constant](tasks/11-extract-scroll-height-constant.md) | Not Started | - | 10m | Major | Review #3 |
-| 12 | [12-fix-background-refresh-error-handling](tasks/12-fix-background-refresh-error-handling.md) | Not Started | - | 25m | Major | Review #4 |
-| 13 | [13-add-truncation-docs](tasks/13-add-truncation-docs.md) | Not Started | 9 | 10m | Minor | Review #5 |
-| 14 | [14-extract-indicator-width-constant](tasks/14-extract-indicator-width-constant.md) | Not Started | - | 10m | Minor | Review #6 |
+| 9 | [09-fix-utf8-truncation](tasks/09-fix-utf8-truncation.md) | Done | - | 20m | Critical | Review #1 |
+| 10 | [10-enable-selection-preservation](tasks/10-enable-selection-preservation.md) | Done | - | 15m | Critical | Review #2 |
+| 11 | [11-extract-scroll-height-constant](tasks/11-extract-scroll-height-constant.md) | Done | - | 10m | Major | Review #3 |
+| 12 | [12-fix-background-refresh-error-handling](tasks/12-fix-background-refresh-error-handling.md) | Done | - | 25m | Major | Review #4 |
+| 13 | [13-add-truncation-docs](tasks/13-add-truncation-docs.md) | Done | 9 | 10m | Minor | Review #5 |
+| 14 | [14-extract-indicator-width-constant](tasks/14-extract-indicator-width-constant.md) | Done | - | 10m | Minor | Review #6 |
 
 ## Parallel Execution Groups
 
@@ -143,14 +143,14 @@ Tasks can be executed in parallel within groups:
 
 ### Review Follow-up Tasks (9-14)
 
-- [ ] No panic when truncating device names with emoji (e.g., "iPhone 🔥")
-- [ ] No panic when truncating device names with CJK characters
-- [ ] User's selected device preserved after background refresh
-- [ ] Selection falls back to first device if selected device removed
-- [ ] Magic numbers replaced with named constants
-- [ ] Background refresh errors logged but don't show error UI
-- [ ] Truncation functions documented with doc comments
-- [ ] All new tests pass
+- [x] No panic when truncating device names with emoji (e.g., "iPhone 🔥")
+- [x] No panic when truncating device names with CJK characters
+- [x] User's selected device preserved after background refresh
+- [x] Selection falls back to first device if selected device removed
+- [x] Magic numbers replaced with named constants
+- [x] Background refresh errors logged but don't show error UI
+- [x] Truncation functions documented with doc comments
+- [x] All new tests pass
 
 ## Issue Reference
 
