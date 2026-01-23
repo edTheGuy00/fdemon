@@ -1,0 +1,139 @@
+## Task: Replace Unwrap Calls with Safe Error Handling
+
+**Objective**: Replace `.unwrap()` calls in handler logging with safe pattern matching to prevent potential panics in production.
+
+**Priority**: Major
+
+**Depends on**: None
+
+### Scope
+
+- `src/app/handler/new_session/launch_context.rs`: Lines 170 and 276
+
+### Problem Analysis
+
+The code calls `.unwrap()` on `selected_config()` immediately after `create_and_select_default_config()`:
+
+**Flavor Handler (lines 164-173):**
+```rust
+if state
+    .new_session_dialog_state
+    .launch_context
+    .selected_config_index
+    .is_none()
+{
+    state
+        .new_session_dialog_state
+        .launch_context
+        .create_and_select_default_config();
+    tracing::info!(
+        "Auto-created config '{}' for flavor selection",
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config()
+            .unwrap()  // ← POTENTIAL PANIC
+            .config
+            .name
+    );
+}
+```
+
+**Dart-Defines Handler (lines 270-279):**
+```rust
+tracing::info!(
+    "Auto-created config '{}' for dart-defines",
+    state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config()
+        .unwrap()  // ← POTENTIAL PANIC
+        .config
+        .name
+);
+```
+
+### Why This Violates Standards
+
+From `CODE_STANDARDS.md`:
+> **❌ Panicking in Library Code**
+> ```rust
+> // ❌ BAD: Panicking in library code
+> let value = some_option.unwrap();
+> ```
+
+Even though the config was just created, if there's ever a bug in `create_and_select_default_config()` that causes it to fail silently, this would cause a panic in production.
+
+### Solution
+
+Replace unwrap with safe pattern matching using `if let`:
+
+### Implementation
+
+**Replace in `handle_flavor_selected()` (around line 170):**
+
+```rust
+// BEFORE:
+tracing::info!(
+    "Auto-created config '{}' for flavor selection",
+    state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config()
+        .unwrap()
+        .config
+        .name
+);
+
+// AFTER:
+if let Some(config) = state.new_session_dialog_state.launch_context.selected_config() {
+    tracing::info!("Auto-created config '{}' for flavor selection", config.config.name);
+}
+```
+
+**Replace in `handle_dart_defines_updated()` (around line 276):**
+
+```rust
+// BEFORE:
+tracing::info!(
+    "Auto-created config '{}' for dart-defines",
+    state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config()
+        .unwrap()
+        .config
+        .name
+);
+
+// AFTER:
+if let Some(config) = state.new_session_dialog_state.launch_context.selected_config() {
+    tracing::info!("Auto-created config '{}' for dart-defines", config.config.name);
+}
+```
+
+### Acceptance Criteria
+
+1. No `.unwrap()` calls on `selected_config()` in the launch_context handler
+2. Logging still works when config exists
+3. No panic if `selected_config()` returns `None` (graceful no-op)
+4. `cargo clippy -- -D warnings` passes with no unwrap warnings
+5. All existing tests pass
+
+### Testing
+
+```bash
+cargo clippy -- -D warnings
+cargo test launch_context
+```
+
+### Notes
+
+- This is a defensive coding practice - the unwrap "should" be safe, but safe patterns prevent future bugs
+- Consider using `tracing::debug!` instead of `info!` for auto-create messages (less noisy)
+
+---
+
+## Completion Summary
+
+**Status:** Not Started
