@@ -135,4 +135,30 @@ fn test_select_config_without_entry_point_preserves_existing() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/src/app/new_session_dialog/state.rs` | Added entry_point handling in `select_config()` method, following same pattern as flavor. Added 2 new tests for entry_point config application. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pattern Consistency**: Followed the exact same pattern as `flavor` field handling - only applies entry_point if the config explicitly has one (preserves existing value if config doesn't specify). This matches the task's acceptance criteria #2.
+
+2. **Test Coverage**: Added two tests as specified in the task:
+   - `test_select_config_applies_entry_point`: Verifies entry_point is applied when config has one
+   - `test_select_config_without_entry_point_preserves_existing`: Verifies existing entry_point is preserved when config doesn't specify one
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1498 tests, 0 failed)
+- `cargo test --lib new_session_dialog::state::tests::test_select_config` - Passed (2 new tests)
+- `cargo fmt -- --check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: This is a straightforward implementation following established patterns. The behavior matches flavor handling, which is well-tested and understood.

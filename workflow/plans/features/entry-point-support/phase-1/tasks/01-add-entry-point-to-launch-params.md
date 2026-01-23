@@ -61,4 +61,25 @@ fn test_launch_params_has_entry_point() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/new_session_dialog/types.rs` | Added `use std::path::PathBuf;` import and `entry_point: Option<PathBuf>` field to `LaunchParams` struct |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field Position**: Added `entry_point` as the last field in `LaunchParams` struct to maintain consistency with the existing field ordering (required fields first, then optional fields)
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (compiles without errors)
+- `cargo test --lib` - Passed (1496 tests passed, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None. This is a simple struct field addition that integrates cleanly with the existing codebase. The `build_launch_params()` method in `src/app/new_session_dialog/state.rs` already properly initializes the field with `self.launch_context.entry_point.clone()`

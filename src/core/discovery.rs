@@ -4,8 +4,10 @@
 //! and checking for platform directories. Filters out plugins, packages,
 //! and Dart-only projects that cannot be run with `flutter run`.
 
+use regex::Regex;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use tracing::{debug, trace};
 
 /// Default maximum search depth
@@ -368,6 +370,216 @@ fn check_has_flutter_dependency(content: &str) -> bool {
     // Simple check: look for "sdk: flutter" anywhere in file
     // This is a reasonable heuristic since "sdk: flutter" is unique
     content.contains("sdk: flutter")
+}
+
+/// Regex patterns for detecting Dart main() function declarations.
+///
+/// Matches:
+/// - `void main(` - standard void return
+/// - `main(` - implicit dynamic return
+/// - `Future<void> main(` - async main
+/// - `FutureOr<void> main(` - sync or async main
+///
+/// Does NOT match:
+/// - `// void main(` - commented out
+/// - `notmain(` - different function name
+/// - `_main(` - private function
+static MAIN_FUNCTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^[^/\n]*\b(?:void|Future<void>|FutureOr<void>)?\s*main\s*\(")
+        .expect("Invalid main function regex")
+});
+
+/// Check if Dart file content contains a main() function declaration.
+///
+/// This uses a regex-based heuristic that handles common patterns:
+/// - `void main()`, `main()`, `Future<void> main() async`
+/// - Ignores single-line comments (`//`)
+///
+/// Note: This may have false positives for main() in multi-line comments
+/// or strings, but these edge cases are acceptable since:
+/// 1. Users can always type a custom path in the UI
+/// 2. False positives are better than missing valid entry points
+///
+/// # Examples
+///
+/// ```
+/// use flutter_demon::core::discovery::has_main_function_in_content;
+///
+/// assert!(has_main_function_in_content("void main() {}"));
+/// assert!(has_main_function_in_content("Future<void> main() async {}"));
+/// assert!(!has_main_function_in_content("void notMain() {}"));
+/// assert!(!has_main_function_in_content("// void main() {}"));
+/// ```
+pub fn has_main_function_in_content(content: &str) -> bool {
+    MAIN_FUNCTION_REGEX.is_match(content)
+}
+
+/// Check if a Dart file at the given path contains a main() function.
+///
+/// Returns `false` if the file cannot be read or doesn't contain main().
+///
+/// # Arguments
+///
+/// * `path` - Path to the Dart file to check
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// use flutter_demon::core::discovery::has_main_function;
+///
+/// let has_main = has_main_function(Path::new("lib/main.dart"));
+/// ```
+pub fn has_main_function(path: &Path) -> bool {
+    match fs::read_to_string(path) {
+        Ok(content) => has_main_function_in_content(&content),
+        Err(_) => false,
+    }
+}
+
+/// Discovers Dart files containing a main() function in the lib/ directory.
+///
+/// This function scans the `lib/` directory of a Flutter project and identifies
+/// files that can be used as entry points with `flutter run -t <path>`.
+///
+/// # Arguments
+///
+/// * `project_path` - Path to the Flutter project root (containing pubspec.yaml)
+///
+/// # Returns
+///
+/// A vector of paths relative to project root, sorted with:
+/// 1. `lib/main.dart` first (if exists)
+/// 2. Other files with `main.dart` filename
+/// 3. Remaining files alphabetically
+///
+/// Returns an empty vector if:
+/// - The `lib/` directory doesn't exist
+/// - No Dart files contain a main() function
+/// - Any I/O errors occur
+///
+/// # Example
+///
+/// ```no_run
+/// use std::path::Path;
+/// use flutter_demon::core::discovery::discover_entry_points;
+///
+/// let project = Path::new("/path/to/flutter/app");
+/// let entry_points = discover_entry_points(project);
+///
+/// // Might return:
+/// // [
+/// //   "lib/main.dart",
+/// //   "lib/main_dev.dart",
+/// //   "lib/main_staging.dart",
+/// //   "lib/flavors/main_prod.dart",
+/// // ]
+/// ```
+pub fn discover_entry_points(project_path: &Path) -> Vec<PathBuf> {
+    let lib_path = project_path.join("lib");
+
+    if !lib_path.is_dir() {
+        trace!("No lib/ directory found at {:?}", lib_path);
+        return Vec::new();
+    }
+
+    let mut entry_points = Vec::new();
+    discover_entry_points_recursive(&lib_path, project_path, &mut entry_points, 0);
+
+    // Sort with main.dart files first, then alphabetically
+    entry_points.sort_by(|a, b| {
+        let a_name = a.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let b_name = b.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+        let a_is_main = a_name == "main.dart";
+        let b_is_main = b_name == "main.dart";
+
+        // Primary sort: main.dart files first
+        match (a_is_main, b_is_main) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => {
+                // Secondary sort: lib/main.dart before nested main.dart
+                let a_is_lib_main =
+                    a.as_os_str() == "lib/main.dart" || a.as_os_str() == "lib\\main.dart";
+                let b_is_lib_main =
+                    b.as_os_str() == "lib/main.dart" || b.as_os_str() == "lib\\main.dart";
+
+                match (a_is_lib_main, b_is_lib_main) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => a.cmp(b), // Alphabetical
+                }
+            }
+        }
+    });
+
+    debug!(
+        "Discovered {} entry points in {:?}",
+        entry_points.len(),
+        project_path
+    );
+    entry_points
+}
+
+/// Maximum recursion depth for entry point discovery.
+/// Prevents stack overflow on pathological directory structures.
+const MAX_ENTRY_POINT_DEPTH: usize = 10;
+
+/// Recursive helper for entry point discovery.
+///
+/// # Arguments
+///
+/// * `dir` - Current directory to scan
+/// * `project_root` - Project root for computing relative paths
+/// * `results` - Accumulator for discovered entry points
+/// * `depth` - Current recursion depth (starts at 0)
+fn discover_entry_points_recursive(
+    dir: &Path,
+    project_root: &Path,
+    results: &mut Vec<PathBuf>,
+    depth: usize,
+) {
+    // Guard against excessive recursion depth
+    if depth >= MAX_ENTRY_POINT_DEPTH {
+        trace!(
+            "Max entry point discovery depth ({}) reached at {:?}",
+            MAX_ENTRY_POINT_DEPTH,
+            dir
+        );
+        return;
+    }
+
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(err) => {
+            trace!("Cannot read directory {:?}: {}", dir, err);
+            return;
+        }
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() {
+            // Skip hidden directories
+            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') {
+                    continue;
+                }
+            }
+            // Recurse into subdirectory with incremented depth
+            discover_entry_points_recursive(&path, project_root, results, depth + 1);
+        } else if path.extension().is_some_and(|ext| ext == "dart") {
+            // Check if this Dart file has a main() function
+            if has_main_function(&path) {
+                if let Ok(relative) = path.strip_prefix(project_root) {
+                    trace!("Found entry point: {:?}", relative);
+                    results.push(relative.to_path_buf());
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -780,5 +992,297 @@ dependencies:
 
         let name = get_project_name(temp.path());
         assert_eq!(name, Some("real_name".to_string()));
+    }
+
+    #[test]
+    fn test_has_main_function_void_main() {
+        assert!(has_main_function_in_content("void main() {}"));
+        assert!(has_main_function_in_content(
+            "void main(List<String> args) {}"
+        ));
+        assert!(has_main_function_in_content(
+            "void main() {\n  runApp(MyApp());\n}"
+        ));
+    }
+
+    #[test]
+    fn test_has_main_function_implicit_return() {
+        assert!(has_main_function_in_content("main() {}"));
+        assert!(has_main_function_in_content("main(List<String> args) {}"));
+    }
+
+    #[test]
+    fn test_has_main_function_async() {
+        assert!(has_main_function_in_content("Future<void> main() async {}"));
+        assert!(has_main_function_in_content(
+            "Future<void> main(List<String> args) async {}"
+        ));
+    }
+
+    #[test]
+    fn test_has_main_function_with_whitespace() {
+        assert!(has_main_function_in_content("void  main() {}"));
+        assert!(has_main_function_in_content("void main () {}"));
+        assert!(has_main_function_in_content("  void main() {}"));
+        assert!(has_main_function_in_content("\nvoid main() {}"));
+    }
+
+    #[test]
+    fn test_has_main_function_rejects_non_main() {
+        assert!(!has_main_function_in_content("void notMain() {}"));
+        assert!(!has_main_function_in_content("void _main() {}"));
+        assert!(!has_main_function_in_content("void mainHelper() {}"));
+        assert!(!has_main_function_in_content("void runMain() {}"));
+    }
+
+    #[test]
+    fn test_has_main_function_rejects_single_line_comment() {
+        assert!(!has_main_function_in_content("// void main() {}"));
+        assert!(!has_main_function_in_content("  // void main() {}"));
+        assert!(!has_main_function_in_content("/// void main() {}"));
+    }
+
+    #[test]
+    fn test_has_main_function_realistic_file() {
+        let content = r#"
+import 'package:flutter/material.dart';
+
+void main() {
+  runApp(const MyApp());
+}
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(body: Text('Hello')),
+    );
+  }
+}
+"#;
+        assert!(has_main_function_in_content(content));
+    }
+
+    #[test]
+    fn test_has_main_function_no_main() {
+        let content = r#"
+import 'package:flutter/material.dart';
+
+class MyWidget extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Container();
+  }
+}
+"#;
+        assert!(!has_main_function_in_content(content));
+    }
+
+    #[test]
+    fn test_has_main_function_file_not_found() {
+        let path = Path::new("/nonexistent/file.dart");
+        assert!(!has_main_function(path));
+    }
+
+    #[test]
+    fn test_has_main_function_reads_file() {
+        let temp = TempDir::new().unwrap();
+        let dart_file = temp.path().join("main.dart");
+
+        fs::write(&dart_file, "void main() {}").unwrap();
+        assert!(has_main_function(&dart_file));
+
+        fs::write(&dart_file, "void helper() {}").unwrap();
+        assert!(!has_main_function(&dart_file));
+    }
+
+    /// Helper to create a Dart file with content
+    fn write_dart_file(base: &Path, relative_path: &str, content: &str) {
+        let full_path = base.join(relative_path);
+        if let Some(parent) = full_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        fs::write(full_path, content).unwrap();
+    }
+
+    #[test]
+    fn test_discover_entry_points_basic() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/utils.dart", "void helper() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 1);
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_multiple() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/main_dev.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/main_staging.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/utils.dart", "void helper() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 3);
+        // main.dart should be first
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+        // Others alphabetically
+        assert!(entry_points.contains(&PathBuf::from("lib/main_dev.dart")));
+        assert!(entry_points.contains(&PathBuf::from("lib/main_staging.dart")));
+    }
+
+    #[test]
+    fn test_discover_entry_points_nested_directories() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/flavors/dev/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/flavors/main_prod.dart", "void main() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 3);
+        // lib/main.dart first
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+        // Nested main.dart second
+        assert_eq!(entry_points[1], PathBuf::from("lib/flavors/dev/main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_no_lib_directory() {
+        let temp = TempDir::new().unwrap();
+        // Don't create lib/ directory
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert!(entry_points.is_empty());
+    }
+
+    #[test]
+    fn test_discover_entry_points_empty_lib() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir(temp.path().join("lib")).unwrap();
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert!(entry_points.is_empty());
+    }
+
+    #[test]
+    fn test_discover_entry_points_no_main_functions() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/widget.dart", "class MyWidget {}");
+        write_dart_file(temp.path(), "lib/utils.dart", "void helper() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert!(entry_points.is_empty());
+    }
+
+    #[test]
+    fn test_discover_entry_points_skips_hidden_directories() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(
+            temp.path(),
+            "lib/.hidden/secret_main.dart",
+            "void main() {}",
+        );
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 1);
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_only_scans_lib() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "test/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "bin/main.dart", "void main() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 1);
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_sorting() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(temp.path(), "lib/zebra_main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/alpha_main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/sub/main.dart", "void main() {}");
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 4);
+        // lib/main.dart first
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+        // Nested main.dart second
+        assert_eq!(entry_points[1], PathBuf::from("lib/sub/main.dart"));
+        // Then alphabetically
+        assert_eq!(entry_points[2], PathBuf::from("lib/alpha_main.dart"));
+        assert_eq!(entry_points[3], PathBuf::from("lib/zebra_main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_async_main() {
+        let temp = TempDir::new().unwrap();
+
+        write_dart_file(
+            temp.path(),
+            "lib/main.dart",
+            "Future<void> main() async { await init(); }",
+        );
+
+        let entry_points = discover_entry_points(temp.path());
+
+        assert_eq!(entry_points.len(), 1);
+        assert_eq!(entry_points[0], PathBuf::from("lib/main.dart"));
+    }
+
+    #[test]
+    fn test_discover_entry_points_respects_depth_limit() {
+        let temp = TempDir::new().unwrap();
+
+        // Create a deeply nested structure that exceeds MAX_ENTRY_POINT_DEPTH (10)
+        // lib/a/b/c/d/e/f/g/h/i/j/k/main.dart (11 levels deep from lib/)
+        let deep_path = "lib/a/b/c/d/e/f/g/h/i/j/k/main.dart";
+        write_dart_file(temp.path(), deep_path, "void main() {}");
+
+        // Also create a file within the depth limit
+        write_dart_file(temp.path(), "lib/main.dart", "void main() {}");
+        write_dart_file(temp.path(), "lib/a/b/c/main.dart", "void main() {}"); // 3 levels deep
+
+        let entry_points = discover_entry_points(temp.path());
+
+        // Should find the shallow files but NOT the one exceeding depth limit
+        assert!(
+            entry_points.contains(&PathBuf::from("lib/main.dart")),
+            "Should find lib/main.dart"
+        );
+        assert!(
+            entry_points.contains(&PathBuf::from("lib/a/b/c/main.dart")),
+            "Should find lib/a/b/c/main.dart (within depth limit)"
+        );
+        assert!(
+            !entry_points.contains(&PathBuf::from(deep_path)),
+            "Should NOT find deeply nested file exceeding depth limit"
+        );
     }
 }

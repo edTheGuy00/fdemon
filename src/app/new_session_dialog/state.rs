@@ -5,6 +5,7 @@ use super::types::{
 };
 use crate::config::{ConfigSource, FlutterMode, LoadedConfigs};
 use crate::daemon::Device;
+use std::path::PathBuf;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FuzzyModalState
@@ -416,6 +417,9 @@ pub struct LaunchContextState {
     /// Flavor (from config or user override)
     pub flavor: Option<String>,
 
+    /// Entry point (from config or user override)
+    pub entry_point: Option<PathBuf>,
+
     /// Dart defines (from config or user override)
     pub dart_defines: Vec<DartDefine>,
 
@@ -430,6 +434,7 @@ impl LaunchContextState {
             selected_config_index: None,
             mode: FlutterMode::Debug,
             flavor: None,
+            entry_point: None,
             dart_defines: Vec::new(),
             focused_field: LaunchContextField::Config,
         }
@@ -497,6 +502,11 @@ impl LaunchContextState {
                 self.flavor = Some(flavor.clone());
             }
 
+            // Apply entry_point from config
+            if let Some(ref entry_point) = config.config.entry_point {
+                self.entry_point = Some(entry_point.clone());
+            }
+
             if !config.config.dart_defines.is_empty() {
                 self.dart_defines = config
                     .config
@@ -554,6 +564,28 @@ impl LaunchContextState {
         self.selected_config()
             .map(|c| c.display_name.clone())
             .unwrap_or_else(|| "(none)".to_string())
+    }
+
+    /// Get entry point display string
+    pub fn entry_point_display(&self) -> String {
+        self.entry_point
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(default)".to_string())
+    }
+
+    /// Check if entry point is editable
+    pub fn is_entry_point_editable(&self) -> bool {
+        // Use Flavor as proxy since EntryPoint field doesn't exist yet (Phase 3)
+        // Entry point follows the same editability rules as flavor
+        self.is_field_editable(LaunchContextField::Flavor)
+    }
+
+    /// Set entry point
+    pub fn set_entry_point(&mut self, entry_point: Option<PathBuf>) {
+        if self.is_entry_point_editable() {
+            self.entry_point = entry_point;
+        }
     }
 
     /// Creates a new default config, adds it to the config list, and selects it.
@@ -842,6 +874,7 @@ impl NewSessionDialogState {
                 .launch_context
                 .selected_config()
                 .map(|c| c.display_name.clone()),
+            entry_point: self.launch_context.entry_point.clone(),
         })
     }
 
@@ -1000,5 +1033,141 @@ mod tests {
 
         assert_eq!(fdemon_configs.len(), 1);
         assert_eq!(fdemon_configs[0].name, "FDemon Config");
+    }
+
+    #[test]
+    fn test_launch_context_state_entry_point_default() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        assert_eq!(state.entry_point, None);
+        assert_eq!(state.entry_point_display(), "(default)");
+    }
+
+    #[test]
+    fn test_launch_context_state_entry_point_set() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.entry_point = Some(PathBuf::from("lib/main_dev.dart"));
+        assert_eq!(state.entry_point_display(), "lib/main_dev.dart");
+    }
+
+    #[test]
+    fn test_entry_point_editable_no_config() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        // No config selected = editable
+        assert!(state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_entry_point_editable_fdemon_config() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Add FDemon config
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "FDemon Config".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "FDemon Config".to_string(),
+        });
+        state.selected_config_index = Some(0);
+
+        // FDemon configs are editable
+        assert!(state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_entry_point_not_editable_vscode_config() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Add VSCode config
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "VSCode Config".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode Config (VSCode)".to_string(),
+        });
+        state.selected_config_index = Some(0);
+
+        // VSCode configs are read-only
+        assert!(!state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_set_entry_point_when_editable() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // No config selected = editable
+        assert!(state.is_entry_point_editable());
+
+        state.set_entry_point(Some(PathBuf::from("lib/main_prod.dart")));
+        assert_eq!(state.entry_point, Some(PathBuf::from("lib/main_prod.dart")));
+        assert_eq!(state.entry_point_display(), "lib/main_prod.dart");
+    }
+
+    #[test]
+    fn test_set_entry_point_when_not_editable() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Add VSCode config (read-only)
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "VSCode Config".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode Config (VSCode)".to_string(),
+        });
+        state.selected_config_index = Some(0);
+
+        // Not editable
+        assert!(!state.is_entry_point_editable());
+
+        // Try to set entry point - should be ignored
+        state.set_entry_point(Some(PathBuf::from("lib/main_prod.dart")));
+        assert_eq!(state.entry_point, None);
+        assert_eq!(state.entry_point_display(), "(default)");
+    }
+
+    #[test]
+    fn test_select_config_applies_entry_point() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Dev".to_string(),
+                entry_point: Some(PathBuf::from("lib/main_dev.dart")),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "Dev".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        assert_eq!(state.entry_point, None);
+
+        state.select_config(Some(0));
+        assert_eq!(state.entry_point, Some(PathBuf::from("lib/main_dev.dart")));
+    }
+
+    #[test]
+    fn test_select_config_without_entry_point_preserves_existing() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Basic".to_string(),
+                entry_point: None, // No entry point
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Basic".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.entry_point = Some(PathBuf::from("lib/existing.dart"));
+
+        state.select_config(Some(0));
+        // Entry point should be preserved since config doesn't specify one
+        assert_eq!(state.entry_point, Some(PathBuf::from("lib/existing.dart")));
     }
 }

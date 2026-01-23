@@ -239,6 +239,13 @@ pub fn update_launch_config_field(
                 Some(value.to_string())
             };
         }
+        "entry_point" => {
+            config.entry_point = if value.is_empty() {
+                None
+            } else {
+                Some(std::path::PathBuf::from(value))
+            };
+        }
         "auto_start" => {
             config.auto_start = value.to_lowercase() == "true";
         }
@@ -951,6 +958,76 @@ EMPTY = ""
             .unwrap_err()
             .to_string()
             .contains("Config 'NonExistent' not found"));
+    }
+
+    #[test]
+    fn test_update_launch_config_field_entry_point_set() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Dev".to_string(),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Set entry_point
+        update_launch_config_field(temp.path(), "Dev", "entry_point", "lib/main_dev.dart").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(
+            loaded[0].config.entry_point,
+            Some(std::path::PathBuf::from("lib/main_dev.dart"))
+        );
+    }
+
+    #[test]
+    fn test_update_launch_config_field_entry_point_clear() {
+        let temp = tempdir().unwrap();
+
+        save_launch_configs(
+            temp.path(),
+            &[LaunchConfig {
+                name: "Dev".to_string(),
+                entry_point: Some("lib/main_dev.dart".into()),
+                ..Default::default()
+            }],
+        )
+        .unwrap();
+
+        // Clear entry_point with empty string
+        update_launch_config_field(temp.path(), "Dev", "entry_point", "").unwrap();
+
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(loaded[0].config.entry_point, None);
+    }
+
+    #[test]
+    fn test_launch_toml_roundtrip_with_entry_point() {
+        let temp = tempdir().unwrap();
+
+        let configs = vec![LaunchConfig {
+            name: "Dev".to_string(),
+            entry_point: Some("lib/main_dev.dart".into()),
+            flavor: Some("development".to_string()),
+            ..Default::default()
+        }];
+
+        save_launch_configs(temp.path(), &configs).unwrap();
+
+        // Verify file content
+        let content = std::fs::read_to_string(temp.path().join(".fdemon/launch.toml")).unwrap();
+        assert!(content.contains("entry_point"));
+        assert!(content.contains("lib/main_dev.dart"));
+
+        // Verify roundtrip
+        let loaded = load_launch_configs(temp.path());
+        assert_eq!(
+            loaded[0].config.entry_point,
+            Some(std::path::PathBuf::from("lib/main_dev.dart"))
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────

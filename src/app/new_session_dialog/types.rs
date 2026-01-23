@@ -1,5 +1,7 @@
 //! Core enums for NewSessionDialog state
 
+use std::path::PathBuf;
+
 /// Represents which pane of the NewSessionDialog has focus
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DialogPane {
@@ -159,4 +161,5 @@ pub struct LaunchParams {
     pub flavor: Option<String>,
     pub dart_defines: Vec<String>,
     pub config_name: Option<String>,
+    pub entry_point: Option<PathBuf>,
 }

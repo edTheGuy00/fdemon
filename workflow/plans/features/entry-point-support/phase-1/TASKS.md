@@ -45,27 +45,27 @@ Fix the broken entry_point flow so that VSCode `program` field and FDemon `entry
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-add-entry-point-to-launch-params](tasks/01-add-entry-point-to-launch-params.md) | Not Started | - | `types.rs` |
-| 2 | [02-add-entry-point-to-launch-context-state](tasks/02-add-entry-point-to-launch-context-state.md) | Not Started | - | `state.rs` |
-| 3 | [03-update-select-config](tasks/03-update-select-config.md) | Not Started | 2 | `state.rs` |
-| 4 | [04-update-build-launch-params](tasks/04-update-build-launch-params.md) | Not Started | 1, 2 | `state.rs` |
-| 5 | [05-update-handle-launch](tasks/05-update-handle-launch.md) | Not Started | 1, 4 | `launch_context.rs` |
-| 6 | [06-add-update-field-support](tasks/06-add-update-field-support.md) | Not Started | - | `config/launch.rs` |
+| 1 | [01-add-entry-point-to-launch-params](tasks/01-add-entry-point-to-launch-params.md) | Done | - | `types.rs` |
+| 2 | [02-add-entry-point-to-launch-context-state](tasks/02-add-entry-point-to-launch-context-state.md) | Done | - | `state.rs` |
+| 3 | [03-update-select-config](tasks/03-update-select-config.md) | Done | 2 | `state.rs` |
+| 4 | [04-update-build-launch-params](tasks/04-update-build-launch-params.md) | Done | 1, 2 | `state.rs` |
+| 5 | [05-update-handle-launch](tasks/05-update-handle-launch.md) | Done | 1, 4 | `launch_context.rs` |
+| 6 | [06-add-update-field-support](tasks/06-add-update-field-support.md) | Done | - | `config/launch.rs` |
 
 ## Success Criteria
 
 Phase 1 is complete when:
 
-- [ ] `LaunchParams` includes `entry_point` field
-- [ ] `LaunchContextState` includes `entry_point` field
-- [ ] `select_config()` applies `entry_point` from selected config
-- [ ] `build_launch_params()` extracts `entry_point` from state
-- [ ] `handle_launch()` passes `entry_point` to `LaunchConfig`
-- [ ] `update_launch_config_field()` handles `entry_point` field
-- [ ] VSCode configs with `program` field result in correct `-t` argument
-- [ ] FDemon configs with `entry_point` field load and save correctly
-- [ ] All unit tests pass
-- [ ] `cargo clippy` passes with no warnings
+- [x] `LaunchParams` includes `entry_point` field
+- [x] `LaunchContextState` includes `entry_point` field
+- [x] `select_config()` applies `entry_point` from selected config
+- [x] `build_launch_params()` extracts `entry_point` from state
+- [x] `handle_launch()` passes `entry_point` to `LaunchConfig`
+- [x] `update_launch_config_field()` handles `entry_point` field
+- [x] VSCode configs with `program` field result in correct `-t` argument
+- [x] FDemon configs with `entry_point` field load and save correctly
+- [x] All unit tests pass
+- [x] `cargo clippy` passes with no warnings
 
 ## Verification Commands
 

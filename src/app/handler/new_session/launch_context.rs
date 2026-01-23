@@ -347,12 +347,14 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
         let config = if params.config_name.is_some()
             || params.flavor.is_some()
             || !params.dart_defines.is_empty()
+            || params.entry_point.is_some()
         {
             let mut cfg = LaunchConfig {
                 name: params.config_name.unwrap_or_else(|| "Session".to_string()),
                 device: device.id.clone(),
                 mode: params.mode,
                 flavor: params.flavor,
+                entry_point: params.entry_point,
                 ..Default::default()
             };
 
@@ -768,5 +770,213 @@ mod tests {
 
         // Should NOT trigger auto-save for VSCode config
         assert!(result.action.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Entry Point Tests for handle_launch
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Helper to create a test device
+    fn test_device() -> crate::daemon::Device {
+        crate::daemon::Device {
+            id: "emulator-5554".to_string(),
+            name: "Android Emulator".to_string(),
+            platform: "android".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[test]
+    fn test_handle_launch_entry_point_creates_config() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add a connected device and select it
+        // Note: selected_index = 1 because index 0 is the group header
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // Set ONLY entry_point (no config, no flavor, no dart_defines)
+        // This should trigger config creation
+        state.new_session_dialog_state.launch_context.entry_point =
+            Some(PathBuf::from("lib/main_dev.dart"));
+
+        let result = handle_launch(&mut state);
+
+        // Should return SpawnSession action with config
+        match result.action {
+            Some(UpdateAction::SpawnSession { config, .. }) => {
+                // Config should be created because entry_point is set
+                assert!(
+                    config.is_some(),
+                    "Config should be created when entry_point is set"
+                );
+                let cfg = config.unwrap();
+                assert_eq!(
+                    cfg.entry_point,
+                    Some(PathBuf::from("lib/main_dev.dart")),
+                    "entry_point should be passed to LaunchConfig"
+                );
+            }
+            _ => panic!("Expected SpawnSession action, got {:?}", result.action),
+        }
+    }
+
+    #[test]
+    fn test_handle_launch_with_entry_point_and_flavor() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add a connected device and select it
+        // Note: selected_index = 1 because index 0 is the group header
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // Set both entry_point and flavor
+        state.new_session_dialog_state.launch_context.entry_point =
+            Some(PathBuf::from("lib/main_staging.dart"));
+        state.new_session_dialog_state.launch_context.flavor = Some("staging".to_string());
+
+        let result = handle_launch(&mut state);
+
+        // Should return SpawnSession action with config containing both
+        match result.action {
+            Some(UpdateAction::SpawnSession { config, .. }) => {
+                assert!(config.is_some(), "Config should be created");
+                let cfg = config.unwrap();
+                assert_eq!(
+                    cfg.entry_point,
+                    Some(PathBuf::from("lib/main_staging.dart")),
+                    "entry_point should be in config"
+                );
+                assert_eq!(
+                    cfg.flavor,
+                    Some("staging".to_string()),
+                    "flavor should be in config"
+                );
+            }
+            _ => panic!("Expected SpawnSession action, got {:?}", result.action),
+        }
+    }
+
+    #[test]
+    fn test_handle_launch_without_entry_point_no_config() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add a connected device and select it
+        // Note: selected_index = 1 because index 0 is the group header
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // No entry_point, no flavor, no dart_defines, no config name
+        // All launch context fields at defaults
+
+        let result = handle_launch(&mut state);
+
+        // Should return SpawnSession action WITHOUT config
+        match result.action {
+            Some(UpdateAction::SpawnSession { config, .. }) => {
+                assert!(
+                    config.is_none(),
+                    "Config should NOT be created when no launch params are set"
+                );
+            }
+            _ => panic!("Expected SpawnSession action, got {:?}", result.action),
+        }
+    }
+
+    #[test]
+    fn test_handle_launch_entry_point_from_vscode_config() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add a connected device and select it
+        // Note: selected_index = 1 because index 0 is the group header
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // Add VSCode config with entry_point (simulating VSCode's program field)
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "Development".to_string(),
+                    entry_point: Some(PathBuf::from("lib/main_dev.dart")),
+                    flavor: Some("dev".to_string()),
+                    ..Default::default()
+                },
+                source: ConfigSource::VSCode,
+                display_name: "Development (VSCode)".to_string(),
+            });
+
+        // Select the config - this should apply entry_point to state
+        state
+            .new_session_dialog_state
+            .launch_context
+            .select_config(Some(0));
+
+        // Verify entry_point was applied from config
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.entry_point,
+            Some(PathBuf::from("lib/main_dev.dart"))
+        );
+
+        let result = handle_launch(&mut state);
+
+        // Should return SpawnSession with config containing entry_point
+        match result.action {
+            Some(UpdateAction::SpawnSession { config, .. }) => {
+                assert!(config.is_some(), "Config should be created");
+                let cfg = config.unwrap();
+                assert_eq!(
+                    cfg.entry_point,
+                    Some(PathBuf::from("lib/main_dev.dart")),
+                    "entry_point from VSCode config should be passed through"
+                );
+            }
+            _ => panic!("Expected SpawnSession action, got {:?}", result.action),
+        }
     }
 }

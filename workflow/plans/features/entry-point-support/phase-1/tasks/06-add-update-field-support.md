@@ -192,4 +192,30 @@ fn test_launch_toml_roundtrip_with_entry_point() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/config/launch.rs` | Added `entry_point` case to `update_launch_config_field()` match statement (lines 242-248) |
+| `src/config/launch.rs` | Added three new test functions: `test_update_launch_config_field_entry_point_set`, `test_update_launch_config_field_entry_point_clear`, `test_launch_toml_roundtrip_with_entry_point` |
+| `src/app/new_session_dialog/state.rs` | Added `entry_point` field to `LaunchParams` initialization in `build_launch_params()` (line 872) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pattern Consistency**: Followed the exact same pattern as `flavor` field handling - empty string sets to `None`, non-empty converts to `Some(PathBuf::from(value))`
+2. **Unplanned Fix**: Discovered and fixed a compilation error in `src/app/new_session_dialog/state.rs` where `build_launch_params()` was missing the `entry_point` field after it was added to the `LaunchParams` struct in a previous task. This was necessary to get the code to compile.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib config::launch::tests::test_update_launch_config_field_entry_point` - Passed (2 tests)
+- `cargo test --lib config::launch::tests::test_launch_toml_roundtrip_with_entry_point` - Passed
+- `cargo test --lib config::launch` - Passed (50 tests total)
+- `cargo fmt` - Passed
+- `cargo clippy --lib -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: The implementation follows established patterns and all tests pass
