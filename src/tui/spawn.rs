@@ -8,6 +8,7 @@
 
 use std::path::{Path, PathBuf};
 use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
 
 use crate::app::message::{AutoLaunchSuccess, Message};
 use crate::config::{
@@ -289,12 +290,31 @@ mod tests {
         assert_eq!(result.device.id, "device1");
         assert!(result.config.is_none()); // No configs = bare run
     }
+
+    #[test]
+    fn test_tool_check_timeout_is_reasonable() {
+        // Verify timeout is set to a reasonable value (10 seconds)
+        assert_eq!(TOOL_CHECK_TIMEOUT.as_secs(), 10);
+    }
 }
+
+/// Timeout for tool availability checks
+const TOOL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Spawn tool availability check in background (Phase 4, Task 05)
 pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
     tokio::spawn(async move {
-        let availability = ToolAvailability::check().await;
+        let availability = match timeout(TOOL_CHECK_TIMEOUT, ToolAvailability::check()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "Tool availability check timed out after {:?}, assuming no tools available",
+                    TOOL_CHECK_TIMEOUT
+                );
+                ToolAvailability::default()
+            }
+        };
+
         let _ = msg_tx
             .send(Message::ToolAvailabilityChecked { availability })
             .await;

@@ -2846,15 +2846,16 @@ mod auto_launch_tests {
 
     #[test]
     fn test_background_discovery_error_is_silent() {
+        use crate::app::handler::new_session::handle_open_new_session_dialog;
+
         // Background errors should not show error UI when cached devices exist
         let mut state = AppState::new();
 
         // Set up cached devices
         state.set_device_cache(vec![test_device("cached-1", "Cached Phone")]);
 
-        // Show new session dialog with cached devices
-        let configs = crate::config::LoadedConfigs::default();
-        state.show_new_session_dialog(configs);
+        // Show new session dialog with cached devices via handler
+        handle_open_new_session_dialog(&mut state);
 
         // Simulate background discovery failure
         let _ = update(
@@ -2959,4 +2960,214 @@ mod auto_launch_tests {
             .error
             .is_none());
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests for Bug 2: Bootable Device Discovery at Startup (Phase 1, Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_tool_availability_triggers_bootable_discovery() {
+    use crate::daemon::ToolAvailability;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::NewSessionDialog;
+
+    let availability = ToolAvailability {
+        xcrun_simctl: true,
+        android_emulator: false,
+        emulator_path: None,
+    };
+
+    let result = update(
+        &mut state,
+        Message::ToolAvailabilityChecked { availability },
+    );
+
+    assert!(state.tool_availability.xcrun_simctl);
+    assert!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading
+    );
+    assert!(matches!(
+        result.action,
+        Some(UpdateAction::DiscoverBootableDevices)
+    ));
+}
+
+#[test]
+fn test_no_tools_available_no_discovery() {
+    use crate::daemon::ToolAvailability;
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::NewSessionDialog;
+
+    let availability = ToolAvailability {
+        xcrun_simctl: false,
+        android_emulator: false,
+        emulator_path: None,
+    };
+
+    let result = update(
+        &mut state,
+        Message::ToolAvailabilityChecked { availability },
+    );
+
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_target_selector_default_shows_bootable_loading() {
+    use crate::tui::widgets::new_session_dialog::target_selector::TargetSelectorState;
+
+    let state = TargetSelectorState::default();
+    assert!(state.bootable_loading);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests for Bug 2: Bootable Device Caching (Phase 1, Task 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_bootable_devices_discovered_updates_cache() {
+    use crate::daemon::{AndroidAvd, IosSimulator, SimulatorState};
+
+    let mut state = AppState::new();
+    state.ui_mode = UiMode::NewSessionDialog;
+
+    let ios_sims = vec![IosSimulator {
+        udid: "sim-1".into(),
+        name: "iPhone 15".into(),
+        state: SimulatorState::Shutdown,
+        runtime: "iOS 17.2".into(),
+        device_type: "iPhone 15 Pro".into(),
+    }];
+
+    let android_avds = vec![AndroidAvd {
+        name: "Pixel_8".into(),
+        display_name: "Pixel 8 API 34".into(),
+        api_level: Some(34),
+        target: Some("android-34".into()),
+    }];
+
+    let _ = update(
+        &mut state,
+        Message::BootableDevicesDiscovered {
+            ios_simulators: ios_sims.clone(),
+            android_avds: android_avds.clone(),
+        },
+    );
+
+    // Verify cache was updated
+    assert!(state.ios_simulators_cache.is_some());
+    assert!(state.android_avds_cache.is_some());
+    assert!(state.bootable_last_updated.is_some());
+
+    // Verify dialog was updated
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .ios_simulators
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .android_avds
+            .len(),
+        1
+    );
+    assert!(
+        !state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading
+    );
+}
+
+#[test]
+fn test_bootable_cache_persists_across_dialog_reopens() {
+    use crate::app::handler::new_session::handle_open_new_session_dialog;
+    use crate::daemon::{AndroidAvd, IosSimulator, SimulatorState};
+
+    let mut state = AppState::new();
+
+    // First: Discover devices and cache them
+    let ios_sims = vec![IosSimulator {
+        udid: "sim-1".into(),
+        name: "iPhone 15".into(),
+        state: SimulatorState::Shutdown,
+        runtime: "iOS 17.2".into(),
+        device_type: "iPhone 15 Pro".into(),
+    }];
+
+    let android_avds = vec![AndroidAvd {
+        name: "Pixel_8".into(),
+        display_name: "Pixel 8 API 34".into(),
+        api_level: Some(34),
+        target: Some("android-34".into()),
+    }];
+
+    state.set_bootable_cache(ios_sims.clone(), android_avds.clone());
+
+    // Open dialog via handler - should use cache
+    handle_open_new_session_dialog(&mut state);
+
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .ios_simulators
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .android_avds
+            .len(),
+        1
+    );
+    // Should not show loading because cache was used
+    assert!(
+        !state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading
+    );
+
+    // Close dialog
+    state.hide_new_session_dialog();
+
+    // Reopen dialog via handler - should still use cache
+    handle_open_new_session_dialog(&mut state);
+
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .ios_simulators
+            .len(),
+        1
+    );
+    assert_eq!(
+        state
+            .new_session_dialog_state
+            .target_selector
+            .android_avds
+            .len(),
+        1
+    );
+    assert!(
+        !state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading
+    );
 }

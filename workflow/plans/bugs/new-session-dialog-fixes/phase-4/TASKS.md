@@ -29,24 +29,24 @@ Automatically create and save a default configuration when the user sets flavor 
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-auto-config-helper](tasks/01-auto-config-helper.md) | Not Started | - | `state.rs`, `launch_context.rs` (state) |
-| 2 | [02-flavor-auto-config](tasks/02-flavor-auto-config.md) | Not Started | 01 | `launch_context.rs` (handler) |
-| 3 | [03-dart-defines-auto-config](tasks/03-dart-defines-auto-config.md) | Not Started | 01 | `launch_context.rs` (handler) |
+| 1 | [01-auto-config-helper](tasks/01-auto-config-helper.md) | Done | - | `state.rs`, `launch_context.rs` (state) |
+| 2 | [02-flavor-auto-config](tasks/02-flavor-auto-config.md) | Done | 01 | `launch_context.rs` (handler) |
+| 3 | [03-dart-defines-auto-config](tasks/03-dart-defines-auto-config.md) | Done | 01 | `launch_context.rs` (handler) |
 
 ## Success Criteria
 
 Phase 4 is complete when:
 
-- [ ] Setting flavor without config selected creates new "Default" config
-- [ ] Setting dart-defines without config selected creates new "Default" config
-- [ ] Created config is automatically selected in the dialog
-- [ ] Config is saved to `.fdemon/launch.toml` via auto-save
-- [ ] Unique naming works ("Default", "Default 2", etc.) if "Default" already exists
-- [ ] Next dialog open shows the created config in the list
-- [ ] No regression in existing config editing behavior
-- [ ] All new code has unit tests
-- [ ] `cargo test` passes
-- [ ] `cargo clippy` passes
+- [x] Setting flavor without config selected creates new "Default" config
+- [x] Setting dart-defines without config selected creates new "Default" config
+- [x] Created config is automatically selected in the dialog
+- [x] Config is saved to `.fdemon/launch.toml` via auto-save
+- [x] Unique naming works ("Default", "Default 2", etc.) if "Default" already exists
+- [x] Next dialog open shows the created config in the list
+- [x] No regression in existing config editing behavior
+- [x] All new code has unit tests
+- [x] `cargo test` passes
+- [x] `cargo clippy` passes
 
 ## Data Flow
 

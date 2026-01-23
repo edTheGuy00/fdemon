@@ -270,23 +270,35 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Modified `handle_dart_defines_updated()` to auto-create default config when dart-defines are set without a selected config; added 4 new unit tests |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **Borrow Checker Pattern**: Initially attempted to use a mutable reference to `launch_context` throughout the function (similar to flavor handler), but this created borrow conflicts when calling `close_dart_defines_modal_with_changes()`. Resolved by accessing `state.new_session_dialog_state.launch_context` directly instead of holding a long-lived mutable reference.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **DartDefine Format Conversion**: Discovered that `LaunchConfig.dart_defines` uses `HashMap<String, String>` (not `Vec<String>` as stated in task spec). Implemented proper conversion from `Vec<DartDefine>` to `HashMap<String, String>` using `map(|d| (d.key.clone(), d.value.clone())).collect()`.
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Logging**: Added tracing log when auto-creating config: `tracing::info!("Auto-created config '{}' for dart-defines", name)` to match flavor handler pattern.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test test_dart_defines` - Passed (6 tests total, 4 new tests added)
+  - `test_dart_defines_updated_no_config_creates_default` - Passed
+  - `test_dart_defines_cleared_no_config_no_create` - Passed
+  - `test_dart_defines_updated_existing_config_no_create` - Passed
+  - `test_dart_defines_vscode_config_no_save` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing Test Failure**: There is 1 unrelated failing test in the codebase (`test_truncate_middle_very_short` in `tui::widgets::new_session_dialog`), but this is a pre-existing issue not related to this implementation.
+
+2. **No HashMap Empty Value Handling**: The conversion from `DartDefine` to `HashMap` stores empty values as empty strings. If dart-defines with empty values need special handling (e.g., flag-style defines), this may need adjustment.

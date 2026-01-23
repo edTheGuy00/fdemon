@@ -158,4 +158,34 @@ fn test_generate_unique_name_fallback() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/new_session_dialog/state.rs` | Replaced unbounded loop in `generate_unique_name()` with bounded for-loop (max 1000 iterations) and timestamp fallback. Added 5 comprehensive tests covering basic usage, increments, and fallback behavior. |
+
+### Notable Decisions/Tradeoffs
+
+1. **MAX_COUNTER set to 1000**: This is a reasonable upper bound that no real user will hit, while preventing infinite loops from malicious or corrupted config files. The timestamp fallback ensures uniqueness even in pathological cases.
+2. **Timestamp fallback using milliseconds**: Provides sufficient uniqueness guarantee (millisecond precision) without adding external dependencies like `uuid`.
+3. **Used `for counter in 2..=MAX_COUNTER`**: Idiomatic Rust bounded iteration that prevents both infinite loops and integer overflow issues.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test generate_unique_name` - Passed (5 tests: basic, increments, with_other_names, with_default, fallback)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+All new tests validate:
+1. Basic case: returns base name when no conflict
+2. Incremental naming: correctly generates "Default 2", "Default 3", etc.
+3. Fallback behavior: when all 1000 numbered names are taken, falls back to timestamp
+4. Uniqueness guarantee: fallback result is not in existing names list
+
+### Risks/Limitations
+
+1. **Timestamp collision risk**: If two configs are created within the same millisecond and both hit the 1000-name limit, they could theoretically get the same timestamp. This is extremely unlikely (requires 1000+ existing numbered configs AND simultaneous creation) and would be caught by the config save logic.
+2. **Timestamp readability**: Fallback names like "Default 1706023456789" are less user-friendly than numbered names, but this is only reached in pathological edge cases that should never occur in practice.

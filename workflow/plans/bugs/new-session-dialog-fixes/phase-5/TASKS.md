@@ -35,14 +35,14 @@ Wave 2 (After Wave 1):
 
 | # | Task | Priority | Status | Depends On | Modules |
 |---|------|----------|--------|------------|---------|
-| 1 | [01-duplicate-cache](tasks/01-duplicate-cache.md) | Critical | Not Started | - | `state.rs` |
-| 2 | [02-validation-bypass](tasks/02-validation-bypass.md) | Critical | Not Started | - | `launch_context.rs` (handler) |
-| 3 | [03-unwrap-safety](tasks/03-unwrap-safety.md) | Major | Not Started | - | `launch_context.rs` (handler) |
-| 4 | [04-error-clearing](tasks/04-error-clearing.md) | Major | Not Started | - | `target_selector.rs` |
-| 5 | [05-loop-bounds](tasks/05-loop-bounds.md) | Major | Not Started | - | `state.rs` (new_session_dialog) |
-| 6 | [06-tool-timeout](tasks/06-tool-timeout.md) | Major | Not Started | - | `spawn.rs`, `update.rs` |
-| 7 | [07-vertical-space-validation](tasks/07-vertical-space-validation.md) | Critical | Not Started | 1-6 | Manual testing |
-| 8 | [08-width-threshold-adjustment](tasks/08-width-threshold-adjustment.md) | Major | Not Started | 1-6 | `launch_context.rs` (widget) |
+| 1 | [01-duplicate-cache](tasks/01-duplicate-cache.md) | Critical | Done | - | `state.rs` |
+| 2 | [02-validation-bypass](tasks/02-validation-bypass.md) | Critical | Done | - | `launch_context.rs` (handler) |
+| 3 | [03-unwrap-safety](tasks/03-unwrap-safety.md) | Major | Done | - | `launch_context.rs` (handler) |
+| 4 | [04-error-clearing](tasks/04-error-clearing.md) | Major | Done | - | `target_selector.rs` |
+| 5 | [05-loop-bounds](tasks/05-loop-bounds.md) | Major | Done | - | `state.rs` (new_session_dialog) |
+| 6 | [06-tool-timeout](tasks/06-tool-timeout.md) | Major | Done | - | `spawn.rs`, `update.rs` |
+| 7 | [07-vertical-space-validation](tasks/07-vertical-space-validation.md) | Critical | Done | 1-6 | Manual testing |
+| 8 | [08-width-threshold-adjustment](tasks/08-width-threshold-adjustment.md) | Major | Done | 1-6 | `launch_context.rs` (widget) |
 
 ## Issue Mapping
 
@@ -61,13 +61,13 @@ Wave 2 (After Wave 1):
 
 Phase 5 is complete when:
 
-- [ ] All critical issues resolved (3)
-- [ ] All major issues resolved (5)
-- [ ] `cargo fmt` passes
-- [ ] `cargo check` passes
-- [ ] `cargo test` passes
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] Manual testing at minimum terminal dimensions (80x20) passes
+- [x] All critical issues resolved (3)
+- [x] All major issues resolved (5)
+- [x] `cargo fmt` passes
+- [x] `cargo check` passes
+- [x] `cargo test` passes
+- [x] `cargo clippy -- -D warnings` passes
+- [x] Manual testing at minimum terminal dimensions (80x20) passes
 
 ## Notes
 

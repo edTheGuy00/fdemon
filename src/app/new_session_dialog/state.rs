@@ -555,6 +555,84 @@ impl LaunchContextState {
             .map(|c| c.display_name.clone())
             .unwrap_or_else(|| "(none)".to_string())
     }
+
+    /// Creates a new default config, adds it to the config list, and selects it.
+    /// Returns the index of the newly created config.
+    ///
+    /// This is used when the user sets flavor or dart-defines without having
+    /// a config selected - we auto-create a config to persist their choices.
+    pub fn create_and_select_default_config(&mut self) -> usize {
+        use crate::config::launch::create_default_launch_config;
+        use crate::config::priority::SourcedConfig;
+        use crate::config::types::ConfigSource;
+
+        // Create a new default config with current mode
+        let mut new_config = create_default_launch_config();
+        new_config.mode = self.mode;
+
+        // Generate unique name if "Default" already exists
+        let existing_names: Vec<&str> = self
+            .configs
+            .configs
+            .iter()
+            .map(|c| c.config.name.as_str())
+            .collect();
+
+        let unique_name = generate_unique_name("Default", &existing_names);
+        new_config.name = unique_name;
+
+        // Wrap in SourcedConfig (FDemon source so it's editable and saveable)
+        let config_with_source = SourcedConfig {
+            display_name: new_config.name.clone(),
+            config: new_config,
+            source: ConfigSource::FDemon,
+        };
+
+        // Add to configs list
+        self.configs.configs.push(config_with_source);
+
+        // Select the new config
+        let new_index = self.configs.configs.len() - 1;
+        self.selected_config_index = Some(new_index);
+
+        new_index
+    }
+
+    /// Returns the current configs as LaunchConfig for saving.
+    /// Only includes FDemon configs (VSCode configs are read-only).
+    pub fn get_fdemon_configs_for_save(&self) -> Vec<crate::config::LaunchConfig> {
+        self.configs
+            .configs
+            .iter()
+            .filter(|c| c.source == ConfigSource::FDemon)
+            .map(|c| c.config.clone())
+            .collect()
+    }
+}
+
+/// Generate a unique name by appending numbers if needed.
+/// "Default" -> "Default", "Default 2", "Default 3", etc.
+/// Falls back to timestamp if counter exceeds limit.
+fn generate_unique_name(base_name: &str, existing_names: &[&str]) -> String {
+    if !existing_names.contains(&base_name) {
+        return base_name.to_string();
+    }
+
+    // Bounded loop with reasonable limit
+    const MAX_COUNTER: u32 = 1000;
+    for counter in 2..=MAX_COUNTER {
+        let candidate = format!("{} {}", base_name, counter);
+        if !existing_names.contains(&candidate.as_str()) {
+            return candidate;
+        }
+    }
+
+    // Fallback to timestamp if all numbered names are taken
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    format!("{} {}", base_name, timestamp)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -789,5 +867,138 @@ impl NewSessionDialogState {
         self.focused_pane = DialogPane::TargetSelector;
         self.close_modal();
         self.target_selector.set_tab(TargetTab::Connected);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::priority::SourcedConfig;
+    use crate::config::types::{ConfigSource, FlutterMode, LaunchConfig};
+
+    #[test]
+    fn test_create_and_select_default_config_empty_list() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.mode = FlutterMode::Profile;
+
+        let index = state.create_and_select_default_config();
+
+        assert_eq!(index, 0);
+        assert_eq!(state.configs.configs.len(), 1);
+        assert_eq!(state.selected_config_index, Some(0));
+        assert_eq!(state.configs.configs[0].config.name, "Default");
+        assert_eq!(state.configs.configs[0].config.mode, FlutterMode::Profile);
+        assert_eq!(state.configs.configs[0].source, ConfigSource::FDemon);
+    }
+
+    #[test]
+    fn test_create_and_select_default_config_unique_naming() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Add existing "Default" config
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Default".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Default".to_string(),
+        });
+
+        let index = state.create_and_select_default_config();
+
+        assert_eq!(state.configs.configs.len(), 2);
+        assert_eq!(state.configs.configs[index].config.name, "Default 2");
+    }
+
+    #[test]
+    fn test_create_and_select_default_config_multiple_defaults() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Add existing "Default" and "Default 2" configs
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Default".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Default".to_string(),
+        });
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Default 2".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Default 2".to_string(),
+        });
+
+        let index = state.create_and_select_default_config();
+
+        assert_eq!(state.configs.configs[index].config.name, "Default 3");
+    }
+
+    #[test]
+    fn test_generate_unique_name_basic() {
+        let existing: Vec<&str> = vec![];
+        assert_eq!(generate_unique_name("Default", &existing), "Default");
+    }
+
+    #[test]
+    fn test_generate_unique_name_increments() {
+        let existing = vec!["Default", "Default 2"];
+        assert_eq!(generate_unique_name("Default", &existing), "Default 3");
+    }
+
+    #[test]
+    fn test_generate_unique_name_with_other_names() {
+        assert_eq!(generate_unique_name("Default", &["Other"]), "Default");
+    }
+
+    #[test]
+    fn test_generate_unique_name_with_default() {
+        assert_eq!(generate_unique_name("Default", &["Default"]), "Default 2");
+    }
+
+    #[test]
+    fn test_generate_unique_name_fallback() {
+        // Create many existing names to trigger fallback
+        let existing: Vec<String> = (2..=1000).map(|i| format!("Default {}", i)).collect();
+        let existing_refs: Vec<&str> = std::iter::once("Default")
+            .chain(existing.iter().map(|s| s.as_str()))
+            .collect();
+
+        let result = generate_unique_name("Default", &existing_refs);
+
+        // Should use timestamp fallback, not panic or hang
+        assert!(result.starts_with("Default "));
+        assert!(!existing_refs.contains(&result.as_str()));
+    }
+
+    #[test]
+    fn test_get_fdemon_configs_for_save() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "FDemon Config".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "FDemon Config".to_string(),
+        });
+        state.configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "VSCode Config".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode Config (VSCode)".to_string(),
+        });
+
+        let fdemon_configs = state.get_fdemon_configs_for_save();
+
+        assert_eq!(fdemon_configs.len(), 1);
+        assert_eq!(fdemon_configs[0].name, "FDemon Config");
     }
 }

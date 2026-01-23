@@ -224,23 +224,50 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Modified `handle_flavor_selected()` to auto-create default config when no config is selected and a flavor is being set (not cleared). Added logic to update config flavor and trigger auto-save. Added 4 comprehensive unit tests. |
 
-(to be filled after implementation)
+### Implementation Details
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **Auto-create logic**: When `selected_config_index` is `None` and `flavor.is_some()`, the handler now calls `create_and_select_default_config()` before applying the flavor.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **Config update**: After setting the flavor in state, the handler also updates the selected config's flavor field directly to ensure consistency.
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Auto-save trigger**: The handler checks if the selected config is from FDemon source and triggers `UpdateAction::AutoSaveConfig` if so.
+
+4. **Logging**: Added informational log when auto-creating a config for traceability.
+
+5. **Tests added**:
+   - `test_flavor_selected_no_config_creates_default`: Verifies auto-creation when no config selected
+   - `test_flavor_cleared_no_config_no_create`: Verifies no creation when clearing flavor (None)
+   - `test_flavor_selected_existing_config_no_create`: Verifies no creation when config already selected
+   - `test_flavor_selected_vscode_config_no_save`: Verifies VSCode configs remain read-only
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --lib app::handler::new_session::launch_context::tests` - Passed (4/4 tests)
+- `cargo test --lib app::handler` - Passed (262/262 tests, 5 ignored)
+
+All new tests pass and validate the acceptance criteria.
+
+### Notable Decisions
+
+1. **Borrow checker handling**: Initially encountered borrow checker issues when holding a mutable reference to `launch_context`. Resolved by accessing `state.new_session_dialog_state.launch_context` directly rather than storing a mutable reference, which allows multiple borrows without conflicts.
+
+2. **Flavor applied twice**: The flavor is applied both via `set_flavor()` (which updates state) and by directly updating the config's flavor field. This ensures both the working state and the persisted config stay synchronized.
+
+3. **Logging for visibility**: Added a log message when auto-creating configs to help with debugging and provide visibility into when automatic configuration creation occurs.
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: One unrelated test (`tui::widgets::new_session_dialog::tests::test_truncate_middle_very_short`) is failing in the codebase. This test is in the TUI layer and unrelated to the handler changes. The failure existed before this implementation.
+
+2. **Config synchronization**: The implementation updates both state and config directly. While this works correctly, future refactoring should ensure this dual-update pattern is consistent across all config-modifying handlers.

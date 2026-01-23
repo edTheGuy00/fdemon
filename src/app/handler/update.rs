@@ -1038,7 +1038,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 state.tool_availability.android_emulator
             );
 
-            UpdateResult::none()
+            // Trigger bootable device discovery now that we know which tools are available
+            if state.tool_availability.xcrun_simctl || state.tool_availability.android_emulator {
+                // Set loading state for bootable tab
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .bootable_loading = true;
+                UpdateResult::action(UpdateAction::DiscoverBootableDevices)
+            } else {
+                // No tools available - stop loading spinner
+                state
+                    .new_session_dialog_state
+                    .target_selector
+                    .bootable_loading = false;
+                UpdateResult::none()
+            }
         }
 
         Message::DiscoverBootableDevices => {
@@ -1050,7 +1065,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             ios_simulators,
             android_avds,
         } => {
-            // Update new session dialog state
+            // Cache bootable devices for instant display on subsequent dialog opens (Bug Fix: Task 03)
+            state.set_bootable_cache(ios_simulators.clone(), android_avds.clone());
+
+            // Update new session dialog state if visible
             if state.is_new_session_dialog_visible() {
                 state
                     .new_session_dialog_state

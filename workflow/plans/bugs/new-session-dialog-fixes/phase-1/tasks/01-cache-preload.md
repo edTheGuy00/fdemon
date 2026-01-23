@@ -111,23 +111,40 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/state.rs` | Modified `show_new_session_dialog()` to check and use device cache if available |
+| `src/app/state.rs` | Added 5 unit tests for cache preload behavior |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **Cache Check Before Dialog Creation**: The cache check happens immediately after creating `NewSessionDialogState`, ensuring the dialog state is initialized with fresh data if available while maintaining the existing creation pattern.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **Clone Cached Devices**: We clone the cached devices when populating the dialog to avoid borrowing issues and maintain data independence between the global cache and dialog state.
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Automatic Loading State Management**: When `set_connected_devices()` is called with cached data, it automatically sets `loading = false`, which gives us the desired instant display behavior without additional state management.
+
+### Testing Performed
+
+- `cargo fmt` - PASSED
+- `cargo check` - PASSED
+- `cargo clippy -- -D warnings` - PASSED
+- `cargo test --lib test_show_new_session_dialog` - PASSED (5 tests)
+- `cargo test --lib` - 1447 passed, 1 failed (pre-existing failure unrelated to changes)
+
+**Test Coverage:**
+- `test_show_new_session_dialog_uses_cached_devices` - Verifies devices are pre-populated from cache
+- `test_show_new_session_dialog_empty_cache_shows_loading` - Verifies loading state when cache is empty
+- `test_show_new_session_dialog_expired_cache_shows_loading` - Verifies expired cache is not used
+- `test_show_new_session_dialog_fresh_cache_within_ttl` - Verifies fresh cache is used
+- `test_show_new_session_dialog_multiple_opens_use_cache` - Verifies cache persists across multiple opens
+
+### Risks/Limitations
+
+1. **Cache TTL Trade-off**: The 30-second TTL balances responsiveness with freshness. Devices might change between opens, but background refresh ensures eventual consistency.
+
+2. **Pre-existing Test Failure**: One unrelated test (`test_truncate_middle_very_short`) was already failing before implementation. This is a separate issue in the TUI widget layer, not related to cache preload functionality.

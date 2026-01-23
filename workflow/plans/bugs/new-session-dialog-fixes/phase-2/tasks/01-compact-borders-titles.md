@@ -200,23 +200,38 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added border and title to `render_compact()` method. Added `BorderType` import. Updated minimum device list constraint from 3 to 1 to account for borders. Added 4 unit tests for compact mode border rendering. |
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Added border and title to `render_compact()` method in `LaunchContextWithDevice` widget. Added `BorderType` import to main imports. Added 4 unit tests for compact mode border rendering. |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **BorderType::Plain vs Rounded**: Used `BorderType::Plain` as specified in the task to minimize visual weight in compact mode, matching the design consideration in the task spec.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **Constraint Adjustment**: Changed device list minimum constraint from `Constraint::Min(3)` to `Constraint::Min(1)` in `target_selector.rs` to account for the 2 lines consumed by borders (top + bottom).
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Border Color Logic**: Implemented cyan border when focused, dark gray when unfocused, matching the existing `render_full()` pattern for consistency.
+
+4. **Test Coverage**: Added tests for border presence, focused/unfocused states, and content readability. Color testing is limited to visual verification since ratatui's TestBackend doesn't easily expose style information.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --lib target_selector::tests` - Passed (42 tests)
+- `cargo test --lib launch_context_tests` - Passed (15 tests)
+- `cargo test` - Passed (1469 tests, 1 pre-existing unrelated failure)
+
+### Risks/Limitations
+
+1. **Vertical Space**: Borders consume 2 lines per section in portrait mode. With `MIN_VERTICAL_HEIGHT: 20`, this is acceptable but leaves less room for content. The constraint adjustment compensates for this.
+
+2. **Visual Testing**: Color testing for focused/unfocused borders relies on visual verification rather than programmatic assertions, as ratatui's TestBackend makes style introspection difficult.
+
+3. **No Regression in Horizontal Layout**: The changes only affect `render_compact()` methods, so horizontal layout (`render_full()`) remains unchanged and unaffected.

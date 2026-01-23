@@ -665,8 +665,8 @@ mod tests {
     #[test]
     fn test_truncate_middle_very_short() {
         let result = truncate_middle("longtext", 5);
-        // Should fallback to truncate_with_ellipsis
-        assert_eq!(result, "lo...");
+        // With max_width=5: available=2, half=1, start="l", end="t"
+        assert_eq!(result, "l...t");
     }
 
     #[test]

@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::Line,
-    widgets::{Block, Borders, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, Paragraph, Widget},
 };
 
 use super::device_groups::{
@@ -62,7 +62,7 @@ impl Default for TargetSelectorState {
             android_avds: Vec::new(),
             selected_index: 0,
             loading: true,
-            bootable_loading: false,
+            bootable_loading: true,
             error: None,
             scroll_offset: 0,
             cached_flat_list: None,
@@ -227,6 +227,7 @@ impl TargetSelectorState {
         self.ios_simulators = ios_simulators;
         self.android_avds = android_avds;
         self.bootable_loading = false;
+        self.error = None;
         self.invalidate_cache();
         self.scroll_offset = 0; // Reset scroll when devices change
 
@@ -423,14 +424,30 @@ impl TargetSelector<'_> {
         self.render_footer(chunks[2], buf);
     }
 
-    /// Render compact (vertical layout) mode - no border, tighter spacing
+    /// Render compact (vertical layout) mode - with border, tighter spacing
     fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Add border with title
+        let border_style = if self.is_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let block = Block::default()
+            .title(" Target Selector ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
         // Compact mode: smaller tab bar, tighter spacing, no footer
         let chunks = Layout::vertical([
             Constraint::Length(1), // Compact tab bar (single line)
-            Constraint::Min(3),    // Device list
+            Constraint::Min(1),    // Device list (reduced from 3 to account for borders)
         ])
-        .split(area);
+        .split(inner);
 
         // Render compact tab bar
         self.render_tabs_compact(chunks[0], buf);
@@ -636,6 +653,26 @@ mod tests {
 
         assert_eq!(state.error, Some("Test error".to_string()));
         assert!(!state.loading);
+    }
+
+    #[test]
+    fn test_set_bootable_devices_clears_error() {
+        let mut state = TargetSelectorState::default();
+        state.error = Some("Previous error".to_string());
+
+        state.set_bootable_devices(vec![], vec![]);
+
+        assert!(state.error.is_none());
+    }
+
+    #[test]
+    fn test_set_connected_devices_clears_error() {
+        let mut state = TargetSelectorState::default();
+        state.error = Some("Previous error".to_string());
+
+        state.set_connected_devices(vec![]);
+
+        assert!(state.error.is_none());
     }
 
     #[test]
@@ -1042,5 +1079,118 @@ mod tests {
         state.adjust_scroll(0);
         // Should not change when visible_height is 0
         assert_eq!(state.scroll_offset, 5);
+    }
+
+    // Tests for Task 01 - Compact Borders and Titles
+
+    #[test]
+    fn test_target_selector_compact_has_border() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true).compact(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that title is rendered
+        assert!(
+            content.contains("Target Selector"),
+            "Compact mode should show 'Target Selector' title"
+        );
+
+        // Check for border characters (Plain style uses │ and ─)
+        assert!(
+            content.contains("│") || content.contains("─"),
+            "Compact mode should have border characters"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_compact_focused_border() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "Device", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test focused
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true).compact(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        // Visual test - focused border should be cyan (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_target_selector_compact_unfocused_border() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "Device", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test unfocused
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, false).compact(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        // Visual test - unfocused border should be dark gray (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_target_selector_compact_content_readable() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![
+            test_device_full("1", "iPhone 15", "ios", false),
+            test_device_full("2", "Pixel 6", "android", false),
+        ]);
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true).compact(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that content is still readable within borders
+        assert!(
+            content.contains("iPhone 15") || content.contains("Pixel 6"),
+            "Device names should be visible within borders"
+        );
     }
 }

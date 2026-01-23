@@ -132,6 +132,7 @@ pub fn handle_config_selected(state: &mut AppState, config_name: String) -> Upda
 /// Handles flavor selection from the fuzzy modal.
 ///
 /// Applies the selected flavor and closes the modal.
+/// Auto-creates a default config if none is selected and flavor is being set (not cleared).
 /// Triggers auto-save for editable FDemon configurations.
 pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> UpdateResult {
     use crate::config::ConfigSource;
@@ -145,7 +146,42 @@ pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> U
         return UpdateResult::none();
     }
 
-    // Determine if we should auto-save (must check before mutating state)
+    // Determine if we need to auto-create a config
+    // Only create if setting a flavor (Some), not when clearing (None)
+    let needs_auto_create = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
+        .is_none()
+        && flavor.is_some();
+
+    // Auto-create config if needed
+    if needs_auto_create {
+        state
+            .new_session_dialog_state
+            .launch_context
+            .create_and_select_default_config();
+        if let Some(config) = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config()
+        {
+            tracing::info!(
+                "Auto-created config '{}' for flavor selection",
+                config.config.name
+            );
+        }
+        // Now selected_config_index is Some, pointing to new config
+    }
+
+    // Apply the flavor to state
+    state
+        .new_session_dialog_state
+        .launch_context
+        .set_flavor(flavor.clone());
+    state.new_session_dialog_state.close_modal();
+
+    // Determine if we should auto-save
     let should_auto_save = if let Some(config_idx) = state
         .new_session_dialog_state
         .launch_context
@@ -166,13 +202,6 @@ pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> U
         false
     };
 
-    state
-        .new_session_dialog_state
-        .launch_context
-        .set_flavor(flavor);
-    state.new_session_dialog_state.close_modal();
-
-    // Trigger auto-save if needed
     if should_auto_save {
         return UpdateResult::action(UpdateAction::AutoSaveConfig {
             configs: state
@@ -189,6 +218,7 @@ pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> U
 /// Handles dart defines updates from the modal.
 ///
 /// Applies the updated dart defines and closes the modal.
+/// Auto-creates a default config if none is selected and dart-defines are being set (not cleared).
 /// Triggers auto-save for editable FDemon configurations.
 pub fn handle_dart_defines_updated(
     state: &mut AppState,
@@ -205,7 +235,44 @@ pub fn handle_dart_defines_updated(
         return UpdateResult::none();
     }
 
-    // Determine if we should auto-save (must check before mutating state)
+    // Determine if we need to auto-create a config
+    // Only create if adding defines (non-empty), not when clearing (empty vec)
+    let needs_auto_create = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
+        .is_none()
+        && !defines.is_empty();
+
+    // Auto-create config if needed
+    if needs_auto_create {
+        state
+            .new_session_dialog_state
+            .launch_context
+            .create_and_select_default_config();
+        if let Some(config) = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config()
+        {
+            tracing::info!(
+                "Auto-created config '{}' for dart-defines",
+                config.config.name
+            );
+        }
+        // Now selected_config_index is Some, pointing to new config
+    }
+
+    // Apply the dart-defines to state
+    state
+        .new_session_dialog_state
+        .launch_context
+        .set_dart_defines(defines.clone());
+    state
+        .new_session_dialog_state
+        .close_dart_defines_modal_with_changes();
+
+    // Determine if we should auto-save
     let should_auto_save = if let Some(config_idx) = state
         .new_session_dialog_state
         .launch_context
@@ -226,15 +293,6 @@ pub fn handle_dart_defines_updated(
         false
     };
 
-    state
-        .new_session_dialog_state
-        .launch_context
-        .set_dart_defines(defines);
-    state
-        .new_session_dialog_state
-        .close_dart_defines_modal_with_changes();
-
-    // Trigger auto-save if needed
     if should_auto_save {
         return UpdateResult::action(UpdateAction::AutoSaveConfig {
             configs: state
@@ -407,4 +465,308 @@ pub fn handle_config_save_failed(state: &mut AppState, error: String) -> UpdateR
         .target_selector
         .set_error(format!("Failed to save config: {}", error));
     UpdateResult::none()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::new_session_dialog::DartDefine;
+    use crate::app::state::{AppState, UiMode};
+    use crate::config::priority::SourcedConfig;
+    use crate::config::types::{ConfigSource, LaunchConfig};
+
+    #[test]
+    fn test_flavor_selected_no_config_creates_default() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        // No config selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+
+        let result = handle_flavor_selected(&mut state, Some("development".to_string()));
+
+        // Config should be created and selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_some());
+        let idx = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .unwrap();
+        let config = &state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs[idx];
+
+        assert_eq!(config.config.name, "Default");
+        assert_eq!(config.source, ConfigSource::FDemon);
+
+        // Verify flavor was set in launch_context state (not config struct)
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.flavor,
+            Some("development".to_string())
+        );
+
+        // Should trigger auto-save
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::AutoSaveConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn test_flavor_cleared_no_config_no_create() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Clear flavor (set to None) - should NOT create config
+        let result = handle_flavor_selected(&mut state, None);
+
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .is_empty());
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_flavor_selected_existing_config_no_create() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add and select existing config
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "Existing".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+                display_name: "Existing".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let _result = handle_flavor_selected(&mut state, Some("staging".to_string()));
+
+        // Should NOT create new config, just update existing
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .launch_context
+                .configs
+                .configs
+                .len(),
+            1
+        );
+
+        // Verify flavor was set in launch_context state (not config struct)
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.flavor,
+            Some("staging".to_string())
+        );
+    }
+
+    #[test]
+    fn test_flavor_selected_vscode_config_no_save() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add VSCode config (read-only)
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "VSCode Config".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::VSCode,
+                display_name: "VSCode Config".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let result = handle_flavor_selected(&mut state, Some("production".to_string()));
+
+        // Should NOT trigger auto-save for VSCode config
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_dart_defines_updated_no_config_creates_default() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        // No config selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+
+        let defines = vec![
+            DartDefine::new("API_URL", "https://api.dev"),
+            DartDefine::new("DEBUG_MODE", "true"),
+        ];
+
+        let result = handle_dart_defines_updated(&mut state, defines);
+
+        // Config should be created and selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_some());
+        let idx = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .unwrap();
+        let config = &state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs[idx];
+
+        assert_eq!(config.config.name, "Default");
+        assert_eq!(config.source, ConfigSource::FDemon);
+
+        // Verify dart_defines were set in launch_context state (not config struct)
+        let state_defines = &state.new_session_dialog_state.launch_context.dart_defines;
+        assert_eq!(state_defines.len(), 2);
+        assert_eq!(state_defines[0].key, "API_URL");
+        assert_eq!(state_defines[0].value, "https://api.dev");
+        assert_eq!(state_defines[1].key, "DEBUG_MODE");
+        assert_eq!(state_defines[1].value, "true");
+
+        // Should trigger auto-save
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::AutoSaveConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn test_dart_defines_cleared_no_config_no_create() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Clear dart-defines (empty vec) - should NOT create config
+        let result = handle_dart_defines_updated(&mut state, vec![]);
+
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .is_empty());
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_dart_defines_updated_existing_config_no_create() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add and select existing config
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "Existing".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+                display_name: "Existing".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let defines = vec![DartDefine::new("ENV", "staging")];
+
+        let _result = handle_dart_defines_updated(&mut state, defines);
+
+        // Should NOT create new config, just update existing
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .launch_context
+                .configs
+                .configs
+                .len(),
+            1
+        );
+
+        // Verify dart_defines were set in launch_context state (not config struct)
+        let state_defines = &state.new_session_dialog_state.launch_context.dart_defines;
+        assert_eq!(state_defines.len(), 1);
+        assert_eq!(state_defines[0].key, "ENV");
+        assert_eq!(state_defines[0].value, "staging");
+    }
+
+    #[test]
+    fn test_dart_defines_vscode_config_no_save() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add VSCode config (read-only)
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "VSCode Config".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::VSCode,
+                display_name: "VSCode Config".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let defines = vec![DartDefine::new("KEY", "value")];
+
+        let result = handle_dart_defines_updated(&mut state, defines);
+
+        // Should NOT trigger auto-save for VSCode config
+        assert!(result.action.is_none());
+    }
 }

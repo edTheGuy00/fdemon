@@ -32,22 +32,22 @@ Fix critical device discovery and caching issues that impact first-run experienc
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-cache-preload](tasks/01-cache-preload.md) | Not Started | - | `state.rs` |
-| 2 | [02-bootable-discovery-startup](tasks/02-bootable-discovery-startup.md) | Not Started | - | `update.rs`, `target_selector.rs` |
-| 3 | [03-bootable-cache](tasks/03-bootable-cache.md) | Not Started | 02 | `state.rs`, `update.rs` |
+| 1 | [01-cache-preload](tasks/01-cache-preload.md) | Done | - | `state.rs` |
+| 2 | [02-bootable-discovery-startup](tasks/02-bootable-discovery-startup.md) | Done | - | `update.rs`, `target_selector.rs` |
+| 3 | [03-bootable-cache](tasks/03-bootable-cache.md) | Done | 02 | `state.rs`, `update.rs` |
 
 ## Success Criteria
 
 Phase 1 is complete when:
 
-- [ ] Opening dialog second time shows connected devices instantly (from cache)
-- [ ] Bootable devices populate on first dialog open (after tool check completes)
-- [ ] Bootable devices are cached and show instantly on subsequent dialog opens
-- [ ] "r" key refreshes both connected and bootable tabs
-- [ ] No regression in device selection flow
-- [ ] All new code has unit tests
-- [ ] `cargo test` passes
-- [ ] `cargo clippy` passes
+- [x] Opening dialog second time shows connected devices instantly (from cache)
+- [x] Bootable devices populate on first dialog open (after tool check completes)
+- [x] Bootable devices are cached and show instantly on subsequent dialog opens
+- [x] "r" key refreshes both connected and bootable tabs
+- [x] No regression in device selection flow
+- [x] All new code has unit tests
+- [x] `cargo test` passes
+- [x] `cargo clippy` passes
 
 ## Notes
 

@@ -114,17 +114,54 @@ Manual testing at widths 48, 49, 50 is the primary verification.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Analysis Results
+
+The threshold of 48 is **already correct** and does not need adjustment. The constant applies to the **inner content area** (after borders are subtracted), not the total widget width.
 
 **Testing Results:**
 
-| Width | Mode Label Display | Issues |
-|-------|-------------------|--------|
-| 48 | | |
-| 49 | | |
-| 50 | | |
+| Width | Border Overhead | Inner Width | Mode Label Display | Behavior |
+|-------|----------------|-------------|-------------------|----------|
+| 48 | 2 | 46 | Abbreviated ("Dbg", "Prof", "Rel") | Correct |
+| 49 | 2 | 47 | Abbreviated ("Dbg", "Prof", "Rel") | Correct |
+| 50 | 2 | 48 | Full ("Debug", "Profile", "Release") | Correct |
 
-**Adjustment Needed:** Yes/No
+**Adjustment Needed:** No
 
-**Files Modified:**
-(If adjustments were made)
+The threshold works correctly because:
+1. `MODE_FULL_LABEL_MIN_WIDTH = 48` is compared against the inner area width (after border deduction)
+2. When the widget has a total width of 50, the inner width is 48, meeting the threshold
+3. This provides the desired behavior: full labels appear when 48+ columns of content space are available
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Added documentation comment explaining that the threshold applies to inner content area and requires total width of 50 with borders |
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Added test `test_mode_inline_with_borders_threshold` to verify correct behavior at widths 48, 49, and 50 |
+
+### Notable Decisions/Tradeoffs
+
+1. **No constant adjustment**: The threshold of 48 is already correct. It applies to the inner content area, not the total widget width. With 2-column border overhead, this naturally requires a total width of 50 to show full labels.
+
+2. **Added clarifying documentation**: Updated the constant's doc comment to explicitly state that it applies to the inner content area and that a widget with borders requires a total width of 50.
+
+3. **Added comprehensive test**: Created `test_mode_inline_with_borders_threshold` to verify the correct behavior with borders at the critical widths (48, 49, 50). This ensures the threshold continues to work correctly even if refactoring occurs.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test launch_context` - Passed (34 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+**Test Verification:**
+- Width 48 with borders (inner 46): Shows abbreviated labels ("Dbg", "Prof", "Rel") ✓
+- Width 49 with borders (inner 47): Shows abbreviated labels ("Dbg", "Prof", "Rel") ✓
+- Width 50 with borders (inner 48): Shows full labels ("Debug", "Profile", "Release") ✓
+
+### Risks/Limitations
+
+None. The threshold is working as designed and provides the expected responsive behavior.

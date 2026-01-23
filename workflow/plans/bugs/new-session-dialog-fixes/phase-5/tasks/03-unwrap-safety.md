@@ -136,4 +136,28 @@ cargo test launch_context
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Replaced `.unwrap()` calls on lines 170 and 276 with safe `if let Some(config)` pattern matching for logging |
+
+### Notable Decisions/Tradeoffs
+
+1. **Safe Pattern Matching**: Replaced both `.unwrap()` calls with `if let Some(config) = state.new_session_dialog_state.launch_context.selected_config()` pattern, which gracefully handles the case where `selected_config()` returns `None` by simply not logging (no-op behavior).
+2. **Logging Preserved**: The logging still occurs when a config exists, maintaining the same informational output while preventing potential panics.
+3. **Pre-existing Test Failures**: Tests `test_flavor_selected_no_config_creates_default`, `test_flavor_selected_existing_config_no_create`, `test_dart_defines_updated_no_config_creates_default`, and `test_dart_defines_updated_existing_config_no_create` are failing due to incomplete feature implementation (missing logic to update config struct with flavor/dart-defines), NOT due to the unwrap replacements. This appears to be from an incomplete refactoring visible in git history.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed (no unwrap warnings)
+- `cargo test launch_context` - 29 passed, 4 failed (pre-existing failures unrelated to unwrap changes)
+
+### Risks/Limitations
+
+1. **Test Failures**: The 4 failing tests indicate incomplete functionality in the handlers (missing config struct updates), but this is outside the scope of this unwrap safety task. The unwrap replacements themselves are correct and prevent potential panics.
+2. **No Behavior Change**: The if-let pattern maintains existing behavior - logging occurs when config exists, silently skips when None (which should never happen after `create_and_select_default_config()`, but defensive coding prevents panics).

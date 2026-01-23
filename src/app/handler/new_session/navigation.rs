@@ -173,8 +173,11 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     // Show the dialog
     state.show_new_session_dialog(configs);
 
-    // Check cache first (Task 04 - Device Cache Usage)
-    if let Some(cached_devices) = state.get_cached_devices() {
+    // Check cache first - this is the ONLY place where cache is checked and populated
+    // to avoid duplicate logic. The handler manages both cache checking and background refresh.
+
+    // Check connected devices cache
+    let has_connected_cache = if let Some(cached_devices) = state.get_cached_devices() {
         tracing::debug!(
             "Using cached devices ({} devices, age: {:?})",
             cached_devices.len(),
@@ -186,8 +189,28 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
             .new_session_dialog_state
             .target_selector
             .set_connected_devices(cached_devices.clone());
+        true
+    } else {
+        false
+    };
 
-        // Trigger background refresh to keep data fresh
+    // Check bootable devices cache (independent of connected devices cache)
+    if let Some((simulators, avds)) = state.get_cached_bootable_devices() {
+        tracing::debug!(
+            "Using cached bootable devices ({} simulators, {} AVDs, age: {:?})",
+            simulators.len(),
+            avds.len(),
+            state.bootable_last_updated.map(|t| t.elapsed())
+        );
+
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_bootable_devices(simulators, avds);
+    }
+
+    // If we have connected device cache, trigger background refresh
+    if has_connected_cache {
         return UpdateResult::action(UpdateAction::RefreshDevicesBackground);
     }
 
@@ -486,6 +509,12 @@ mod tests {
             .new_session_dialog_state
             .target_selector
             .set_tab(TargetTab::Connected);
+
+        // Simulate that initial discovery has completed (no devices found)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_loading = false;
 
         let result = handle_switch_tab(&mut state, TargetTab::Bootable);
 

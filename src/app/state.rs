@@ -7,7 +7,7 @@ use rand::Rng;
 use crate::app::new_session_dialog::NewSessionDialogState;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::core::AppPhase;
-use crate::daemon::{Device, ToolAvailability};
+use crate::daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 use crate::tui::widgets::ConfirmDialogState;
 
 use super::session_manager::SessionManager;
@@ -340,6 +340,16 @@ pub struct AppState {
     /// Task 08e - Device Cache Sharing
     pub devices_last_updated: Option<std::time::Instant>,
 
+    /// Bootable device cache - iOS simulators (Bug Fix: Task 03)
+    pub ios_simulators_cache: Option<Vec<IosSimulator>>,
+
+    /// Bootable device cache - Android AVDs (Bug Fix: Task 03)
+    pub android_avds_cache: Option<Vec<AndroidAvd>>,
+
+    /// When bootable devices were last discovered (for cache invalidation)
+    /// Bug Fix: Task 03 - Bootable Device Caching
+    pub bootable_last_updated: Option<std::time::Instant>,
+
     /// Cached tool availability (checked at startup)
     /// Phase 4, Task 05 - Discovery Integration
     pub tool_availability: ToolAvailability,
@@ -375,6 +385,9 @@ impl AppState {
             loading_state: None,
             device_cache: None,
             devices_last_updated: None,
+            ios_simulators_cache: None,
+            android_avds_cache: None,
+            bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
         }
     }
@@ -407,8 +420,9 @@ impl AppState {
     }
 
     /// Check if new session dialog is visible
+    /// Both UiMode::Startup and UiMode::NewSessionDialog show the new session dialog
     pub fn is_new_session_dialog_visible(&self) -> bool {
-        self.ui_mode == UiMode::NewSessionDialog
+        self.ui_mode == UiMode::NewSessionDialog || self.ui_mode == UiMode::Startup
     }
 
     /// Check if any session should prevent immediate quit
@@ -514,6 +528,41 @@ impl AppState {
     pub fn set_device_cache(&mut self, devices: Vec<Device>) {
         self.device_cache = Some(devices);
         self.devices_last_updated = Some(std::time::Instant::now());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Bootable Device Cache Helpers (Bug Fix: Task 03)
+    // ─────────────────────────────────────────────────────────
+
+    /// Get cached bootable devices if fresh enough (within TTL)
+    ///
+    /// Returns both iOS simulators and Android AVDs from cache if valid.
+    /// Cache is considered valid for 30 seconds to balance freshness with responsiveness.
+    /// Bootable device changes are rare (simulator/AVD creation/deletion) so this is a safe tradeoff.
+    pub fn get_cached_bootable_devices(&self) -> Option<(Vec<IosSimulator>, Vec<AndroidAvd>)> {
+        // Cache TTL of 30 seconds (same as connected devices)
+        const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
+
+        if let (Some(ref simulators), Some(ref avds), Some(updated)) = (
+            &self.ios_simulators_cache,
+            &self.android_avds_cache,
+            self.bootable_last_updated,
+        ) {
+            if updated.elapsed() < CACHE_TTL {
+                return Some((simulators.clone(), avds.clone()));
+            }
+        }
+        None
+    }
+
+    /// Update the bootable device cache with fresh results
+    ///
+    /// Called after successful bootable device discovery to cache results globally.
+    /// The NewSessionDialog uses this shared cache to show bootable devices instantly.
+    pub fn set_bootable_cache(&mut self, simulators: Vec<IosSimulator>, avds: Vec<AndroidAvd>) {
+        self.ios_simulators_cache = Some(simulators);
+        self.android_avds_cache = Some(avds);
+        self.bootable_last_updated = Some(std::time::Instant::now());
     }
 }
 
@@ -818,4 +867,128 @@ mod tests {
         assert!(!state.is_new_session_dialog_visible());
         assert_eq!(state.ui_mode, UiMode::Normal);
     }
+
+    #[test]
+    fn test_startup_mode_is_dialog_visible() {
+        // UiMode::Startup also shows the new session dialog
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+        assert!(state.is_new_session_dialog_visible());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Cache Preload Tests (Moved to handler tests - Task 01)
+    // These tests have been moved to app/handler/new_session/navigation.rs
+    // because cache checking is now done in the handler, not in show_new_session_dialog().
+    // This follows TEA principles where state methods are pure and handlers contain logic.
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_show_new_session_dialog_does_not_populate_cache() {
+        let mut state = AppState::new();
+        let configs = LoadedConfigs::default();
+
+        // Simulate cached devices
+        let devices = vec![
+            test_device("device1", "Test Device 1"),
+            test_device("device2", "Test Device 2"),
+        ];
+        state.set_device_cache(devices.clone());
+
+        // Open dialog - should NOT populate from cache (handler does this)
+        state.show_new_session_dialog(configs);
+
+        // Verify devices are NOT pre-populated (handler responsibility)
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .connected_devices
+                .len(),
+            0
+        );
+    }
+
+    #[test]
+    fn test_show_new_session_dialog_sets_ui_mode() {
+        let mut state = AppState::new();
+        let configs = LoadedConfigs::default();
+
+        // Open dialog
+        state.show_new_session_dialog(configs);
+
+        // Verify UI mode is set
+        assert_eq!(state.ui_mode, UiMode::NewSessionDialog);
+    }
+
+    // These cache tests have been moved to handler tests because
+    // cache population is now done in handle_open_new_session_dialog(),
+    // not in show_new_session_dialog(). This follows TEA principles.
+
+    // ─────────────────────────────────────────────────────────
+    // Bootable Device Cache Tests (Bug Fix: Task 03)
+    // ─────────────────────────────────────────────────────────
+
+    // Helper to create a test iOS simulator
+    fn test_ios_simulator(udid: &str, name: &str) -> IosSimulator {
+        IosSimulator {
+            udid: udid.to_string(),
+            name: name.to_string(),
+            runtime: "iOS 17.2".to_string(),
+            state: crate::daemon::SimulatorState::Shutdown,
+            device_type: "iPhone 15".to_string(),
+        }
+    }
+
+    // Helper to create a test Android AVD
+    fn test_android_avd(name: &str) -> AndroidAvd {
+        AndroidAvd {
+            name: name.to_string(),
+            display_name: format!("{} Display", name),
+            api_level: Some(33),
+            target: Some("android-33".to_string()),
+        }
+    }
+
+    #[test]
+    fn test_set_bootable_cache() {
+        let mut state = AppState::default();
+        let simulators = vec![test_ios_simulator("test-udid", "iPhone 15")];
+        let avds = vec![test_android_avd("Pixel_7")];
+
+        state.set_bootable_cache(simulators.clone(), avds.clone());
+
+        assert!(state.ios_simulators_cache.is_some());
+        assert!(state.android_avds_cache.is_some());
+        assert!(state.bootable_last_updated.is_some());
+        assert_eq!(state.ios_simulators_cache.as_ref().unwrap().len(), 1);
+        assert_eq!(state.android_avds_cache.as_ref().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_get_cached_bootable_devices_valid() {
+        let mut state = AppState::default();
+        let simulators = vec![test_ios_simulator("test-udid", "iPhone 15")];
+        let avds = vec![test_android_avd("Pixel_7")];
+        state.set_bootable_cache(simulators.clone(), avds.clone());
+
+        let cached = state.get_cached_bootable_devices();
+        assert!(cached.is_some());
+        let (s, a) = cached.unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!(a.len(), 1);
+        assert_eq!(s[0].name, "iPhone 15");
+        assert_eq!(a[0].name, "Pixel_7");
+    }
+
+    #[test]
+    fn test_get_cached_bootable_devices_empty_when_not_set() {
+        let state = AppState::default();
+        let cached = state.get_cached_bootable_devices();
+        assert!(cached.is_none());
+    }
+
+    // Bootable cache tests have been moved to handler tests because
+    // cache population is now done in handle_open_new_session_dialog(),
+    // not in show_new_session_dialog(). This follows TEA principles.
 }

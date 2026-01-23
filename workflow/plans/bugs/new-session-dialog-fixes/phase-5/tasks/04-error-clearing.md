@@ -112,4 +112,28 @@ fn test_set_bootable_devices_clears_error() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Added `self.error = None;` to `set_bootable_devices()` method at line 229; Added two new tests: `test_set_bootable_devices_clears_error()` and `test_set_connected_devices_clears_error()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Error Clearing Consistency**: Added error clearing to `set_bootable_devices()` to match the behavior of `set_connected_devices()`. Both methods now clear any previous error state when devices are successfully loaded, ensuring users don't see stale error messages.
+
+2. **Additional Test Coverage**: Added a complementary test `test_set_connected_devices_clears_error()` to verify that the existing behavior in `set_connected_devices()` is also properly tested and documented.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test clears_error` - Passed (2 new tests)
+- `cargo test target_selector` - Passed (45 tests total, including 2 new tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None. This is a straightforward bug fix that adds consistency between two similar methods. The change is minimal and well-tested.

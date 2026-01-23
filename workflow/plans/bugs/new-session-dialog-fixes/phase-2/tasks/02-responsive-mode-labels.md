@@ -236,23 +236,37 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Modified `render_mode_inline()` to use responsive labels based on width threshold; added 3 unit tests |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **Fixed Threshold (48)**: Used Option A from the task specification - a simple fixed threshold of 48 columns. This is predictable and easy to test. The threshold was extracted as a constant `MODE_FULL_LABEL_MIN_WIDTH` for maintainability.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **Added Space After Indicators**: Changed from `(●)Dbg` to `(●) Debug` format to match the full ModeSelector widget's spacing pattern. This provides better visual consistency between horizontal and compact layouts.
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Refactored Style Logic**: Extracted mode indicator and style selection into helper closures to reduce code duplication and improve readability.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `cargo test --lib` - Passed (1469 tests, 1 pre-existing failure unrelated to this task)
+- `cargo test launch_context_tests::test_mode_inline --lib` - Passed (all 3 new tests)
+
+**New Tests Added:**
+- `test_mode_inline_full_labels_wide_area` - Verifies full labels shown when width >= 48
+- `test_mode_inline_abbreviated_labels_narrow_area` - Verifies abbreviated labels shown when width < 48
+- `test_mode_inline_threshold_boundary` - Verifies behavior at exact threshold (48) and just below (47)
+
+### Risks/Limitations
+
+1. **Coordination with Task 01**: Task 01 (compact mode borders) is being worked on concurrently. If borders are added, the available width will be reduced by 2, which may require adjusting the threshold from 48 to 50. However, since we're modifying different functions (`render_compact()` vs `render_mode_inline()`), there should be no merge conflicts.
+
+2. **Portrait Width Range**: The task notes mention portrait mode width range is 40-69 columns, with dialog width at 90% = 36-62 columns. The threshold of 48 sits in the middle of this range, ensuring abbreviated labels are used on the narrowest devices (36-47) and full labels on wider ones (48-62).

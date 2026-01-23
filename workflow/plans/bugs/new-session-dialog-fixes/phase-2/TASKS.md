@@ -27,22 +27,22 @@ Fix visual inconsistencies in portrait layout mode. Add section titles and borde
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-compact-borders-titles](tasks/01-compact-borders-titles.md) | Not Started | - | `target_selector.rs`, `launch_context.rs` |
-| 2 | [02-responsive-mode-labels](tasks/02-responsive-mode-labels.md) | Not Started | - | `launch_context.rs` |
+| 1 | [01-compact-borders-titles](tasks/01-compact-borders-titles.md) | Done | - | `target_selector.rs`, `launch_context.rs` |
+| 2 | [02-responsive-mode-labels](tasks/02-responsive-mode-labels.md) | Done | - | `launch_context.rs` |
 
 ## Success Criteria
 
 Phase 2 is complete when:
 
-- [ ] Portrait layout shows "Target Selector" title with border
-- [ ] Portrait layout shows "Launch Context" title with border
-- [ ] Mode buttons show full labels ("Debug", "Profile", "Release") when width >= 45
-- [ ] Mode buttons show abbreviated labels ("Dbg", "Prof", "Rel") when width < 45
-- [ ] No visual regression in horizontal layout
-- [ ] Borders don't consume excessive vertical space
-- [ ] All new code has unit tests
-- [ ] `cargo test` passes
-- [ ] `cargo clippy` passes
+- [x] Portrait layout shows "Target Selector" title with border
+- [x] Portrait layout shows "Launch Context" title with border
+- [x] Mode buttons show full labels ("Debug", "Profile", "Release") when width >= 48
+- [x] Mode buttons show abbreviated labels ("Dbg", "Prof", "Rel") when width < 48
+- [x] No visual regression in horizontal layout
+- [x] Borders don't consume excessive vertical space
+- [x] All new code has unit tests
+- [x] `cargo test` passes
+- [x] `cargo clippy` passes
 
 ## Notes
 

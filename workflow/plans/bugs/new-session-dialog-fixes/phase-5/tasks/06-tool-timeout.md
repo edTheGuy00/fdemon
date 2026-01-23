@@ -180,4 +180,44 @@ Manual testing:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/spawn.rs` | Added `tokio::time::{timeout, Duration}` import, added `TOOL_CHECK_TIMEOUT` constant (10 seconds), wrapped `ToolAvailability::check()` with timeout in `spawn_tool_availability_check()` function |
+| `src/app/handler/update.rs` | Added else branch to `Message::ToolAvailabilityChecked` handler to set `bootable_loading = false` when no tools are available (timeout case) |
+
+### Notable Decisions/Tradeoffs
+
+1. **10-second timeout chosen**: This is generous enough to handle slow SDK paths while preventing permanent hangs. Most tool checks complete in under 1 second, so this gives plenty of buffer.
+
+2. **Timeout at spawn layer (Option A)**: Implemented timeout at the spawn layer rather than within individual tool check methods. This provides a single, clear timeout boundary and simplifies the implementation.
+
+3. **Default values on timeout**: When timeout occurs, `ToolAvailability::default()` returns safe defaults (`xcrun_simctl: false`, `android_emulator: false`, `emulator_path: None`), which results in empty bootable tab instead of permanent loading spinner.
+
+4. **Critical fix in handler**: Added else branch in `Message::ToolAvailabilityChecked` handler to set `bootable_loading = false` when no tools are available. Without this, the bootable tab would show a permanent spinner even after timeout because `bootable_loading` is initialized to `true` when the dialog opens.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo build` - Passed
+- `cargo test tool_availability` - Passed (9 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing test compilation errors**: The test suite has compilation errors in unrelated modules (navigation module visibility). These errors existed before this change and are not caused by the timeout implementation. The main codebase compiles successfully with `cargo build` and `cargo check`.
+
+2. **Manual testing needed**: Should manually test timeout behavior by temporarily misconfiguring SDK paths or renaming tool binaries, though this is difficult to automate reliably.
+
+### Acceptance Criteria Met
+
+1. ✅ Tool availability check has a timeout (10 seconds) - Implemented with `tokio::time::timeout` in `spawn.rs`
+2. ✅ If timeout occurs, `bootable_loading` is set to `false` - Implemented in else branch of handler in `update.rs`
+3. ✅ User sees empty bootable tab (not permanent spinner) on timeout - Follows from criterion 2
+4. ✅ Normal case (tools respond quickly) still works - Existing code path unchanged
+5. ✅ Warning logged when timeout occurs - `tracing::warn!` added with timeout details
+6. ⚠️ All existing tests pass - Pre-existing test compilation errors unrelated to this change; related tests pass

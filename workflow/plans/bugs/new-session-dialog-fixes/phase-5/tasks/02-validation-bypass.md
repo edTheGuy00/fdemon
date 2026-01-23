@@ -167,4 +167,31 @@ fn test_vscode_config_flavor_not_modifiable() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Removed direct config mutation blocks in `handle_flavor_selected()` (lines 184-199) and `handle_dart_defines_updated()` (lines 292-311) that bypassed validation. Updated tests to verify launch_context state instead of config struct mutation. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test Assertion Updates**: Tests were updated to check `state.new_session_dialog_state.launch_context.flavor` and `.dart_defines` instead of the underlying config struct fields. This correctly validates that the validated setters (`set_flavor()`, `set_dart_defines()`) are working, not that config structs are being mutated directly.
+
+2. **Validation Enforcement**: By removing the bypass code, VSCode configs are now truly read-only. The validated setters check `is_flavor_editable()` and `are_dart_defines_editable()` which return `false` for VSCode configs, preventing any modification.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test launch_context` - Passed (33 tests)
+- `cargo test flavor` - Passed (15 tests)
+- `cargo test dart_defines` - Passed (47 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Config Persistence**: Config changes are now only persisted through the auto-save mechanism, not through direct mutation. This is the correct behavior - the auto-save action is triggered for FDemon configs only, ensuring VSCode configs remain read-only.
+
+2. **State Synchronization**: The launch_context state fields (`flavor`, `dart_defines`) are the source of truth, not the config struct fields. When launching, these values are read from launch_context state via `build_launch_params()`.

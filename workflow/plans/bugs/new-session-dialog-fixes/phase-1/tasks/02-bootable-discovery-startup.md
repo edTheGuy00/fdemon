@@ -151,23 +151,46 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
 
-**Files Modified:**
-- (to be filled after implementation)
+### Files Modified
 
-**Implementation Details:**
+| File | Changes |
+|------|---------|
+| `src/app/handler/update.rs` | Modified `ToolAvailabilityChecked` handler to trigger bootable discovery when tools are available |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Changed `bootable_loading` default from `false` to `true` |
+| `src/app/handler/tests.rs` | Added 3 new unit tests for bootable discovery startup behavior |
+| `src/app/handler/new_session/navigation.rs` | Fixed existing test to account for new default `bootable_loading` state |
 
-(to be filled after implementation)
+### Notable Decisions/Tradeoffs
 
-**Testing Performed:**
-- `cargo fmt` -
-- `cargo check` -
-- `cargo clippy` -
-- `cargo test` -
+1. **Automatic Discovery Trigger**: When `ToolAvailabilityChecked` message is received, if either `xcrun_simctl` or `android_emulator` is available, the handler automatically sets `bootable_loading: true` and returns `UpdateAction::DiscoverBootableDevices`. This ensures bootable devices are discovered as soon as we know which tools are available.
 
-**Notable Decisions:**
-- (to be filled after implementation)
+2. **Default Loading State**: Setting `bootable_loading: true` in the default state shows a loading indicator immediately when the dialog opens, providing better UX feedback while tools are being checked and devices discovered.
 
-**Risks/Limitations:**
-- (to be filled after implementation)
+3. **Graceful Degradation**: If no tools are available (neither iOS nor Android emulator tools), the handler simply returns `UpdateResult::none()`, preventing unnecessary discovery attempts and leaving the bootable tab empty.
+
+4. **Test Compatibility**: Updated existing `test_switch_tab_to_bootable_triggers_discovery` to set `bootable_loading: false` before testing, simulating the scenario where initial discovery has completed with no devices found.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo clippy -- -D warnings` - Passed
+- `cargo test --lib` - Passed (1450 passed, 1 pre-existing failure unrelated to changes)
+
+**New Tests Added:**
+- `test_tool_availability_triggers_bootable_discovery` - Verifies discovery is triggered when tools are available
+- `test_no_tools_available_no_discovery` - Verifies no discovery when no tools available
+- `test_target_selector_default_shows_bootable_loading` - Verifies default loading state
+
+**Existing Tests Updated:**
+- `test_switch_tab_to_bootable_triggers_discovery` - Updated to account for new default state
+
+### Risks/Limitations
+
+1. **Pre-existing Test Failure**: `test_truncate_middle_very_short` in `src/tui/widgets/new_session_dialog/mod.rs` was already failing before our changes and remains failing. This is unrelated to bootable discovery functionality.
+
+2. **Timing Dependency**: The bootable discovery now depends on tool availability check completing first. This is the intended behavior, but there's a brief period where the bootable tab shows "Discovering devices..." before tools are even checked. This is acceptable as tool checking is very fast (~100ms).
+
+3. **No Explicit Timeout**: If tool availability check never completes (edge case), bootable tab would show loading forever. However, this is mitigated by the tool availability check having its own timeout handling in the spawn layer.

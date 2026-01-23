@@ -13,7 +13,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Widget},
+    widgets::{BorderType, Paragraph, Widget},
 };
 
 /// Styles for Launch Context fields
@@ -768,8 +768,24 @@ impl LaunchContextWithDevice<'_> {
         launch_button.render(chunks[9], buf);
     }
 
-    /// Render compact (vertical layout) mode - tighter spacing, inline mode selector
+    /// Render compact (vertical layout) mode - with border, tighter spacing, inline mode selector
     fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Add border with title
+        let border_style = if self.is_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let block = Block::default()
+            .title(" Launch Context ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
         // Compact layout: fewer spacers, inline mode
         let chunks = Layout::vertical([
             Constraint::Length(1), // Config field
@@ -780,7 +796,7 @@ impl LaunchContextWithDevice<'_> {
             Constraint::Length(1), // Launch button
             Constraint::Min(0),    // Rest
         ])
-        .split(area);
+        .split(inner);
 
         // Render config field
         render_config_field(chunks[0], buf, self.state, self.is_focused);
@@ -803,8 +819,13 @@ impl LaunchContextWithDevice<'_> {
         launch_button.render(chunks[5], buf);
     }
 
-    /// Render mode selector as inline radio buttons with abbreviated labels
+    /// Render mode selector as inline radio buttons with responsive labels
     fn render_mode_inline(&self, area: Rect, buf: &mut Buffer) {
+        /// Minimum width to show full mode labels ("Debug", "Profile", "Release").
+        /// This threshold applies to the inner content area width (after borders).
+        /// For a widget with 2-column border overhead, this requires a total width of 50.
+        const MODE_FULL_LABEL_MIN_WIDTH: u16 = 48;
+
         let mode_focused =
             self.is_focused && self.state.focused_field == super::state::LaunchContextField::Mode;
         let mode_disabled = !self.state.is_mode_editable();
@@ -826,46 +847,60 @@ impl LaunchContextWithDevice<'_> {
 
         let style_label = Style::default().fg(Color::Gray);
 
+        // Determine if we have space for full labels
+        // Full labels need ~42 chars, abbreviated need ~24 chars
+        // Add buffer for "Mode: " prefix (8 chars) and margins
+        let use_full_labels = area.width >= MODE_FULL_LABEL_MIN_WIDTH;
+
+        let (debug_label, profile_label, release_label) = if use_full_labels {
+            ("Debug", "Profile", "Release")
+        } else {
+            ("Dbg", "Prof", "Rel")
+        };
+
         use crate::config::FlutterMode;
+
+        let mode_indicator = |mode: FlutterMode| -> &'static str {
+            if self.state.mode == mode {
+                "(●) "
+            } else {
+                "(○) "
+            }
+        };
+
+        let debug_style = if self.state.mode == FlutterMode::Debug {
+            style_selected
+        } else {
+            style_unselected
+        };
+
+        let profile_style = if self.state.mode == FlutterMode::Profile {
+            style_selected
+        } else {
+            style_unselected
+        };
+
+        let release_style = if self.state.mode == FlutterMode::Release {
+            style_selected
+        } else {
+            style_unselected
+        };
+
         let mode_str = vec![
             ratatui::text::Span::styled("  Mode: ", style_label),
             ratatui::text::Span::styled(
-                if self.state.mode == FlutterMode::Debug {
-                    "(●)Dbg"
-                } else {
-                    "(○)Dbg"
-                },
-                if self.state.mode == FlutterMode::Debug {
-                    style_selected
-                } else {
-                    style_unselected
-                },
+                format!("{}{}", mode_indicator(FlutterMode::Debug), debug_label),
+                debug_style,
             ),
-            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::raw("  "),
             ratatui::text::Span::styled(
-                if self.state.mode == FlutterMode::Profile {
-                    "(●)Prof"
-                } else {
-                    "(○)Prof"
-                },
-                if self.state.mode == FlutterMode::Profile {
-                    style_selected
-                } else {
-                    style_unselected
-                },
+                format!("{}{}", mode_indicator(FlutterMode::Profile), profile_label),
+                profile_style,
             ),
-            ratatui::text::Span::raw(" "),
+            ratatui::text::Span::raw("  "),
             ratatui::text::Span::styled(
-                if self.state.mode == FlutterMode::Release {
-                    "(●)Rel"
-                } else {
-                    "(○)Rel"
-                },
-                if self.state.mode == FlutterMode::Release {
-                    style_selected
-                } else {
-                    style_unselected
-                },
+                format!("{}{}", mode_indicator(FlutterMode::Release), release_label),
+                release_style,
             ),
         ];
 
@@ -1052,5 +1087,290 @@ mod launch_context_tests {
         assert!(content.contains("Mode"));
         assert!(content.contains("Flavor"));
         assert!(content.contains("Dart Defines"));
+    }
+
+    #[test]
+    fn test_mode_inline_full_labels_wide_area() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.mode = FlutterMode::Debug;
+
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                // Render mode inline directly on the full area
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Debug"), "Should show full 'Debug' label");
+        assert!(
+            content.contains("Profile"),
+            "Should show full 'Profile' label"
+        );
+        assert!(
+            content.contains("Release"),
+            "Should show full 'Release' label"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_abbreviated_labels_narrow_area() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.mode = FlutterMode::Debug;
+
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Dbg"),
+            "Should show abbreviated 'Dbg' label"
+        );
+        assert!(
+            content.contains("Prof"),
+            "Should show abbreviated 'Prof' label"
+        );
+        assert!(
+            content.contains("Rel"),
+            "Should show abbreviated 'Rel' label"
+        );
+        assert!(
+            !content.contains("Debug"),
+            "Should NOT show full 'Debug' label"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_threshold_boundary() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Exactly at threshold (48)
+        let backend_at = TestBackend::new(48, 1);
+        let mut terminal_at = Terminal::new(backend_at).unwrap();
+
+        terminal_at
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer_at = terminal_at.backend().buffer();
+        let content_at: String = buffer_at.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_at.contains("Debug"),
+            "At threshold should use full labels"
+        );
+
+        // Just below threshold (47)
+        let backend_below = TestBackend::new(47, 1);
+        let mut terminal_below = Terminal::new(backend_below).unwrap();
+
+        terminal_below
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer_below = terminal_below.backend().buffer();
+        let content_below: String = buffer_below.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_below.contains("Dbg"),
+            "Below threshold should use abbreviated labels"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_with_borders_threshold() {
+        // Verify that the threshold accounts for the 2-column border overhead.
+        // When the compact widget (with borders) is rendered at width 50,
+        // the inner content area is 48 columns, which should trigger full labels.
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Test at width 50: should show full labels
+        let backend_50 = TestBackend::new(50, 10);
+        let mut terminal_50 = Terminal::new(backend_50).unwrap();
+
+        terminal_50
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_50 = terminal_50.backend().buffer();
+        let content_50: String = buffer_50.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_50.contains("Debug")
+                && content_50.contains("Profile")
+                && content_50.contains("Release"),
+            "Width 50 should show full labels (inner width 48)"
+        );
+        assert!(
+            !content_50.contains("Dbg"),
+            "Width 50 should not show abbreviated 'Dbg' label"
+        );
+
+        // Test at width 49: should show abbreviated labels
+        let backend_49 = TestBackend::new(49, 10);
+        let mut terminal_49 = Terminal::new(backend_49).unwrap();
+
+        terminal_49
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_49 = terminal_49.backend().buffer();
+        let content_49: String = buffer_49.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_49.contains("Dbg") && content_49.contains("Prof") && content_49.contains("Rel"),
+            "Width 49 should show abbreviated labels (inner width 47)"
+        );
+
+        // Test at width 48: should show abbreviated labels
+        let backend_48 = TestBackend::new(48, 10);
+        let mut terminal_48 = Terminal::new(backend_48).unwrap();
+
+        terminal_48
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_48 = terminal_48.backend().buffer();
+        let content_48: String = buffer_48.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_48.contains("Dbg") && content_48.contains("Prof") && content_48.contains("Rel"),
+            "Width 48 should show abbreviated labels (inner width 46)"
+        );
+    }
+
+    // Tests for Task 01 - Compact Borders and Titles
+
+    #[test]
+    fn test_launch_context_compact_has_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that title is rendered
+        assert!(
+            content.contains("Launch Context"),
+            "Compact mode should show 'Launch Context' title"
+        );
+
+        // Check for border characters (Plain style uses │ and ─)
+        assert!(
+            content.contains("│") || content.contains("─"),
+            "Compact mode should have border characters"
+        );
+    }
+
+    #[test]
+    fn test_launch_context_compact_focused_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test focused
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Visual test - focused border should be cyan (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_launch_context_compact_unfocused_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test unfocused
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Visual test - unfocused border should be dark gray (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_launch_context_compact_content_readable() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                flavor: Some("production".to_string()),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "Production".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.select_config(Some(0));
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that content is still readable within borders
+        assert!(
+            content.contains("Production") || content.contains("Configuration"),
+            "Content should be visible within borders"
+        );
     }
 }
