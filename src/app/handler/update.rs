@@ -1114,6 +1114,41 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Entry Point Discovery Messages (Phase 3, Task 09)
+        // ─────────────────────────────────────────────────────────
+        Message::EntryPointsDiscovered { entry_points } => {
+            // Clear loading flag
+            state
+                .new_session_dialog_state
+                .launch_context
+                .entry_points_loading = false;
+
+            // Cache discovered entry points
+            state
+                .new_session_dialog_state
+                .launch_context
+                .set_available_entry_points(entry_points);
+
+            // Update modal if open
+            if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
+                if modal.modal_type == crate::app::new_session_dialog::FuzzyModalType::EntryPoint {
+                    let items = state
+                        .new_session_dialog_state
+                        .launch_context
+                        .entry_point_modal_items();
+                    modal.items = items;
+
+                    // Reapply fuzzy filter with current query
+                    use crate::tui::widgets::new_session_dialog::fuzzy_modal::fuzzy_filter;
+                    let filtered = fuzzy_filter(&modal.query, &modal.items);
+                    modal.update_filter(filtered);
+                }
+            }
+
+            UpdateResult::none()
+        }
     }
 }
 

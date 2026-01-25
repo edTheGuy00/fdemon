@@ -598,4 +598,12 @@ pub enum Message {
 
     /// Device boot failed
     DeviceBootFailed { device_id: String, error: String },
+
+    // ─────────────────────────────────────────────────────────
+    // Entry Point Discovery Messages (Phase 3, Task 09)
+    // ─────────────────────────────────────────────────────────
+    /// Entry point discovery completed
+    EntryPointsDiscovered {
+        entry_points: Vec<std::path::PathBuf>,
+    },
 }

@@ -414,9 +414,13 @@ pub fn has_main_function_in_content(content: &str) -> bool {
     MAIN_FUNCTION_REGEX.is_match(content)
 }
 
+/// Maximum file size to check for main() function (1MB)
+const MAX_MAIN_CHECK_FILE_SIZE: u64 = 1024 * 1024;
+
 /// Check if a Dart file at the given path contains a main() function.
 ///
 /// Returns `false` if the file cannot be read or doesn't contain main().
+/// Also returns `false` for files larger than 1MB (likely generated code).
 ///
 /// # Arguments
 ///
@@ -431,6 +435,18 @@ pub fn has_main_function_in_content(content: &str) -> bool {
 /// let has_main = has_main_function(Path::new("lib/main.dart"));
 /// ```
 pub fn has_main_function(path: &Path) -> bool {
+    // Skip files that are too large (likely generated code)
+    if let Ok(metadata) = fs::metadata(path) {
+        if metadata.len() > MAX_MAIN_CHECK_FILE_SIZE {
+            tracing::debug!(
+                "Skipping large file ({} bytes): {}",
+                metadata.len(),
+                path.display()
+            );
+            return false;
+        }
+    }
+
     match fs::read_to_string(path) {
         Ok(content) => has_main_function_in_content(&content),
         Err(_) => false,
@@ -1284,5 +1300,32 @@ class MyWidget extends StatelessWidget {
             !entry_points.contains(&PathBuf::from(deep_path)),
             "Should NOT find deeply nested file exceeding depth limit"
         );
+    }
+
+    #[test]
+    fn test_has_main_function_skips_large_files() {
+        let temp = TempDir::new().unwrap();
+        let large_file = temp.path().join("large.dart");
+
+        // Create a file just over 1MB
+        let content = format!(
+            "void main() {{ print('hello'); }}\n{}",
+            "x".repeat(1024 * 1024 + 1)
+        );
+        fs::write(&large_file, content).unwrap();
+
+        // Should return false because file is too large
+        assert!(!has_main_function(&large_file));
+    }
+
+    #[test]
+    fn test_has_main_function_accepts_normal_files() {
+        let temp = TempDir::new().unwrap();
+        let normal_file = temp.path().join("main.dart");
+
+        fs::write(&normal_file, "void main() { print('hello'); }").unwrap();
+
+        // Normal sized file should be checked
+        assert!(has_main_function(&normal_file));
     }
 }

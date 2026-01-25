@@ -216,3 +216,47 @@ mod tests {
 - Modal can be closed before discovery completes (no special handling needed)
 - Pattern matches device discovery flow exactly
 - Discovery results are cached in `available_entry_points` for reuse
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/mod.rs` | Added `UpdateAction::DiscoverEntryPoints` variant |
+| `src/app/message.rs` | Added `Message::EntryPointsDiscovered` variant |
+| `src/app/new_session_dialog/state.rs` | Added `entry_points_loading: bool` field to `LaunchContextState` and initialized in constructor |
+| `src/tui/spawn.rs` | Added `spawn_entry_point_discovery()` function using `tokio::task::spawn_blocking` |
+| `src/tui/actions.rs` | Added match arm for `UpdateAction::DiscoverEntryPoints` to dispatch async task |
+| `src/app/handler/new_session/fuzzy_modal.rs` | Refactored `handle_open_fuzzy_modal()` for EntryPoint to return action instead of blocking; updated 5 tests to reflect async behavior |
+| `src/app/handler/update.rs` | Added handler for `Message::EntryPointsDiscovered` to clear loading flag, cache results, and update modal |
+
+### Notable Decisions/Tradeoffs
+
+1. **spawn_blocking usage**: Used `tokio::task::spawn_blocking` to wrap synchronous `discover_entry_points()` I/O operation, following established pattern for blocking operations in async context
+2. **Placeholder text**: Modal displays "(discovering...)" immediately to provide user feedback while discovery runs
+3. **Fuzzy filter reapplication**: When discovery completes, modal items are updated and fuzzy filter is reapplied with current query to maintain user's search state
+4. **Test refactoring**: Updated 5 existing tests to match async pattern - tests now verify action dispatch and simulate discovery completion via message handling
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1559 tests, 0 failures)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+All tests updated to verify:
+- Modal opens immediately with placeholder
+- Action is returned for async dispatch
+- Loading flag is set during discovery
+- Discovery completion updates modal and clears loading flag
+- Cached entry points persist in state
+
+### Risks/Limitations
+
+1. **No UI indication of loading state**: While `entry_points_loading` flag is set, the TUI layer does not currently display a loading indicator (only placeholder text in modal). Future enhancement could add visual loading state.
+2. **Modal closure during discovery**: If user closes modal before discovery completes, results are still cached but modal won't update. This is acceptable behavior (user explicitly canceled) and matches device discovery pattern.

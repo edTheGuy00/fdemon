@@ -90,3 +90,32 @@ mod tests {
 - Entry point files with `main()` are typically small (< 100 lines)
 - Generated files (localization, protobuf) can be several MB
 - This is a simple, low-risk mitigation for memory issues
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/core/discovery.rs` | Added MAX_MAIN_CHECK_FILE_SIZE constant, file size check in has_main_function(), and unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **File size check placement**: Added the size check before reading the file to avoid unnecessary I/O and memory allocation for large files. This ensures we fail fast for large files without consuming resources.
+2. **Debug logging**: Used tracing::debug! for logging skipped files, which allows troubleshooting without cluttering normal output.
+3. **Error handling for metadata**: Used if let Ok(metadata) pattern to gracefully handle cases where metadata cannot be read, falling through to the file read attempt.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib discovery` - Passed (59 tests including 2 new tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No risks identified**: This is a defensive guard that only adds safety. Files under 1MB are processed normally, and large files that would have caused issues are now safely skipped with debug logging.

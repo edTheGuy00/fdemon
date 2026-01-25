@@ -378,3 +378,19 @@ pub fn spawn_device_boot(
         }
     });
 }
+
+/// Spawn entry point discovery in background (Phase 3, Task 09)
+pub fn spawn_entry_point_discovery(msg_tx: mpsc::Sender<Message>, project_path: PathBuf) {
+    tokio::spawn(async move {
+        // Use spawn_blocking since discover_entry_points is sync I/O
+        let entry_points = tokio::task::spawn_blocking(move || {
+            crate::core::discovery::discover_entry_points(&project_path)
+        })
+        .await
+        .unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::EntryPointsDiscovered { entry_points })
+            .await;
+    });
+}

@@ -72,10 +72,10 @@ Add UI support for entry point selection in the NewSessionDialog Launch Context 
 
 | # | Task | Status | Depends On | Priority | Modules |
 |---|------|--------|------------|----------|---------|
-| 8 | [08-add-file-size-guard](tasks/08-add-file-size-guard.md) | Not Started | - | Medium | `core/discovery.rs` |
-| 9 | [09-move-discovery-to-async](tasks/09-move-discovery-to-async.md) | Not Started | 8 | High | `handler/mod.rs`, `message.rs`, `spawn.rs`, `actions.rs`, `fuzzy_modal.rs` |
-| 10 | [10-add-loading-indicator](tasks/10-add-loading-indicator.md) | Not Started | 9 | Medium | `tui/widgets/.../fuzzy_modal.rs` |
-| 11 | [11-reorder-editability-check](tasks/11-reorder-editability-check.md) | Not Started | - | Low | `handler/new_session/launch_context.rs` |
+| 8 | [08-add-file-size-guard](tasks/08-add-file-size-guard.md) | Done | - | Medium | `core/discovery.rs` |
+| 9 | [09-move-discovery-to-async](tasks/09-move-discovery-to-async.md) | Done | 8 | High | `handler/mod.rs`, `message.rs`, `spawn.rs`, `actions.rs`, `fuzzy_modal.rs` |
+| 10 | [10-add-loading-indicator](tasks/10-add-loading-indicator.md) | Done | 9 | Medium | `tui/widgets/.../fuzzy_modal.rs` |
+| 11 | [11-reorder-editability-check](tasks/11-reorder-editability-check.md) | Done | - | Low | `handler/new_session/launch_context.rs` |
 
 ## Success Criteria
 
@@ -100,11 +100,11 @@ Phase 3 is complete when:
 
 ### Review Follow-up Criteria (Tasks 8-11)
 
-- [ ] Large files (>1MB) skipped during discovery
-- [ ] Entry point discovery runs asynchronously
-- [ ] UI remains responsive during discovery on large projects
-- [ ] Loading indicator shown while discovering
-- [ ] Editability check precedes selection parsing
+- [x] Large files (>1MB) skipped during discovery
+- [x] Entry point discovery runs asynchronously
+- [x] UI remains responsive during discovery on large projects
+- [x] Loading indicator shown while discovering
+- [x] Editability check precedes selection parsing
 
 ## Verification Commands
 

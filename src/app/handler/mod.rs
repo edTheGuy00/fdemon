@@ -107,6 +107,9 @@ pub enum UpdateAction {
         dart_defines: Vec<String>,
         config_name: Option<String>,
     },
+
+    /// Discover entry points in background (Phase 3, Task 09)
+    DiscoverEntryPoints { project_path: std::path::PathBuf },
 }
 
 /// Background tasks to spawn

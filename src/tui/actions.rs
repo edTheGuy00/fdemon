@@ -147,6 +147,10 @@ pub fn handle_action(
             // Kept for backward compatibility, but this branch should never execute.
             tracing::warn!("LaunchFlutterSession action reached - this should not happen");
         }
+
+        UpdateAction::DiscoverEntryPoints { project_path } => {
+            spawn::spawn_entry_point_discovery(msg_tx, project_path);
+        }
     }
 }
 

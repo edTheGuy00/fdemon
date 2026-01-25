@@ -128,3 +128,46 @@ fn is_entry_point_modal_loading(state: &NewSessionDialogState) -> bool {
 - Keep the loading indicator simple - this is a short operation
 - Discovery typically completes in < 500ms, so spinner may flash briefly
 - Consider debouncing spinner appearance for very fast discovery (optional optimization)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/fuzzy_modal.rs` | Added loading state parameter to FuzzyModal widget, modified title to show "(discovering...)" when loading for EntryPoint modal, show loading message in list area instead of items when loading, added 4 unit tests |
+| `src/tui/widgets/new_session_dialog/mod.rs` | Updated render_fuzzy_modal_overlay to detect entry point loading state from launch_context and pass to FuzzyModal widget via loading() builder method |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simple text-based loading instead of spinner**: Since `throbber-widgets-tui` is not actually in the dependencies (despite task notes), I followed the existing pattern from target_selector which uses simple text-based loading indicators. This is consistent with the codebase and avoids adding new dependencies.
+
+2. **Builder pattern for loading state**: Added `.loading(bool)` builder method to FuzzyModal to make it optional and backwards compatible. All existing call sites work without modification since loading defaults to false.
+
+3. **EntryPoint-specific loading check**: The loading indicator only appears for EntryPoint modals when entry_points_loading is true. Other modal types (Config, Flavor) ignore the loading flag to prevent confusion.
+
+4. **Title and list area both show loading**: Title displays "(discovering...)" suffix and list area shows centered yellow "Discovering entry points..." message, providing clear visual feedback without a spinner.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (no warnings)
+- `cargo test --lib fuzzy_modal` - Passed (32 tests including 4 new loading indicator tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### New Tests Added
+
+1. `test_fuzzy_modal_entry_point_loading_title` - Verifies title shows "discovering" during loading
+2. `test_fuzzy_modal_entry_point_loading_message` - Verifies list area shows "Discovering entry points..." message
+3. `test_fuzzy_modal_entry_point_not_loading` - Verifies normal rendering when not loading
+4. `test_fuzzy_modal_other_types_ignore_loading` - Verifies Config/Flavor modals don't show loading even if flag is true
+
+### Risks/Limitations
+
+1. **No actual spinner animation**: The loading indicator is static text rather than an animated spinner. This is acceptable since discovery is expected to complete quickly (< 500ms) and matches existing patterns in the codebase.
+
+2. **ESC during loading**: User can still close modal with Esc during loading (this was a requirement). The async discovery will complete in the background and update the cached entry points, but the modal will be closed.

@@ -316,14 +316,7 @@ pub fn handle_entry_point_selected(state: &mut AppState, selected: Option<String
     use crate::config::ConfigSource;
     use std::path::PathBuf;
 
-    // Parse selection into Option<PathBuf>
-    let entry_point = match selected {
-        None => None,
-        Some(s) if s == "(default)" => None,
-        Some(s) => Some(PathBuf::from(s)),
-    };
-
-    // Check if field is editable
+    // Check if field is editable FIRST
     if !state
         .new_session_dialog_state
         .launch_context
@@ -332,6 +325,9 @@ pub fn handle_entry_point_selected(state: &mut AppState, selected: Option<String
         state.new_session_dialog_state.close_modal();
         return UpdateResult::none();
     }
+
+    // Parse selection into Option<PathBuf>
+    let entry_point = selected.filter(|s| s != "(default)").map(PathBuf::from);
 
     // Determine if we need to auto-create a config
     // Only create if setting an entry point (Some), not when clearing (None)

@@ -29,11 +29,21 @@ mod styles {
 /// Fuzzy search modal widget
 pub struct FuzzyModal<'a> {
     state: &'a FuzzyModalState,
+    loading: bool,
 }
 
 impl<'a> FuzzyModal<'a> {
     pub fn new(state: &'a FuzzyModalState) -> Self {
-        Self { state }
+        Self {
+            state,
+            loading: false,
+        }
+    }
+
+    /// Set loading state for the modal
+    pub fn loading(mut self, loading: bool) -> Self {
+        self.loading = loading;
+        self
     }
 
     /// Calculate modal area (bottom 45% of screen)
@@ -57,7 +67,14 @@ impl<'a> FuzzyModal<'a> {
     /// Render the search input line
     fn render_search_input(&self, area: Rect, buf: &mut Buffer) {
         let icon = "🔍 ";
-        let title = self.state.modal_type.title();
+
+        // Show loading indicator in title for EntryPoint modal
+        let title = if self.loading && self.state.modal_type == super::FuzzyModalType::EntryPoint {
+            format!("{} (discovering...)", self.state.modal_type.title())
+        } else {
+            self.state.modal_type.title().to_string()
+        };
+
         let hint = " (Type to filter)";
 
         // Query with cursor
@@ -84,6 +101,16 @@ impl<'a> FuzzyModal<'a> {
 
     /// Render the filtered items list
     fn render_list(&self, area: Rect, buf: &mut Buffer) {
+        // Show loading message if loading
+        if self.loading {
+            let msg = "Discovering entry points...";
+            let para = Paragraph::new(msg)
+                .style(Style::default().fg(Color::Yellow))
+                .alignment(Alignment::Center);
+            para.render(area, buf);
+            return;
+        }
+
         if !self.state.has_results() {
             // No matches
             let msg = if self.state.modal_type.allows_custom() {
@@ -528,5 +555,58 @@ mod widget_tests {
         // The function should not crash
         // Note: The overlay modifies cell styles, changing the content
         // We just verify it executes without panicking
+    }
+
+    #[test]
+    fn test_fuzzy_modal_entry_point_loading_title() {
+        let mut term = TestTerminal::new();
+        let items = vec!["lib/main.dart".into()];
+        let state = FuzzyModalState::new(super::super::state::FuzzyModalType::EntryPoint, items);
+
+        let modal = FuzzyModal::new(&state).loading(true);
+        term.render_widget(modal, term.area());
+
+        assert!(term.buffer_contains("discovering"));
+    }
+
+    #[test]
+    fn test_fuzzy_modal_entry_point_loading_message() {
+        let mut term = TestTerminal::new();
+        let items = vec!["lib/main.dart".into()];
+        let state = FuzzyModalState::new(super::super::state::FuzzyModalType::EntryPoint, items);
+
+        let modal = FuzzyModal::new(&state).loading(true);
+        term.render_widget(modal, term.area());
+
+        assert!(term.buffer_contains("Discovering entry points"));
+    }
+
+    #[test]
+    fn test_fuzzy_modal_entry_point_not_loading() {
+        let mut term = TestTerminal::new();
+        let items = vec!["lib/main.dart".into()];
+        let state = FuzzyModalState::new(super::super::state::FuzzyModalType::EntryPoint, items);
+
+        let modal = FuzzyModal::new(&state).loading(false);
+        term.render_widget(modal, term.area());
+
+        // Should show the item, not loading message
+        assert!(term.buffer_contains("lib/main.dart"));
+        assert!(!term.buffer_contains("discovering"));
+    }
+
+    #[test]
+    fn test_fuzzy_modal_other_types_ignore_loading() {
+        let mut term = TestTerminal::new();
+        let items = vec!["config1".into()];
+        let state = FuzzyModalState::new(super::super::state::FuzzyModalType::Config, items);
+
+        // Even with loading=true, Config modal shouldn't show loading
+        let modal = FuzzyModal::new(&state).loading(true);
+        term.render_widget(modal, term.area());
+
+        // Should show normal title, not loading title
+        assert!(term.buffer_contains("Select Configuration"));
+        assert!(!term.buffer_contains("discovering"));
     }
 }

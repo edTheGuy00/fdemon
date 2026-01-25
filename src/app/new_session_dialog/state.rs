@@ -423,6 +423,9 @@ pub struct LaunchContextState {
     /// Available entry points discovered from project
     pub available_entry_points: Vec<PathBuf>,
 
+    /// True while discovering entry points (Phase 3, Task 09)
+    pub entry_points_loading: bool,
+
     /// Dart defines (from config or user override)
     pub dart_defines: Vec<DartDefine>,
 
@@ -439,6 +442,7 @@ impl LaunchContextState {
             flavor: None,
             entry_point: None,
             available_entry_points: Vec::new(),
+            entry_points_loading: false,
             dart_defines: Vec::new(),
             focused_field: LaunchContextField::Config,
         }

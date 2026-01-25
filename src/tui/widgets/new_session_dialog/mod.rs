@@ -255,8 +255,12 @@ impl<'a> NewSessionDialog<'a> {
         // Dim the background (main dialog area)
         fuzzy_modal::render_dim_overlay(dialog_area, buf);
 
+        // Check if this is an entry point modal that's loading
+        let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
+            && self.state.launch_context.entry_points_loading;
+
         // Render fuzzy modal widget (it calculates its own area)
-        let fuzzy_modal = FuzzyModal::new(modal_state);
+        let fuzzy_modal = FuzzyModal::new(modal_state).loading(is_loading);
         fuzzy_modal.render(dialog_area, buf);
     }
 

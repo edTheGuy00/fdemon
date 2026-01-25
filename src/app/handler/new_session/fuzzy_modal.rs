@@ -36,30 +36,24 @@ pub fn handle_open_fuzzy_modal(state: &mut AppState, modal_type: FuzzyModalType)
             apply_fuzzy_filter(state);
         }
         FuzzyModalType::EntryPoint => {
-            // Discover entry points from project and open modal
-            use crate::core::discovery::discover_entry_points;
-
-            let entry_points = discover_entry_points(&state.project_path);
-
-            // Cache discovered entry points in state
+            // Set loading state
             state
                 .new_session_dialog_state
                 .launch_context
-                .set_available_entry_points(entry_points);
+                .entry_points_loading = true;
 
-            // Build modal items: "(default)" + discovered paths
-            let items = state
-                .new_session_dialog_state
-                .launch_context
-                .entry_point_modal_items();
-
-            // Open fuzzy modal with EntryPoint type
+            // Open modal with placeholder (will be populated when discovery completes)
             use crate::app::new_session_dialog::FuzzyModalState;
-            state.new_session_dialog_state.fuzzy_modal =
-                Some(FuzzyModalState::new(FuzzyModalType::EntryPoint, items));
+            state.new_session_dialog_state.fuzzy_modal = Some(FuzzyModalState::new(
+                FuzzyModalType::EntryPoint,
+                vec!["(discovering...)".to_string()],
+            ));
 
-            // Initial filter with empty query (show all)
-            apply_fuzzy_filter(state);
+            // Return action to spawn async discovery
+            use crate::app::handler::UpdateAction;
+            return UpdateResult::action(UpdateAction::DiscoverEntryPoints {
+                project_path: state.project_path.clone(),
+            });
         }
     };
     UpdateResult::none()
@@ -198,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn test_entry_point_modal_opens() {
+    fn test_entry_point_modal_returns_action() {
         let temp = create_test_project();
         let mut state = AppState::with_settings(
             temp.path().to_path_buf(),
@@ -209,21 +203,35 @@ mod tests {
         state.new_session_dialog_state.launch_context.focused_field =
             LaunchContextField::EntryPoint;
 
-        handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
+        let result = handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
 
-        // Modal should be open
+        // Should return action to spawn discovery
+        assert!(matches!(
+            result.action,
+            Some(crate::app::handler::UpdateAction::DiscoverEntryPoints { .. })
+        ));
+
+        // Loading flag should be set
+        assert!(
+            state
+                .new_session_dialog_state
+                .launch_context
+                .entry_points_loading
+        );
+
+        // Modal should be open with placeholder
         assert!(state.new_session_dialog_state.fuzzy_modal.is_some());
-
         let modal = state.new_session_dialog_state.fuzzy_modal.as_ref().unwrap();
         assert_eq!(modal.modal_type, FuzzyModalType::EntryPoint);
-
-        // Should have "(default)" + discovered entry points
-        assert!(modal.items.len() >= 2); // At least (default) + main.dart
-        assert_eq!(modal.items[0], "(default)");
+        assert_eq!(modal.items[0], "(discovering...)");
     }
 
     #[test]
-    fn test_entry_point_modal_includes_discovered_files() {
+    fn test_entry_points_discovered_updates_modal() {
+        use crate::app::handler::update;
+        use crate::app::message::Message;
+        use std::path::PathBuf;
+
         let temp = create_test_project();
         let mut state = AppState::with_settings(
             temp.path().to_path_buf(),
@@ -231,18 +239,48 @@ mod tests {
         );
         state.ui_mode = UiMode::NewSessionDialog;
 
-        handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
+        // Simulate modal open with placeholder
+        use crate::app::new_session_dialog::FuzzyModalState;
+        state.new_session_dialog_state.fuzzy_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::EntryPoint,
+            vec!["(discovering...)".to_string()],
+        ));
+        state
+            .new_session_dialog_state
+            .launch_context
+            .entry_points_loading = true;
 
+        // Simulate discovery completion
+        let entry_points = vec![
+            PathBuf::from("lib/main.dart"),
+            PathBuf::from("lib/main_dev.dart"),
+        ];
+        let result = update(&mut state, Message::EntryPointsDiscovered { entry_points });
+
+        // Loading flag should be cleared
+        assert!(
+            !state
+                .new_session_dialog_state
+                .launch_context
+                .entry_points_loading
+        );
+
+        // Modal should have items (including "(default)")
         let modal = state.new_session_dialog_state.fuzzy_modal.as_ref().unwrap();
-
-        // Should contain main.dart and main_dev.dart
+        assert!(modal.items.contains(&"(default)".to_string()));
         assert!(modal.items.iter().any(|i| i.contains("main.dart")));
-        assert!(modal.items.iter().any(|i| i.contains("main_dev.dart")));
+
+        // UpdateResult should be none (no further action)
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
     }
 
     #[test]
     fn test_entry_point_confirm_with_default() {
         use crate::app::handler::update;
+        use crate::app::message::Message;
+        use crate::app::new_session_dialog::FuzzyModalState;
+        use std::path::PathBuf;
 
         let temp = create_test_project();
         let mut state = AppState::with_settings(
@@ -251,12 +289,19 @@ mod tests {
         );
         state.ui_mode = UiMode::NewSessionDialog;
         state.new_session_dialog_state.launch_context.entry_point =
-            Some(std::path::PathBuf::from("lib/main_dev.dart"));
+            Some(PathBuf::from("lib/main_dev.dart"));
 
-        // Open modal and select "(default)"
-        handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
+        // Simulate modal already populated (after discovery)
+        state.new_session_dialog_state.fuzzy_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::EntryPoint,
+            vec![
+                "(default)".to_string(),
+                "lib/main.dart".to_string(),
+                "lib/main_dev.dart".to_string(),
+            ],
+        ));
+
         // Default is already selected (index 0)
-
         handle_fuzzy_confirm(&mut state, update);
 
         // Entry point should be cleared
@@ -270,6 +315,7 @@ mod tests {
     #[test]
     fn test_entry_point_confirm_with_file() {
         use crate::app::handler::update;
+        use crate::app::new_session_dialog::FuzzyModalState;
 
         let temp = create_test_project();
         let mut state = AppState::with_settings(
@@ -278,8 +324,15 @@ mod tests {
         );
         state.ui_mode = UiMode::NewSessionDialog;
 
-        // Open modal
-        handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
+        // Simulate modal already populated (after discovery)
+        state.new_session_dialog_state.fuzzy_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::EntryPoint,
+            vec![
+                "(default)".to_string(),
+                "lib/main.dart".to_string(),
+                "lib/main_dev.dart".to_string(),
+            ],
+        ));
 
         // Navigate to select main_dev.dart (index 2, after default and main.dart)
         if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
@@ -306,7 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn test_entry_point_cached_in_state() {
+    fn test_entry_point_cached_after_discovery() {
+        use crate::app::handler::update;
+        use crate::app::message::Message;
+        use std::path::PathBuf;
+
         let temp = create_test_project();
         let mut state = AppState::with_settings(
             temp.path().to_path_buf(),
@@ -321,7 +378,12 @@ mod tests {
             .available_entry_points
             .is_empty());
 
-        handle_open_fuzzy_modal(&mut state, FuzzyModalType::EntryPoint);
+        // Simulate discovery completion
+        let entry_points = vec![
+            PathBuf::from("lib/main.dart"),
+            PathBuf::from("lib/main_dev.dart"),
+        ];
+        update(&mut state, Message::EntryPointsDiscovered { entry_points });
 
         // Should have cached discovered entry points
         assert!(!state
@@ -329,5 +391,13 @@ mod tests {
             .launch_context
             .available_entry_points
             .is_empty());
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .launch_context
+                .available_entry_points
+                .len(),
+            2
+        );
     }
 }
