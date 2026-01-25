@@ -102,3 +102,43 @@ Entry point selection should allow custom input because:
 4. **Fallback**: Discovery might miss files with unusual main() signatures
 
 The fuzzy modal will show discovered entry points first, but the user can type any path.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/new_session_dialog/types.rs` | Added `EntryPoint` variant to `FuzzyModalType` enum, updated `title()` and `allows_custom()` methods, added unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **allows_custom() returns true**: Following the task specification, `EntryPoint` allows custom input so users can type arbitrary paths not in the discovered list. This is consistent with the `Flavor` variant behavior.
+2. **Test placement**: Added tests to the existing `#[cfg(test)] mod tests` block that was created by task 01, avoiding duplication of the tests module.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Expected compilation errors in other files (see explanation below)
+- Unit tests added:
+  - `test_fuzzy_modal_type_entry_point_title()` - Tests the title method
+  - `test_fuzzy_modal_type_entry_point_allows_custom()` - Tests allows_custom for all variants
+
+### Risks/Limitations
+
+1. **Expected Compilation Errors**: The project currently has compilation errors in `src/app/handler/new_session/fuzzy_modal.rs` and `src/app/new_session_dialog/state.rs` where `match` statements on `FuzzyModalType` need to handle the new `EntryPoint` variant. Per task 01's notes and task 07's scope, these errors are expected and will be resolved by task 07 which adds the `handle_entry_point_selected()` handler and updates the match statements.
+
+2. **Parallel Implementation**: This task was implemented in parallel with task 01, which modified the same file (`types.rs`) but a different enum (`LaunchContextField`). Both changes are present in the final file.
+
+### Implementation Details
+
+The `EntryPoint` variant was successfully added to `FuzzyModalType` with:
+- Doc comment: "Entry point selection (discovered Dart files with main())"
+- `title()` returns: "Select Entry Point"
+- `allows_custom()` returns: `true` (allows typing custom paths)
+
+All acceptance criteria met except full project compilation, which is blocked by expected missing match arms that will be added in task 07.

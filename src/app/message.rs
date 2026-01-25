@@ -494,6 +494,9 @@ pub enum Message {
     /// Flavor selected from fuzzy modal
     NewSessionDialogFlavorSelected { flavor: Option<String> },
 
+    /// Entry point selected from fuzzy modal
+    NewSessionDialogEntryPointSelected { entry_point: Option<String> },
+
     /// Dart defines updated from modal
     NewSessionDialogDartDefinesUpdated { defines: Vec<DartDefine> },
 

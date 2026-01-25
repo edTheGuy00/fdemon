@@ -368,3 +368,53 @@ When `AutoSaveConfig` action is returned:
 1. The action runner calls `update_launch_config_field()` (from Phase 1)
 2. This persists the entry_point to `.fdemon/launch.toml`
 3. The file is saved with the updated configuration
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/launch_context.rs` | Added `handle_entry_point_selected()` function with auto-save logic and comprehensive tests (7 tests) |
+| `src/app/handler/new_session/fuzzy_modal.rs` | Updated `handle_fuzzy_confirm()` to dispatch EntryPoint selection to handler via Message; updated 2 tests to use real update function |
+| `src/app/message.rs` | Added `NewSessionDialogEntryPointSelected` message variant |
+| `src/app/handler/update.rs` | Wired up `NewSessionDialogEntryPointSelected` message to handler |
+
+### Notable Decisions/Tradeoffs
+
+1. **Message-based dispatch**: Following the pattern established by `handle_flavor_selected()`, the handler is invoked via the Message enum rather than being called directly from the fuzzy modal. This maintains consistency with TEA architecture and allows the handler to return UpdateActions for auto-save.
+2. **"(default)" special value**: Following the flavor pattern, the string "(default)" is treated as a request to clear the entry point (set to None), while any other string becomes a PathBuf.
+3. **Auto-create behavior**: Config is only auto-created when SETTING a value (Some), not when clearing to default (None). This prevents unnecessary config creation when the user just wants to use the default entry point.
+4. **VSCode config protection**: The handler checks `is_entry_point_editable()` first and returns early if the field is read-only (VSCode config), preventing any state changes.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib handler::new_session::launch_context::tests::test_entry_point` - Passed (7 tests)
+- `cargo test --lib handler::new_session::fuzzy_modal::tests::test_entry_point` - Passed (5 tests)
+- `cargo test --lib` - Passed (1557 tests)
+- `cargo clippy -- -D warnings` - Passed (0 warnings)
+- `cargo fmt` - Applied formatting
+
+### Test Coverage
+
+**New tests in launch_context.rs:**
+- `test_entry_point_selected_sets_path` - Verifies entry point is set and auto-save triggers
+- `test_entry_point_selected_default_clears` - Verifies "(default)" clears entry point
+- `test_entry_point_selected_none_clears` - Verifies None selection clears entry point
+- `test_entry_point_selected_auto_creates_config` - Verifies config creation when no config exists
+- `test_entry_point_cleared_no_config_no_create` - Verifies no config created when clearing
+- `test_entry_point_selected_vscode_config_no_save` - Verifies VSCode configs are read-only
+- `test_entry_point_selected_closes_modal` - Verifies modal closes after selection
+
+**Updated tests in fuzzy_modal.rs:**
+- `test_entry_point_confirm_with_default` - Now uses real update function
+- `test_entry_point_confirm_with_file` - Now uses real update function
+
+### Risks/Limitations
+
+None identified. The implementation follows established patterns from flavor and dart-defines handlers, ensuring consistency and maintainability.

@@ -249,3 +249,44 @@ mod tests {
 - "(default)" is always first, allowing users to clear the entry point
 - VSCode configs block activation since they're read-only
 - `state.project_path` must be set for discovery to work
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/handler/new_session/navigation.rs` | Added EntryPoint case to `handle_field_activate()` to trigger fuzzy modal on Enter key |
+| `src/app/handler/new_session/fuzzy_modal.rs` | Added EntryPoint modal type handling in `handle_open_fuzzy_modal()` to discover entry points and populate modal; Added EntryPoint case to `handle_fuzzy_confirm()` to handle selection via state method; Added comprehensive unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Integrated with Existing Fuzzy Modal System**: Instead of creating a standalone handler, integrated entry point activation into the existing `fuzzy_modal.rs` handler infrastructure. This maintains consistency with Config and Flavor field activation patterns.
+
+2. **State Management via close_fuzzy_modal_with_selection()**: Entry point selection is handled directly through the existing `close_fuzzy_modal_with_selection()` method in `NewSessionDialogState`, which already handles the EntryPoint case. This avoids creating a separate message type and handler, simplifying the architecture.
+
+3. **Discovery on Every Activation**: Entry points are discovered each time the modal is opened, ensuring the list is always fresh. The discovered paths are cached in `state.launch_context.available_entry_points` for reference but are not persisted between activations.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test fuzzy_modal` - Passed (28 tests, including 5 new entry point tests)
+- `cargo test --lib` - Passed (1548 tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+**New Tests Added:**
+- `test_entry_point_modal_opens` - Verifies modal opens with EntryPoint type and includes "(default)"
+- `test_entry_point_modal_includes_discovered_files` - Verifies discovered Dart files are included
+- `test_entry_point_confirm_with_default` - Verifies selecting "(default)" clears entry point
+- `test_entry_point_confirm_with_file` - Verifies selecting a file sets the entry point
+- `test_entry_point_cached_in_state` - Verifies discovered entry points are cached
+
+### Risks/Limitations
+
+1. **No Caching Optimization**: Entry points are discovered on each modal open. For large projects with many Dart files, this could cause a slight delay. Could be optimized in the future by caching with invalidation on file system changes.
+
+2. **Depends on project_path**: The handler assumes `state.project_path` is always set. In the current architecture, `AppState` requires a `PathBuf` for initialization, so this is not a practical risk, but worth noting for future refactoring.

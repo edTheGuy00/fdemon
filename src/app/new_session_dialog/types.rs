@@ -58,6 +58,7 @@ pub enum LaunchContextField {
     Config,
     Mode,
     Flavor,
+    EntryPoint,
     DartDefines,
     Launch,
 }
@@ -67,7 +68,8 @@ impl LaunchContextField {
         match self {
             Self::Config => Self::Mode,
             Self::Mode => Self::Flavor,
-            Self::Flavor => Self::DartDefines,
+            Self::Flavor => Self::EntryPoint,
+            Self::EntryPoint => Self::DartDefines,
             Self::DartDefines => Self::Launch,
             Self::Launch => Self::Config,
         }
@@ -78,7 +80,8 @@ impl LaunchContextField {
             Self::Config => Self::Launch,
             Self::Mode => Self::Config,
             Self::Flavor => Self::Mode,
-            Self::DartDefines => Self::Flavor,
+            Self::EntryPoint => Self::Flavor,
+            Self::DartDefines => Self::EntryPoint,
             Self::Launch => Self::DartDefines,
         }
     }
@@ -112,6 +115,8 @@ pub enum FuzzyModalType {
     Config,
     /// Flavor selection (from project + custom)
     Flavor,
+    /// Entry point selection (discovered Dart files with main())
+    EntryPoint,
 }
 
 impl FuzzyModalType {
@@ -120,14 +125,16 @@ impl FuzzyModalType {
         match self {
             Self::Config => "Select Configuration",
             Self::Flavor => "Select Flavor",
+            Self::EntryPoint => "Select Entry Point",
         }
     }
 
     /// Whether custom input is allowed
     pub fn allows_custom(&self) -> bool {
         match self {
-            Self::Config => false, // Must select from list
-            Self::Flavor => true,  // Can type custom flavor
+            Self::Config => false,    // Must select from list
+            Self::Flavor => true,     // Can type custom flavor
+            Self::EntryPoint => true, // Can type custom path
         }
     }
 }
@@ -162,4 +169,82 @@ pub struct LaunchParams {
     pub dart_defines: Vec<String>,
     pub config_name: Option<String>,
     pub entry_point: Option<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_launch_context_field_next_includes_entry_point() {
+        assert_eq!(
+            LaunchContextField::Flavor.next(),
+            LaunchContextField::EntryPoint
+        );
+        assert_eq!(
+            LaunchContextField::EntryPoint.next(),
+            LaunchContextField::DartDefines
+        );
+    }
+
+    #[test]
+    fn test_launch_context_field_prev_includes_entry_point() {
+        assert_eq!(
+            LaunchContextField::DartDefines.prev(),
+            LaunchContextField::EntryPoint
+        );
+        assert_eq!(
+            LaunchContextField::EntryPoint.prev(),
+            LaunchContextField::Flavor
+        );
+    }
+
+    #[test]
+    fn test_launch_context_field_navigation_cycle() {
+        // Forward cycle
+        let mut field = LaunchContextField::Config;
+        let fields = [
+            LaunchContextField::Config,
+            LaunchContextField::Mode,
+            LaunchContextField::Flavor,
+            LaunchContextField::EntryPoint,
+            LaunchContextField::DartDefines,
+            LaunchContextField::Launch,
+        ];
+
+        for expected in &fields[1..] {
+            field = field.next();
+            assert_eq!(field, *expected);
+        }
+
+        // Wraps around
+        assert_eq!(field.next(), LaunchContextField::Config);
+    }
+
+    #[test]
+    fn test_launch_context_field_next_enabled_skips_disabled() {
+        // Simulate EntryPoint being disabled
+        let is_disabled = |f: LaunchContextField| f == LaunchContextField::EntryPoint;
+
+        let next = LaunchContextField::Flavor.next_enabled(is_disabled);
+        assert_eq!(next, LaunchContextField::DartDefines);
+
+        let prev = LaunchContextField::DartDefines.prev_enabled(is_disabled);
+        assert_eq!(prev, LaunchContextField::Flavor);
+    }
+
+    #[test]
+    fn test_fuzzy_modal_type_entry_point_title() {
+        assert_eq!(FuzzyModalType::EntryPoint.title(), "Select Entry Point");
+    }
+
+    #[test]
+    fn test_fuzzy_modal_type_entry_point_allows_custom() {
+        // EntryPoint should allow custom input for typing arbitrary paths
+        assert!(FuzzyModalType::EntryPoint.allows_custom());
+
+        // Verify other types for consistency
+        assert!(!FuzzyModalType::Config.allows_custom());
+        assert!(FuzzyModalType::Flavor.allows_custom());
+    }
 }

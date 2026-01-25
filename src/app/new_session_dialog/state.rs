@@ -420,6 +420,9 @@ pub struct LaunchContextState {
     /// Entry point (from config or user override)
     pub entry_point: Option<PathBuf>,
 
+    /// Available entry points discovered from project
+    pub available_entry_points: Vec<PathBuf>,
+
     /// Dart defines (from config or user override)
     pub dart_defines: Vec<DartDefine>,
 
@@ -435,6 +438,7 @@ impl LaunchContextState {
             mode: FlutterMode::Debug,
             flavor: None,
             entry_point: None,
+            available_entry_points: Vec::new(),
             dart_defines: Vec::new(),
             focused_field: LaunchContextField::Config,
         }
@@ -576,9 +580,7 @@ impl LaunchContextState {
 
     /// Check if entry point is editable
     pub fn is_entry_point_editable(&self) -> bool {
-        // Use Flavor as proxy since EntryPoint field doesn't exist yet (Phase 3)
-        // Entry point follows the same editability rules as flavor
-        self.is_field_editable(LaunchContextField::Flavor)
+        self.is_field_editable(LaunchContextField::EntryPoint)
     }
 
     /// Set entry point
@@ -586,6 +588,24 @@ impl LaunchContextState {
         if self.is_entry_point_editable() {
             self.entry_point = entry_point;
         }
+    }
+
+    /// Set available entry points (typically from discovery)
+    pub fn set_available_entry_points(&mut self, entry_points: Vec<PathBuf>) {
+        self.available_entry_points = entry_points;
+    }
+
+    /// Get entry point items for fuzzy modal
+    ///
+    /// Returns a list of strings for the fuzzy modal, with "(default)" as first option.
+    pub fn entry_point_modal_items(&self) -> Vec<String> {
+        let mut items = vec!["(default)".to_string()];
+        items.extend(
+            self.available_entry_points
+                .iter()
+                .map(|p| p.display().to_string()),
+        );
+        items
     }
 
     /// Creates a new default config, adds it to the config list, and selects it.
@@ -827,6 +847,17 @@ impl NewSessionDialogState {
                 }
                 FuzzyModalType::Flavor => {
                     self.launch_context.set_flavor(selected);
+                }
+                FuzzyModalType::EntryPoint => {
+                    // Convert "(default)" to None, otherwise parse as PathBuf
+                    let entry_point = selected.and_then(|s| {
+                        if s == "(default)" {
+                            None
+                        } else {
+                            Some(PathBuf::from(s))
+                        }
+                    });
+                    self.launch_context.set_entry_point(entry_point);
                 }
             }
         }
@@ -1169,5 +1200,86 @@ mod tests {
         state.select_config(Some(0));
         // Entry point should be preserved since config doesn't specify one
         assert_eq!(state.entry_point, Some(PathBuf::from("lib/existing.dart")));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Phase 3 Task 03: Entry Point State Helper Methods Tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_entry_point_display_none() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        assert_eq!(state.entry_point_display(), "(default)");
+    }
+
+    #[test]
+    fn test_entry_point_display_some() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.set_entry_point(Some(PathBuf::from("lib/main_dev.dart")));
+        assert_eq!(state.entry_point_display(), "lib/main_dev.dart");
+    }
+
+    #[test]
+    fn test_is_entry_point_editable_no_config() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        // No config selected = editable
+        assert!(state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_is_entry_point_editable_vscode_config() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+
+        // VSCode config = NOT editable
+        assert!(!state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_is_entry_point_editable_fdemon_config() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::FDemon,
+            display_name: "FDemon".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+
+        // FDemon config = editable
+        assert!(state.is_entry_point_editable());
+    }
+
+    #[test]
+    fn test_entry_point_modal_items() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.set_available_entry_points(vec![
+            PathBuf::from("lib/main.dart"),
+            PathBuf::from("lib/main_dev.dart"),
+        ]);
+
+        let items = state.entry_point_modal_items();
+
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0], "(default)");
+        assert_eq!(items[1], "lib/main.dart");
+        assert_eq!(items[2], "lib/main_dev.dart");
+    }
+
+    #[test]
+    fn test_entry_point_modal_items_empty() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let items = state.entry_point_modal_items();
+
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0], "(default)");
     }
 }

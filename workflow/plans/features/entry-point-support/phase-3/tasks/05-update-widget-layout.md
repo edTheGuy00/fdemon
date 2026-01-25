@@ -186,3 +186,44 @@ mod tests {
 - The compact layout may use different chunk organization
 - Test rendering visually with `cargo run` after changes
 - If layout becomes too tall, consider if compact mode needs adjustment
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/widgets/new_session_dialog/launch_context.rs` | Added layout verification tests for Entry Point field |
+
+### Notable Decisions/Tradeoffs
+
+1. **Task 04 Already Completed Layout Changes**: Task 04 had already implemented all the layout changes required by this task (adding Entry Point field to both full and compact layouts, updating `calculate_fields_layout()` to return 13 chunks, calling `render_entry_point_field()` in `render_common_fields()`, and updating `min_height()` to 14). This task only needed to add the verification tests specified in the acceptance criteria.
+
+2. **Added Two Comprehensive Tests**: Added `test_layout_has_entry_point_row()` to verify the layout array structure and positioning, and `test_compact_layout_includes_entry_point()` to verify the compact layout includes the Entry Point field in the correct position between Flavor and Dart Defines.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib launch_context` - Passed (53 tests)
+- `cargo test --lib` - Passed (1550 tests)
+- `cargo clippy --lib -- -D warnings` - Passed (no warnings)
+- `cargo fmt -- --check` - Passed (code properly formatted)
+
+### Verification of Acceptance Criteria
+
+1. ✓ `calculate_fields_layout()` returns array with space for Entry Point (line 657: `[Rect; 13]`)
+2. ✓ `render_common_fields()` calls `render_entry_point_field()` (line 709)
+3. ✓ Entry Point field appears between Flavor and Dart Defines (chunks[5], chunks[7], chunks[9])
+4. ✓ Launch button renders at correct position (chunks[11])
+5. ✓ Compact layout includes Entry Point field (line 846 in `render_compact()`)
+6. ✓ Minimum height updated to 14 (line 730)
+7. ✓ Code compiles without errors
+8. ✓ Tests verify layout structure and field ordering
+
+### Risks/Limitations
+
+None identified. All existing tests continue to pass, and the new tests provide comprehensive coverage of the layout changes.

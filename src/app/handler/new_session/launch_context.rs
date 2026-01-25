@@ -306,6 +306,101 @@ pub fn handle_dart_defines_updated(
     UpdateResult::none()
 }
 
+/// Handles entry point selection from the fuzzy modal.
+///
+/// - "(default)" selection clears the entry point (Flutter uses lib/main.dart)
+/// - Path selection sets the entry point
+/// - Auto-creates FDemon config if none selected and setting a value
+/// - Triggers auto-save for FDemon configurations
+pub fn handle_entry_point_selected(state: &mut AppState, selected: Option<String>) -> UpdateResult {
+    use crate::config::ConfigSource;
+    use std::path::PathBuf;
+
+    // Parse selection into Option<PathBuf>
+    let entry_point = match selected {
+        None => None,
+        Some(s) if s == "(default)" => None,
+        Some(s) => Some(PathBuf::from(s)),
+    };
+
+    // Check if field is editable
+    if !state
+        .new_session_dialog_state
+        .launch_context
+        .is_entry_point_editable()
+    {
+        state.new_session_dialog_state.close_modal();
+        return UpdateResult::none();
+    }
+
+    // Determine if we need to auto-create a config
+    // Only create if setting an entry point (Some), not when clearing (None)
+    let needs_auto_create = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
+        .is_none()
+        && entry_point.is_some();
+
+    // Auto-create config if needed
+    if needs_auto_create {
+        state
+            .new_session_dialog_state
+            .launch_context
+            .create_and_select_default_config();
+        if let Some(config) = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config()
+        {
+            tracing::info!(
+                "Auto-created config '{}' for entry point selection",
+                config.config.name
+            );
+        }
+    }
+
+    // Apply the entry point to state
+    state
+        .new_session_dialog_state
+        .launch_context
+        .set_entry_point(entry_point);
+    state.new_session_dialog_state.close_modal();
+
+    // Determine if we should auto-save
+    let should_auto_save = if let Some(config_idx) = state
+        .new_session_dialog_state
+        .launch_context
+        .selected_config_index
+    {
+        if let Some(config) = state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .get(config_idx)
+        {
+            config.source == ConfigSource::FDemon
+        } else {
+            false
+        }
+    } else {
+        false
+    };
+
+    if should_auto_save {
+        return UpdateResult::action(UpdateAction::AutoSaveConfig {
+            configs: state
+                .new_session_dialog_state
+                .launch_context
+                .configs
+                .clone(),
+        });
+    }
+
+    UpdateResult::none()
+}
+
 /// Launches a Flutter session with the current dialog configuration.
 ///
 /// Validates that a device is selected and builds launch parameters
@@ -472,7 +567,7 @@ pub fn handle_config_save_failed(state: &mut AppState, error: String) -> UpdateR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::new_session_dialog::DartDefine;
+    use crate::app::new_session_dialog::{DartDefine, FuzzyModalType};
     use crate::app::state::{AppState, UiMode};
     use crate::config::priority::SourcedConfig;
     use crate::config::types::{ConfigSource, LaunchConfig};
@@ -978,5 +1073,206 @@ mod tests {
             }
             _ => panic!("Expected SpawnSession action, got {:?}", result.action),
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 3 Task 06: Entry Point Activation Handler Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // Note: Entry point activation is now handled through fuzzy_modal.rs
+    // These tests verify the integration with the modal system
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 3 Task 07: Entry Point Selection Handler Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_entry_point_selected_sets_path() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add FDemon config so auto-save can trigger
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig::default(),
+                source: ConfigSource::FDemon,
+                display_name: "Default".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let result = handle_entry_point_selected(&mut state, Some("lib/main_dev.dart".to_string()));
+
+        // Entry point should be set
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.entry_point,
+            Some(PathBuf::from("lib/main_dev.dart"))
+        );
+
+        // Should trigger auto-save
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::AutoSaveConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn test_entry_point_selected_default_clears() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.launch_context.entry_point =
+            Some(PathBuf::from("lib/old.dart"));
+
+        let _result = handle_entry_point_selected(&mut state, Some("(default)".to_string()));
+
+        // Entry point should be cleared
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.entry_point,
+            None
+        );
+    }
+
+    #[test]
+    fn test_entry_point_selected_none_clears() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.launch_context.entry_point =
+            Some(PathBuf::from("lib/old.dart"));
+
+        let _result = handle_entry_point_selected(&mut state, None);
+
+        // Entry point should be cleared
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.entry_point,
+            None
+        );
+    }
+
+    #[test]
+    fn test_entry_point_selected_auto_creates_config() {
+        use std::path::PathBuf;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        // No config selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+
+        let result = handle_entry_point_selected(&mut state, Some("lib/main_dev.dart".to_string()));
+
+        // Config should be created and selected
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_some());
+        let idx = state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .unwrap();
+        let config = &state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs[idx];
+
+        assert_eq!(config.config.name, "Default");
+        assert_eq!(config.source, ConfigSource::FDemon);
+
+        // Entry point should be set
+        assert_eq!(
+            state.new_session_dialog_state.launch_context.entry_point,
+            Some(PathBuf::from("lib/main_dev.dart"))
+        );
+
+        // Should trigger auto-save
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::AutoSaveConfig { .. })
+        ));
+    }
+
+    #[test]
+    fn test_entry_point_cleared_no_config_no_create() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Clear entry point (set to default) - should NOT create config
+        let result = handle_entry_point_selected(&mut state, Some("(default)".to_string()));
+
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index
+            .is_none());
+        assert!(state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .is_empty());
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_entry_point_selected_vscode_config_no_save() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add VSCode config (read-only)
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig::default(),
+                source: ConfigSource::VSCode,
+                display_name: "VSCode".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+
+        let result = handle_entry_point_selected(&mut state, Some("lib/main_dev.dart".to_string()));
+
+        // Should NOT trigger auto-save for VSCode config
+        // Note: The handler checks is_entry_point_editable() and returns early
+        // Entry point should NOT be set because field is not editable
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_entry_point_selected_closes_modal() {
+        use crate::app::new_session_dialog::FuzzyModalState;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Simulate modal being open
+        state.new_session_dialog_state.fuzzy_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::EntryPoint, vec![]));
+
+        handle_entry_point_selected(&mut state, Some("lib/main.dart".to_string()));
+
+        // Modal should be closed
+        assert!(state.new_session_dialog_state.fuzzy_modal.is_none());
     }
 }

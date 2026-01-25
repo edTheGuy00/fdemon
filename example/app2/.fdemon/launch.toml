@@ -5,3 +5,7 @@
 name = "Default"
 device = "auto"
 flavor = "develop"
+
+[[configurations]]
+name = "Default 2"
+device = "auto"

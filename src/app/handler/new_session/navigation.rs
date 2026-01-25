@@ -128,6 +128,28 @@ pub fn handle_field_activate(
             );
         }
 
+        LaunchContextField::EntryPoint => {
+            // Check if entry point is editable based on selected config
+            if !state
+                .new_session_dialog_state
+                .launch_context
+                .is_entry_point_editable()
+            {
+                // VSCode configs are read-only, skip to next field
+                let next = current_field.next();
+                state.new_session_dialog_state.launch_context.focused_field = next;
+                return UpdateResult::none();
+            }
+
+            // Open entry point fuzzy modal
+            return update_fn(
+                state,
+                Message::NewSessionDialogOpenFuzzyModal {
+                    modal_type: FuzzyModalType::EntryPoint,
+                },
+            );
+        }
+
         LaunchContextField::DartDefines => {
             // Check if dart defines are editable
             if !state

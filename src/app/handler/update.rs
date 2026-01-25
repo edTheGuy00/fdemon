@@ -951,6 +951,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             new_session::handle_flavor_selected(state, flavor)
         }
 
+        Message::NewSessionDialogEntryPointSelected { entry_point } => {
+            new_session::handle_entry_point_selected(state, entry_point)
+        }
+
         Message::NewSessionDialogDartDefinesUpdated { defines } => {
             new_session::handle_dart_defines_updated(state, defines)
         }

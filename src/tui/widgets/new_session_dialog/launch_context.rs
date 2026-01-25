@@ -606,6 +606,37 @@ fn render_flavor_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState,
     flavor_field.render(area, buf);
 }
 
+/// Render the entry point dropdown field
+fn render_entry_point_field(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    let entry_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::EntryPoint;
+    let entry_disabled = !state.is_entry_point_editable();
+
+    let display = state.entry_point_display();
+
+    let suffix = if should_show_disabled_suffix(state, super::state::LaunchContextField::EntryPoint)
+    {
+        Some("(from config)")
+    } else {
+        None
+    };
+
+    let mut field = DropdownField::new("Entry Point", display)
+        .focused(entry_focused)
+        .disabled(entry_disabled);
+
+    if let Some(s) = suffix {
+        field = field.suffix(s);
+    }
+
+    field.render(area, buf);
+}
+
 /// Render the dart defines action field
 fn render_dart_defines_field(
     area: Rect,
@@ -623,7 +654,7 @@ fn render_dart_defines_field(
 }
 
 /// Calculate the layout for all fields
-fn calculate_fields_layout(inner: Rect) -> [Rect; 11] {
+fn calculate_fields_layout(inner: Rect) -> [Rect; 13] {
     let chunks = Layout::vertical([
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Config field
@@ -631,6 +662,8 @@ fn calculate_fields_layout(inner: Rect) -> [Rect; 11] {
         Constraint::Length(1), // Mode field
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Flavor field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Entry Point field
         Constraint::Length(1), // Spacer
         Constraint::Length(1), // Dart Defines field
         Constraint::Length(1), // Spacer
@@ -641,7 +674,7 @@ fn calculate_fields_layout(inner: Rect) -> [Rect; 11] {
 
     [
         chunks[0], chunks[1], chunks[2], chunks[3], chunks[4], chunks[5], chunks[6], chunks[7],
-        chunks[8], chunks[9], chunks[10],
+        chunks[8], chunks[9], chunks[10], chunks[11], chunks[12],
     ]
 }
 
@@ -663,9 +696,9 @@ fn render_border(area: Rect, buf: &mut Buffer, is_focused: bool) -> Rect {
     inner
 }
 
-/// Render all common fields (config, mode, flavor, dart defines)
+/// Render all common fields (config, mode, flavor, entry point, dart defines)
 fn render_common_fields(
-    chunks: &[Rect; 11],
+    chunks: &[Rect; 13],
     buf: &mut Buffer,
     state: &LaunchContextState,
     is_focused: bool,
@@ -673,7 +706,8 @@ fn render_common_fields(
     render_config_field(chunks[1], buf, state, is_focused);
     render_mode_field(chunks[3], buf, state, is_focused);
     render_flavor_field(chunks[5], buf, state, is_focused);
-    render_dart_defines_field(chunks[7], buf, state, is_focused);
+    render_entry_point_field(chunks[7], buf, state, is_focused);
+    render_dart_defines_field(chunks[9], buf, state, is_focused);
 }
 
 // ============================================================================
@@ -693,7 +727,7 @@ impl<'a> LaunchContext<'a> {
 
     /// Calculate minimum height needed
     pub fn min_height() -> u16 {
-        12 // 1 border + 10 content + 1 border
+        14 // 1 border + 12 content + 1 border
     }
 }
 
@@ -708,7 +742,7 @@ impl Widget for LaunchContext<'_> {
         let launch_focused =
             self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
         let launch_button = LaunchButton::new().focused(launch_focused);
-        launch_button.render(chunks[9], buf);
+        launch_button.render(chunks[11], buf);
     }
 }
 
@@ -765,7 +799,7 @@ impl LaunchContextWithDevice<'_> {
         let launch_button = LaunchButton::new()
             .focused(launch_focused)
             .enabled(self.has_device_selected);
-        launch_button.render(chunks[9], buf);
+        launch_button.render(chunks[11], buf);
     }
 
     /// Render compact (vertical layout) mode - with border, tighter spacing, inline mode selector
@@ -791,6 +825,7 @@ impl LaunchContextWithDevice<'_> {
             Constraint::Length(1), // Config field
             Constraint::Length(1), // Mode inline
             Constraint::Length(1), // Flavor field
+            Constraint::Length(1), // Entry Point field
             Constraint::Length(1), // Dart Defines field
             Constraint::Length(1), // Spacer
             Constraint::Length(1), // Launch button
@@ -807,8 +842,11 @@ impl LaunchContextWithDevice<'_> {
         // Render flavor field
         render_flavor_field(chunks[2], buf, self.state, self.is_focused);
 
+        // Render entry point field
+        render_entry_point_field(chunks[3], buf, self.state, self.is_focused);
+
         // Render dart defines field
-        render_dart_defines_field(chunks[3], buf, self.state, self.is_focused);
+        render_dart_defines_field(chunks[4], buf, self.state, self.is_focused);
 
         // Render launch button
         let launch_focused =
@@ -816,7 +854,7 @@ impl LaunchContextWithDevice<'_> {
         let launch_button = LaunchButton::new()
             .focused(launch_focused)
             .enabled(self.has_device_selected);
-        launch_button.render(chunks[5], buf);
+        launch_button.render(chunks[6], buf);
     }
 
     /// Render mode selector as inline radio buttons with responsive labels
@@ -1033,7 +1071,7 @@ mod launch_context_tests {
 
     #[test]
     fn test_min_height() {
-        assert_eq!(LaunchContext::min_height(), 12);
+        assert_eq!(LaunchContext::min_height(), 14);
     }
 
     #[test]
@@ -1371,6 +1409,240 @@ mod launch_context_tests {
         assert!(
             content.contains("Production") || content.contains("Configuration"),
             "Content should be visible within borders"
+        );
+    }
+
+    // =========================================================================
+    // Phase 3 Task 04: Entry Point Field Rendering Tests
+    // =========================================================================
+
+    /// Helper function to convert buffer to string
+    fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
+        buf.content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn test_render_entry_point_field_default() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("(default)"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_with_value() {
+        use std::path::PathBuf;
+
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.set_entry_point(Some(PathBuf::from("lib/main_dev.dart")));
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("lib/main_dev.dart"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_vscode_config_shows_suffix() {
+        use std::path::PathBuf;
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                entry_point: Some(PathBuf::from("lib/main_vscode.dart")),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+        state.set_entry_point(Some(PathBuf::from("lib/main_vscode.dart")));
+
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, false);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("(from config)"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_focused() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.focused_field = super::super::state::LaunchContextField::EntryPoint;
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        // Test passes if rendering doesn't panic
+        // Visual verification: field should be highlighted when focused
+    }
+
+    #[test]
+    fn test_render_entry_point_field_disabled() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        // Test passes if rendering doesn't panic
+        // Visual verification: field should be grayed out when disabled
+    }
+
+    #[test]
+    fn test_min_height_updated_for_entry_point() {
+        // Verify that min_height accounts for the entry point field
+        assert_eq!(LaunchContext::min_height(), 14);
+    }
+
+    #[test]
+    fn test_launch_context_includes_entry_point() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(60, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+
+        // Verify all fields are present including entry point
+        assert!(content.contains("Configuration"));
+        assert!(content.contains("Mode"));
+        assert!(content.contains("Flavor"));
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("Dart Defines"));
+        assert!(content.contains("LAUNCH"));
+    }
+
+    // =========================================================================
+    // Phase 3 Task 05: Layout verification tests
+    // =========================================================================
+
+    #[test]
+    fn test_layout_has_entry_point_row() {
+        let area = Rect::new(0, 0, 60, 20);
+        let chunks = calculate_fields_layout(area);
+
+        // Verify we have 13 chunks
+        assert_eq!(chunks.len(), 13);
+
+        // Verify Entry Point row (index 7) has height 1
+        assert_eq!(chunks[7].height, 1);
+
+        // Verify the layout order:
+        // 0: Spacer, 1: Config, 2: Spacer, 3: Mode, 4: Spacer, 5: Flavor
+        // 6: Spacer, 7: Entry Point, 8: Spacer, 9: Dart Defines
+        // 10: Spacer, 11: Launch button, 12: Remaining space
+
+        // Entry Point should be between Flavor (5) and Dart Defines (9)
+        assert!(
+            chunks[7].y > chunks[5].y,
+            "Entry Point should be after Flavor"
+        );
+        assert!(
+            chunks[7].y < chunks[9].y,
+            "Entry Point should be before Dart Defines"
+        );
+    }
+
+    #[test]
+    fn test_compact_layout_includes_entry_point() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+
+        // Verify Entry Point field is present in compact mode
+        assert!(content.contains("Entry Point"));
+
+        // Verify all fields are present in correct order
+        let config_pos = content.find("Configuration");
+        let mode_pos = content.find("Mode");
+        let flavor_pos = content.find("Flavor");
+        let entry_pos = content.find("Entry Point");
+        let defines_pos = content.find("Dart Defines");
+
+        assert!(config_pos.is_some());
+        assert!(mode_pos.is_some());
+        assert!(flavor_pos.is_some());
+        assert!(entry_pos.is_some());
+        assert!(defines_pos.is_some());
+
+        // Entry Point should appear between Flavor and Dart Defines
+        assert!(
+            entry_pos.unwrap() > flavor_pos.unwrap(),
+            "Entry Point should be after Flavor"
+        );
+        assert!(
+            entry_pos.unwrap() < defines_pos.unwrap(),
+            "Entry Point should be before Dart Defines"
         );
     }
 }
