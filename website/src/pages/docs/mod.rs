@@ -86,7 +86,8 @@ pub fn DocsLayout() -> impl IntoView {
                     "-translate-x-full"
                 };
                 format!(
-                    "fixed md:sticky top-16 md:top-24 left-0 h-[calc(100vh-4rem)] w-64 bg-slate-950 border-r border-slate-800 \
+                    "fixed md:sticky top-16 left-0 h-[calc(100vh-4rem)] w-64 bg-slate-950 border-r border-slate-800 \
+                     shrink-0 self-start \
                      transform {transform} md:translate-x-0 transition-transform duration-200 z-30 \
                      overflow-y-auto"
                 )
