@@ -1,0 +1,5 @@
+[build]
+filehash = true
+
+[tools]
+tailwindcss = "4.1.8"
