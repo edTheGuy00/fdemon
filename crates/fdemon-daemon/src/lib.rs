@@ -1,7 +1,35 @@
-//! fdemon-daemon - Flutter process management for Flutter Demon
+//! # fdemon-daemon - Flutter Process Management
 //!
-//! Manages Flutter child processes, JSON-RPC communication, device discovery,
-//! and emulator/simulator lifecycle.
+//! Manages Flutter child processes, JSON-RPC communication (`--machine` mode),
+//! device discovery, and emulator/simulator lifecycle.
+//!
+//! Depends on [`fdemon_core`] for domain types and error handling.
+//!
+//! ## Public API
+//!
+//! ### Process Management
+//! - [`FlutterProcess`] - Spawn and manage `flutter run --machine` child processes
+//! - [`CommandSender`] - Send JSON-RPC commands to a running Flutter process
+//! - [`RequestTracker`] - Track pending request/response pairs
+//!
+//! ### Protocol Parsing
+//! - [`parse_daemon_message()`] - Parse a line of Flutter `--machine` output
+//! - [`to_log_entry()`] - Convert a parsed message to a log entry
+//! - [`detect_log_level()`] - Determine log level from message content
+//!
+//! ### Device Discovery
+//! - [`Device`] - Connected Flutter device (physical or emulator)
+//! - [`discover_devices()`] - List connected devices via `flutter devices`
+//!
+//! ### Emulator Management
+//! - [`Emulator`] - Available emulator/simulator
+//! - [`discover_emulators()`] - List available emulators
+//! - [`launch_emulator()`] - Start an emulator
+//! - [`BootCommand`] - Platform-specific boot command (iOS Simulator / Android AVD)
+//!
+//! ### Platform Utilities
+//! - [`IosSimulator`], [`AndroidAvd`] - Platform-specific device types
+//! - [`ToolAvailability`] - Check for Android SDK, iOS tools
 
 pub mod avds;
 pub mod commands;
@@ -18,9 +46,7 @@ pub mod tool_availability;
 pub use avds::{
     boot_avd, is_any_emulator_running, kill_all_emulators, list_android_avds, AndroidAvd,
 };
-pub use commands::{
-    next_request_id, CommandResponse, CommandSender, DaemonCommand, RequestTracker,
-};
+pub use commands::{CommandResponse, CommandSender, DaemonCommand, RequestTracker};
 pub use devices::{
     discover_devices, discover_devices_with_timeout, filter_by_platform, find_device,
     group_by_platform, has_devices, Device, DeviceDiscoveryResult,
@@ -35,8 +61,7 @@ pub use emulators::{
 pub use fdemon_core::DaemonMessage;
 pub use process::FlutterProcess;
 pub use protocol::{
-    detect_log_level, parse_daemon_message, parse_flutter_log, strip_brackets, to_log_entry,
-    LogEntryInfo, RawMessage,
+    detect_log_level, parse_daemon_message, parse_flutter_log, to_log_entry, LogEntryInfo,
 };
 pub use simulators::{
     boot_simulator, group_simulators_by_runtime, list_ios_simulators, shutdown_simulator,

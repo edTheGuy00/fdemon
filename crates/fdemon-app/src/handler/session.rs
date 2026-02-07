@@ -6,7 +6,7 @@
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{AppPhase, DaemonMessage, LogEntry, LogLevel, LogSource, ParsedStackTrace};
-use fdemon_daemon::{parse_daemon_message, strip_brackets, to_log_entry};
+use fdemon_daemon::{parse_daemon_message, to_log_entry};
 
 use super::helpers::detect_raw_line_level;
 
@@ -15,50 +15,45 @@ use super::helpers::detect_raw_line_level;
 /// Parses daemon JSON messages and queues log entries for batched processing.
 pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: &str) {
     // Try to parse as JSON daemon message
-    if let Some(json) = strip_brackets(line) {
-        if let Some(msg) = parse_daemon_message(json) {
-            // Handle responses separately (they don't create log entries)
-            if matches!(msg, DaemonMessage::Response { .. }) {
-                tracing::debug!("Session {} response: {}", session_id, msg.summary());
-                return;
-            }
-
-            // Convert to log entry if applicable
-            if let Some(entry_info) = to_log_entry(&msg) {
-                if let Some(handle) = state.session_manager.get_mut(session_id) {
-                    // Create log entry with parsed stack trace if present
-                    let log_entry = if let Some(trace_str) = entry_info.stack_trace {
-                        let parsed_trace = ParsedStackTrace::parse(&trace_str);
-                        LogEntry::with_stack_trace(
-                            entry_info.level,
-                            entry_info.source,
-                            entry_info.message,
-                            parsed_trace,
-                        )
-                    } else {
-                        LogEntry::new(entry_info.level, entry_info.source, entry_info.message)
-                    };
-
-                    // Use batched logging for performance
-                    if handle.session.queue_log(log_entry) {
-                        handle.session.flush_batched_logs();
-                    }
-                }
-            } else {
-                // Unknown event type, log at debug level
-                tracing::debug!(
-                    "Session {} unhandled daemon message: {}",
-                    session_id,
-                    msg.summary()
-                );
-            }
-
-            // Update session state based on message type
-            handle_session_message_state(state, session_id, &msg);
-        } else {
-            // Unparseable JSON
-            tracing::debug!("Session {} unparseable daemon JSON: {}", session_id, json);
+    if let Some(msg) = parse_daemon_message(line) {
+        // Handle responses separately (they don't create log entries)
+        if matches!(msg, DaemonMessage::Response { .. }) {
+            tracing::debug!("Session {} response: {}", session_id, msg.summary());
+            return;
         }
+
+        // Convert to log entry if applicable
+        if let Some(entry_info) = to_log_entry(&msg) {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Create log entry with parsed stack trace if present
+                let log_entry = if let Some(trace_str) = entry_info.stack_trace {
+                    let parsed_trace = ParsedStackTrace::parse(&trace_str);
+                    LogEntry::with_stack_trace(
+                        entry_info.level,
+                        entry_info.source,
+                        entry_info.message,
+                        parsed_trace,
+                    )
+                } else {
+                    LogEntry::new(entry_info.level, entry_info.source, entry_info.message)
+                };
+
+                // Use batched logging for performance
+                if handle.session.queue_log(log_entry) {
+                    handle.session.flush_batched_logs();
+                }
+            }
+        } else {
+            // Unknown event type, log at debug level
+            tracing::debug!(
+                "Session {} unhandled daemon message: {}",
+                session_id,
+                msg.summary()
+            );
+        }
+
+        // Update session state based on message type
+        handle_session_message_state(state, session_id, &msg);
     } else if !line.trim().is_empty() {
         // Non-JSON output (build progress, etc.)
         let (level, message) = detect_raw_line_level(line);

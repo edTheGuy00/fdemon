@@ -19,7 +19,7 @@ pub struct LogEntryInfo {
 ///
 /// The Flutter daemon wraps all messages in `[...]` for resilience.
 /// Returns the inner content if brackets are present.
-pub fn strip_brackets(line: &str) -> Option<&str> {
+pub(crate) fn strip_brackets(line: &str) -> Option<&str> {
     let trimmed = line.trim();
     if trimmed.starts_with('[') && trimmed.ends_with(']') {
         Some(&trimmed[1..trimmed.len() - 1])
@@ -31,7 +31,7 @@ pub fn strip_brackets(line: &str) -> Option<&str> {
 /// A raw daemon message (before parsing into typed events)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum RawMessage {
+pub(crate) enum RawMessage {
     /// A response to a request we sent
     Response {
         id: serde_json::Value,
@@ -47,6 +47,7 @@ pub enum RawMessage {
     },
 }
 
+#[allow(dead_code)]
 impl RawMessage {
     /// Parse a JSON string into a RawMessage
     pub fn parse(json: &str) -> Option<Self> {
@@ -89,16 +90,20 @@ impl RawMessage {
 
 /// Parses a JSON-RPC message from Flutter's --machine stdout.
 ///
-/// This function uses `RawMessage` as an intermediary to avoid duplicate
-/// JSON destructuring logic.
+/// This function handles both bracketed lines (e.g., `[{...}]`) and raw JSON strings.
+/// The Flutter daemon wraps messages in brackets for resilience, but this function
+/// accepts both formats for flexibility.
 ///
 /// # Arguments
-/// * `json` - Raw JSON string from Flutter daemon stdout (after bracket stripping)
+/// * `line` - Line from Flutter daemon stdout (may or may not have brackets)
 ///
 /// # Returns
 /// * `Some(DaemonMessage)` if valid JSON-RPC
 /// * `None` if parsing fails
-pub fn parse_daemon_message(json: &str) -> Option<DaemonMessage> {
+pub fn parse_daemon_message(line: &str) -> Option<DaemonMessage> {
+    // Strip brackets if present, otherwise use line as-is
+    let json = strip_brackets(line).unwrap_or(line);
+
     let raw = RawMessage::parse(json)?;
     match raw {
         RawMessage::Event { event, params } => Some(parse_event(&event, params)),

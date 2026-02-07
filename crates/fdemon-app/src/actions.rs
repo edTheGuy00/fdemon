@@ -240,12 +240,10 @@ fn spawn_session(
 
                                     // Capture app_id from stdout events
                                     if let DaemonEvent::Stdout(ref line) = event {
-                                        if let Some(json) = fdemon_daemon::strip_brackets(line) {
-                                            if let Some(DaemonMessage::AppStart(app_start)) =
-                                                fdemon_daemon::parse_daemon_message(json)
-                                            {
-                                                app_id = Some(app_start.app_id.clone());
-                                            }
+                                        if let Some(DaemonMessage::AppStart(app_start)) =
+                                            fdemon_daemon::parse_daemon_message(line)
+                                        {
+                                            app_id = Some(app_start.app_id.clone());
                                         }
                                     }
 

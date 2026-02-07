@@ -383,3 +383,48 @@ cargo clippy --workspace
 - `Message` needs to be `Clone` for the plugin notification in `process_message()`. Check if it already is -- if not, derive `Clone` on `Message` (it should be lightweight since most variants are small)
 - The `notify_plugins_start()` method is `pub` because the runner (TUI or headless) calls it after registering plugins and before entering the event loop
 - Do NOT add an `unregister_plugin()` method -- plugins are registered at startup and live for the Engine's lifetime
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/plugin.rs` | Created new module with EnginePlugin trait, default implementations, and 7 comprehensive tests |
+| `crates/fdemon-app/src/engine.rs` | Added plugins field, register_plugin/plugin_count methods, notify_plugins_start (pub), notify_plugins_message/notify_plugins_shutdown (private), integrated plugin hooks into process_message/emit/shutdown |
+| `crates/fdemon-app/src/lib.rs` | Added pub mod plugin and pub use plugin::EnginePlugin |
+
+### Notable Decisions/Tradeoffs
+
+1. **Message cloning**: Message already derives Clone, so we clone before passing to process::process_message to enable plugin notification
+2. **Error handling**: Plugin errors are logged with warn! but do not propagate - ensures misbehaving plugins cannot crash the Engine
+3. **Plugin notification order**: Plugins are notified AFTER state update and event emission in process_message to ensure consistent state
+4. **notify_plugins_start visibility**: Made public so runners can call it after plugin registration
+5. **Event notification**: Integrated into emit() so all events (including from emit_events) are delivered to plugins synchronously
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (20 pre-existing warnings)
+- `cargo test -p fdemon-app` - Passed (736 tests)
+- `cargo check --workspace` - Passed
+- `cargo test --lib --workspace` - Passed (1553 tests across all crates)
+- `cargo clippy --workspace` - Passed (only pre-existing warnings)
+
+**Tests added:**
+- test_register_plugin - Verifies plugin registration and count
+- test_plugin_on_start - Verifies on_start is called
+- test_plugin_on_shutdown - Verifies on_shutdown is called during Engine::shutdown
+- test_plugin_on_message - Verifies on_message is called during process_message
+- test_plugin_on_event - Verifies on_event is called (basic smoke test)
+- test_multiple_plugins - Verifies multiple plugins can be registered and all are called
+- test_plugin_error_handling - Verifies plugin errors don't crash the Engine
+
+### Risks/Limitations
+
+1. **No plugin unregister**: Plugins live for Engine lifetime - acceptable for the intended use case (pro features registered at startup)
+2. **Synchronous delivery**: Plugin hooks are called synchronously in the event loop - plugins should avoid blocking operations
+3. **Error handling**: Plugin errors are logged but swallowed - ensures stability but means plugins can silently fail (logged at warn level for visibility)

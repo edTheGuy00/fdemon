@@ -8,7 +8,7 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use fdemon_app::{actions::handle_action, message::Message, state::AppState, Engine, UpdateAction};
+use fdemon_app::{message::Message, state::AppState, Engine, UpdateAction};
 use fdemon_core::prelude::*;
 use fdemon_daemon::devices;
 
@@ -57,7 +57,7 @@ async fn headless_event_loop(engine: &mut Engine) -> Result<()> {
         }
 
         // Wait for next message
-        match engine.msg_rx.recv().await {
+        match engine.recv_message().await {
             Some(msg) => {
                 // Emit events based on message type before processing
                 emit_pre_message_events(&engine.state, &msg);
@@ -204,24 +204,14 @@ async fn headless_auto_start(engine: &mut Engine) {
                         HeadlessEvent::session_created(&session_id.to_string(), &device.name)
                             .emit();
 
-                        // Dispatch SpawnSession action via handle_action
-                        // This uses the shared spawn_session from app/actions
+                        // Dispatch SpawnSession action via Engine
                         let action = UpdateAction::SpawnSession {
                             session_id,
                             device: device.clone(),
                             config: None,
                         };
 
-                        handle_action(
-                            action,
-                            engine.msg_tx.clone(),
-                            None,       // session_cmd_sender - not needed for spawn
-                            Vec::new(), // session_senders - not needed for spawn
-                            engine.session_tasks.clone(),
-                            engine.shutdown_rx.clone(),
-                            &engine.project_path,
-                            Default::default(), // tool_availability
-                        );
+                        engine.dispatch_action(action);
                     }
                     Err(e) => {
                         tracing::error!("Failed to create session: {}", e);

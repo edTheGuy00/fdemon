@@ -50,13 +50,13 @@ Wave 5 (final):
 
 | # | Task | Status | Depends On | Est. Hours | Key Modules |
 |---|------|--------|------------|------------|-------------|
-| 1 | [01-lock-down-fdemon-core](tasks/01-lock-down-fdemon-core.md) | Not Started | - | 2-3h | `crates/fdemon-core/src/` |
-| 2 | [02-lock-down-fdemon-daemon](tasks/02-lock-down-fdemon-daemon.md) | Not Started | - | 2-3h | `crates/fdemon-daemon/src/` |
-| 3 | [03-lock-down-fdemon-app](tasks/03-lock-down-fdemon-app.md) | Not Started | 1, 2 | 4-6h | `crates/fdemon-app/src/` |
-| 4 | [04-lock-down-fdemon-tui](tasks/04-lock-down-fdemon-tui.md) | Not Started | - | 2-3h | `crates/fdemon-tui/src/` |
-| 5 | [05-engine-plugin-trait](tasks/05-engine-plugin-trait.md) | Not Started | 3 | 3-4h | `crates/fdemon-app/src/engine.rs`, `crates/fdemon-app/src/plugin.rs` |
-| 6 | [06-crate-level-docs](tasks/06-crate-level-docs.md) | Not Started | 1, 2, 3, 4, 5 | 2-3h | All `lib.rs` files |
-| 7 | [07-verify-and-document](tasks/07-verify-and-document.md) | Not Started | 6 | 3-4h | `docs/EXTENSION_API.md`, `docs/ARCHITECTURE.md` |
+| 1 | [01-lock-down-fdemon-core](tasks/01-lock-down-fdemon-core.md) | [x] Done | - | 2-3h | `crates/fdemon-core/src/` |
+| 2 | [02-lock-down-fdemon-daemon](tasks/02-lock-down-fdemon-daemon.md) | [x] Done | - | 2-3h | `crates/fdemon-daemon/src/` |
+| 3 | [03-lock-down-fdemon-app](tasks/03-lock-down-fdemon-app.md) | [x] Done | 1, 2 | 4-6h | `crates/fdemon-app/src/` |
+| 4 | [04-lock-down-fdemon-tui](tasks/04-lock-down-fdemon-tui.md) | [x] Done | - | 2-3h | `crates/fdemon-tui/src/` |
+| 5 | [05-engine-plugin-trait](tasks/05-engine-plugin-trait.md) | [x] Done | 3 | 3-4h | `crates/fdemon-app/src/engine.rs`, `crates/fdemon-app/src/plugin.rs` |
+| 6 | [06-crate-level-docs](tasks/06-crate-level-docs.md) | [x] Done | 1, 2, 3, 4, 5 | 2-3h | All `lib.rs` files |
+| 7 | [07-verify-and-document](tasks/07-verify-and-document.md) | [x] Done | 6 | 3-4h | `docs/EXTENSION_API.md`, `docs/ARCHITECTURE.md` |
 
 ## Success Criteria
 

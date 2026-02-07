@@ -682,3 +682,224 @@ The return type from `handler::update()`:
 - `DiscoverEmulators` — Trigger emulator discovery
 - `LaunchEmulator { emulator_id }` — Launch a specific emulator
 - `SpawnSession { device, config }` — Create a new Flutter session
+
+---
+
+## API Surface
+
+### Public API Boundaries
+
+Each crate in the workspace has a clearly defined public API. Only items exported from `lib.rs` are considered public. Items marked `pub(crate)` are internal implementation details.
+
+#### `fdemon-core` — Domain Types
+
+**Public API** (exported from `lib.rs`):
+- `LogEntry`, `LogLevel`, `LogSource` — Log entries and metadata
+- `AppPhase` — Application lifecycle phases
+- `DaemonMessage`, `DaemonEvent` — Events from Flutter daemon
+- `Error`, `Result<T>` — Error handling types
+- `is_runnable_flutter_project()`, `discover_flutter_projects()` — Project discovery
+- `prelude` module — Common imports
+
+**Internal** (`pub(crate)`):
+- Protocol parsing helpers
+- Stack trace implementation details
+
+#### `fdemon-daemon` — Flutter Process Management
+
+**Public API** (exported from `lib.rs`):
+- `Device`, `Emulator`, `AndroidAvd`, `IosSimulator` — Device types
+- `discover_devices()`, `discover_emulators()`, `launch_emulator()` — Discovery functions
+- `FlutterProcess` — Process spawning and lifecycle
+- `CommandSender`, `DaemonCommand` — Command dispatch
+- `ToolAvailability` — Tool detection
+
+**Internal** (`pub(crate)`):
+- JSON-RPC protocol parsing (`protocol.rs`)
+- Request tracking implementation
+- AVD/simulator utilities
+
+#### `fdemon-app` — Application State and Orchestration
+
+**Public API** (exported from `lib.rs`):
+- `Engine` — Orchestration core
+- `EngineEvent` — Domain events for external consumers
+- `EnginePlugin` — Extension trait for plugins
+- `AppState` — TEA model (read-only access recommended)
+- `Message` — TEA messages
+- `UpdateAction`, `UpdateResult` — TEA update outputs
+- `Session`, `SessionHandle`, `SessionManager` — Session types
+- `services::FlutterController` — Reload/restart operations
+- `services::LogService` — Log buffer access
+- `services::StateService` — App state queries
+- `config::Settings`, `config::LaunchConfig` — Configuration types
+
+**Internal** (`pub(crate)`):
+- TEA handler implementation (`handler/`)
+- Process spawning logic (`process.rs`, `spawn.rs`)
+- Signal handling (`signals.rs`)
+- Action dispatching (`actions.rs`)
+
+#### `fdemon-tui` — Terminal UI
+
+**Public API** (exported from `lib.rs`):
+- `run_with_project()` — Main TUI entry point
+- Widget types are not exported (TUI-specific)
+
+**Internal** (`pub(crate)`):
+- All rendering logic
+- Terminal setup/cleanup
+- Event polling
+
+### Visibility Conventions
+
+| Visibility | Meaning | External Access |
+|------------|---------|-----------------|
+| `pub` (in `lib.rs`) | Public API | ✅ Stable, documented, supported |
+| `pub` (in submodule) | Crate-public | ⚠️ Internal, may change |
+| `pub(crate)` | Crate-internal | ❌ Private implementation detail |
+| `pub(super)` | Parent module only | ❌ Private implementation detail |
+| (no visibility) | Module-private | ❌ Private implementation detail |
+
+**Rule:** External consumers should only use items exported from `lib.rs`. Importing from submodules (e.g., `use fdemon_app::handler::update`) is unsupported and may break.
+
+---
+
+## Extension Points
+
+The Engine provides two extension mechanisms for pro features (MCP server, remote SSH, desktop apps):
+
+### 1. Event Subscription (`Engine::subscribe()`)
+
+Async broadcast channel for observing domain events. Best for read-only consumers that need async processing.
+
+```rust
+let mut rx = engine.subscribe();
+
+tokio::spawn(async move {
+    while let Ok(event) = rx.recv().await {
+        match event {
+            EngineEvent::ReloadCompleted { session_id, time_ms } => {
+                // Forward to remote client
+            }
+            EngineEvent::LogBatch { session_id, entries } => {
+                // Stream logs
+            }
+            _ => {}
+        }
+    }
+});
+```
+
+**Key Properties:**
+- **Non-blocking**: Subscribers receive events via async channel
+- **Multiple subscribers**: Each call to `subscribe()` creates a new receiver
+- **Lagging policy**: If a subscriber falls behind, older events are dropped
+- **Event types**: 15 event types covering sessions, phases, reloads, logs, devices, files
+
+See `engine_event.rs` for the full `EngineEvent` enum.
+
+### 2. Plugin Trait (`EnginePlugin`)
+
+Synchronous lifecycle callbacks for tighter integration. Best for features that need to react to every message or participate in the Engine lifecycle.
+
+```rust
+#[derive(Debug)]
+struct MetricsPlugin {
+    reload_count: AtomicUsize,
+}
+
+impl EnginePlugin for MetricsPlugin {
+    fn name(&self) -> &str { "metrics" }
+
+    fn on_start(&self, state: &AppState) -> Result<()> {
+        // Called when Engine starts
+        Ok(())
+    }
+
+    fn on_message(&self, msg: &Message, state: &AppState) -> Result<()> {
+        // Called after each message is processed
+        Ok(())
+    }
+
+    fn on_event(&self, event: &EngineEvent) -> Result<()> {
+        // Called for each EngineEvent
+        if matches!(event, EngineEvent::ReloadCompleted { .. }) {
+            self.reload_count.fetch_add(1, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    fn on_shutdown(&self) -> Result<()> {
+        // Called during shutdown
+        Ok(())
+    }
+}
+
+// Registration
+engine.register_plugin(Box::new(MetricsPlugin { reload_count: AtomicUsize::new(0) }));
+engine.notify_plugins_start();
+```
+
+**Key Properties:**
+- **Synchronous**: Hooks are called inline with message processing
+- **Lifecycle**: Covers start, per-message, per-event, shutdown
+- **Thread-safe**: Must be `Send + Sync`
+- **Error handling**: Plugin errors are logged but don't crash the Engine
+
+### 3. Service Traits
+
+Programmatic access to Flutter operations via trait-based abstractions.
+
+**`FlutterController`** (`services/flutter_controller.rs`):
+```rust
+if let Some(controller) = engine.flutter_controller() {
+    controller.reload().await?;
+    controller.restart().await?;
+    controller.stop().await?;
+    let running = controller.is_running().await;
+}
+```
+
+**`LogService`** (`services/log_service.rs`):
+```rust
+let log_service = engine.log_service();
+let logs = log_service.get_logs(100).await;
+let count = log_service.count().await;
+```
+
+**`StateService`** (`services/state_service.rs`):
+```rust
+let state_service = engine.state_service();
+let phase = state_service.phase().await;
+let info = state_service.project_info().await;
+let running = state_service.is_running().await;
+```
+
+**Key Properties:**
+- **Trait-based**: Abstracts daemon implementation details
+- **Async**: All operations return `async` futures
+- **Testable**: Traits can be mocked for testing
+- **Thread-safe**: Uses `Arc<SharedState>` internally
+
+### Extension Point Comparison
+
+| Feature | Event Subscription | Plugin Trait | Service Traits |
+|---------|-------------------|--------------|----------------|
+| **Async** | ✅ Yes | ❌ No | ✅ Yes |
+| **Multiple consumers** | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Read state** | ✅ Events only | ✅ Full state | ✅ Via services |
+| **Write state** | ❌ No | ❌ No | ✅ Commands only |
+| **Lifecycle hooks** | ❌ No | ✅ Yes | ❌ No |
+| **Best for** | Remote forwarding | Metrics, logging | Control operations |
+
+For detailed examples and usage patterns, see [Extension API Documentation](./EXTENSION_API.md).
+
+---
+
+## Future Considerations
+
+- **Remote MCP Server**: The Engine's event broadcasting and service traits are designed to support an MCP server that can control Flutter Demon from Claude Desktop or other AI tools
+- **SSH Remote Development**: The headless mode and shared state architecture enable remote Flutter development workflows
+- **Multi-Project Workspaces**: The single-session architecture could be extended to support multiple concurrent projects in a workspace view
+- **Time-Travel Debugging**: The TEA pattern (pure update function) enables recording and replaying state transitions for debugging

@@ -70,7 +70,8 @@ pub struct DiscoveryResult {
 }
 
 /// Check if pubspec.yaml has Flutter SDK dependency
-pub fn has_flutter_dependency(path: &Path) -> bool {
+#[allow(dead_code)]
+pub(crate) fn has_flutter_dependency(path: &Path) -> bool {
     let pubspec_path = path.join("pubspec.yaml");
     match fs::read_to_string(&pubspec_path) {
         Ok(content) => check_has_flutter_dependency(&content),
@@ -79,7 +80,7 @@ pub fn has_flutter_dependency(path: &Path) -> bool {
 }
 
 /// Check if a project is a Flutter plugin
-pub fn is_flutter_plugin(path: &Path) -> bool {
+pub(crate) fn is_flutter_plugin(path: &Path) -> bool {
     let pubspec_path = path.join("pubspec.yaml");
     match fs::read_to_string(&pubspec_path) {
         Ok(content) => check_is_plugin(&content),
@@ -88,7 +89,7 @@ pub fn is_flutter_plugin(path: &Path) -> bool {
 }
 
 /// Check if project has any platform directories
-pub fn has_platform_directories(path: &Path) -> bool {
+pub(crate) fn has_platform_directories(path: &Path) -> bool {
     PLATFORM_DIRECTORIES
         .iter()
         .any(|dir| path.join(dir).is_dir())
@@ -399,18 +400,7 @@ static MAIN_FUNCTION_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 /// or strings, but these edge cases are acceptable since:
 /// 1. Users can always type a custom path in the UI
 /// 2. False positives are better than missing valid entry points
-///
-/// # Examples
-///
-/// ```
-/// use fdemon_core::discovery::has_main_function_in_content;
-///
-/// assert!(has_main_function_in_content("void main() {}"));
-/// assert!(has_main_function_in_content("Future<void> main() async {}"));
-/// assert!(!has_main_function_in_content("void notMain() {}"));
-/// assert!(!has_main_function_in_content("// void main() {}"));
-/// ```
-pub fn has_main_function_in_content(content: &str) -> bool {
+pub(crate) fn has_main_function_in_content(content: &str) -> bool {
     MAIN_FUNCTION_REGEX.is_match(content)
 }
 
@@ -421,20 +411,7 @@ const MAX_MAIN_CHECK_FILE_SIZE: u64 = 1024 * 1024;
 ///
 /// Returns `false` if the file cannot be read or doesn't contain main().
 /// Also returns `false` for files larger than 1MB (likely generated code).
-///
-/// # Arguments
-///
-/// * `path` - Path to the Dart file to check
-///
-/// # Examples
-///
-/// ```no_run
-/// use std::path::Path;
-/// use fdemon_core::discovery::has_main_function;
-///
-/// let has_main = has_main_function(Path::new("lib/main.dart"));
-/// ```
-pub fn has_main_function(path: &Path) -> bool {
+pub(crate) fn has_main_function(path: &Path) -> bool {
     // Skip files that are too large (likely generated code)
     if let Ok(metadata) = fs::metadata(path) {
         if metadata.len() > MAX_MAIN_CHECK_FILE_SIZE {

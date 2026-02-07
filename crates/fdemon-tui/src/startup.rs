@@ -9,7 +9,6 @@ use std::path::Path;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
-use fdemon_app::actions::SessionTaskMap;
 use fdemon_app::config::{
     self, get_first_auto_start, get_first_config, load_all_configs, load_last_selection,
     validate_last_selection, LaunchConfig, LoadedConfigs, ValidatedSelection,
@@ -19,6 +18,7 @@ use fdemon_app::session::SessionId;
 use fdemon_app::spawn;
 use fdemon_app::state::{AppState, UiMode};
 use fdemon_app::Device;
+use fdemon_app::SessionTaskMap;
 use fdemon_app::UpdateAction;
 use fdemon_core::LogSource;
 
@@ -54,6 +54,7 @@ pub enum StartupAction {
     /// Enter normal mode, no auto-start
     Ready,
     /// Enter normal mode, then trigger auto-start
+    #[allow(dead_code)]
     AutoStart {
         /// Pre-loaded configs for auto-start flow
         configs: LoadedConfigs,
@@ -327,6 +328,7 @@ fn enter_normal_mode_disconnected(state: &mut AppState) -> Option<UpdateAction> 
 ///
 /// All sessions are managed through the session task system.
 /// This function signals all background tasks to shut down and waits for them.
+#[allow(dead_code)]
 pub async fn cleanup_sessions(
     state: &mut AppState,
     term: &mut ratatui::DefaultTerminal,

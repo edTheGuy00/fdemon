@@ -15,6 +15,7 @@ pub struct ScreenAreas {
     pub header: Rect,
 
     /// Tab subheader area (only when multiple sessions)
+    #[allow(dead_code)]
     pub tabs: Option<Rect>,
 
     /// Main content area (log view)
@@ -25,6 +26,7 @@ pub struct ScreenAreas {
 }
 
 /// Layout mode based on terminal size
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
     /// Very narrow terminal (< 60 cols)
@@ -39,6 +41,7 @@ pub enum LayoutMode {
 
 impl LayoutMode {
     /// Determine layout mode from terminal width
+    #[allow(dead_code)]
     pub fn from_width(width: u16) -> Self {
         match width {
             0..=59 => LayoutMode::Compact,
@@ -54,6 +57,7 @@ impl LayoutMode {
 /// # Arguments
 /// * `area` - Total screen area
 /// * `session_count` - Number of active sessions (determines if tabs are shown)
+#[allow(dead_code)]
 pub fn create(area: Rect) -> ScreenAreas {
     create_with_sessions(area, 0)
 }
@@ -92,16 +96,19 @@ pub fn use_compact_status(area: Rect) -> bool {
 }
 
 /// Check if compact header should be used
+#[allow(dead_code)]
 pub fn use_compact_header(area: Rect) -> bool {
     area.width < MIN_FULL_STATUS_WIDTH
 }
 
 /// Get header height (constant regardless of session count)
+#[allow(dead_code)]
 pub fn header_height(_session_count: usize) -> u16 {
     3 // Top border + content row + bottom border
 }
 
 /// Get timestamp format for log entries based on width
+#[allow(dead_code)]
 pub fn timestamp_format(area: Rect) -> &'static str {
     let mode = LayoutMode::from_width(area.width);
 
@@ -114,6 +121,7 @@ pub fn timestamp_format(area: Rect) -> &'static str {
 }
 
 /// Get maximum tab count that fits in the header
+#[allow(dead_code)]
 pub fn max_visible_tabs(area: Rect) -> usize {
     let mode = LayoutMode::from_width(area.width);
 

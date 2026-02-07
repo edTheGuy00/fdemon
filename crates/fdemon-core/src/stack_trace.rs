@@ -14,31 +14,32 @@ use crate::ansi::strip_ansi_codes;
 
 /// Matches Dart VM stack trace format: `#0      main (package:app/main.dart:15:3)`
 /// Captures: 1=frame_number, 2=function_name, 3=file_path, 4=line, 5=column
-pub static DART_VM_FRAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static DART_VM_FRAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"#(\d+)\s+(.+?)\s+\((.+?):(\d+):(\d+)\)").expect("Invalid DART_VM_FRAME_REGEX")
 });
 
 /// Matches Dart VM stack trace format without column: `#0      main (package:app/main.dart:15)`
 /// Captures: 1=frame_number, 2=function_name, 3=file_path, 4=line
-pub static DART_VM_FRAME_NO_COL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static DART_VM_FRAME_NO_COL_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"#(\d+)\s+(.+?)\s+\((.+?):(\d+)\)").expect("Invalid DART_VM_FRAME_NO_COL_REGEX")
 });
 
 /// Matches the friendly/package_trace format: `package:app/main.dart 15:3  main`
 /// Captures: 1=file_path, 2=line, 3=column, 4=function_name
-pub static FRIENDLY_FRAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+pub(crate) static FRIENDLY_FRAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(.+?)\s+(\d+):(\d+)\s+(.+)$").expect("Invalid FRIENDLY_FRAME_REGEX")
 });
 
 /// Matches async suspension markers
-pub static ASYNC_GAP_REGEX: LazyLock<Regex> =
+pub(crate) static ASYNC_GAP_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<asynchronous suspension>").expect("Invalid ASYNC_GAP_REGEX"));
 
 /// Matches package frame paths (SDK/pub cache packages to dim)
 /// - `dart:` prefix (Dart SDK internals)
 /// - `package:flutter/` (Flutter SDK)
 /// - paths containing `.pub-cache` (pub packages)
-pub static PACKAGE_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
+#[allow(dead_code)]
+pub(crate) static PACKAGE_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(dart:|package:flutter/)|\.pub-cache").expect("Invalid PACKAGE_PATH_REGEX")
 });
 

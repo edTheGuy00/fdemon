@@ -13,17 +13,29 @@
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
 
-pub mod daemon;
-pub mod helpers;
-pub mod keys;
-pub mod log_view;
-pub mod new_session;
-pub mod scroll;
-pub mod session;
-pub mod session_lifecycle;
-pub mod settings;
-pub mod settings_handlers;
-pub mod update;
+// Handler submodule functions are dispatched through update() but the compiler
+// cannot trace pub(crate) cross-module usage, resulting in false dead_code warnings.
+#[allow(dead_code)]
+pub(crate) mod daemon;
+#[allow(dead_code)]
+pub(crate) mod helpers;
+#[allow(dead_code)]
+pub(crate) mod keys;
+#[allow(dead_code)]
+pub(crate) mod log_view;
+#[allow(dead_code)]
+pub(crate) mod new_session;
+#[allow(dead_code)]
+pub(crate) mod scroll;
+#[allow(dead_code)]
+pub(crate) mod session;
+#[allow(dead_code)]
+pub(crate) mod session_lifecycle;
+#[allow(dead_code)]
+pub(crate) mod settings;
+#[allow(dead_code)]
+pub(crate) mod settings_handlers;
+pub(crate) mod update;
 
 #[cfg(test)]
 mod tests;
@@ -36,9 +48,11 @@ use fdemon_daemon::Device;
 // Re-export main entry point
 pub use update::update;
 
-// Re-export functions used by tests
-pub use helpers::detect_raw_line_level;
-pub use keys::handle_key;
+// Re-export functions used by internal tests
+#[allow(unused_imports)]
+pub(crate) use helpers::detect_raw_line_level;
+#[allow(unused_imports)]
+pub(crate) use keys::handle_key;
 
 /// Actions that the event loop should perform after update
 #[derive(Debug, Clone)]

@@ -19,7 +19,7 @@ use fdemon_core::prelude::*;
 static REQUEST_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Generate a unique request ID
-pub fn next_request_id() -> u64 {
+pub(crate) fn next_request_id() -> u64 {
     REQUEST_ID_COUNTER.fetch_add(1, Ordering::SeqCst)
 }
 

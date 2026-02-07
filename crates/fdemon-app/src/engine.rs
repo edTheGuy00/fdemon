@@ -11,9 +11,12 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
+use crate::plugin::EnginePlugin;
+
 use crate::actions::SessionTaskMap;
 use crate::config::{self, Settings};
 use crate::engine_event::EngineEvent;
+use crate::handler::UpdateAction;
 use crate::message::Message;
 use crate::process;
 use crate::services::{
@@ -75,25 +78,30 @@ impl StateSnapshot {
 /// - Shared state for service layer
 /// - Event broadcasting for external consumers
 pub struct Engine {
-    /// TEA application state (the Model)
+    /// TEA application state (the Model).
+    ///
+    /// Read access is public for rendering. State mutations should go through
+    /// `process_message()` to maintain Engine invariants (event emission,
+    /// SharedState sync). Direct `&mut` access is provided for TUI startup
+    /// only -- do not mutate outside of the TEA cycle in normal operation.
     pub state: AppState,
 
     /// Sender half of the unified message channel.
     /// Clone this to give to input sources (signal handler, watcher, daemon tasks).
-    pub msg_tx: mpsc::Sender<Message>,
+    pub(crate) msg_tx: mpsc::Sender<Message>,
 
     /// Receiver half of the unified message channel.
     /// The frontend event loop drains messages from here.
-    pub msg_rx: mpsc::Receiver<Message>,
+    pub(crate) msg_rx: mpsc::Receiver<Message>,
 
     /// Map of session IDs to their background task handles.
-    pub session_tasks: SessionTaskMap,
+    pub(crate) session_tasks: SessionTaskMap,
 
     /// Sender for the shutdown signal. Send `true` to initiate shutdown.
-    pub shutdown_tx: watch::Sender<bool>,
+    pub(crate) shutdown_tx: watch::Sender<bool>,
 
     /// Receiver for the shutdown signal. Clone for background tasks.
-    pub shutdown_rx: watch::Receiver<bool>,
+    pub(crate) shutdown_rx: watch::Receiver<bool>,
 
     /// File watcher for auto-reload. None if watcher failed to start.
     file_watcher: Option<FileWatcher>,
@@ -111,6 +119,9 @@ pub struct Engine {
     /// Event broadcaster for external consumers.
     /// Subscribers receive EngineEvents after each message processing cycle.
     event_tx: broadcast::Sender<EngineEvent>,
+
+    /// Registered plugins
+    plugins: Vec<Box<dyn EnginePlugin>>,
 }
 
 impl Engine {
@@ -171,6 +182,7 @@ impl Engine {
             project_path,
             shared_state,
             event_tx,
+            plugins: Vec::new(),
         }
     }
 
@@ -185,6 +197,32 @@ impl Engine {
         self.event_tx.subscribe()
     }
 
+    /// Register a plugin with the Engine.
+    ///
+    /// Plugins receive lifecycle callbacks (on_start, on_message, on_event, on_shutdown).
+    /// Multiple plugins can be registered. They are called in registration order.
+    pub fn register_plugin(&mut self, plugin: Box<dyn EnginePlugin>) {
+        info!("Registering plugin: {}", plugin.name());
+        self.plugins.push(plugin);
+    }
+
+    /// Get the number of registered plugins.
+    pub fn plugin_count(&self) -> usize {
+        self.plugins.len()
+    }
+
+    /// Notify all plugins that the Engine has started.
+    ///
+    /// This is called by runners after registering plugins and before
+    /// entering the event loop.
+    pub fn notify_plugins_start(&self) {
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.on_start(&self.state) {
+                warn!("Plugin '{}' on_start error: {}", plugin.name(), e);
+            }
+        }
+    }
+
     /// Process a single message through the TEA update cycle.
     ///
     /// Delegates to `process::process_message()` which runs handler::update()
@@ -193,6 +231,9 @@ impl Engine {
     pub fn process_message(&mut self, msg: Message) {
         // Snapshot state before processing
         let pre = StateSnapshot::capture(&self.state);
+
+        // Clone message for plugin notification (Message derives Clone)
+        let msg_for_plugins = msg.clone();
 
         process::process_message(
             &mut self.state,
@@ -208,6 +249,9 @@ impl Engine {
 
         // Emit events for any state changes
         self.emit_events(&pre, &post);
+
+        // Notify plugins after processing and event emission
+        self.notify_plugins_message(&msg_for_plugins);
     }
 
     /// Drain and process all pending messages from the channel.
@@ -268,9 +312,32 @@ impl Engine {
         self.msg_tx.clone()
     }
 
+    /// Receive the next message from the channel.
+    ///
+    /// Returns None if the channel is closed.
+    pub async fn recv_message(&mut self) -> Option<Message> {
+        self.msg_rx.recv().await
+    }
+
     /// Get a clone of the shutdown receiver for background tasks.
     pub fn shutdown_receiver(&self) -> watch::Receiver<bool> {
         self.shutdown_rx.clone()
+    }
+
+    /// Dispatch an UpdateAction (same as what process_message does internally).
+    ///
+    /// Used by headless runner for auto-start session spawning.
+    pub fn dispatch_action(&self, action: UpdateAction) {
+        crate::actions::handle_action(
+            action,
+            self.msg_tx.clone(),
+            None,
+            Vec::new(),
+            self.session_tasks.clone(),
+            self.shutdown_rx.clone(),
+            &self.project_path,
+            Default::default(),
+        );
     }
 
     /// Check if the application should quit.
@@ -314,6 +381,9 @@ impl Engine {
 
     /// Initiate shutdown: stop watcher, signal background tasks, cleanup sessions.
     pub async fn shutdown(&mut self) {
+        // Notify plugins first
+        self.notify_plugins_shutdown();
+
         // Emit shutdown event
         self.emit(EngineEvent::Shutdown);
 
@@ -426,7 +496,33 @@ impl Engine {
     /// send() returns Err only if there are no receivers -- that's fine,
     /// we don't want to panic or log errors for having no subscribers.
     fn emit(&self, event: EngineEvent) {
-        let _ = self.event_tx.send(event);
+        // Broadcast to channel subscribers
+        let _ = self.event_tx.send(event.clone());
+
+        // Notify plugins
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.on_event(&event) {
+                warn!("Plugin '{}' on_event error: {}", plugin.name(), e);
+            }
+        }
+    }
+
+    /// Notify all plugins that a message was processed.
+    fn notify_plugins_message(&self, msg: &Message) {
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.on_message(msg, &self.state) {
+                warn!("Plugin '{}' on_message error: {}", plugin.name(), e);
+            }
+        }
+    }
+
+    /// Notify all plugins about shutdown.
+    fn notify_plugins_shutdown(&self) {
+        for plugin in &self.plugins {
+            if let Err(e) = plugin.on_shutdown() {
+                warn!("Plugin '{}' on_shutdown error: {}", plugin.name(), e);
+            }
+        }
     }
 
     /// Create and start the file watcher, bridging events to messages.

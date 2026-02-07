@@ -28,7 +28,12 @@ pub use settings::{
     save_user_preferences, validate_last_selection, EditorConfig, LastSelection,
     ValidatedSelection, KNOWN_EDITORS,
 };
-pub use types::*;
+// Re-export public config types used by TUI and other crates
+pub use types::{
+    BehaviorSettings, ConfigSource, DevToolsSettings, EditorSettings, FlutterMode, LaunchConfig,
+    LaunchFile, ParentIde, ResolvedLaunchConfig, SettingItem, SettingValue, Settings, SettingsTab,
+    UiSettings, UserPreferences, WatcherSettings, WindowPrefs,
+};
 pub use vscode::load_vscode_configs;
 pub use writer::{
     save_fdemon_configs, update_config_dart_defines, update_config_flavor, update_config_mode,

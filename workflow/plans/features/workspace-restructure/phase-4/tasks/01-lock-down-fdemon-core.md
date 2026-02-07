@@ -134,3 +134,37 @@ cargo clippy --workspace
 - The `events` module exports only domain types -- no changes needed
 - The `types` module exports only domain types -- no changes needed
 - Do NOT change `pub mod` declarations in `lib.rs` -- only change the `pub use` re-exports and individual item visibility
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/stack_trace.rs` | Changed 5 regex statics from `pub static` to `pub(crate) static` (DART_VM_FRAME_REGEX, DART_VM_FRAME_NO_COL_REGEX, FRIENDLY_FRAME_REGEX, ASYNC_GAP_REGEX, PACKAGE_PATH_REGEX) |
+| `crates/fdemon-core/src/discovery.rs` | Changed 5 helper functions from `pub fn` to `pub(crate) fn` (has_flutter_dependency, is_flutter_plugin, has_platform_directories, has_main_function_in_content, has_main_function). Removed doc examples from internalized functions. |
+| `crates/fdemon-core/src/lib.rs` | Removed internalized items from `pub use` re-exports (regex statics and discovery helper functions) |
+
+### Notable Decisions/Tradeoffs
+
+1. **has_flutter_dependency made internal**: Even though the task file suggested checking if it was used externally and keeping it public if so, grep confirmed it was only used in tests within fdemon-core itself, so it was made `pub(crate)`.
+
+2. **Removed doc examples**: The doc examples for `has_main_function_in_content` and `has_main_function` were removed because they showed public API usage which would fail to compile now that these functions are `pub(crate)`.
+
+3. **Dead code warnings acceptable**: The compiler warns that `has_flutter_dependency` and `PACKAGE_PATH_REGEX` are never used. This is expected because they're only used in tests (which doesn't count as usage for dead code analysis). These warnings are acceptable and don't indicate a problem.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed (with 2 expected dead code warnings)
+- `cargo test -p fdemon-core` - Passed (all 243 unit tests + 4 doc tests passed)
+- Verified no external usage of internalized items via grep in fdemon-daemon, fdemon-app, fdemon-tui, and src/
+
+### Risks/Limitations
+
+1. **Workspace compilation issues**: The workspace has pre-existing compilation errors in fdemon-daemon and fdemon-app that are unrelated to this task. These errors existed before the fdemon-core API changes and are due to other refactoring work on the branch (removal of strip_brackets function and changes to LogEntryInfo visibility).
+
+2. **Unused static PACKAGE_PATH_REGEX**: This regex was never actually used in the implementation (is_package_path uses plain string matching). It could potentially be removed entirely in a future cleanup task.

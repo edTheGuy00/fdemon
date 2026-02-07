@@ -1,8 +1,8 @@
 //! Terminal event polling
 
 use crossterm::event::{self, Event, KeyCode, KeyModifiers};
-use fdemon_app::input_key::InputKey;
 use fdemon_app::message::Message;
+use fdemon_app::InputKey;
 use fdemon_core::prelude::*;
 use std::time::Duration;
 

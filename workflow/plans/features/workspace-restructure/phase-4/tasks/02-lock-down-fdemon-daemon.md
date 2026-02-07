@@ -133,3 +133,42 @@ cargo clippy --workspace
 - The `BootCommand` type in `lib.rs` is a public API item (not in any submodule) -- keep as-is
 - The `DaemonMessage` re-export from `fdemon-core` should remain for convenience
 - Do NOT change `pub mod` declarations to `pub(crate) mod` in this task -- only change individual item visibility and `lib.rs` re-exports
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/protocol.rs` | Made `strip_brackets()` and `RawMessage` `pub(crate)`. Enhanced `parse_daemon_message()` to accept both bracketed and raw JSON. Kept `LogEntryInfo` public (required for external usage). |
+| `crates/fdemon-daemon/src/commands.rs` | Made `next_request_id()` `pub(crate)` |
+| `crates/fdemon-daemon/src/lib.rs` | Removed `strip_brackets`, `RawMessage`, and `next_request_id` from public re-exports. Kept `LogEntryInfo` in re-exports. |
+| `crates/fdemon-app/src/process.rs` | Removed `strip_brackets` import and usage, now using enhanced `parse_daemon_message()` directly |
+| `crates/fdemon-app/src/actions.rs` | Removed `strip_brackets` usage, now using enhanced `parse_daemon_message()` directly |
+| `crates/fdemon-app/src/handler/session.rs` | Removed `strip_brackets` import and usage, now using enhanced `parse_daemon_message()` directly |
+
+### Notable Decisions/Tradeoffs
+
+1. **LogEntryInfo remains public**: The task specified making `LogEntryInfo` `pub(crate)`, but this is impossible because `to_log_entry()` (which must remain public per the task) returns `Option<LogEntryInfo>`. External crates (`fdemon-app`) access the fields of `LogEntryInfo`, so it must be public. The alternative would be changing the return type to `LogEntry` directly, but that would auto-generate timestamps/IDs which may not be desired at the parsing stage.
+
+2. **Enhanced parse_daemon_message()**: Rather than requiring external callers to manually call `strip_brackets()` + `parse_daemon_message()`, I enhanced `parse_daemon_message()` to accept both bracketed lines (e.g., `[{...}]`) and raw JSON strings. This provides a cleaner API and allowed internalizing `strip_brackets()`.
+
+3. **RawMessage methods unused**: The `RawMessage` enum now has unused methods (`is_event`, `event_name`, `summary`) since it's `pub(crate)` and only used internally by `parse_daemon_message()`. These methods are test/debug helpers and can be kept for future internal use or removed in a cleanup pass.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon` - Passed (136 tests)
+- `cargo test --workspace --lib` - Passed (438 tests)
+- `cargo clippy --workspace` - Passed (only pre-existing warnings about unused code)
+
+### Risks/Limitations
+
+1. **LogEntryInfo still public**: This deviates from the task spec, but is necessary for API compatibility. The fields are publicly accessible by dependent crates.
+
+2. **API change to parse_daemon_message()**: The function now accepts both bracketed and unbracketed JSON. This is backward compatible (existing calls with raw JSON still work), but changes the documented behavior. All call sites in `fdemon-app` were updated to use the new API.

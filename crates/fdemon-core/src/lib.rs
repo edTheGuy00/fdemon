@@ -1,7 +1,44 @@
-//! fdemon-core - Core domain types for Flutter Demon
+//! # fdemon-core - Core Domain Types
 //!
-//! This crate provides the foundational types shared across all Flutter Demon
-//! crates: error handling, domain types, event definitions, and project discovery.
+//! Foundation crate for Flutter Demon. Provides domain types, error handling,
+//! event definitions, project discovery, and stack trace parsing.
+//!
+//! This crate has **zero internal dependencies** -- it only depends on external
+//! crates (serde, chrono, thiserror, regex, tracing).
+//!
+//! ## Public API
+//!
+//! ### Domain Types (`types`)
+//! - [`AppPhase`] - Application lifecycle phase (Initializing, Running, Reloading, etc.)
+//! - [`LogEntry`] - A single log line with level, source, and timestamp
+//! - [`LogLevel`] - Log severity (Debug, Info, Warning, Error)
+//! - [`LogSource`] - Origin of a log entry (App, Flutter, Daemon)
+//! - [`FilterState`], [`SearchState`] - Log filtering and search state
+//!
+//! ### Events (`events`)
+//! - [`DaemonMessage`] - Parsed messages from Flutter's `--machine` JSON-RPC output
+//! - [`DaemonEvent`] - Wrapper enum for daemon stdout/stderr/exit events
+//!
+//! ### Error Handling (`error`)
+//! - [`Error`] - Custom error enum with `fatal` vs `recoverable` classification
+//! - [`Result`] - Type alias for `std::result::Result<T, Error>`
+//! - [`ResultExt`] - Extension trait for adding error context
+//!
+//! ### Project Discovery (`discovery`)
+//! - [`is_runnable_flutter_project()`] - Check if a directory is a runnable Flutter project
+//! - [`discover_flutter_projects()`] - Find Flutter projects in subdirectories
+//! - [`get_project_type()`] - Determine project type (app, plugin, package)
+//!
+//! ### Stack Traces (`stack_trace`)
+//! - [`ParsedStackTrace`] - Parsed and formatted stack trace
+//! - [`StackFrame`] - Individual stack frame with file, line, column
+//!
+//! ## Prelude
+//!
+//! Import commonly used types with:
+//! ```rust
+//! use fdemon_core::prelude::*;
+//! ```
 
 pub mod ansi;
 pub mod discovery;
@@ -21,9 +58,7 @@ pub mod prelude {
 pub use ansi::{contains_ansi_codes, contains_word, strip_ansi_codes};
 pub use discovery::{
     discover_entry_points, discover_flutter_projects, get_project_name, get_project_type,
-    has_flutter_dependency, has_main_function, has_main_function_in_content,
-    has_platform_directories, is_flutter_plugin, is_runnable_flutter_project, DiscoveryResult,
-    ProjectType, SkippedProject, DEFAULT_MAX_DEPTH,
+    is_runnable_flutter_project, DiscoveryResult, ProjectType, SkippedProject, DEFAULT_MAX_DEPTH,
 };
 pub use error::{Error, Result, ResultExt};
 pub use events::{
@@ -31,9 +66,7 @@ pub use events::{
     DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use stack_trace::{
-    detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame,
-    StackTraceFormat, ASYNC_GAP_REGEX, DART_VM_FRAME_NO_COL_REGEX, DART_VM_FRAME_REGEX,
-    FRIENDLY_FRAME_REGEX, PACKAGE_PATH_REGEX,
+    detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame, StackTraceFormat,
 };
 pub use types::{
     AppPhase, BootableDevice, DeviceState, FilterState, LogEntry, LogLevel, LogLevelFilter,

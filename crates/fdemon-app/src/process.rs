@@ -15,7 +15,7 @@ use crate::session::SessionId;
 use crate::state::AppState;
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
-use fdemon_daemon::{parse_daemon_message, strip_brackets, CommandSender};
+use fdemon_daemon::{parse_daemon_message, CommandSender};
 
 use super::actions::handle_action;
 
@@ -66,18 +66,15 @@ fn route_session_daemon_response(message: &Message, state: &AppState) {
         event: DaemonEvent::Stdout(ref line),
     } = message
     {
-        if let Some(json) = strip_brackets(line) {
-            if let Some(DaemonMessage::Response { id, result, error }) = parse_daemon_message(json)
-            {
-                // Use session-specific cmd_sender for response routing
-                if let Some(handle) = state.session_manager.get(*session_id) {
-                    if let Some(ref sender) = handle.cmd_sender {
-                        if let Some(id_num) = id.as_u64() {
-                            let tracker = sender.tracker().clone();
-                            tokio::spawn(async move {
-                                tracker.handle_response(id_num, result, error).await;
-                            });
-                        }
+        if let Some(DaemonMessage::Response { id, result, error }) = parse_daemon_message(line) {
+            // Use session-specific cmd_sender for response routing
+            if let Some(handle) = state.session_manager.get(*session_id) {
+                if let Some(ref sender) = handle.cmd_sender {
+                    if let Some(id_num) = id.as_u64() {
+                        let tracker = sender.tracker().clone();
+                        tokio::spawn(async move {
+                            tracker.handle_response(id_num, result, error).await;
+                        });
                     }
                 }
             }
