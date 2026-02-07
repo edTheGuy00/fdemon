@@ -6,7 +6,6 @@
 //! - Launch configurations (launch.toml)
 //! - VSCode configurations (launch.json, read-only)
 
-mod items;
 mod styles;
 
 use ratatui::{
@@ -20,13 +19,11 @@ use ratatui::{
 
 use std::path::Path;
 
-use crate::app::state::SettingsViewState;
-use crate::config::{SettingItem, Settings, SettingsTab, UserPreferences};
-
-// Re-export item generators for use in handlers
-pub use items::{
+use crate::app::settings_items::{
     launch_config_items, project_settings_items, user_prefs_items, vscode_config_items,
 };
+use crate::app::state::SettingsViewState;
+use crate::config::{SettingItem, Settings, SettingsTab, UserPreferences};
 
 // Use styles module
 use styles::{
@@ -887,31 +884,10 @@ impl SettingsPanel<'_> {
     // ─────────────────────────────────────────────────────────────────────────────
 
     /// Get the currently selected item for editing
+    ///
+    /// Delegated to the app layer's `get_selected_item` function (moved in Phase 1, Task 05).
     pub fn get_selected_item(&self, state: &SettingsViewState) -> Option<SettingItem> {
-        let items = match state.active_tab {
-            SettingsTab::Project => project_settings_items(self.settings),
-            SettingsTab::UserPrefs => user_prefs_items(&state.user_prefs, self.settings),
-            SettingsTab::LaunchConfig => {
-                use crate::config::launch::load_launch_configs;
-                let configs = load_launch_configs(self.project_path);
-                let mut all_items = Vec::new();
-                for (idx, resolved) in configs.iter().enumerate() {
-                    all_items.extend(launch_config_items(&resolved.config, idx));
-                }
-                all_items
-            }
-            SettingsTab::VSCodeConfig => {
-                use crate::config::load_vscode_configs;
-                let configs = load_vscode_configs(self.project_path);
-                let mut all_items = Vec::new();
-                for (idx, resolved) in configs.iter().enumerate() {
-                    all_items.extend(vscode_config_items(&resolved.config, idx));
-                }
-                all_items
-            }
-        };
-
-        items.get(state.selected_index).cloned()
+        crate::app::settings_items::get_selected_item(self.settings, self.project_path, state)
     }
 }
 

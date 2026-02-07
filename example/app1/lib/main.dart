@@ -59,7 +59,10 @@ class ErrorTestingPage extends StatelessWidget {
         children: [
           _buildSection(context, 'Built-in Logging', [
             _buildButton('print()', () => print('Standard print message')),
-            _buildButton('debugPrint()', () => debugPrint('Debug print message')),
+            _buildButton(
+              'debugPrint()',
+              () => debugPrint('Debug print message'),
+            ),
             _buildButton('developer.log()', demonstrateBuiltInLogging),
             _buildButton('Log + Metadata', demonstrateLogWithMetadata),
             _buildButton('Log + Error', demonstrateLogWithError),
@@ -93,9 +96,15 @@ class ErrorTestingPage extends StatelessWidget {
           ]),
           _buildSection(context, 'Async Errors', [
             _buildAsyncErrorButton('Simple Async', triggerAsyncError),
-            _buildAsyncErrorButton('Nested (3 levels)', triggerNestedAsyncError),
+            _buildAsyncErrorButton(
+              'Nested (3 levels)',
+              triggerNestedAsyncError,
+            ),
             _buildAsyncErrorButton('Timeout Error', triggerTimeoutError),
-            _buildAsyncErrorButton('Multi Suspensions', triggerMultipleAsyncSuspensions),
+            _buildAsyncErrorButton(
+              'Multi Suspensions',
+              triggerMultipleAsyncSuspensions,
+            ),
             _buildButton('Uncaught Async', triggerUncaughtAsyncError),
             _buildAsyncErrorButton('Stream Error', triggerStreamError),
           ]),
@@ -119,7 +128,11 @@ class ErrorTestingPage extends StatelessWidget {
     );
   }
 
-  Widget _buildSection(BuildContext context, String title, List<Widget> children) {
+  Widget _buildSection(
+    BuildContext context,
+    String title,
+    List<Widget> children,
+  ) {
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
       child: Padding(
@@ -129,11 +142,7 @@ class ErrorTestingPage extends StatelessWidget {
           children: [
             Text(title, style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 12),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: children,
-            ),
+            Wrap(spacing: 8, runSpacing: 8, children: children),
           ],
         ),
       ),
@@ -141,10 +150,7 @@ class ErrorTestingPage extends StatelessWidget {
   }
 
   Widget _buildButton(String label, VoidCallback onPressed) {
-    return ElevatedButton(
-      onPressed: onPressed,
-      child: Text(label),
-    );
+    return ElevatedButton(onPressed: onPressed, child: Text(label));
   }
 
   Widget _buildErrorButton(String label, VoidCallback errorFunction) {
@@ -165,7 +171,10 @@ class ErrorTestingPage extends StatelessWidget {
     );
   }
 
-  Widget _buildAsyncErrorButton(String label, Future<void> Function() errorFunction) {
+  Widget _buildAsyncErrorButton(
+    String label,
+    Future<void> Function() errorFunction,
+  ) {
     return ElevatedButton(
       style: ElevatedButton.styleFrom(
         backgroundColor: Colors.orange.shade100,

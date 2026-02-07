@@ -9,8 +9,10 @@ use std::path::Path;
 use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
+use crate::app::actions::SessionTaskMap;
 use crate::app::message::Message;
 use crate::app::session::SessionId;
+use crate::app::spawn;
 use crate::app::state::{AppState, UiMode};
 use crate::app::UpdateAction;
 use crate::config::{
@@ -20,9 +22,7 @@ use crate::config::{
 use crate::core::LogSource;
 use crate::daemon::{devices, Device};
 
-use super::actions::SessionTaskMap;
 use super::render;
-use super::spawn;
 
 /// Result of startup initialization
 #[derive(Debug)]

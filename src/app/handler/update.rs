@@ -1141,7 +1141,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     modal.items = items;
 
                     // Reapply fuzzy filter with current query
-                    use crate::tui::widgets::new_session_dialog::fuzzy_modal::fuzzy_filter;
+                    use crate::app::new_session_dialog::fuzzy::fuzzy_filter;
                     let filtered = fuzzy_filter(&modal.query, &modal.items);
                     modal.update_filter(filtered);
                 }

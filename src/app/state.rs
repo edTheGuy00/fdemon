@@ -4,11 +4,11 @@ use std::path::PathBuf;
 
 use rand::Rng;
 
+use crate::app::confirm_dialog::ConfirmDialogState;
 use crate::app::new_session_dialog::NewSessionDialogState;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::core::AppPhase;
 use crate::daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
-use crate::tui::widgets::ConfirmDialogState;
 
 use super::session_manager::SessionManager;
 

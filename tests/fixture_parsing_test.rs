@@ -1,6 +1,8 @@
 //! Tests to verify JSON fixtures parse correctly
 
-use flutter_demon::daemon::protocol::DaemonMessage;
+// DaemonMessage type is in core, but parse() method is in daemon/protocol
+// Re-export from daemon makes this work
+use flutter_demon::daemon::DaemonMessage;
 
 #[test]
 fn test_daemon_connected_fixture_parses() {

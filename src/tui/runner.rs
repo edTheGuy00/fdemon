@@ -11,15 +11,18 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch, Mutex};
 use tracing::{error, warn};
 
+use crate::app::actions::SessionTaskMap;
 use crate::app::message::Message;
+use crate::app::process;
+use crate::app::signals;
+use crate::app::spawn;
 use crate::app::state::AppState;
-use crate::common::{prelude::*, signals};
+use crate::common::prelude::*;
 use crate::config;
 use crate::core::LogSource;
-use crate::watcher::{FileWatcher, WatcherConfig};
+use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
 
-use super::actions::SessionTaskMap;
-use super::{event, process, render, startup, terminal};
+use super::{event, render, startup, terminal};
 
 /// Run the TUI application with a Flutter project
 pub async fn run_with_project(project_path: &Path) -> Result<()> {
@@ -66,10 +69,10 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     }
 
     // Trigger tool availability check at startup (async, non-blocking)
-    super::spawn::spawn_tool_availability_check(msg_tx.clone());
+    spawn::spawn_tool_availability_check(msg_tx.clone());
 
     // Trigger device discovery at startup (async, non-blocking)
-    super::spawn::spawn_device_discovery(msg_tx.clone());
+    spawn::spawn_device_discovery(msg_tx.clone());
 
     // Start file watcher for auto-reload
     let mut file_watcher = FileWatcher::new(
@@ -79,7 +82,10 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
             .with_auto_reload(settings.watcher.auto_reload),
     );
 
-    if let Err(e) = file_watcher.start(msg_tx.clone()) {
+    // Create watcher-specific channel
+    let (watcher_tx, mut watcher_rx) = mpsc::channel::<WatcherEvent>(32);
+
+    if let Err(e) = file_watcher.start(watcher_tx) {
         warn!("Failed to start file watcher: {}", e);
         if let Some(session) = state.session_manager.selected_mut() {
             session.session.log_error(
@@ -88,6 +94,19 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
             );
         }
     }
+
+    // Bridge watcher events to app messages
+    let watcher_msg_tx = msg_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = watcher_rx.recv().await {
+            let msg = match event {
+                WatcherEvent::AutoReloadTriggered => Message::AutoReloadTriggered,
+                WatcherEvent::FilesChanged { count } => Message::FilesChanged { count },
+                WatcherEvent::Error { message } => Message::WatcherError { message },
+            };
+            let _ = watcher_msg_tx.send(msg).await;
+        }
+    });
 
     // Run the main loop
     let result = run_loop(

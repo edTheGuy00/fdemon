@@ -233,3 +233,44 @@ Manual verification:
 - **`handle_action` is the largest function** -- it matches on `UpdateAction` variants and spawns tokio tasks for each. It calls into `spawn.rs` for session creation, `daemon::devices` for discovery, etc. All of this is pure orchestration with no rendering.
 - **`tui/startup.rs`** contains functions like `startup_flutter()`, `show_device_selector()`, `cleanup_sessions()`. Some of these interact with the terminal (showing dialogs) and must stay in `tui/`. Others (cleanup, auto-start logic) could move. Only move what's needed to break the headless->tui dependency. If headless doesn't use startup functions directly, they can stay.
 - **This task is the biggest single win**: It eliminates the dependency that forces headless to import from tui, and establishes the `app/` module as the single source of truth for all non-rendering logic.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/actions.rs` | Created - moved from tui/actions.rs with SessionTaskMap and handle_action() |
+| `src/app/process.rs` | Created - moved from tui/process.rs with process_message() |
+| `src/app/spawn.rs` | Created - moved from tui/spawn.rs with all background task spawning functions |
+| `src/app/mod.rs` | Added actions, process, and spawn module declarations |
+| `src/headless/runner.rs` | Updated imports from `crate::tui::*` to `crate::app::*` - **zero tui imports** |
+| `src/tui/runner.rs` | Updated imports to use app::actions, app::process, app::spawn |
+| `src/tui/startup.rs` | Updated imports to use app::actions and app::spawn |
+| `src/tui/mod.rs` | Removed actions, process, spawn modules and re-exports |
+| `src/tui/actions.rs` | Deleted (moved to app/) |
+| `src/tui/process.rs` | Deleted (moved to app/) |
+| `src/tui/spawn.rs` | Deleted (moved to app/) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Keep startup.rs in tui/**: The startup module contains terminal-specific operations (animate_during_async, cleanup_sessions with term.draw()) that require ratatui types. Only moved the spawn helpers it uses to app/, while the startup logic itself stays in tui/ as it's presentation-layer code.
+
+2. **Complete move instead of thin re-exports**: All three files (actions.rs, process.rs, spawn.rs) were fully moved from tui/ to app/ and the old files were deleted. This is cleaner than leaving stub re-exports since there are no internal tui/ dependencies on these modules.
+
+3. **SessionTaskMap now lives in app/**: This is the canonical location for the type alias, and both TUI and headless runners import from here.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test` - Passed (1510 unit tests passed)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None. This is a pure refactoring with no behavioral changes. The headless runner now has zero tui/ imports as verified by grep.

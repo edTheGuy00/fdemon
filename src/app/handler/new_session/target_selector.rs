@@ -62,8 +62,8 @@ pub fn handle_device_select(state: &mut AppState) -> UpdateResult {
                 .target_selector
                 .selected_bootable_device()
             {
+                use crate::app::new_session_dialog::GroupedBootableDevice;
                 use crate::core::Platform;
-                use crate::tui::widgets::GroupedBootableDevice;
                 let (device_id, platform) = match device {
                     GroupedBootableDevice::IosSimulator(sim) => (sim.udid.clone(), Platform::IOS),
                     GroupedBootableDevice::AndroidAvd(avd) => (avd.name.clone(), Platform::Android),

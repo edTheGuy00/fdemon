@@ -2,8 +2,8 @@
 //!
 //! Handles log filtering, search, stack trace toggling, and link highlighting.
 
+use crate::app::editor::{open_in_editor, sanitize_path};
 use crate::app::state::{AppState, UiMode};
-use crate::tui::editor::{open_in_editor, sanitize_path};
 
 use super::UpdateResult;
 

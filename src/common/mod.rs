@@ -2,7 +2,6 @@
 
 pub mod error;
 pub mod logging;
-pub mod signals;
 
 /// Prelude for common imports used throughout the application
 pub mod prelude {

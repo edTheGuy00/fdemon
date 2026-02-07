@@ -15,10 +15,10 @@ pub fn handle_switch_pane(state: &mut AppState) -> UpdateResult {
 /// Handle tab switch (Connected/Bootable tabs)
 pub fn handle_switch_tab(
     state: &mut AppState,
-    tab: crate::tui::widgets::TargetTab,
+    tab: crate::app::new_session_dialog::TargetTab,
 ) -> UpdateResult {
     // Check if we need to trigger discovery BEFORE switch_tab modifies state
-    let needs_bootable_discovery = tab == crate::tui::widgets::TargetTab::Bootable
+    let needs_bootable_discovery = tab == crate::app::new_session_dialog::TargetTab::Bootable
         && state
             .new_session_dialog_state
             .target_selector
@@ -298,7 +298,7 @@ mod tests {
     use crate::app::new_session_dialog::TargetTab;
     use crate::app::state::{AppState, UiMode};
     use crate::config::LoadedConfigs;
-    use crate::tui::test_utils::test_device_full;
+    use crate::daemon::test_utils::test_device_full;
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 

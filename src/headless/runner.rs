@@ -9,6 +9,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
+use crate::app::actions::SessionTaskMap;
 use crate::app::message::Message;
 use crate::app::session::SessionId;
 use crate::app::state::AppState;
@@ -17,8 +18,7 @@ use crate::common::prelude::*;
 use crate::config::{self, LaunchConfig};
 use crate::core::DaemonEvent;
 use crate::daemon::{devices, protocol, DaemonMessage, Device, FlutterProcess, RequestTracker};
-use crate::tui::SessionTaskMap;
-use crate::watcher::{FileWatcher, WatcherConfig};
+use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
 
 use super::HeadlessEvent;
 
@@ -94,10 +94,26 @@ pub async fn run_headless(project_path: &Path) -> Result<()> {
             .with_auto_reload(settings.watcher.auto_reload),
     );
 
-    if let Err(e) = file_watcher.start(msg_tx.clone()) {
+    // Create watcher-specific channel
+    let (watcher_tx, mut watcher_rx) = mpsc::channel::<WatcherEvent>(32);
+
+    if let Err(e) = file_watcher.start(watcher_tx) {
         warn!("Failed to start file watcher: {}", e);
         HeadlessEvent::error(format!("Watcher failed: {}", e), false).emit();
     }
+
+    // Bridge watcher events to app messages
+    let watcher_msg_tx = msg_tx.clone();
+    tokio::spawn(async move {
+        while let Some(event) = watcher_rx.recv().await {
+            let msg = match event {
+                WatcherEvent::AutoReloadTriggered => Message::AutoReloadTriggered,
+                WatcherEvent::FilesChanged { count } => Message::FilesChanged { count },
+                WatcherEvent::Error { message } => Message::WatcherError { message },
+            };
+            let _ = watcher_msg_tx.send(msg).await;
+        }
+    });
 
     // Main event loop
     let result = headless_event_loop(
@@ -180,7 +196,7 @@ async fn process_headless_message(
     shutdown_rx: &watch::Receiver<bool>,
     project_path: &Path,
 ) {
-    use crate::tui::process;
+    use crate::app::process;
 
     // Log the message for debugging
     info!("Processing message: {:?}", msg);
@@ -188,7 +204,7 @@ async fn process_headless_message(
     // Emit events based on message type before processing
     emit_pre_message_events(state, &msg);
 
-    // Use the existing TUI message processor (it's state management, no rendering)
+    // Use the existing message processor (it's state management, no rendering)
     process::process_message(state, msg, msg_tx, session_tasks, shutdown_rx, project_path);
 
     // Flush pending logs

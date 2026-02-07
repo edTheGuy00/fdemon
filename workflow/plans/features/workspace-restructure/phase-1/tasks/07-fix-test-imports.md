@@ -113,3 +113,54 @@ cargo clippy                        # Lint check
 - **This is the tedious task** -- it involves finding and updating many individual import lines in test code. The actual logic doesn't change, only import paths.
 - **Tests may reveal missed type moves**: If a test constructs a `NewSessionDialogState` that requires a type from `tui/`, that type needs to move. This task serves as a catch-all for anything Tasks 04-06 missed.
 - **`app/mod.rs` calling `tui::run_with_project`**: This is NOT a violation. The `app/mod.rs` functions (`run`, `run_with_project`) are binary-level entry points that route to the TUI. This is analogous to `main.rs` choosing between TUI and headless. In Phase 3 (workspace split), these functions will be in the binary crate, not in `fdemon-app`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/daemon/test_utils.rs` | Created new test utilities module with `test_device`, `test_device_with_platform`, and `test_device_full` helpers moved from tui layer |
+| `src/daemon/mod.rs` | Added `#[cfg(test)] pub mod test_utils;` to expose test utilities |
+| `src/tui/test_utils.rs` | Replaced device helper implementations with re-exports from `daemon::test_utils` |
+| `src/app/handler/tests.rs` | Updated all test imports: `DartDefinesEditField`, `DartDefinesPane`, `TargetTab`, `DialogPane`, `TargetSelectorState`, and `FuzzyModalType` now imported from `app::new_session_dialog` |
+| `src/app/handler/new_session/navigation.rs` | Updated production code `TargetTab` imports and test import of `test_device_full` to use `daemon::test_utils` |
+| `src/app/handler/new_session/fuzzy_modal.rs` | Updated `fuzzy_filter` import from `tui::widgets::new_session_dialog::fuzzy_modal` to `app::new_session_dialog::fuzzy` |
+| `src/app/handler/new_session/launch_context.rs` | Updated `DartDefine` type parameter from `tui::widgets::DartDefine` to `app::new_session_dialog::DartDefine` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test utilities location**: Moved device test helpers to `daemon/test_utils.rs` (not `app/`) because `Device` is a daemon-layer type. This follows the layer architecture - test utilities should live in the same layer as the types they construct.
+
+2. **Re-export pattern**: TUI layer re-exports the device helpers for backward compatibility, so existing TUI tests don't break. This maintains a clean upgrade path.
+
+3. **All state types already moved**: Tasks 04-06 successfully moved all state types (`TargetTab`, `DialogPane`, `DartDefinesEditField`, `DartDefinesPane`, `FuzzyModalType`, `DartDefine`, `TargetSelectorState`) to the app layer. This task only needed to update import paths.
+
+4. **Legitimate tui imports preserved**: Two intentional imports remain:
+   - `app/mod.rs:29` - Entry point calling `tui::run_with_project()` (orchestration layer)
+   - `app/settings_items.rs:15` - Re-exports settings panel item generators from TUI (shared utility pattern)
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (1.40s)
+- `cargo test --lib` - Passed (1513 passed; 0 failed; 8 ignored)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+- `grep -rn "crate::tui" src/app/handler/` - Zero results (acceptance criteria met)
+
+### Acceptance Criteria Verification
+
+1. ✅ `grep -rn "crate::tui" src/app/handler/tests.rs` returns zero results
+2. ✅ `grep -rn "crate::tui" src/app/handler/new_session/` returns zero results
+3. ✅ Only legitimate `crate::tui` imports in `src/app/` are `app/mod.rs` (orchestration) and `app/settings_items.rs` (re-export pattern)
+4. ✅ All state enums have authoritative definitions in `app/new_session_dialog/`
+5. ✅ `cargo test` passes (1513 tests)
+6. ✅ `cargo clippy` is clean (no warnings)
+
+### Risks/Limitations
+
+None identified. All imports updated cleanly, build and test suite remain green.

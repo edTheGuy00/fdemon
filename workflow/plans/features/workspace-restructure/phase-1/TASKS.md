@@ -52,30 +52,30 @@ Eliminate all 6 dependency violations so module boundaries flow downward, withou
 
 | # | Task | Status | Depends On | Est. Hours | Key Modules |
 |---|------|--------|------------|------------|-------------|
-| 1 | [01-move-daemon-message](tasks/01-move-daemon-message.md) | Not Started | - | 2-3h | `core/events.rs`, `daemon/protocol.rs`, `daemon/events.rs` |
-| 2 | [02-move-signal-handler](tasks/02-move-signal-handler.md) | Not Started | - | 1h | `common/signals.rs`, `app/signals.rs` |
-| 3 | [03-make-watcher-generic](tasks/03-make-watcher-generic.md) | Not Started | - | 1-2h | `watcher/mod.rs` |
-| 4 | [04-move-state-types-to-app](tasks/04-move-state-types-to-app.md) | Not Started | 1 | 4-5h | `app/session.rs`, `app/state.rs`, `tui/widgets/log_view/state.rs`, `tui/hyperlinks.rs`, `tui/widgets/confirm_dialog.rs` |
-| 5 | [05-move-handler-deps-from-tui](tasks/05-move-handler-deps-from-tui.md) | Not Started | 4 | 4-6h | `app/handler/*.rs`, `tui/editor.rs`, `tui/widgets/settings_panel/`, `tui/widgets/new_session_dialog/` |
-| 6 | [06-move-process-and-actions](tasks/06-move-process-and-actions.md) | Not Started | 5 | 3-4h | `tui/process.rs`, `tui/actions.rs`, `headless/runner.rs` |
-| 7 | [07-fix-test-imports](tasks/07-fix-test-imports.md) | Not Started | 6 | 2-3h | `app/handler/tests.rs`, `app/handler/new_session/*.rs` |
-| 8 | [08-verify-and-document](tasks/08-verify-and-document.md) | Not Started | 7 | 1-2h | `docs/ARCHITECTURE.md` |
+| 1 | [01-move-daemon-message](tasks/01-move-daemon-message.md) | Done | - | 2-3h | `core/events.rs`, `daemon/protocol.rs`, `daemon/events.rs` |
+| 2 | [02-move-signal-handler](tasks/02-move-signal-handler.md) | Done | - | 1h | `common/signals.rs`, `app/signals.rs` |
+| 3 | [03-make-watcher-generic](tasks/03-make-watcher-generic.md) | Done | - | 1-2h | `watcher/mod.rs` |
+| 4 | [04-move-state-types-to-app](tasks/04-move-state-types-to-app.md) | Done | 1 | 4-5h | `app/session.rs`, `app/state.rs`, `tui/widgets/log_view/state.rs`, `tui/hyperlinks.rs`, `tui/widgets/confirm_dialog.rs` |
+| 5 | [05-move-handler-deps-from-tui](tasks/05-move-handler-deps-from-tui.md) | Done | 4 | 4-6h | `app/handler/*.rs`, `tui/editor.rs`, `tui/widgets/settings_panel/`, `tui/widgets/new_session_dialog/` |
+| 6 | [06-move-process-and-actions](tasks/06-move-process-and-actions.md) | Done | 5 | 3-4h | `tui/process.rs`, `tui/actions.rs`, `headless/runner.rs` |
+| 7 | [07-fix-test-imports](tasks/07-fix-test-imports.md) | Done | 6 | 2-3h | `app/handler/tests.rs`, `app/handler/new_session/*.rs` |
+| 8 | [08-verify-and-document](tasks/08-verify-and-document.md) | Done | 7 | 1-2h | `docs/ARCHITECTURE.md` |
 
 ## Success Criteria
 
 Phase 1 is complete when:
 
-- [ ] All module imports flow downward (no upward/circular dependencies)
-- [ ] `cargo test` passes with no regressions
-- [ ] `cargo clippy` is clean
-- [ ] `DaemonMessage` and event structs live in `core/`, not `daemon/`
-- [ ] `AppState` contains no types imported from `tui/`
-- [ ] `Session` contains no types imported from `tui/`
-- [ ] `app/handler/*.rs` has no imports from `tui/`
-- [ ] `headless/` does not import from `tui/`
-- [ ] `common/` does not import from `app/`
-- [ ] `watcher/` does not import from `app/`
-- [ ] `docs/ARCHITECTURE.md` accurately reflects the new structure
+- [x] All module imports flow downward (no upward/circular dependencies)
+- [x] `cargo test` passes with no regressions
+- [x] `cargo clippy` is clean
+- [x] `DaemonMessage` and event structs live in `core/`, not `daemon/`
+- [x] `AppState` contains no types imported from `tui/`
+- [x] `Session` contains no types imported from `tui/`
+- [x] `app/handler/*.rs` has no imports from `tui/`
+- [x] `headless/` does not import from `tui/`
+- [x] `common/` does not import from `app/`
+- [x] `watcher/` does not import from `app/`
+- [x] `docs/ARCHITECTURE.md` accurately reflects the new structure
 
 ## Notes
 

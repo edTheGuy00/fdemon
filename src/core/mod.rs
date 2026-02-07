@@ -12,7 +12,10 @@ pub use discovery::{
     has_platform_directories, is_flutter_plugin, is_runnable_flutter_project, DiscoveryResult,
     ProjectType, SkippedProject, DEFAULT_MAX_DEPTH,
 };
-pub use events::*;
+pub use events::{
+    AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected, DaemonEvent,
+    DaemonLogMessage, DaemonMessage, DeviceInfo,
+};
 pub use stack_trace::{
     detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame,
     StackTraceFormat, ASYNC_GAP_REGEX, DART_VM_FRAME_NO_COL_REGEX, DART_VM_FRAME_REGEX,

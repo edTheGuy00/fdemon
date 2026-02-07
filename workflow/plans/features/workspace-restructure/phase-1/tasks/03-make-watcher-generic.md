@@ -156,3 +156,51 @@ Verify manually that file watcher behavior is unchanged:
 - The bridge pattern adds one extra async task per runner but the overhead is negligible (one channel forward per file change event).
 - `WatcherConfig` and the public constants (`DEFAULT_DEBOUNCE_MS`, etc.) are unchanged.
 - If `watcher/mod.rs` has any inline tests that construct `Message`, they need to change to construct `WatcherEvent` instead.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/watcher/mod.rs` | Added `WatcherEvent` enum, changed `FileWatcher::start()` signature to accept `mpsc::Sender<WatcherEvent>`, updated all internal event sending to use `WatcherEvent` variants, removed `use crate::app::message::Message` import, updated test to use `WatcherEvent` channel type |
+| `src/tui/runner.rs` | Added import for `WatcherEvent`, created bridge channel for watcher events, spawned async task to convert `WatcherEvent` -> `Message` |
+| `src/headless/runner.rs` | Added import for `WatcherEvent`, created bridge channel for watcher events, spawned async task to convert `WatcherEvent` -> `Message` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Bridge Pattern**: Used the bridge pattern as specified in the task - creates a separate channel for `WatcherEvent` and spawns an async task to convert events to `Message` variants. This adds minimal overhead (one async task per runner, one channel forward per file change event) but provides clean separation of concerns and eliminates the layer violation.
+
+2. **Consistent Implementation**: Applied the same bridge pattern to both TUI and headless runners for consistency and maintainability.
+
+3. **Event Naming**: Used `WatcherEvent::Error` instead of `WatcherEvent::WatcherError` to avoid redundancy since the enum name already indicates these are watcher events.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo build` - Passed (5.25s)
+- `cargo test` - Pre-existing test failures unrelated to this task (daemon/protocol.rs tests reference missing `daemon::events` module)
+- `cargo clippy -- -D warnings` - Passed
+
+### Verification of Acceptance Criteria
+
+1. `src/watcher/mod.rs` has zero imports from `crate::app` - VERIFIED (grep shows no matches)
+2. `WatcherEvent` enum is defined in `watcher/mod.rs` - VERIFIED (lines 17-25)
+3. `FileWatcher::start()` accepts `mpsc::Sender<WatcherEvent>` - VERIFIED (line 112)
+4. TUI runner bridges `WatcherEvent` -> `Message` - VERIFIED (lines 84-106 in runner.rs)
+5. Headless runner bridges `WatcherEvent` -> `Message` - VERIFIED (lines 98-117 in headless/runner.rs)
+6. `cargo build` succeeds - VERIFIED
+7. `cargo test` passes - BLOCKED (pre-existing unrelated test failures)
+8. `cargo clippy` is clean - VERIFIED
+9. Auto-reload still works - REQUIRES MANUAL VERIFICATION
+
+### Risks/Limitations
+
+1. **Pre-existing Test Failures**: The test suite has pre-existing failures related to missing `daemon::events` module that prevent running tests. These failures existed before this implementation and are unrelated to the watcher changes. The watcher module compiles successfully and all verification commands that don't depend on the test suite pass.
+
+2. **Manual Verification Required**: Auto-reload functionality should be manually verified by running fdemon in a Flutter project and editing a `.dart` file to confirm hot reload triggers automatically. The implementation preserves all existing behavior through the bridge pattern.

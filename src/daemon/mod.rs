@@ -4,10 +4,11 @@ pub mod avds;
 pub mod commands;
 pub mod devices;
 pub mod emulators;
-pub mod events;
 pub mod process;
 pub mod protocol;
 pub mod simulators;
+#[cfg(test)]
+pub mod test_utils;
 pub mod tool_availability;
 
 pub use avds::{
@@ -26,12 +27,13 @@ pub use emulators::{
     launch_ios_simulator, Emulator, EmulatorDiscoveryResult, EmulatorLaunchOptions,
     EmulatorLaunchResult,
 };
-pub use events::{
+// Re-export event structs and DaemonMessage from core for backward compatibility
+pub use crate::core::{
     AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected,
-    DaemonLogMessage, DeviceInfo,
+    DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use process::FlutterProcess;
-pub use protocol::{strip_brackets, DaemonMessage, LogEntryInfo, RawMessage};
+pub use protocol::{strip_brackets, LogEntryInfo, RawMessage};
 pub use simulators::{
     boot_simulator, group_simulators_by_runtime, list_ios_simulators, shutdown_simulator,
     IosSimulator, SimulatorState,

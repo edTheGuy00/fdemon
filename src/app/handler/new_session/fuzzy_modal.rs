@@ -151,8 +151,8 @@ pub fn handle_fuzzy_clear(state: &mut AppState) -> UpdateResult {
 /// Apply fuzzy filter to current modal state
 fn apply_fuzzy_filter(state: &mut AppState) {
     if let Some(ref mut modal) = state.new_session_dialog_state.fuzzy_modal {
-        // Import the filter function from TUI layer
-        use crate::tui::widgets::new_session_dialog::fuzzy_modal::fuzzy_filter;
+        // Import the filter function from app layer
+        use crate::app::new_session_dialog::fuzzy::fuzzy_filter;
 
         let query = &modal.query;
         let items = &modal.items;

@@ -7,6 +7,8 @@
 //! - Dart defines master-detail modal
 
 mod dart_defines_modal;
+// device_groups is a thin re-export to app layer, intentionally shadows glob re-export
+#[allow(hidden_glob_reexports)]
 mod device_groups;
 mod device_list;
 pub mod fuzzy_modal; // Public for App layer to access fuzzy_filter function

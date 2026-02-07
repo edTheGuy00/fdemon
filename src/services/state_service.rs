@@ -8,8 +8,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, Local};
 use tokio::sync::{broadcast, RwLock};
 
-use crate::core::{AppPhase, LogEntry};
-use crate::daemon::{DaemonMessage, DeviceInfo};
+use crate::core::{AppPhase, DaemonMessage, DeviceInfo, LogEntry};
 
 /// Application run state with metadata
 #[derive(Debug, Clone, Default)]

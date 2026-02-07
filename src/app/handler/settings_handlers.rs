@@ -2,10 +2,11 @@
 //!
 //! Handles navigation, editing, and persistence of settings.
 
+use crate::app::confirm_dialog::ConfirmDialogState;
 use crate::app::message::Message;
+use crate::app::settings_items::get_selected_item;
 use crate::app::state::AppState;
 use crate::config::{SettingValue, SettingsTab};
-use crate::tui::widgets::{ConfirmDialogState, SettingsPanel};
 
 use super::{update, UpdateResult};
 
@@ -76,8 +77,11 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
         state.settings_view_state.stop_editing();
     } else {
         // Get the current item and start editing with its value
-        let panel = SettingsPanel::new(&state.settings, &state.project_path);
-        if let Some(item) = panel.get_selected_item(&state.settings_view_state) {
+        if let Some(item) = get_selected_item(
+            &state.settings,
+            &state.project_path,
+            &state.settings_view_state,
+        ) {
             // Start editing based on value type
             match &item.value {
                 SettingValue::Bool(_) => {
@@ -157,8 +161,11 @@ pub fn handle_settings_reset_item(_state: &mut AppState) -> UpdateResult {
 
 /// Handle settings toggle bool message
 pub fn handle_settings_toggle_bool(state: &mut AppState) -> UpdateResult {
-    let panel = SettingsPanel::new(&state.settings, &state.project_path);
-    if let Some(item) = panel.get_selected_item(&state.settings_view_state) {
+    if let Some(item) = get_selected_item(
+        &state.settings,
+        &state.project_path,
+        &state.settings_view_state,
+    ) {
         // Only toggle if it's a boolean value
         if let SettingValue::Bool(val) = &item.value {
             // Create new item with flipped value

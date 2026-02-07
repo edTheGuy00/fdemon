@@ -74,12 +74,15 @@ Each layer has clear responsibilities and dependencies flow downward:
 | Layer | Responsibility | Dependencies |
 |-------|----------------|--------------|
 | **Binary** | CLI, entry point | All |
-| **App** | State, orchestration | Core, Daemon, TUI |
-| **Services** | Reusable controllers | Core, Daemon |
-| **TUI** | Presentation | Core, App (TEA View pattern) |
+| **App** | State, orchestration, TEA, action dispatch | Core, Daemon, Config, Services, Watcher, Common |
+| **Services** | Reusable controllers | Core, Daemon, Common |
+| **TUI** | Presentation | Core, Daemon, Config, App, Common |
+| **Headless** | NDJSON event output | Core, Daemon, Config, App, Common |
 | **Daemon** | Flutter process I/O | Core |
-| **Core** | Domain types | None |
-| **Common** | Utilities | None |
+| **Config** | Configuration parsing | Common |
+| **Watcher** | File system watching | None (emits WatcherEvent) |
+| **Core** | Domain types, events | None |
+| **Common** | Utilities, error types | None |
 
 ### Layer Dependencies Note
 
@@ -107,13 +110,14 @@ src/
 ├── common/              # Shared utilities (no dependencies)
 │   ├── error.rs         # Error types and Result alias
 │   ├── logging.rs       # File-based logging setup
-│   ├── signals.rs       # SIGINT/SIGTERM handling
 │   └── prelude.rs       # Common imports
 │
 ├── core/                # Domain types (pure business logic)
 │   ├── types.rs         # LogEntry, LogLevel, AppPhase
-│   ├── events.rs        # DaemonEvent enum
-│   └── discovery.rs     # Flutter project detection
+│   ├── events.rs        # DaemonMessage, DaemonEvent + 9 event structs
+│   ├── discovery.rs     # Flutter project detection
+│   ├── stack_trace.rs   # Stack trace parsing
+│   └── ansi.rs          # ANSI escape sequence handling
 │
 ├── config/              # Configuration parsing
 │   ├── types.rs         # LaunchConfig, Settings types
@@ -123,14 +127,13 @@ src/
 │
 ├── daemon/              # Flutter process management
 │   ├── process.rs       # FlutterProcess spawning/lifecycle
-│   ├── protocol.rs      # JSON-RPC message parsing
+│   ├── protocol.rs      # DaemonMessage::parse() implementation
 │   ├── commands.rs      # Command sending with request tracking
 │   ├── devices.rs       # Device discovery
-│   ├── emulators.rs     # Emulator discovery and launch
-│   └── events.rs        # Daemon event type definitions
+│   └── emulators.rs     # Emulator discovery and launch
 │
 ├── watcher/             # File system watching
-│   └── mod.rs           # FileWatcher for auto-reload
+│   └── mod.rs           # FileWatcher emitting WatcherEvent
 │
 ├── services/            # Reusable service layer
 │   ├── flutter_controller.rs  # Reload/restart operations
@@ -138,29 +141,56 @@ src/
 │   └── state_service.rs       # Shared state management
 │
 ├── app/                 # Application layer (TEA)
+│   ├── mod.rs           # Entry point, tui::run_with_project call
 │   ├── state.rs         # AppState (the Model)
 │   ├── message.rs       # Message enum (all events)
-│   ├── handler.rs       # update() function
+│   ├── signals.rs       # SIGINT/SIGTERM handling (moved from common/)
+│   ├── process.rs       # TEA message processing loop (moved from tui/)
+│   ├── actions.rs       # Action dispatch, SessionTaskMap (moved from tui/)
+│   ├── spawn.rs         # Session spawning logic (moved from tui/)
+│   ├── editor.rs        # Editor integration (moved from tui/)
+│   ├── settings_items.rs  # Setting item generators (moved from tui/)
+│   ├── log_view_state.rs  # Scroll/viewport state (moved from tui/)
+│   ├── hyperlinks.rs    # Link detection and state (moved from tui/)
+│   ├── confirm_dialog.rs  # Dialog state (moved from tui/)
+│   ├── handler/         # TEA update function + helpers
 │   ├── session.rs       # Per-device session state
-│   └── session_manager.rs  # Multi-session coordination
+│   ├── session_manager.rs  # Multi-session coordination
+│   └── new_session_dialog/
+│       ├── state.rs
+│       ├── fuzzy.rs     # Fuzzy filtering (moved from tui/)
+│       ├── target_selector_state.rs  # Target selector state (moved from tui/)
+│       └── device_groups.rs  # Device grouping (moved from tui/)
 │
-└── tui/                 # Terminal UI (ratatui)
-    ├── mod.rs           # Main event loop
-    ├── render.rs        # State → UI rendering
-    ├── layout.rs        # Layout calculations
-    ├── event.rs         # Terminal event handling
-    ├── terminal.rs      # Terminal setup/restore
-    ├── selector.rs      # Project selection UI
-    └── widgets/         # Reusable UI components
-        ├── header.rs       # App header bar
-        ├── tabs.rs         # Session tab bar
-        ├── log_view/       # Scrollable log display (module)
-        │   ├── mod.rs         # Widget implementation
-        │   ├── state.rs       # LogViewState, FocusInfo
-        │   ├── styles.rs      # Stack trace styling
-        │   └── tests.rs       # Unit tests
-        ├── status_bar.rs   # Bottom status bar
-        └── device_selector.rs  # Device selection modal
+├── tui/                 # Terminal UI (ratatui)
+│   ├── mod.rs           # Main event loop
+│   ├── render/          # State → UI rendering
+│   │   ├── mod.rs
+│   │   └── tests.rs
+│   ├── layout.rs        # Layout calculations
+│   ├── event.rs         # Terminal event handling
+│   ├── terminal.rs      # Terminal setup/restore
+│   ├── selector.rs      # Project selection UI
+│   ├── test_utils.rs    # TestTerminal wrapper
+│   └── widgets/         # Reusable UI components
+│       ├── header.rs
+│       ├── tabs.rs
+│       ├── log_view/    # Scrollable log display
+│       │   ├── mod.rs
+│       │   ├── styles.rs
+│       │   └── tests.rs
+│       ├── status_bar.rs
+│       ├── device_selector.rs
+│       ├── settings_panel/
+│       │   ├── mod.rs
+│       │   └── styles.rs
+│       ├── confirm_dialog.rs
+│       └── new_session_dialog/
+│           ├── mod.rs
+│           └── target_selector.rs
+│
+└── headless/            # NDJSON event output (no tui dependency)
+    └── mod.rs
 ```
 
 ---
@@ -175,7 +205,6 @@ Infrastructure code with no domain dependencies.
 |------|---------|
 | `error.rs` | Custom `Error` enum with variants for each error category. Includes `Result<T>` alias and `ResultExt` trait for error context. |
 | `logging.rs` | Sets up file-based logging via `tracing` (stdout is owned by TUI). |
-| `signals.rs` | Spawns async handler for SIGINT/SIGTERM, sends `Message::Quit`. |
 | `prelude.rs` | Re-exports common types (`Result`, `Error`, tracing macros). |
 
 ### `core/` — Domain Types
@@ -185,8 +214,10 @@ Pure business logic types with no external dependencies.
 | File | Purpose |
 |------|---------|
 | `types.rs` | `AppPhase`, `LogEntry`, `LogLevel`, `LogSource` — core domain types. |
-| `events.rs` | `DaemonEvent` — events from the Flutter process (stdout, stderr, exit). |
+| `events.rs` | `DaemonMessage`, `DaemonEvent`, and all 9 event structs (`AppStart`, `AppLog`, `DeviceInfo`, etc.) — events from the Flutter process (moved from daemon/). |
 | `discovery.rs` | Flutter project detection: `is_runnable_flutter_project()`, `discover_flutter_projects()`, `ProjectType` enum. |
+| `stack_trace.rs` | Stack trace parsing and rendering. |
+| `ansi.rs` | ANSI escape sequence handling. |
 
 ### `config/` — Configuration
 
@@ -211,11 +242,10 @@ Manages Flutter child processes and JSON-RPC communication.
 | File | Purpose |
 |------|---------|
 | `process.rs` | `FlutterProcess` — spawns `flutter run --machine`, manages stdin/stdout/stderr streams. |
-| `protocol.rs` | `DaemonMessage` parsing — converts JSON-RPC to typed events. |
+| `protocol.rs` | `DaemonMessage::parse()` — converts JSON-RPC to typed events (event types now in `core/events.rs`). |
 | `commands.rs` | `CommandSender`, `DaemonCommand`, `RequestTracker` — send commands with request ID tracking. |
 | `devices.rs` | `Device` type, `discover_devices()` — finds connected devices. |
 | `emulators.rs` | `Emulator` type, `discover_emulators()`, `launch_emulator()`. |
-| `events.rs` | Daemon-specific event types (`AppStart`, `AppLog`, `DeviceInfo`, etc.). |
 
 **Key Protocol:**
 - Flutter's `--machine` flag outputs JSON-RPC over stdout
@@ -229,7 +259,7 @@ Watches for Dart file changes to trigger auto-reload.
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, sends `Message::AutoReloadTriggered`. |
+| `mod.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` (no longer depends on `app::Message`). |
 
 **Configuration:**
 - Default watch path: `lib/`
@@ -272,10 +302,20 @@ TEA pattern implementation — state management and orchestration.
 |------|---------|
 | `state.rs` | `AppState` — complete application state (the Model). |
 | `message.rs` | `Message` enum — all possible events/actions. |
-| `handler.rs` | `update()` function — processes messages, returns new state + actions. |
+| `signals.rs` | Signal handling for SIGINT/SIGTERM (moved from `common/`). |
+| `process.rs` | TEA message processing loop (moved from `tui/`). |
+| `actions.rs` | Action dispatch, `SessionTaskMap` (moved from `tui/`). |
+| `spawn.rs` | Session spawning logic (moved from `tui/`). |
+| `editor.rs` | `open_in_editor()` function (moved from `tui/`). |
+| `settings_items.rs` | Setting item generators: `project_settings_items()`, `user_prefs_items()`, etc. (moved from `tui/widgets/settings_panel/items.rs`). |
+| `log_view_state.rs` | `LogViewState`, scroll/viewport state (moved from `tui/widgets/log_view/`). |
+| `hyperlinks.rs` | `LinkHighlightState`, link detection (moved from `tui/`). |
+| `confirm_dialog.rs` | `ConfirmDialogState` (moved from `tui/widgets/confirm_dialog/`). |
+| `handler/` | `update()` function and handler helpers. |
 | `session.rs` | `Session`, `SessionHandle` — per-device session state. |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions. |
-| `mod.rs` | `run()`, `run_with_project()` — entry points. |
+| `new_session_dialog/` | New session dialog state and logic (fuzzy filtering, target selector, device groups). |
+| `mod.rs` | `run()`, `run_with_project()` — entry points that call `tui::run_with_project()`. |
 
 **Message Categories:**
 - Keyboard events (`Key`)
@@ -288,6 +328,23 @@ TEA pattern implementation — state management and orchestration.
 ### `tui/` — Terminal UI
 
 Presentation layer using `ratatui` for rendering.
+
+### Restructuring Notes (Phase 1)
+
+Several types and functions were relocated to enforce clean layer boundaries:
+
+- **Event types** (`DaemonMessage`, event structs) moved from `daemon/` to `core/` — core is now a true leaf module with no dependencies
+- **State types** (`LogViewState`, `LinkHighlightState`, `ConfirmDialogState`) moved from `tui/` to `app/` — app no longer depends on tui for state
+- **Logic functions** (`process_message`, `handle_action`, `open_in_editor`, `fuzzy_filter`, setting item generators) moved from `tui/` to `app/` — headless no longer depends on tui
+- **Signal handler** moved from `common/` to `app/` — common is now a true leaf module
+- **File watcher** emits its own `WatcherEvent` instead of constructing `Message` — watcher is now independent of app
+
+This restructuring enables:
+- Clean dependency flow (no circular dependencies)
+- Headless mode with zero TUI dependencies
+- Future workspace split (engine crate extraction)
+
+---
 
 | File | Purpose |
 |------|---------|

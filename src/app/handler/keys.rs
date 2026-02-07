@@ -371,11 +371,14 @@ fn handle_key_settings(state: &AppState, key: KeyEvent) -> Option<Message> {
 /// Handle key events while editing a setting value
 fn handle_key_settings_edit(state: &AppState, key: KeyEvent) -> Option<Message> {
     // Get the current item type to determine appropriate key handling
+    use crate::app::settings_items::get_selected_item;
     use crate::config::SettingValue;
-    use crate::tui::widgets::SettingsPanel;
 
-    let panel = SettingsPanel::new(&state.settings, &state.project_path);
-    let item = panel.get_selected_item(&state.settings_view_state)?;
+    let item = get_selected_item(
+        &state.settings,
+        &state.project_path,
+        &state.settings_view_state,
+    )?;
 
     match &item.value {
         SettingValue::Bool(_) => {

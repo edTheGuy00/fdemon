@@ -2,11 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::events::{
-    AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected,
-    DaemonLogMessage, DeviceInfo,
-};
-use crate::core::{contains_word, strip_ansi_codes, LogLevel, LogSource};
+use crate::core::{contains_word, strip_ansi_codes, DaemonMessage, LogLevel, LogSource};
 
 /// Strip the outer brackets from a daemon message
 ///
@@ -76,38 +72,8 @@ impl RawMessage {
     }
 }
 
-/// Fully typed daemon message
-#[derive(Debug, Clone)]
-pub enum DaemonMessage {
-    // Connection
-    DaemonConnected(DaemonConnected),
-    DaemonLogMessage(DaemonLogMessage),
-
-    // App lifecycle
-    AppStart(AppStart),
-    AppStarted(AppStarted),
-    AppStop(AppStop),
-    AppLog(AppLog),
-    AppProgress(AppProgress),
-    AppDebugPort(AppDebugPort),
-
-    // Devices
-    DeviceAdded(DeviceInfo),
-    DeviceRemoved(DeviceInfo),
-
-    // Responses
-    Response {
-        id: serde_json::Value,
-        result: Option<serde_json::Value>,
-        error: Option<serde_json::Value>,
-    },
-
-    // Fallback for unknown events
-    UnknownEvent {
-        event: String,
-        params: serde_json::Value,
-    },
-}
+// DaemonMessage enum and pure methods moved to core/events.rs
+// Parsing methods remain here as they depend on RawMessage
 
 impl DaemonMessage {
     /// Parse a JSON string into a typed DaemonMessage
@@ -170,75 +136,7 @@ impl DaemonMessage {
         }
     }
 
-    /// Get the app ID if this message relates to an app
-    pub fn app_id(&self) -> Option<&str> {
-        match self {
-            DaemonMessage::AppStart(e) => Some(&e.app_id),
-            DaemonMessage::AppStarted(e) => Some(&e.app_id),
-            DaemonMessage::AppStop(e) => Some(&e.app_id),
-            DaemonMessage::AppLog(e) => Some(&e.app_id),
-            DaemonMessage::AppProgress(e) => Some(&e.app_id),
-            DaemonMessage::AppDebugPort(e) => Some(&e.app_id),
-            _ => None,
-        }
-    }
-
-    /// Check if this is an error message
-    pub fn is_error(&self) -> bool {
-        match self {
-            DaemonMessage::AppLog(log) => log.error,
-            DaemonMessage::AppStop(stop) => stop.error.is_some(),
-            DaemonMessage::Response { error, .. } => error.is_some(),
-            _ => false,
-        }
-    }
-
-    /// Get a human-readable summary
-    pub fn summary(&self) -> String {
-        match self {
-            DaemonMessage::DaemonConnected(c) => {
-                format!("Daemon connected (v{})", c.version)
-            }
-            DaemonMessage::DaemonLogMessage(m) => {
-                format!("[{}] {}", m.level, m.message)
-            }
-            DaemonMessage::AppStart(s) => {
-                format!("App starting on {}", s.device_id)
-            }
-            DaemonMessage::AppStarted(_) => "App started".to_string(),
-            DaemonMessage::AppStop(s) => {
-                if let Some(err) = &s.error {
-                    format!("App stopped: {}", err)
-                } else {
-                    "App stopped".to_string()
-                }
-            }
-            DaemonMessage::AppLog(log) => log.log.clone(),
-            DaemonMessage::AppProgress(p) => p
-                .message
-                .clone()
-                .unwrap_or_else(|| "Progress...".to_string()),
-            DaemonMessage::AppDebugPort(d) => {
-                format!("DevTools at port {}", d.port)
-            }
-            DaemonMessage::DeviceAdded(d) => {
-                format!("Device added: {} ({})", d.name, d.platform)
-            }
-            DaemonMessage::DeviceRemoved(d) => {
-                format!("Device removed: {}", d.name)
-            }
-            DaemonMessage::Response { id, error, .. } => {
-                if error.is_some() {
-                    format!("Response #{}: error", id)
-                } else {
-                    format!("Response #{}: ok", id)
-                }
-            }
-            DaemonMessage::UnknownEvent { event, .. } => {
-                format!("Event: {}", event)
-            }
-        }
-    }
+    // Pure methods (app_id, is_error, summary) moved to core/events.rs
 
     /// Extract a clean log message for display
     pub fn to_log_entry(&self) -> Option<LogEntryInfo> {
@@ -845,7 +743,7 @@ mod tests {
 
     #[test]
     fn test_app_log_to_log_entry() {
-        use crate::daemon::events::AppLog;
+        use crate::core::AppLog;
 
         let app_log = AppLog {
             app_id: "test".to_string(),
@@ -864,7 +762,7 @@ mod tests {
 
     #[test]
     fn test_daemon_log_message_to_log_entry() {
-        use crate::daemon::events::DaemonLogMessage;
+        use crate::core::DaemonLogMessage;
 
         let daemon_msg = DaemonLogMessage {
             level: "error".to_string(),
@@ -881,7 +779,7 @@ mod tests {
 
     #[test]
     fn test_app_progress_finished_only() {
-        use crate::daemon::events::AppProgress;
+        use crate::core::AppProgress;
 
         let progress_ongoing = AppProgress {
             app_id: "test".to_string(),
@@ -908,7 +806,7 @@ mod tests {
 
     #[test]
     fn test_app_stop_error_level() {
-        use crate::daemon::events::AppStop;
+        use crate::core::AppStop;
 
         let stop_normal = AppStop {
             app_id: "test".to_string(),
@@ -927,7 +825,7 @@ mod tests {
 
     #[test]
     fn test_app_log_strips_flutter_prefix() {
-        use crate::daemon::events::AppLog;
+        use crate::core::AppLog;
 
         let app_log = AppLog {
             app_id: "test".to_string(),
@@ -945,7 +843,7 @@ mod tests {
 
     #[test]
     fn test_app_log_with_stack_trace() {
-        use crate::daemon::events::AppLog;
+        use crate::core::AppLog;
 
         let app_log = AppLog {
             app_id: "test".to_string(),

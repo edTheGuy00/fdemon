@@ -175,3 +175,43 @@ Verify no test files needed changes (the re-exports from `daemon/` should make t
 - The `serde_json::Value` usage in `DaemonMessage::Response` and `UnknownEvent` means `core/` will have a dependency on `serde_json`. This is acceptable since `serde_json` is already in `Cargo.toml` and `core/` will need it for the workspace split anyway.
 - `LogEntryInfo` (defined at `daemon/protocol.rs:499`) stays in `daemon/` -- it is only used within `daemon/protocol.rs` and `tui/actions.rs`.
 - The `daemon/events.rs` file can either be deleted (if all content moves) or kept as a thin re-export file. Prefer deleting and having `daemon/mod.rs` re-export from `core/`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/core/events.rs` | Added 9 event structs (DaemonConnected, DaemonLogMessage, AppStart, AppStarted, AppLog, AppProgress, AppStop, AppDebugPort, DeviceInfo), DaemonMessage enum, and pure methods (app_id, is_error, summary) from daemon layer |
+| `src/core/mod.rs` | Updated re-exports to include new types from events module |
+| `src/daemon/protocol.rs` | Removed DaemonMessage enum definition and pure methods, kept parsing methods (parse, from_raw, parse_event, unknown, to_log_entry, parse_flutter_log, detect_log_level); updated imports to use core types |
+| `src/daemon/events.rs` | Deleted - all content moved to core/events.rs |
+| `src/daemon/mod.rs` | Removed events module declaration; added re-exports from core for backward compatibility |
+| `src/services/state_service.rs` | Updated imports to use core::{DaemonMessage, DeviceInfo} instead of daemon |
+| `tests/fixture_parsing_test.rs` | Updated imports to use daemon re-export (which now points to core) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Split Implementation Pattern**: DaemonMessage now has split impl blocks - pure methods in core/events.rs and parsing methods in daemon/protocol.rs. This is allowed by Rust and maintains clean layer boundaries while keeping daemon-specific parsing logic separate.
+
+2. **Backward Compatibility via Re-exports**: daemon/mod.rs re-exports all moved types from core, allowing existing consumer code to continue using `use crate::daemon::DaemonMessage` without modification. Only services/state_service.rs was updated to import directly from core as planned.
+
+3. **File Deletion**: daemon/events.rs was deleted entirely rather than kept as a thin re-export file, as all its content was successfully moved to core and the re-exports from daemon/mod.rs provide the necessary backward compatibility.
+
+4. **Test Updates**: Test code in daemon/protocol.rs updated to import event structs from crate::core instead of crate::daemon::events. Integration test uses daemon re-export path which works seamlessly.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1563 tests)
+- `cargo test --test fixture_parsing_test` - Passed (7 integration tests)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None identified**: The split implementation pattern is standard Rust practice and the re-export strategy ensures backward compatibility. All tests pass with no regressions.

@@ -222,7 +222,7 @@ pub fn handle_flavor_selected(state: &mut AppState, flavor: Option<String>) -> U
 /// Triggers auto-save for editable FDemon configurations.
 pub fn handle_dart_defines_updated(
     state: &mut AppState,
-    defines: Vec<crate::tui::widgets::DartDefine>,
+    defines: Vec<crate::app::new_session_dialog::DartDefine>,
 ) -> UpdateResult {
     use crate::config::ConfigSource;
 

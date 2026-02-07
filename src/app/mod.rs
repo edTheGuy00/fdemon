@@ -1,10 +1,19 @@
 //! Application layer - state management and orchestration
 
+pub mod actions;
+pub mod confirm_dialog;
+pub mod editor;
 pub mod handler;
+pub mod hyperlinks;
+pub mod log_view_state;
 pub mod message;
 pub mod new_session_dialog;
+pub mod process;
 pub mod session;
 pub mod session_manager;
+pub mod settings_items;
+pub mod signals;
+pub mod spawn;
 pub mod state;
 
 // Re-export handler types for event loop integration

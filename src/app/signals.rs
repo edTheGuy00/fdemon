@@ -2,7 +2,7 @@
 
 use tokio::sync::mpsc;
 
-use crate::app::message::Message;
+use super::message::Message;
 use crate::common::prelude::*;
 
 /// Spawn a task that listens for OS signals and sends quit messages

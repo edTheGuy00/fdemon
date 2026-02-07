@@ -7,11 +7,11 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 
 use crate::app::handler::helpers::{is_block_end, is_block_start};
+use crate::app::hyperlinks::LinkHighlightState;
+use crate::app::log_view_state::LogViewState;
 use crate::config::LaunchConfig;
 use crate::core::{AppPhase, FilterState, LogEntry, LogLevel, LogSource, SearchState};
 use crate::daemon::{CommandSender, FlutterProcess, RequestTracker};
-use crate::tui::hyperlinks::LinkHighlightState;
-use crate::tui::widgets::LogViewState;
 
 // ─────────────────────────────────────────────────────────
 // Log Batching for Performance (Task 04)

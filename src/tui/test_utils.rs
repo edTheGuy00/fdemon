@@ -211,47 +211,8 @@ pub fn create_test_state_with_name(name: &str) -> crate::app::state::AppState {
     state
 }
 
-/// Creates a test device with basic defaults.
-///
-/// # Arguments
-/// * `id` - Device identifier
-/// * `name` - Human-readable device name
-///
-/// # Returns
-/// A Device with iOS platform, non-emulator defaults.
-pub fn test_device(id: &str, name: &str) -> Device {
-    test_device_full(id, name, "ios", false)
-}
-
-/// Creates a test device with platform specification.
-///
-/// # Arguments
-/// * `id` - Device identifier
-/// * `name` - Human-readable device name
-/// * `platform` - Platform string (e.g., "ios", "android", "macos")
-pub fn test_device_with_platform(id: &str, name: &str, platform: &str) -> Device {
-    test_device_full(id, name, platform, false)
-}
-
-/// Creates a test device with full control over all fields.
-///
-/// # Arguments
-/// * `id` - Device identifier
-/// * `name` - Human-readable device name
-/// * `platform` - Platform string
-/// * `emulator` - Whether this is an emulator/simulator
-pub fn test_device_full(id: &str, name: &str, platform: &str, emulator: bool) -> Device {
-    Device {
-        id: id.to_string(),
-        name: name.to_string(),
-        platform: platform.to_string(),
-        emulator,
-        category: None,
-        platform_type: None,
-        ephemeral: false,
-        emulator_id: None,
-    }
-}
+// Re-export device test utilities from daemon layer
+pub use crate::daemon::test_utils::{test_device, test_device_full, test_device_with_platform};
 
 #[cfg(test)]
 mod tests {

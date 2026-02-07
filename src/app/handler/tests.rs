@@ -2100,7 +2100,7 @@ mod auto_launch_tests {
         let _ = update(
             &mut state,
             Message::NewSessionDialogOpenFuzzyModal {
-                modal_type: crate::tui::widgets::FuzzyModalType::Flavor,
+                modal_type: crate::app::new_session_dialog::FuzzyModalType::Flavor,
             },
         );
 
@@ -2108,7 +2108,7 @@ mod auto_launch_tests {
         let modal = state.new_session_dialog_state.fuzzy_modal.as_ref().unwrap();
         assert_eq!(
             modal.modal_type,
-            crate::tui::widgets::FuzzyModalType::Flavor
+            crate::app::new_session_dialog::FuzzyModalType::Flavor
         );
     }
 
@@ -2156,7 +2156,7 @@ mod auto_launch_tests {
         let _ = update(
             &mut state,
             Message::NewSessionDialogOpenFuzzyModal {
-                modal_type: crate::tui::widgets::FuzzyModalType::Flavor,
+                modal_type: crate::app::new_session_dialog::FuzzyModalType::Flavor,
             },
         );
         assert!(state.new_session_dialog_state.fuzzy_modal.is_some());
@@ -2165,7 +2165,7 @@ mod auto_launch_tests {
         let _ = update(
             &mut state,
             Message::NewSessionDialogOpenFuzzyModal {
-                modal_type: crate::tui::widgets::FuzzyModalType::Config,
+                modal_type: crate::app::new_session_dialog::FuzzyModalType::Config,
             },
         );
 
@@ -2178,13 +2178,13 @@ mod auto_launch_tests {
                 .as_ref()
                 .unwrap()
                 .modal_type,
-            crate::tui::widgets::FuzzyModalType::Flavor
+            crate::app::new_session_dialog::FuzzyModalType::Flavor
         );
     }
 
     #[test]
     fn test_dart_defines_confirm_with_empty_key_returns_focus_to_key() {
-        use crate::tui::widgets::{DartDefinesEditField, DartDefinesPane};
+        use crate::app::new_session_dialog::{DartDefinesEditField, DartDefinesPane};
 
         let mut state = AppState::new();
 
@@ -2227,7 +2227,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_switch_tab_to_connected() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
@@ -2252,7 +2252,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_switch_tab_to_bootable_triggers_discovery() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
@@ -2289,7 +2289,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_toggle_tab_switches_between_tabs() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
@@ -2377,7 +2377,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_device_select_on_connected_tab() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
@@ -2394,8 +2394,8 @@ mod auto_launch_tests {
 
     #[test]
     fn test_device_select_on_bootable_tab_triggers_boot() {
+        use crate::app::new_session_dialog::TargetTab;
         use crate::daemon::{IosSimulator, SimulatorState};
-        use crate::tui::widgets::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
@@ -2425,7 +2425,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_refresh_devices_on_connected_tab() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
@@ -2438,7 +2438,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_refresh_devices_on_bootable_tab() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
@@ -2653,7 +2653,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_boot_completed_switches_tab_and_triggers_refresh() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
@@ -2708,7 +2708,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_device_booted_redirects_to_boot_completed() {
-        use crate::tui::widgets::TargetTab;
+        use crate::app::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
@@ -2731,7 +2731,7 @@ mod auto_launch_tests {
 
     #[test]
     fn test_switch_pane() {
-        use crate::tui::widgets::DialogPane;
+        use crate::app::new_session_dialog::DialogPane;
 
         let mut state = AppState::new();
         state.new_session_dialog_state.focused_pane = DialogPane::TargetSelector;
@@ -3020,7 +3020,7 @@ fn test_no_tools_available_no_discovery() {
 
 #[test]
 fn test_target_selector_default_shows_bootable_loading() {
-    use crate::tui::widgets::new_session_dialog::target_selector::TargetSelectorState;
+    use crate::app::new_session_dialog::TargetSelectorState;
 
     let state = TargetSelectorState::default();
     assert!(state.bootable_loading);

@@ -11,7 +11,17 @@ use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use tokio::sync::mpsc;
 use tracing::{debug, error, info, warn};
 
-use crate::app::message::Message;
+/// Events emitted by the file watcher.
+/// Consumers map these to their own message types.
+#[derive(Debug, Clone)]
+pub enum WatcherEvent {
+    /// File changes detected and auto-reload is enabled
+    AutoReloadTriggered,
+    /// File changes detected but auto-reload is disabled
+    FilesChanged { count: usize },
+    /// Watcher encountered an error
+    Error { message: String },
+}
 
 /// Default debounce duration in milliseconds
 pub const DEFAULT_DEBOUNCE_MS: u64 = 500;
@@ -98,8 +108,8 @@ impl FileWatcher {
 
     /// Start watching for file changes
     ///
-    /// Sends `Message::AutoReloadTriggered` or `Message::FilesChanged` to the channel
-    pub fn start(&mut self, message_tx: mpsc::Sender<Message>) -> Result<(), String> {
+    /// Sends `WatcherEvent` variants to the channel
+    pub fn start(&mut self, event_tx: mpsc::Sender<WatcherEvent>) -> Result<(), String> {
         if self.is_running() {
             return Err("Watcher is already running".to_string());
         }
@@ -112,7 +122,7 @@ impl FileWatcher {
 
         // Spawn the watcher in a blocking task
         tokio::task::spawn_blocking(move || {
-            Self::run_watcher(project_root, config, message_tx, stop_rx);
+            Self::run_watcher(project_root, config, event_tx, stop_rx);
         });
 
         Ok(())
@@ -134,10 +144,10 @@ impl FileWatcher {
     fn run_watcher(
         project_root: PathBuf,
         config: WatcherConfig,
-        message_tx: mpsc::Sender<Message>,
+        event_tx: mpsc::Sender<WatcherEvent>,
         mut stop_rx: tokio::sync::oneshot::Receiver<()>,
     ) {
-        let tx_clone = message_tx.clone();
+        let tx_clone = event_tx.clone();
         let extensions = config.extensions.clone();
         let auto_reload = config.auto_reload;
 
@@ -170,12 +180,12 @@ impl FileWatcher {
 
                         debug!("File watcher detected {} change(s)", relevant_events.len());
 
-                        // Send auto-reload message if enabled
+                        // Send auto-reload event if enabled
                         if auto_reload {
-                            let _ = tx_clone.blocking_send(Message::AutoReloadTriggered);
+                            let _ = tx_clone.blocking_send(WatcherEvent::AutoReloadTriggered);
                         } else {
                             // Just notify about file changes
-                            let _ = tx_clone.blocking_send(Message::FilesChanged {
+                            let _ = tx_clone.blocking_send(WatcherEvent::FilesChanged {
                                 count: relevant_events.len(),
                             });
                         }
@@ -183,7 +193,7 @@ impl FileWatcher {
                     Err(errors) => {
                         for error in errors {
                             warn!("File watcher error: {:?}", error);
-                            let _ = tx_clone.blocking_send(Message::WatcherError {
+                            let _ = tx_clone.blocking_send(WatcherEvent::Error {
                                 message: error.to_string(),
                             });
                         }
@@ -196,7 +206,7 @@ impl FileWatcher {
             Ok(d) => d,
             Err(e) => {
                 error!("Failed to create file watcher: {}", e);
-                let _ = message_tx.blocking_send(Message::WatcherError {
+                let _ = event_tx.blocking_send(WatcherEvent::Error {
                     message: format!("Failed to create watcher: {}", e),
                 });
                 return;
@@ -302,7 +312,7 @@ mod tests {
         let config = WatcherConfig::default();
         let mut watcher = FileWatcher::new(project_root, config);
 
-        let (tx, _rx) = mpsc::channel(32);
+        let (tx, _rx) = mpsc::channel::<WatcherEvent>(32);
 
         // First start should succeed
         let result1 = watcher.start(tx.clone());

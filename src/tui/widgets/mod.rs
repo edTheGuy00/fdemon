@@ -5,7 +5,7 @@ mod header;
 mod log_view;
 pub mod new_session_dialog;
 mod search_input;
-mod settings_panel;
+pub mod settings_panel;
 mod status_bar;
 mod tabs;
 

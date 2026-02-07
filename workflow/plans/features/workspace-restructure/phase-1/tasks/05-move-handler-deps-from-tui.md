@@ -352,3 +352,59 @@ cargo clippy                  # Lint check
 - **Re-exports**: It's acceptable to leave thin re-exports in `tui/` files so that the TUI widget code can still `use super::*` without changes. The key requirement is that `app/handler/` does NOT import from `tui/`.
 - **SettingsPanel widget**: After extracting `get_selected_item()`, the `SettingsPanel` widget struct stays in `tui/` and imports the extracted function from `app/settings_items`. The widget's `StatefulWidget` impl stays.
 - **Test code in handlers**: Some test imports may still reference `tui/` -- that's handled in Task 07.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/new_session_dialog/device_groups.rs` | **NEW** - Moved device grouping types and logic from tui/ |
+| `src/app/new_session_dialog/target_selector_state.rs` | **NEW** - Moved TargetSelectorState from tui/ |
+| `src/app/new_session_dialog/fuzzy.rs` | **NEW** - Moved fuzzy filter logic from tui/ |
+| `src/app/editor.rs` | **NEW** - Moved editor functions from tui/ |
+| `src/app/settings_items.rs` | **NEW** - Extracted get_selected_item from SettingsPanel widget |
+| `src/app/new_session_dialog/mod.rs` | Added exports for new modules |
+| `src/app/new_session_dialog/state.rs` | Updated TargetSelectorState re-export to use app layer |
+| `src/app/mod.rs` | Added editor and settings_items modules |
+| `src/app/handler/log_view.rs` | Updated to import from app/editor instead of tui/editor |
+| `src/app/handler/update.rs` | Updated to import fuzzy_filter from app layer |
+| `src/app/handler/settings_handlers.rs` | Updated to use get_selected_item from app/settings_items |
+| `src/app/handler/keys.rs` | Updated to use get_selected_item from app/settings_items |
+| `src/app/handler/new_session/target_selector.rs` | Updated to import GroupedBootableDevice from app layer |
+| `src/tui/editor.rs` | Replaced with re-export from app layer |
+| `src/tui/widgets/mod.rs` | Made settings_panel module public |
+| `src/tui/widgets/settings_panel/mod.rs` | Updated get_selected_item to delegate to app layer |
+| `src/tui/widgets/new_session_dialog/mod.rs` | Added allow annotation for hidden glob re-export warning |
+| `src/tui/widgets/new_session_dialog/device_groups.rs` | Replaced with re-exports from app layer, kept tests |
+| `src/tui/widgets/new_session_dialog/target_selector.rs` | Removed duplicate TargetSelectorState, added re-export, fixed test imports |
+| `src/tui/widgets/new_session_dialog/fuzzy_modal.rs` | Replaced fuzzy_filter/fuzzy_score with re-export, removed duplicate tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-exports for backward compatibility**: Left thin re-exports in `tui/` modules so that TUI widgets can continue using `use super::*` without changes. The key goal was to eliminate `app/handler/ -> tui/` dependencies, which is achieved.
+
+2. **Made cached_flat_list pub(crate)**: The `TargetSelectorState.cached_flat_list` field was made `pub(crate)` to allow TUI tests to access it while keeping it internal to the crate.
+
+3. **Kept settings_panel module public**: Made `tui::widgets::settings_panel` public so that `app/settings_items.rs` can import the item generator functions. This is temporary until those functions are also moved to the app layer in a future task.
+
+4. **Test consolidation**: Moved tests for fuzzy_filter and fuzzy_score to the app layer (`app/new_session_dialog/fuzzy.rs`). TUI tests now only test widget rendering, not the underlying algorithms.
+
+5. **calculate_scroll_offset duplication**: Duplicated the small `calculate_scroll_offset` function in `app/new_session_dialog/target_selector_state.rs` to avoid complex cross-module dependencies. The function is pure logic with no ratatui dependency.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1510 tests)
+- `cargo clippy -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Settings panel item generators still in TUI**: The functions `project_settings_items`, `user_prefs_items`, `launch_config_items`, and `vscode_config_items` are still in `tui/widgets/settings_panel/items.rs`. They should be moved to the app layer in a future refactoring for complete separation.
+
+2. **Test code in handlers**: Some handler test code (in `src/app/handler/tests.rs`) may still reference TUI types. This is acceptable for now and will be addressed in Task 07.

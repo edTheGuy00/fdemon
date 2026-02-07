@@ -695,9 +695,9 @@ fn generate_unique_name(base_name: &str, existing_names: &[&str]) -> String {
 // TargetSelectorState
 // ─────────────────────────────────────────────────────────────────────────────
 
-// Re-export TargetSelectorState from TUI layer (it has widget-specific caching)
-// The TUI widget version is the canonical one since it needs caching for performance
-pub use crate::tui::widgets::new_session_dialog::target_selector::TargetSelectorState;
+// Re-export TargetSelectorState from the app layer (moved in Phase 1, Task 05)
+// The state has been moved from tui/ to app/ to eliminate handler dependencies on tui/
+pub use crate::app::new_session_dialog::target_selector_state::TargetSelectorState;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NewSessionDialogState (Main State)

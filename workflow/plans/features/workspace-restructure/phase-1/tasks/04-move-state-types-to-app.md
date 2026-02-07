@@ -257,3 +257,42 @@ Pay particular attention to `src/app/handler/tests.rs` and `src/tui/widgets/log_
 - **Re-exports for gradual migration**: During this task, it's fine to add `pub use crate::app::log_view_state::LogViewState;` in `tui/widgets/log_view/state.rs` so that test files importing from the old path still compile. Task 07 cleans these up.
 - **`scan_viewport()` complexity**: The `LinkHighlightState::scan_viewport()` method takes multiple parameters from `core/` types. It is business logic (detecting file references in log output) that was incorrectly placed in the TUI layer. Moving it to `app/` is the right thing to do.
 - **`ConfirmDialogState` circular dependency resolution**: Currently `tui/confirm_dialog.rs` imports `Message` from `app/`, and `app/state.rs` imports `ConfirmDialogState` from `tui/`. Moving `ConfirmDialogState` to `app/` eliminates this circular dependency entirely.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/log_view_state.rs` | Created - moved LogViewState and FocusInfo from tui/widgets/log_view/state.rs |
+| `src/app/hyperlinks.rs` | Created - moved LinkHighlightState, DetectedLink, FileReference, and all scan logic from tui/hyperlinks.rs |
+| `src/app/confirm_dialog.rs` | Created - moved ConfirmDialogState from tui/widgets/confirm_dialog.rs |
+| `src/app/mod.rs` | Added new modules: confirm_dialog, hyperlinks, log_view_state |
+| `src/app/session.rs` | Updated imports: use app/hyperlinks and app/log_view_state instead of tui/ |
+| `src/app/state.rs` | Updated imports: use app/confirm_dialog instead of tui/widgets |
+| `src/app/handler/settings_handlers.rs` | Updated imports: use app/confirm_dialog instead of tui/widgets |
+| `src/tui/widgets/log_view/state.rs` | Replaced with re-export from app/log_view_state |
+| `src/tui/hyperlinks.rs` | Replaced with re-export from app/hyperlinks |
+| `src/tui/widgets/confirm_dialog.rs` | Removed state definition, added re-export from app/confirm_dialog, added Message import in tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-export strategy**: Created thin re-export modules in tui/ to maintain backward compatibility during transition. This allows existing code that imports from tui/ to continue working without changes.
+2. **Circular dependency resolution**: Moving ConfirmDialogState to app/ resolves the circular dependency where tui/confirm_dialog.rs imported Message from app/, and app/state.rs imported ConfirmDialogState from tui/.
+3. **Complete state migration**: All three state types (LogViewState, LinkHighlightState, ConfirmDialogState) are now in app/, eliminating all app/ -> tui/ dependencies for state management.
+
+### Testing Performed
+
+- `cargo fmt` - Passed
+- `cargo check` - Passed (clean compilation)
+- `cargo test --lib` - Passed (1515 tests passed; 0 failed; 8 ignored)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Backward compatibility via re-exports**: The re-export strategy maintains compatibility but creates temporary dual import paths. These should be cleaned up in a follow-up task to enforce single canonical import locations.
+2. **No breaking changes**: All existing imports continue to work through re-exports, ensuring zero disruption to the codebase during this refactor.

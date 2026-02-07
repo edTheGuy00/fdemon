@@ -1,6 +1,57 @@
-//! Setting item generation functions for each settings tab
+//! Settings item enumeration.
+//!
+//! Builds the list of configurable setting items per tab,
+//! used by both the settings handler (for editing) and the
+//! settings panel widget (for rendering).
 
-use crate::config::{LaunchConfig, SettingItem, SettingValue, Settings, UserPreferences};
+use std::path::Path;
+
+use crate::app::state::SettingsViewState;
+use crate::config::{
+    launch::load_launch_configs, load_vscode_configs, LaunchConfig, SettingItem, SettingValue,
+    Settings, SettingsTab, UserPreferences,
+};
+
+/// Get the currently selected setting item for editing
+///
+/// This function builds the list of settings items for the active tab
+/// and returns the one at the selected index.
+///
+/// # Arguments
+/// * `settings` - Global settings
+/// * `project_path` - Project root path for loading launch configurations
+/// * `view_state` - Current view state (which tab, which item selected)
+///
+/// # Returns
+/// The selected `SettingItem`, or `None` if the index is out of bounds.
+pub fn get_selected_item(
+    settings: &Settings,
+    project_path: &Path,
+    view_state: &SettingsViewState,
+) -> Option<SettingItem> {
+    let items = match view_state.active_tab {
+        SettingsTab::Project => project_settings_items(settings),
+        SettingsTab::UserPrefs => user_prefs_items(&view_state.user_prefs, settings),
+        SettingsTab::LaunchConfig => {
+            let configs = load_launch_configs(project_path);
+            let mut all_items = Vec::new();
+            for (idx, resolved) in configs.iter().enumerate() {
+                all_items.extend(launch_config_items(&resolved.config, idx));
+            }
+            all_items
+        }
+        SettingsTab::VSCodeConfig => {
+            let configs = load_vscode_configs(project_path);
+            let mut all_items = Vec::new();
+            for (idx, resolved) in configs.iter().enumerate() {
+                all_items.extend(vscode_config_items(&resolved.config, idx));
+            }
+            all_items
+        }
+    };
+
+    items.get(view_state.selected_index).cloned()
+}
 
 /// Generate settings items for the Project tab from Settings struct
 pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
