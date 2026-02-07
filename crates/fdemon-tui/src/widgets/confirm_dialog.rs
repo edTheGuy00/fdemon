@@ -13,6 +13,7 @@ use ratatui::{
 use fdemon_app::confirm_dialog::ConfirmDialogState;
 
 use crate::theme::palette;
+use crate::widgets::modal_overlay::centered_rect;
 
 /// Confirmation dialog widget
 pub struct ConfirmDialog<'a> {
@@ -24,13 +25,6 @@ impl<'a> ConfirmDialog<'a> {
     pub fn new(state: &'a ConfirmDialogState) -> Self {
         Self { state }
     }
-
-    /// Calculate centered modal rect
-    fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-        let x = area.x + (area.width.saturating_sub(width)) / 2;
-        let y = area.y + (area.height.saturating_sub(height)) / 2;
-        Rect::new(x, y, width.min(area.width), height.min(area.height))
-    }
 }
 
 impl Widget for ConfirmDialog<'_> {
@@ -38,7 +32,7 @@ impl Widget for ConfirmDialog<'_> {
         // Fixed modal size
         let modal_width = 50;
         let modal_height = 9;
-        let modal_area = Self::centered_rect(modal_width, modal_height, area);
+        let modal_area = centered_rect(modal_width, modal_height, area);
 
         // Clear the area behind the modal
         Clear.render(modal_area, buf);
@@ -287,7 +281,7 @@ mod tests {
     #[test]
     fn test_centered_rect() {
         let area = Rect::new(0, 0, 100, 50);
-        let modal = ConfirmDialog::centered_rect(40, 10, area);
+        let modal = centered_rect(40, 10, area);
 
         // Should be centered
         assert_eq!(modal.x, 30); // (100 - 40) / 2
@@ -299,7 +293,7 @@ mod tests {
     #[test]
     fn test_centered_rect_small_area() {
         let area = Rect::new(0, 0, 30, 8);
-        let modal = ConfirmDialog::centered_rect(50, 10, area);
+        let modal = centered_rect(50, 10, area);
 
         // Should be clamped to area
         assert_eq!(modal.width, 30);

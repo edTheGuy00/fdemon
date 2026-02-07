@@ -3,7 +3,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget},
@@ -142,7 +142,7 @@ impl<'a> FuzzyModal<'a> {
 
                 let style = if is_selected {
                     Style::default()
-                        .fg(Color::Black)
+                        .fg(palette::CONTRAST_FG)
                         .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {

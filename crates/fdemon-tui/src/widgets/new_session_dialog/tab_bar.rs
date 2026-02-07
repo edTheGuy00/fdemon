@@ -33,7 +33,7 @@ impl TabBar {
 
         if is_active && self.pane_focused {
             Style::default()
-                .fg(ratatui::style::Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else if is_active {

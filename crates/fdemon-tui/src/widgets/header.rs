@@ -16,6 +16,9 @@ use crate::theme::{icons, palette, styles};
 
 use super::SessionTabs;
 
+/// Padding around header sections for layout calculations
+const HEADER_SECTION_PADDING: u16 = 4;
+
 /// Main header showing app title, project name, and keybindings
 /// with optional session tabs rendered inside the bordered area
 pub struct MainHeader<'a> {
@@ -135,7 +138,7 @@ impl MainHeader<'_> {
             Span::styled(project_name, Style::default().fg(palette::TEXT_SECONDARY)),
         ];
 
-        let left_line = Line::from(left_spans.clone());
+        let left_line = Line::from(left_spans);
         let left_width = left_line.width() as u16;
 
         // Build shortcut hints (center section)
@@ -156,7 +159,7 @@ impl MainHeader<'_> {
             Span::styled("q", Style::default().fg(palette::STATUS_YELLOW)),
             Span::styled("] Quit", Style::default().fg(palette::TEXT_MUTED)),
         ];
-        let shortcuts_line = Line::from(shortcuts.clone());
+        let shortcuts_line = Line::from(shortcuts);
         let shortcuts_width = shortcuts_line.width() as u16;
 
         // Build device pill (right section) if single session
@@ -182,7 +185,8 @@ impl MainHeader<'_> {
             .unwrap_or(0);
 
         // Calculate available space and positioning
-        let total_content_width = left_width + shortcuts_width + device_width + 4; // 4 for padding
+        let total_content_width =
+            left_width + shortcuts_width + device_width + HEADER_SECTION_PADDING;
 
         if total_content_width <= area.width {
             // Everything fits: left | center | right layout
@@ -197,7 +201,7 @@ impl MainHeader<'_> {
             // Right-align device pill
             if let Some(device_line) = device_content {
                 let device_x = area.x + area.width - device_width;
-                if device_x >= area.x + left_width + shortcuts_width + 4 {
+                if device_x >= area.x + left_width + shortcuts_width + HEADER_SECTION_PADDING {
                     buf.set_line(device_x, area.y, &device_line, device_width);
                 }
             }

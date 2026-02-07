@@ -111,3 +111,41 @@ cargo clippy --workspace -- -D warnings
 - Run snapshot updates with `INSTA_UPDATE=1` environment variable if using `insta` for snapshot testing
 - The search overlay deduplication is a minor refactor — if it causes unexpected complexity, it can be deferred
 - Magic number extraction and clone removal are low-risk cleanups that naturally belong in the test update pass
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `HEADER_SECTION_PADDING` constant (line 20), removed unnecessary `.clone()` calls on `left_spans` and `shortcuts` (lines 140, 161), replaced magic number `4` with constant (lines 190, 203) |
+| `crates/fdemon-tui/src/render/mod.rs` | Extracted duplicate search overlay rendering into `render_search_overlay()` helper function (lines 21-47), replaced duplicate code in `UiMode::SearchInput` and `UiMode::Normal` with helper calls (lines 142, 146) |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `test_footer_height_not_stolen_in_small_area()` test (lines 961-1011) to verify footer height calculations in constrained spaces |
+
+### Notable Decisions/Tradeoffs
+
+1. **Layout tests already comprehensive**: The required dynamic height tests (`test_create_with_sessions_single_session_height` and `test_create_with_sessions_multi_session_height`) were already implemented in `layout.rs` with more thorough coverage as `test_create_layout_single_session`, `test_create_layout_multiple_sessions`, and `test_create_with_sessions_returns_different_heights`. No additional tests were needed.
+
+2. **MIN_FULL_STATUS_WIDTH already extracted**: Task 03 already extracted the magic number `60` to `MIN_FULL_STATUS_WIDTH` constant in `log_view/mod.rs:32`, so no additional change was needed.
+
+3. **Snapshot tests unchanged**: All 4 snapshot tests pass without updates because they test single-session states, and the layout changes (Task 01) only affect multi-session mode (>1 session). Previous tasks already updated snapshots for icon and color changes.
+
+4. **Footer height test revised**: Initial test design was corrected after discovering that very small areas (inner.height = 1) correctly result in visible_lines = 0 due to top metadata bar. Final test uses a 5-row area to properly test footer presence/absence difference.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (419 tests, up from 418)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo test -p fdemon-tui --lib render::tests` - Passed (all 4 snapshot tests unchanged)
+
+### Risks/Limitations
+
+1. **Test count**: Test count increased by 1 (418 → 419) instead of expected increase, because layout tests were already comprehensive and MIN_FULL_STATUS_WIDTH constant already existed from Task 03.
+
+2. **Snapshot stability**: Snapshot tests remain stable because they test single-session scenarios. Future multi-session snapshot tests may need baseline updates.

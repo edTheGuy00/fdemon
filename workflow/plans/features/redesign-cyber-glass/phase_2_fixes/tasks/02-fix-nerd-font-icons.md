@@ -64,3 +64,39 @@
 - Prefer single-character Unicode symbols that are widely supported (Unicode 6.0+ / BMP)
 - Emoji (📱, 🌐, 🖥) are double-width in most terminals — consider using single-width alternatives to avoid layout issues
 - The `phase_indicator()` function in `styles.rs` already uses safe Unicode ("●", "○", "↻", "✗") and works correctly — this validates the approach
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/icons.rs` | Replaced all `ICON_*` constants with safe Unicode equivalents. Preserved original Nerd Font values as `NERD_*` constants. Removed all `ASCII_*` constants (no longer needed). Fixed `ICON_TERMINAL` vs `ICON_COMMAND` to be distinct ("❯" vs "$"). Updated module docstring to reflect current state. Updated all tests to reference `NERD_*` instead of `ASCII_*`. Added test to verify `ICON_TERMINAL` and `ICON_COMMAND` are distinct. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single-width Unicode preferred over emoji**: Avoided emoji like 📱, 🌐, 🖥 which are double-width in most terminals and cause layout issues. Used bracket notation `[M]`, `[W]`, `[D]` for device icons instead, which is consistent with ASCII-art style and works universally.
+
+2. **`ICON_ACTIVITY` uses `~` instead of `⏱`**: The timer emoji `⏱` may not render consistently across terminals, so opted for the simple `~` character which is safe and conveys "ongoing activity".
+
+3. **`ICON_TERMINAL` uses `❯`**: Chose the right-pointing angle bracket `❯` (U+276F) which is a common modern terminal prompt symbol and visually distinct from `ICON_COMMAND` which uses `$`.
+
+4. **Preserved all Nerd Font constants**: All original Nerd Font glyphs are now available as `NERD_*` constants, enabling future config-driven opt-in for users with Nerd Fonts installed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (476 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Unicode rendering varies by terminal**: While the chosen Unicode characters are widely supported (Unicode 6.0+ / BMP), some terminals may still render them differently or fall back to alternative glyphs. This is an inherent limitation of Unicode support across terminal emulators.
+
+2. **Visual appearance may differ from Nerd Fonts**: The safe Unicode replacements are functional but may not match the visual polish of Nerd Font icons. Users can opt-in to Nerd Fonts in a future config-driven enhancement.
+
+3. **No visual verification in Zed yet**: While the characters chosen are safe and widely supported, actual visual verification in Zed integrated terminal should be performed during manual testing to confirm no tofu rendering occurs.

@@ -5,8 +5,10 @@
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style};
+use ratatui::style::Style;
 use ratatui::widgets::{Clear, Widget};
+
+use crate::theme::palette;
 
 /// Center a fixed-size rect within an area.
 ///
@@ -95,7 +97,9 @@ pub fn centered_rect_percent(width_percent: u16, height_percent: u16, area: Rect
 /// // All cells now have dimmed styling
 /// ```
 pub fn dim_background(buf: &mut Buffer, area: Rect) {
-    let dim_style = Style::default().fg(Color::DarkGray).bg(Color::Black);
+    let dim_style = Style::default()
+        .fg(palette::TEXT_MUTED)
+        .bg(palette::DEEPEST_BG);
 
     let y_end = area.y.saturating_add(area.height);
     let x_end = area.x.saturating_add(area.width);
@@ -130,7 +134,7 @@ pub fn dim_background(buf: &mut Buffer, area: Rect) {
 /// // Shadow cells rendered at right and bottom edges
 /// ```
 pub fn render_shadow(buf: &mut Buffer, modal_rect: Rect) {
-    let shadow_style = Style::default().fg(Color::Black).bg(Color::Black);
+    let shadow_style = Style::default().fg(palette::SHADOW).bg(palette::SHADOW);
 
     // Right edge shadow (1 cell wide, full height)
     let right_x = modal_rect.x.saturating_add(modal_rect.width);
@@ -231,12 +235,12 @@ mod tests {
         let area = Rect::new(0, 0, 10, 5);
         let mut buf = Buffer::empty(area);
         dim_background(&mut buf, area);
-        // All cells should now have DarkGray fg and Black bg
+        // All cells should now have TEXT_MUTED fg and DEEPEST_BG bg
         for y in 0..5 {
             for x in 0..10 {
                 let cell = &buf[(x, y)];
-                assert_eq!(cell.fg, Color::DarkGray);
-                assert_eq!(cell.bg, Color::Black);
+                assert_eq!(cell.fg, palette::TEXT_MUTED);
+                assert_eq!(cell.bg, palette::DEEPEST_BG);
             }
         }
     }
@@ -250,8 +254,8 @@ mod tests {
         for y in 3..8 {
             for x in 5..15 {
                 let cell = &buf[(x, y)];
-                assert_eq!(cell.fg, Color::DarkGray);
-                assert_eq!(cell.bg, Color::Black);
+                assert_eq!(cell.fg, palette::TEXT_MUTED);
+                assert_eq!(cell.bg, palette::DEEPEST_BG);
             }
         }
     }
@@ -265,14 +269,14 @@ mod tests {
 
         // Cell at (15, 3) should be shadow (right edge, offset by 1)
         let right_shadow = &buf[(15, 3)];
-        assert_eq!(right_shadow.fg, Color::Black);
-        assert_eq!(right_shadow.bg, Color::Black);
+        assert_eq!(right_shadow.fg, palette::SHADOW);
+        assert_eq!(right_shadow.bg, palette::SHADOW);
         assert_eq!(right_shadow.symbol(), " ");
 
         // Cell at (6, 8) should be shadow (bottom edge, offset by 1)
         let bottom_shadow = &buf[(6, 8)];
-        assert_eq!(bottom_shadow.fg, Color::Black);
-        assert_eq!(bottom_shadow.bg, Color::Black);
+        assert_eq!(bottom_shadow.fg, palette::SHADOW);
+        assert_eq!(bottom_shadow.bg, palette::SHADOW);
         assert_eq!(bottom_shadow.symbol(), " ");
     }
 

@@ -66,7 +66,7 @@ impl<'a> ConnectedDeviceList<'a> {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
                     Style::default()
-                        .fg(ratatui::style::Color::Black)
+                        .fg(palette::CONTRAST_FG)
                         .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else if is_selected {
@@ -225,7 +225,7 @@ impl<'a> BootableDeviceList<'a> {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
                     Style::default()
-                        .fg(ratatui::style::Color::Black)
+                        .fg(palette::CONTRAST_FG)
                         .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else if is_selected {

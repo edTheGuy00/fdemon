@@ -17,6 +17,36 @@ use ratatui::Frame;
 
 use crate::theme::palette;
 
+/// Render search overlay at the bottom of the log area
+///
+/// # Arguments
+/// * `frame` - Frame to render to
+/// * `areas` - Screen layout areas
+/// * `state` - Application state (to access session manager)
+/// * `force` - If true, always render even if query is empty (for SearchInput mode)
+fn render_search_overlay(
+    frame: &mut Frame,
+    areas: &layout::ScreenAreas,
+    state: &AppState,
+    force: bool,
+) {
+    if let Some(handle) = state.session_manager.selected() {
+        if force || !handle.session.search_state.query.is_empty() {
+            let search_area = Rect::new(
+                areas.logs.x + 1,
+                areas.logs.y + areas.logs.height.saturating_sub(3),
+                areas.logs.width.saturating_sub(2),
+                1,
+            );
+            frame.render_widget(Clear, search_area);
+            frame.render_widget(
+                widgets::SearchInput::new(&handle.session.search_state).inline(),
+                search_area,
+            );
+        }
+    }
+}
+
 /// Render the complete UI (View function in TEA)
 ///
 /// This is a pure rendering function - it should not modify state
@@ -115,43 +145,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         }
         UiMode::SearchInput => {
             // Render search input at bottom of log area, above bottom metadata bar
-            if let Some(handle) = state.session_manager.selected() {
-                // Calculate position for inline search
-                // Position it above the bottom metadata bar (which is at height - 2)
-                let search_area = Rect::new(
-                    areas.logs.x + 1,
-                    areas.logs.y + areas.logs.height.saturating_sub(3),
-                    areas.logs.width.saturating_sub(2),
-                    1,
-                );
-
-                // Clear the line and render search input
-                frame.render_widget(Clear, search_area);
-                frame.render_widget(
-                    widgets::SearchInput::new(&handle.session.search_state).inline(),
-                    search_area,
-                );
-            }
+            render_search_overlay(frame, &areas, state, true);
         }
         UiMode::Normal => {
             // No overlay - but show search status if search has results
-            if let Some(handle) = state.session_manager.selected() {
-                if !handle.session.search_state.query.is_empty() {
-                    // Show mini search status above bottom metadata bar
-                    let search_area = Rect::new(
-                        areas.logs.x + 1,
-                        areas.logs.y + areas.logs.height.saturating_sub(3),
-                        areas.logs.width.saturating_sub(2),
-                        1,
-                    );
-
-                    frame.render_widget(Clear, search_area);
-                    frame.render_widget(
-                        widgets::SearchInput::new(&handle.session.search_state).inline(),
-                        search_area,
-                    );
-                }
-            }
+            render_search_overlay(frame, &areas, state, false);
         }
         UiMode::LinkHighlight => {
             // Link mode is active - the log view handles badge rendering

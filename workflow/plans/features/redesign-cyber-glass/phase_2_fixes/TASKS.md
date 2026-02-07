@@ -42,14 +42,14 @@ Wave 4 (after all):
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-multi-session-header](tasks/01-fix-multi-session-header.md) | Not Started | - | `layout.rs`, `header.rs` |
-| 2 | [02-fix-nerd-font-icons](tasks/02-fix-nerd-font-icons.md) | Not Started | - | `theme/icons.rs`, `header.rs`, `log_view/mod.rs` |
-| 3 | [03-fix-footer-height-desync](tasks/03-fix-footer-height-desync.md) | Not Started | - | `log_view/mod.rs` |
-| 4 | [04-remove-dead-code](tasks/04-remove-dead-code.md) | Not Started | - | `status_bar/`, `tabs.rs`, `log_view/mod.rs`, `layout.rs`, `widgets/mod.rs` |
-| 5 | [05-complete-palette-migration](tasks/05-complete-palette-migration.md) | Not Started | - | `modal_overlay.rs`, `log_view/mod.rs`, `settings_panel/mod.rs`, `new_session_dialog/`, `confirm_dialog.rs` |
-| 6 | [06-fix-theme-module-hygiene](tasks/06-fix-theme-module-hygiene.md) | Not Started | 2, 4, 5 | `theme/palette.rs`, `theme/icons.rs`, `theme/styles.rs` |
-| 7 | [07-fix-width-calculations](tasks/07-fix-width-calculations.md) | Not Started | 2 | `log_view/mod.rs` |
-| 8 | [08-update-tests](tasks/08-update-tests.md) | Not Started | 1-7 | All test files |
+| 1 | [01-fix-multi-session-header](tasks/01-fix-multi-session-header.md) | Done | - | `layout.rs`, `header.rs` |
+| 2 | [02-fix-nerd-font-icons](tasks/02-fix-nerd-font-icons.md) | Done | - | `theme/icons.rs`, `header.rs`, `log_view/mod.rs` |
+| 3 | [03-fix-footer-height-desync](tasks/03-fix-footer-height-desync.md) | Done | - | `log_view/mod.rs` |
+| 4 | [04-remove-dead-code](tasks/04-remove-dead-code.md) | Done | - | `status_bar/`, `tabs.rs`, `log_view/mod.rs`, `layout.rs`, `widgets/mod.rs` |
+| 5 | [05-complete-palette-migration](tasks/05-complete-palette-migration.md) | Done | - | `modal_overlay.rs`, `log_view/mod.rs`, `settings_panel/mod.rs`, `new_session_dialog/`, `confirm_dialog.rs` |
+| 6 | [06-fix-theme-module-hygiene](tasks/06-fix-theme-module-hygiene.md) | Done | 2, 4, 5 | `theme/palette.rs`, `theme/icons.rs`, `theme/styles.rs` |
+| 7 | [07-fix-width-calculations](tasks/07-fix-width-calculations.md) | Done | 2 | `log_view/mod.rs` |
+| 8 | [08-update-tests](tasks/08-update-tests.md) | Done | 1-7 | All test files |
 
 ## Execution Strategy
 

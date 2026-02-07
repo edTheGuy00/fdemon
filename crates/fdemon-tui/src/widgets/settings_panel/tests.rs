@@ -347,9 +347,9 @@ fn test_value_style_number() {
 
 #[test]
 fn test_value_style_string_empty() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::String(String::new()), false);
-    assert_eq!(style.fg, Some(Color::DarkGray));
+    assert_eq!(style.fg, Some(palette::TEXT_MUTED));
 }
 
 #[test]

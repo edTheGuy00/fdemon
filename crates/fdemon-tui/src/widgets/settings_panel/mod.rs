@@ -11,7 +11,7 @@ mod styles;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
@@ -173,7 +173,7 @@ impl SettingsPanel<'_> {
             (
                 Style::default().fg(palette::TEXT_MUTED).bg(palette::ACCENT),
                 Style::default()
-                    .fg(Color::Black)
+                    .fg(palette::CONTRAST_FG)
                     .bg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
                 Style::default().bg(palette::ACCENT),

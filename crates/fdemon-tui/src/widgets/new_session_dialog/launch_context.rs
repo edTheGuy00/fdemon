@@ -11,7 +11,7 @@ use fdemon_app::config::FlutterMode;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{BorderType, Paragraph, Widget},
 };
@@ -75,7 +75,7 @@ impl Widget for DropdownField {
             Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -134,7 +134,7 @@ impl ModeSelector {
             Style::default().fg(palette::TEXT_MUTED)
         } else if mode == self.selected && self.is_focused {
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else if mode == self.selected {
@@ -242,7 +242,7 @@ impl Widget for ActionField {
             Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -302,7 +302,7 @@ impl Widget for LaunchButton {
             Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::STATUS_GREEN)
                 .add_modifier(Modifier::BOLD)
         } else {
@@ -845,7 +845,7 @@ impl LaunchContextWithDevice<'_> {
             Style::default().fg(palette::TEXT_MUTED)
         } else if mode_focused {
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {

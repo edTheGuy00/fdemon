@@ -3,15 +3,14 @@
 //! Phase 1: Maps to existing named colors for zero visual regression.
 //! Phase 2+: Will transition to RGB design token values.
 
-// Allow dead_code since these are infrastructure constants for Phase 2 migration
-#![allow(dead_code)]
-
 use ratatui::style::Color;
 
 // --- Background layers ---
 pub const DEEPEST_BG: Color = Color::Black; // Terminal background (Phase 2: Rgb(10,12,16))
 pub const CARD_BG: Color = Color::Black; // Panel/card backgrounds (Phase 2: Rgb(18,21,28))
 pub const POPUP_BG: Color = Color::DarkGray; // Modal/popup backgrounds (Phase 2: Rgb(28,33,43))
+                                             // Kept for future surface elevation hierarchy in Phase 2+
+#[allow(dead_code)]
 pub const SURFACE: Color = Color::Black; // Elevated surface (Phase 2: Rgb(22,27,34))
 
 // --- Borders ---
@@ -20,12 +19,16 @@ pub const BORDER_ACTIVE: Color = Color::Cyan; // Focused borders (Phase 2: Rgb(8
 
 // --- Accent ---
 pub const ACCENT: Color = Color::Cyan; // Primary accent (Phase 2: Rgb(88,166,255))
+                                       // Kept for future hover/inactive accent states in Phase 2+
+#[allow(dead_code)]
 pub const ACCENT_DIM: Color = Color::DarkGray; // Dimmed accent (Phase 2: Rgb(56,107,163))
 
 // --- Text ---
 pub const TEXT_PRIMARY: Color = Color::White; // Primary text (Phase 2: Rgb(201,209,217))
 pub const TEXT_SECONDARY: Color = Color::Gray; // Secondary text (Phase 2: Rgb(125,133,144))
 pub const TEXT_MUTED: Color = Color::DarkGray; // Muted text (Phase 2: Rgb(72,79,88))
+                                               // Kept for future high-emphasis text hierarchy in Phase 2+
+#[allow(dead_code)]
 pub const TEXT_BRIGHT: Color = Color::White; // Bright/emphasis text (Phase 2: Rgb(240,246,252))
 
 // --- Status ---
@@ -37,9 +40,13 @@ pub const STATUS_INDIGO: Color = Color::Magenta; // Flutter messages (Phase 2: R
 
 // --- Effects ---
 pub const SHADOW: Color = Color::Black; // Shadow color (Phase 2: Rgb(5,6,8))
+pub const CONTRAST_FG: Color = Color::Black; // High contrast foreground on accent bg (Phase 2: Rgb(0,0,0))
 
 // --- Gradients (approximate) ---
+// Kept for future gradient button styles in Phase 2+
+#[allow(dead_code)]
 pub const GRADIENT_BLUE: Color = Color::Blue; // Button gradient start (Phase 2: Rgb(37,99,235))
+#[allow(dead_code)]
 pub const GRADIENT_INDIGO: Color = Color::Magenta; // Button gradient end (Phase 2: Rgb(99,102,241))
 
 // --- Log level colors ---
@@ -53,11 +60,11 @@ pub const LOG_DEBUG: Color = Color::DarkGray;
 pub const LOG_DEBUG_MSG: Color = Color::DarkGray;
 
 // --- Log source colors ---
-pub const SOURCE_APP: Color = Color::Magenta;
-pub const SOURCE_DAEMON: Color = Color::Yellow;
-pub const SOURCE_FLUTTER: Color = Color::Blue;
-pub const SOURCE_FLUTTER_ERROR: Color = Color::Red;
-pub const SOURCE_WATCHER: Color = Color::Cyan;
+pub const SOURCE_APP: Color = STATUS_GREEN; // App logs use green
+pub const SOURCE_DAEMON: Color = STATUS_YELLOW; // Daemon logs use yellow
+pub const SOURCE_FLUTTER: Color = STATUS_INDIGO; // Flutter logs use indigo
+pub const SOURCE_FLUTTER_ERROR: Color = STATUS_RED; // Flutter error logs use red
+pub const SOURCE_WATCHER: Color = STATUS_BLUE; // Watcher logs use blue
 
 // --- Search highlight ---
 pub const SEARCH_HIGHLIGHT_FG: Color = Color::Black;

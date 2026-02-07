@@ -1,15 +1,14 @@
 //! Semantic style builders for the Cyber-Glass theme.
 
-// Allow dead_code since these are infrastructure functions for Phase 2 migration
-#![allow(dead_code)]
-
 use fdemon_core::types::AppPhase;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders};
 
 use super::palette;
 
 // --- Text styles ---
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn text_primary() -> Style {
     Style::default().fg(palette::TEXT_PRIMARY)
 }
@@ -22,6 +21,8 @@ pub fn text_muted() -> Style {
     Style::default().fg(palette::TEXT_MUTED)
 }
 
+// Kept for future high-emphasis text in Phase 2+
+#[allow(dead_code)]
 pub fn text_bright() -> Style {
     Style::default().fg(palette::TEXT_BRIGHT)
 }
@@ -40,6 +41,8 @@ pub fn accent() -> Style {
     Style::default().fg(palette::ACCENT)
 }
 
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn accent_bold() -> Style {
     Style::default()
         .fg(palette::ACCENT)
@@ -47,6 +50,8 @@ pub fn accent_bold() -> Style {
 }
 
 // --- Status styles ---
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn status_green() -> Style {
     Style::default().fg(palette::STATUS_GREEN)
 }
@@ -55,20 +60,28 @@ pub fn status_red() -> Style {
     Style::default().fg(palette::STATUS_RED)
 }
 
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn status_yellow() -> Style {
     Style::default().fg(palette::STATUS_YELLOW)
 }
 
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn status_blue() -> Style {
     Style::default().fg(palette::STATUS_BLUE)
 }
 
 // --- Keybinding hint style ---
+// Kept for future help panel in Phase 2+
+#[allow(dead_code)]
 pub fn keybinding() -> Style {
     Style::default().fg(palette::STATUS_YELLOW)
 }
 
 // --- Selection styles ---
+// Kept for future widget styling in Phase 2+
+#[allow(dead_code)]
 pub fn selected_highlight() -> Style {
     Style::default()
         .fg(palette::TEXT_BRIGHT)
@@ -79,7 +92,7 @@ pub fn selected_highlight() -> Style {
 /// "Black on Cyan" - used for focused+selected items across widgets
 pub fn focused_selected() -> Style {
     Style::default()
-        .fg(Color::Black)
+        .fg(palette::CONTRAST_FG)
         .bg(palette::ACCENT)
         .add_modifier(Modifier::BOLD)
 }
@@ -96,6 +109,8 @@ pub fn glass_block(focused: bool) -> Block<'static> {
         })
 }
 
+// Kept for future modal dialogs in Phase 2+
+#[allow(dead_code)]
 pub fn modal_block(title: &str) -> Block<'_> {
     Block::default()
         .title(title)
@@ -147,6 +162,8 @@ pub fn phase_indicator_busy() -> (&'static str, &'static str, Style) {
 }
 
 /// "Not connected" indicator for when no sessions exist.
+// Kept for future multi-session UI in Phase 2+
+#[allow(dead_code)]
 pub fn phase_indicator_disconnected() -> (&'static str, &'static str, Style) {
     (
         "○",
@@ -211,7 +228,7 @@ mod tests {
     #[test]
     fn test_focused_selected_uses_black_on_cyan() {
         let style = focused_selected();
-        assert_eq!(style.fg, Some(Color::Black));
+        assert_eq!(style.fg, Some(palette::CONTRAST_FG));
         assert_eq!(style.bg, Some(palette::ACCENT));
     }
 

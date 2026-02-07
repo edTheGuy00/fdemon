@@ -100,3 +100,57 @@ After Task 04 removes dead code (status_bar: 16 refs, legacy tabs: 10 refs), app
 - If `styles::focused_selected()` doesn't exactly match some use sites (e.g., some use `Color::Black` on `Color::Green` instead of `ACCENT`), add specific style helpers or use palette constants directly
 - The `Color::Black` inside `styles.rs:82` (`focused_selected()` function itself) should also be migrated to a `palette::CONTRAST_FG` constant — this is covered in Task 06
 - Verify `palette.rs` has all necessary constants before starting (e.g., `SHADOW`, `CONTRAST_FG` may need to be added)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/palette.rs` | Added `CONTRAST_FG` constant for high-contrast foreground on accent background |
+| `crates/fdemon-tui/src/widgets/modal_overlay.rs` | Replaced hardcoded `Color::DarkGray`/`Color::Black` with `palette::TEXT_MUTED`, `palette::DEEPEST_BG`, and `palette::SHADOW`; updated tests to use palette constants |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Replaced `Color::Black` in link badge and search highlight styles with `palette::CONTRAST_FG` and search palette constants; removed unused `Color` import |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Updated stack frame style tests to use palette constants instead of hardcoded colors |
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Replaced `Color::Black` in active tab style with `palette::CONTRAST_FG`; removed unused `Color` import |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated test to use `palette::TEXT_MUTED` instead of hardcoded `Color::DarkGray` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/dart_defines_modal.rs` | Replaced `Color::Black` in selected item and button styles with `palette::CONTRAST_FG`; removed unused `Color` import |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/fuzzy_modal.rs` | Replaced `Color::Black` in selected item style with `palette::CONTRAST_FG`; removed unused `Color` import |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs` | Replaced `ratatui::style::Color::Black` in active tab style with `palette::CONTRAST_FG` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Replaced all 5 `Color::Black` references with `palette::CONTRAST_FG` using replace_all; removed unused `Color` import |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/device_list.rs` | Replaced 2 `ratatui::style::Color::Black` references with `palette::CONTRAST_FG` using replace_all |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added CONTRAST_FG constant**: Created `palette::CONTRAST_FG = Color::Black` to handle cases where only the foreground color is needed on accent backgrounds, rather than using the full `styles::focused_selected()` style. This provides flexibility for widgets that need to customize the background or modifiers separately.
+
+2. **Search highlight uses palette constants**: Used existing `palette::SEARCH_HIGHLIGHT_FG` and `palette::SEARCH_CURRENT_FG` constants that were already defined in palette.rs, maintaining consistency with the existing palette structure.
+
+3. **Test updates**: Updated test assertions to use palette constants instead of hardcoded colors for future-proofing when Phase 2 transitions to RGB values.
+
+4. **Preserved theme/styles.rs**: Left `Color::Black` in `styles::focused_selected()` function (line 82) unchanged, as noted in task - this will be migrated to `CONTRAST_FG` in Task 06.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (no warnings)
+- `cargo test -p fdemon-tui --lib` - Passed (418 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Verification
+
+Confirmed zero `Color::Black` or `Color::DarkGray` references in production widget code outside `theme/`:
+- All production widget code now uses palette constants or style helpers
+- Only remaining hardcoded colors are in `theme/palette.rs` (definitions) and `theme/styles.rs:82` (focused_selected function, deferred to Task 06)
+- Visual rendering unchanged - all colors sourced from theme module
+
+### Risks/Limitations
+
+None identified. All acceptance criteria met:
+1. Zero Color:: references in production code outside theme/ - PASS
+2. All replaced references use appropriate palette constants - PASS
+3. Visual rendering unchanged - PASS (same color values, different source)
+4. cargo check passes - PASS
+5. cargo clippy passes - PASS

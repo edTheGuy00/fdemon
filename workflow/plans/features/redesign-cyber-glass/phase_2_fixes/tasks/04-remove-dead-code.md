@@ -66,3 +66,37 @@
 - Removing the legacy tabs code eliminates 10 more, bringing the remaining count to ~20
 - Be careful to preserve `SessionTabs` in `tabs.rs` — it IS used by the active render pipeline
 - The `status_bar/styles.rs` file (if it exists) should also be removed with the module
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/status_bar/` | Deleted entire directory (mod.rs + tests.rs) |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Removed `mod status_bar` declaration, removed `StatusBar`/`StatusBarCompact` exports, removed `HeaderWithTabs` export |
+| `crates/fdemon-tui/src/widgets/tabs.rs` | Deleted `HeaderWithTabs` struct, Widget impl, 3 legacy render functions (160 lines), deleted 7 HeaderWithTabs tests, cleaned up unused imports |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Deleted deprecated `build_title()` function (38 lines) |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Deleted 7 tests for removed `build_title()` function |
+| `crates/fdemon-tui/src/layout.rs` | Deleted `LayoutMode` enum and `from_width()` method, deleted 7 dead utility functions with `#[allow(dead_code)]`, deleted 6 corresponding tests, removed unused `MIN_FULL_STATUS_WIDTH` constant |
+
+### Notable Decisions/Tradeoffs
+
+1. **Preserved SessionTabs**: Carefully preserved `SessionTabs` widget in tabs.rs as it is actively used by the render pipeline, only removed legacy `HeaderWithTabs` code.
+2. **Import cleanup**: Removed unused imports from tabs.rs after deleting legacy functions, keeping only what SessionTabs needs (Paragraph, Tabs, Widget).
+3. **Test cleanup**: Removed all tests for deleted functions to ensure test suite remains clean and focused on active code.
+4. **Constant removal**: Also removed `MIN_FULL_STATUS_WIDTH` constant from layout.rs as it was only used by the deleted dead functions.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (no compilation errors)
+- `cargo test -p fdemon-tui --lib` - Passed (418 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None. All removed code was marked with `#[allow(dead_code)]` or explicitly unused in the codebase. The comprehensive test suite (418 tests) passing confirms no active code depended on the removed functions.

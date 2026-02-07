@@ -77,3 +77,42 @@ Then update `log_view/styles.rs` to use `palette::SOURCE_APP` and `palette::SOUR
 
 - This task should be done AFTER Tasks 02, 04, and 05 to minimize churn — we need to know the final state of icon constants and palette usage before auditing dead code
 - The `icons.rs` docstring fix (removing reference to nonexistent `icon()` function) may already be done in Task 02. Verify and skip if so.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/palette.rs` | Removed `#![allow(dead_code)]` file-level suppression; Added targeted `#[allow(dead_code)]` to 6 unused constants (`SURFACE`, `ACCENT_DIM`, `TEXT_BRIGHT`, `GRADIENT_BLUE`, `GRADIENT_INDIGO`) with comments explaining they're kept for Phase 2+; Updated `SOURCE_APP = STATUS_GREEN` and `SOURCE_FLUTTER = STATUS_INDIGO` to match actual usage |
+| `crates/fdemon-tui/src/theme/icons.rs` | Removed `#![allow(dead_code)]` file-level suppression; Added targeted `#[allow(dead_code)]` to 17 unused `ICON_*` constants with comment explaining they're kept for future config opt-in; Added targeted `#[allow(dead_code)]` to all 25 `NERD_*` constants with comment explaining they're kept for future Nerd Font opt-in |
+| `crates/fdemon-tui/src/theme/styles.rs` | Removed `#![allow(dead_code)]` file-level suppression; Removed unused `Color` import; Replaced `Color::Black` with `palette::CONTRAST_FG` in `focused_selected()` function; Added targeted `#[allow(dead_code)]` to 9 unused style functions (`text_primary`, `text_bright`, `accent_bold`, `status_green`, `status_yellow`, `status_blue`, `keybinding`, `selected_highlight`, `modal_block`, `phase_indicator_disconnected`) with comments; Updated test to use `palette::CONTRAST_FG` instead of `Color::Black` |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Updated `source_style()` function to use semantic `palette::SOURCE_*` constants instead of direct `palette::STATUS_*` constants for log source styling |
+| `crates/fdemon-tui/src/widgets/confirm_dialog.rs` | Removed duplicate `centered_rect()` private method; Added import `use crate::widgets::modal_overlay::centered_rect;`; Updated widget rendering to call module-level `centered_rect()` function; Updated tests to use module-level function |
+
+### Notable Decisions/Tradeoffs
+
+1. **Targeted allow annotations**: Instead of removing all dead code, added targeted `#[allow(dead_code)]` with explanatory comments to constants and functions intentionally kept for Phase 2+ features (Nerd Font opt-in, gradient buttons, surface elevation hierarchy, etc.). This preserves the full design token set while documenting intent.
+
+2. **SOURCE_* constant semantics**: Updated `SOURCE_APP` and `SOURCE_FLUTTER` to reference `STATUS_GREEN` and `STATUS_INDIGO` respectively, then updated log_view to use the semantic `SOURCE_*` names. This gives meaningful names to color choices (e.g., "app source logs are green" vs "app source logs use status green").
+
+3. **CONTRAST_FG for accessibility**: Replaced hardcoded `Color::Black` with `palette::CONTRAST_FG` constant, which was added in Task 05. This improves theming consistency and prepares for Phase 2 RGB migration.
+
+4. **Deduplication**: Removed duplicate `centered_rect()` implementation in `confirm_dialog.rs` in favor of the shared `modal_overlay::centered_rect()` utility, reducing maintenance burden and ensuring consistent centering behavior across modals.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed (0 warnings)
+- `cargo test -p fdemon-tui --lib` - Passed (418/418 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **No visual regression**: All changes are refactoring/hygiene fixes with zero visual impact. The SOURCE_* constant updates maintain the same color values, just with semantic naming.
+
+2. **Future Phase 2 work**: The targeted `#[allow(dead_code)]` annotations document which constants/functions are intentionally unused but kept for future work. If any of these are removed before Phase 2, the annotations should be removed as well.

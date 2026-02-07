@@ -45,3 +45,39 @@
 - The `MainHeader` widget code at `header.rs:59-89` is already correctly structured for multi-session rendering — it just never gets enough height to execute that branch. This fix is primarily a layout change.
 - The gap row between header and logs (`Length(1)`) should be preserved regardless of session count.
 - Consider edge case: terminal is very short and can't fit expanded header + gap + logs. The `Min(3)` constraint on logs should handle this gracefully.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/layout.rs` | Modified `create_with_sessions()` to return dynamic header height based on session count: `Length(5)` for multiple sessions (>1), `Length(3)` for single/no session. Updated `header_height()` helper to match. Updated 3 existing tests and added 1 new test. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Dynamic Header Height**: Implemented conditional logic where `session_count > 1` triggers expanded header (5 rows total = 3 inner rows after borders). This gives the `MainHeader` widget's multi-session branch the `inner.height >= 2` it needs to render tabs. Single-session mode remains unchanged at 3 rows (1 inner row).
+
+2. **Preserved Gap**: The 1-row gap between header and logs remains constant regardless of session count, maintaining visual breathing room.
+
+3. **Test Coverage**: Added new test `test_create_with_sessions_returns_different_heights()` that explicitly verifies the 1 vs 2+ session height difference. Updated 3 existing tests to reflect the new multi-session height (5 rows vs 3 rows).
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (475 tests)
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Snapshot Tests**: The existing snapshot tests in `render/tests.rs` may need updates if they test multi-session scenarios, as the header height has changed from 3 to 5 rows for multiple sessions. This was noted in the task requirements.
+
+2. **Very Short Terminals**: In extremely short terminals (< 10 rows), the expanded header (5 rows) + gap (1 row) + minimum logs (3 rows) = 9 rows minimum. Terminals shorter than this will have the log area compressed by the `Constraint::Min(3)` constraint, which should handle this gracefully but may not be ideal UX.
+
+3. **No Widget Changes Required**: The `MainHeader` widget at `header.rs` did not require any modifications as it already had the correct multi-session logic. This fix purely addresses the layout height allocation issue.

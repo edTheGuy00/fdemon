@@ -154,60 +154,6 @@ fn test_error_has_bold_modifier() {
 // ─────────────────────────────────────────────────────────
 
 #[test]
-fn test_build_title_no_filter() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let view = LogView::new(&logs).title("Logs");
-    assert_eq!(view.build_title(), " Logs ");
-}
-
-#[test]
-fn test_build_title_with_default_filter() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let filter = FilterState::default();
-    let view = LogView::new(&logs).title("Logs").filter_state(&filter);
-    // Default filter (All/All) should not show indicator
-    assert_eq!(view.build_title(), " Logs ");
-}
-
-#[test]
-fn test_build_title_with_level_filter() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let filter = FilterState {
-        level_filter: LogLevelFilter::Errors,
-        source_filter: LogSourceFilter::All,
-    };
-    let view = LogView::new(&logs).title("Logs").filter_state(&filter);
-    let title = view.build_title();
-    assert!(title.contains("Errors only"), "Title was: {}", title);
-}
-
-#[test]
-fn test_build_title_with_source_filter() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let filter = FilterState {
-        level_filter: LogLevelFilter::All,
-        source_filter: LogSourceFilter::App,
-    };
-    let view = LogView::new(&logs).title("Logs").filter_state(&filter);
-    let title = view.build_title();
-    assert!(title.contains("App logs"), "Title was: {}", title);
-}
-
-#[test]
-fn test_build_title_with_combined_filter() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let filter = FilterState {
-        level_filter: LogLevelFilter::Errors,
-        source_filter: LogSourceFilter::Flutter,
-    };
-    let view = LogView::new(&logs).title("Logs").filter_state(&filter);
-    let title = view.build_title();
-    assert!(title.contains("Errors only"), "Title was: {}", title);
-    assert!(title.contains("Flutter logs"), "Title was: {}", title);
-    assert!(title.contains(" | "), "Title was: {}", title);
-}
-
-#[test]
 fn test_filter_state_builder() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
     let filter = FilterState::default();
@@ -357,46 +303,6 @@ fn test_format_message_with_highlights_invalid_regex() {
     let spans = view.format_message_with_highlights("test", 0, Style::default());
 
     assert_eq!(spans.len(), 1);
-}
-
-#[test]
-fn test_build_title_with_search_status() {
-    let logs = logs_from(vec![
-        make_entry(LogLevel::Info, LogSource::App, "test message"),
-        make_entry(LogLevel::Info, LogSource::App, "another test"),
-    ]);
-    let mut search = SearchState::default();
-    search.set_query("test");
-    search.execute_search(&logs);
-
-    let view = LogView::new(&logs).title("Logs").search_state(&search);
-
-    let title = view.build_title();
-    assert!(title.contains("["), "Title was: {}", title);
-    assert!(title.contains("2"), "Title was: {}", title);
-    assert!(title.contains("matches"), "Title was: {}", title);
-}
-
-#[test]
-fn test_build_title_with_filter_and_search() {
-    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "test")]);
-    let filter = FilterState {
-        level_filter: LogLevelFilter::Errors,
-        source_filter: LogSourceFilter::All,
-    };
-    let mut search = SearchState::default();
-    search.set_query("test");
-    search.execute_search(&logs);
-
-    let view = LogView::new(&logs)
-        .title("Logs")
-        .filter_state(&filter)
-        .search_state(&search);
-
-    let title = view.build_title();
-    // Should contain both filter and search indicators
-    assert!(title.contains("Errors"), "Title was: {}", title);
-    assert!(title.contains("•"), "Title was: {}", title); // separator
 }
 
 #[test]
@@ -589,15 +495,16 @@ fn test_stack_frame_with_long_function_name() {
 #[test]
 fn test_stack_frame_styles_module_constants() {
     // Verify style constants are accessible and have expected properties
+    use crate::theme::palette;
     use styles::*;
 
     assert_eq!(INDENT, "    ");
-    assert_eq!(FRAME_NUMBER.fg, Some(Color::DarkGray));
-    assert_eq!(FUNCTION_PROJECT.fg, Some(Color::White));
-    assert_eq!(FUNCTION_PACKAGE.fg, Some(Color::DarkGray));
-    assert_eq!(FILE_PROJECT.fg, Some(Color::Blue));
+    assert_eq!(FRAME_NUMBER.fg, Some(palette::STACK_FRAME_NUMBER));
+    assert_eq!(FUNCTION_PROJECT.fg, Some(palette::STACK_FUNCTION_PROJECT));
+    assert_eq!(FUNCTION_PACKAGE.fg, Some(palette::STACK_FUNCTION_PACKAGE));
+    assert_eq!(FILE_PROJECT.fg, Some(palette::STACK_FILE_PROJECT));
     assert!(FILE_PROJECT.add_modifier.contains(Modifier::UNDERLINED));
-    assert_eq!(LOCATION_PROJECT.fg, Some(Color::Cyan));
+    assert_eq!(LOCATION_PROJECT.fg, Some(palette::STACK_LOCATION_PROJECT));
     assert!(ASYNC_GAP.add_modifier.contains(Modifier::ITALIC));
 }
 
@@ -1047,4 +954,67 @@ fn test_visible_range_empty_content() {
 
     assert_eq!(start, 0);
     assert_eq!(end, 0);
+}
+
+#[test]
+fn test_footer_height_not_stolen_in_small_area() {
+    // Test that status info doesn't cause overflow in small spaces
+    // This is a regression test for the footer height desync bug (Phase 2 Task 03)
+    use crate::test_utils::TestTerminal;
+    use std::time::Duration;
+
+    // Create a terminal with 5 rows total: border(2) + top_meta(1) + content(1) + bottom_meta(1)
+    let mut term = TestTerminal::with_size(80, 5);
+
+    let logs = logs_from(vec![
+        make_entry(LogLevel::Info, LogSource::App, "Line 1"),
+        make_entry(LogLevel::Info, LogSource::App, "Line 2"),
+        make_entry(LogLevel::Info, LogSource::App, "Line 3"),
+    ]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: Some(Duration::from_secs(5)),
+        error_count: 0,
+    };
+
+    let log_view = LogView::new(&logs).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    // Render the widget
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // In a 5-row area:
+    // - inner height = 3 (5 - 2 for borders)
+    // - top metadata = 1
+    // - bottom metadata = 1 (footer_height)
+    // - content = 3 - 1 - 1 = 1 line visible
+    assert_eq!(
+        state.visible_lines, 1,
+        "visible_lines should be calculated correctly with footer"
+    );
+
+    // Now test without footer (no status_info)
+    let log_view_no_footer = LogView::new(&logs);
+    let mut state_no_footer = LogViewState::new();
+
+    term.render_stateful_widget(log_view_no_footer, term.area(), &mut state_no_footer);
+
+    // Without footer:
+    // - inner height = 3
+    // - top metadata = 1
+    // - content = 3 - 1 = 2 lines visible
+    assert_eq!(
+        state_no_footer.visible_lines, 2,
+        "visible_lines should be higher without footer"
+    );
+
+    // Verify the footer presence changes visible line count
+    assert!(
+        state_no_footer.visible_lines > state.visible_lines,
+        "Footer should reduce visible lines by exactly 1"
+    );
 }

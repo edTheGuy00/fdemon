@@ -13,7 +13,7 @@ use fdemon_core::{
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
@@ -26,6 +26,10 @@ use crate::theme::{icons, palette};
 
 /// Stack trace styling constants
 pub mod styles;
+
+/// Minimum width (in columns) for full status display.
+/// Below this width, the bottom metadata bar switches to compact mode.
+const MIN_FULL_STATUS_WIDTH: u16 = 60;
 
 /// Status information for the bottom metadata bar
 pub struct StatusInfo<'a> {
@@ -183,11 +187,11 @@ impl<'a> LogView<'a> {
     /// Get style for log source
     fn source_style(source: LogSource) -> Style {
         match source {
-            LogSource::App => Style::default().fg(palette::STATUS_GREEN),
-            LogSource::Daemon => Style::default().fg(palette::STATUS_YELLOW),
-            LogSource::Flutter => Style::default().fg(palette::STATUS_INDIGO),
-            LogSource::FlutterError => Style::default().fg(palette::STATUS_RED),
-            LogSource::Watcher => Style::default().fg(palette::STATUS_BLUE),
+            LogSource::App => Style::default().fg(palette::SOURCE_APP),
+            LogSource::Daemon => Style::default().fg(palette::SOURCE_DAEMON),
+            LogSource::Flutter => Style::default().fg(palette::SOURCE_FLUTTER),
+            LogSource::FlutterError => Style::default().fg(palette::SOURCE_FLUTTER_ERROR),
+            LogSource::Watcher => Style::default().fg(palette::SOURCE_WATCHER),
         }
     }
 
@@ -200,7 +204,7 @@ impl<'a> LogView<'a> {
         Span::styled(
             format!("[{}]", shortcut),
             Style::default()
-                .fg(Color::Black)
+                .fg(palette::CONTRAST_FG)
                 .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
@@ -344,11 +348,11 @@ impl<'a> LogView<'a> {
         // Highlight styles
         let highlight_style = Style::default()
             .bg(palette::SEARCH_HIGHLIGHT_BG)
-            .fg(Color::Black)
+            .fg(palette::SEARCH_HIGHLIGHT_FG)
             .add_modifier(Modifier::BOLD);
         let current_highlight_style = Style::default()
             .bg(palette::SEARCH_CURRENT_BG)
-            .fg(Color::Black)
+            .fg(palette::SEARCH_CURRENT_FG)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
         for mat in matches {
@@ -683,8 +687,8 @@ impl<'a> LogView<'a> {
         // Right side: "LIVE FEED" badge
         // Calculate position based on available width
         let right_badge = " LIVE FEED ";
-        let left_text_len: usize = spans.iter().map(|s| s.content.len()).sum();
-        let badge_len = right_badge.len();
+        let left_text_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let badge_len = right_badge.chars().count();
 
         // Fill space between left text and right badge
         let padding = if area.width as usize > left_text_len + badge_len {
@@ -793,45 +797,6 @@ impl<'a> LogView<'a> {
 
         let line = Line::from(spans);
         buf.set_line(area.x, area.y, &line, area.width);
-    }
-
-    /// Generate the title string including filter and search indicators (deprecated - now in metadata bar)
-    #[allow(dead_code)]
-    fn build_title(&self) -> String {
-        let base = self.title.trim();
-        let mut parts = Vec::new();
-
-        // Add filter indicators
-        if let Some(filter) = self.filter_state {
-            if filter.is_active() {
-                let mut indicators = Vec::new();
-                if filter.level_filter != LogLevelFilter::All {
-                    indicators.push(filter.level_filter.display_name());
-                }
-                if filter.source_filter != LogSourceFilter::All {
-                    indicators.push(filter.source_filter.display_name());
-                }
-                if !indicators.is_empty() {
-                    parts.push(indicators.join(" | "));
-                }
-            }
-        }
-
-        // Add search status
-        if let Some(search) = self.search_state {
-            if !search.query.is_empty() {
-                let status = search.display_status();
-                if !status.is_empty() {
-                    parts.push(status);
-                }
-            }
-        }
-
-        if parts.is_empty() {
-            format!(" {} ", base)
-        } else {
-            format!(" {} {} ", base, parts.join(" • "))
-        }
     }
 
     /// Render empty filtered state
@@ -1016,13 +981,13 @@ impl<'a> StatefulWidget for LogView<'a> {
 
         // Determine if we have a bottom metadata bar
         let has_footer = self.status_info.is_some();
-        let footer_height = if has_footer { 1 } else { 0 };
+        let footer_height = if has_footer && inner.height > 1 { 1 } else { 0 };
 
         // Render bottom metadata bar (if status_info is present)
         if let Some(ref status) = self.status_info {
             if inner.height > 1 {
-                // Check for compact mode (< 60 columns)
-                let compact = area.width < 60;
+                // Check for compact mode
+                let compact = area.width < MIN_FULL_STATUS_WIDTH;
                 let meta_bottom = Rect::new(
                     inner.x,
                     inner.y + inner.height.saturating_sub(1),
