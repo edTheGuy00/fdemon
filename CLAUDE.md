@@ -9,41 +9,54 @@ Flutter Demon (`fdemon`) is a high-performance terminal user interface (TUI) for
 ## Build Commands
 
 ```bash
-cargo build            # Build the project
-cargo test             # Run all tests
-cargo test --lib       # Run unit tests only
-cargo test log_view    # Run tests matching pattern
-cargo fmt              # Format code
-cargo clippy           # Run lints
+# Workspace commands
+cargo build --workspace        # Build all crates
+cargo test --workspace         # Test all crates
+cargo test --lib               # Unit tests only
+cargo fmt --all                # Format all crates
+cargo clippy --workspace       # Lint all crates
+
+# Per-crate commands
+cargo check -p fdemon-core     # Check specific crate
+cargo test -p fdemon-app       # Test specific crate
 ```
 
 Run the binary: `cargo run -- /path/to/flutter/project` or `cargo run` from a Flutter project directory.
 
 ## Architecture
 
-The project follows **The Elm Architecture (TEA)** pattern with a layered architecture:
+The project follows **The Elm Architecture (TEA)** pattern with a **Cargo workspace** structure:
 
 ```
-Binary (main.rs) → CLI, project discovery
-       ↓
-App Layer (app/) → TEA state management, Message handling
-       ↓
-┌──────────────┬──────────────┬──────────────┐
-│ TUI (tui/)   │ Daemon       │ Core (core/) │
-│ Terminal UI  │ (daemon/)    │ Domain types │
-│ Widgets      │ Flutter I/O  │ Discovery    │
-└──────────────┴──────────────┴──────────────┘
+┌─────────────────────────────────────────────────┐
+│         flutter-demon (binary crate)            │
+│         CLI + headless mode                     │
+└──────────────┬──────────────────────────────────┘
+               │
+       ┌───────┴────────┐
+       ▼                ▼
+┌─────────────┐  ┌─────────────┐
+│ fdemon-tui  │  │ fdemon-app  │
+│ Terminal UI │  │ Engine, TEA │
+└──────┬──────┘  └──────┬──────┘
+       │                │
+       │         ┌──────┴──────┐
+       │         ▼             ▼
+       │  ┌─────────────┐ ┌─────────────┐
+       │  │fdemon-daemon│ │ fdemon-core │
+       │  │Flutter I/O  │ │Domain types │
+       │  └──────┬──────┘ └─────────────┘
+       │         │
+       └─────────┘
 ```
 
-### Key Modules
+### Workspace Crates
 
-- **`app/`**: TEA implementation - `AppState` (model), `Message` (events), `handler::update()` (state transitions)
-- **`tui/`**: Ratatui-based terminal UI with widgets in `tui/widgets/`
-- **`daemon/`**: Flutter process management, JSON-RPC protocol parsing (`--machine` mode)
-- **`core/`**: Domain types (`LogEntry`, `LogLevel`, `AppPhase`), project discovery
-- **`config/`**: Configuration loading from `.fdemon/config.toml`, `.fdemon/launch.toml`, and `.vscode/launch.json`
-- **`services/`**: Abstraction layer (`FlutterController`, `LogService`) for future MCP server integration
-- **`watcher/`**: File system monitoring for auto hot reload
+- **`fdemon-core`** (`crates/fdemon-core/`): Domain types (`LogEntry`, `LogLevel`, `AppPhase`), project discovery, error handling. **Zero internal dependencies.**
+- **`fdemon-daemon`** (`crates/fdemon-daemon/`): Flutter process management, JSON-RPC protocol parsing (`--machine` mode), device/emulator discovery. Depends on `fdemon-core`.
+- **`fdemon-app`** (`crates/fdemon-app/`): TEA implementation - `AppState` (model), `Message` (events), `handler::update()` (state transitions), Engine orchestration, services, config, watcher. Depends on `fdemon-core` + `fdemon-daemon`.
+- **`fdemon-tui`** (`crates/fdemon-tui/`): Ratatui-based terminal UI with widgets. Depends on `fdemon-core` + `fdemon-app`.
+- **`flutter-demon`** (binary): CLI parsing, project discovery, headless mode. Depends on all 4 crates.
 
 ### Data Flow
 
@@ -60,9 +73,13 @@ App Layer (app/) → TEA state management, Message handling
 
 Unit tests use inline `#[cfg(test)] mod tests` or separate `tests.rs` files for larger suites:
 
-- `src/app/handler/tests.rs` - Handler/state transition tests
-- `src/tui/widgets/log_view/tests.rs` - Widget rendering tests
-- `tests/` directory - Integration tests
+- `crates/fdemon-core/src/` - 243 unit tests
+- `crates/fdemon-daemon/src/` - 136 unit tests
+- `crates/fdemon-app/src/handler/tests.rs` - 726 unit tests (state transitions)
+- `crates/fdemon-tui/src/widgets/` - 427 unit tests (rendering)
+- `tests/` directory - Integration tests (binary crate)
+
+Total: 1,532 unit tests across 4 crates
 
 ## Configuration
 
@@ -72,7 +89,10 @@ Unit tests use inline `#[cfg(test)] mod tests` or separate `tests.rs` files for 
 
 ## Key Patterns
 
-- **Custom errors**: `common/error.rs` defines `Error` enum with `fatal` vs `recoverable` classification
-- **Request tracking**: `daemon/commands.rs` tracks JSON-RPC request/response pairs via `RequestTracker`
-- **Log parsing**: `daemon/protocol.rs` parses Flutter's `--machine` JSON-RPC output
-- **Stack trace detection**: `core/stack_trace.rs` parses and renders collapsible stack traces
+- **Workspace structure**: 4 library crates with compile-time enforced layer boundaries
+- **Custom errors**: `fdemon-core/error.rs` defines `Error` enum with `fatal` vs `recoverable` classification
+- **Request tracking**: `fdemon-daemon/commands.rs` tracks JSON-RPC request/response pairs via `RequestTracker`
+- **Log parsing**: `fdemon-daemon/protocol.rs` parses Flutter's `--machine` JSON-RPC output
+- **Stack trace detection**: `fdemon-core/stack_trace.rs` parses and renders collapsible stack traces
+- **Engine abstraction**: `fdemon-app/engine.rs` provides shared orchestration for TUI and headless modes
+- **Service layer**: `fdemon-app/services/` provides trait-based abstractions for external consumers

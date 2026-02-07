@@ -4,10 +4,10 @@
 
 use crate::e2e::mock_daemon::MockFlutterDaemon;
 use crate::{android_emulator, test_app_state};
-use flutter_demon::app::handler::update;
-use flutter_demon::app::message::Message;
-use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::{DaemonCommand, DaemonMessage};
+use fdemon_app::handler::update;
+use fdemon_app::message::Message;
+use fdemon_core::DaemonEvent;
+use fdemon_daemon::{DaemonCommand, DaemonMessage};
 
 // ─────────────────────────────────────────────────────────
 // Hot Reload Command Tests

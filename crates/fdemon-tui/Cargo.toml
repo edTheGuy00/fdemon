@@ -1,0 +1,20 @@
+[package]
+name = "fdemon-tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Terminal UI for Flutter Demon"
+
+[dependencies]
+fdemon-core.workspace = true
+fdemon-app.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+insta.workspace = true
+fdemon-daemon.workspace = true

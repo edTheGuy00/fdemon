@@ -1,0 +1,31 @@
+[package]
+name = "fdemon-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Application state and orchestration for Flutter Demon"
+
+[dependencies]
+fdemon-core.workspace = true
+fdemon-daemon.workspace = true
+tokio.workspace = true
+crossterm.workspace = true
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
+regex.workspace = true
+rand.workspace = true
+color-eyre.workspace = true
+toml.workspace = true
+dirs.workspace = true
+fs2.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+trait-variant.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test.workspace = true
+mockall.workspace = true

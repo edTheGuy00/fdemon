@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
-use flutter_demon::core::{discover_flutter_projects, ProjectType, DEFAULT_MAX_DEPTH};
+use fdemon_core::{discover_flutter_projects, ProjectType, DEFAULT_MAX_DEPTH};
 
 /// Helper to create a runnable Flutter application structure
 fn create_flutter_app(path: &Path, name: &str) {

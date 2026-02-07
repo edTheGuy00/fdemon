@@ -184,3 +184,57 @@ cargo test
 - `engine.rs` is the key file - it imports from `services`, `watcher`, `config`, `core`, and `daemon`. All become either `crate::` (for things in fdemon-app) or `fdemon_core::`/`fdemon_daemon::`.
 - After this task, `fdemon-app` is the hub crate that glues core + daemon together with state management and orchestration.
 - The `app/mod.rs` in the new crate should NOT contain the `run()` / `run_with_project()` functions (removed in task 02).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/lib.rs` | Created with module declarations and primary type re-exports |
+| `crates/fdemon-app/src/actions.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/engine.rs` | Moved from `src/app/`, imports updated to fdemon_core/fdemon_daemon |
+| `crates/fdemon-app/src/engine_event.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/state.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/message.rs` | Moved from `src/app/`, crossterm KeyEvent kept as-is |
+| `crates/fdemon-app/src/session.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/session_manager.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/process.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/spawn.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/signals.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/editor.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/log_view_state.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/hyperlinks.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/confirm_dialog.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/settings_items.rs` | Moved from `src/app/`, imports updated |
+| `crates/fdemon-app/src/handler/` | All 12+ handler files moved, `crate::app::` → `crate::` |
+| `crates/fdemon-app/src/new_session_dialog/` | All 6 dialog files moved, imports updated |
+| `crates/fdemon-app/src/config/` | All 7 config files moved from `src/config/` |
+| `crates/fdemon-app/src/services/` | All 4 service files moved from `src/services/` |
+| `crates/fdemon-app/src/watcher/mod.rs` | Moved from `src/watcher/mod.rs` (no import changes needed) |
+| `src/app/mod.rs` | Replaced with `pub use fdemon_app::*` shim |
+| `src/config/mod.rs` | Replaced with `pub use fdemon_app::config::*` shim |
+| `src/services/mod.rs` | Replaced with `pub use fdemon_app::services::*` shim |
+| `src/watcher/mod.rs` | Replaced with `pub use fdemon_app::watcher::*` shim |
+
+### Notable Decisions/Tradeoffs
+
+1. **Visibility change**: `TargetSelectorState.cached_flat_list` changed from `pub(crate)` to `pub` to allow cross-crate access from TUI widget tests. This is acceptable since the field was already accessible within the old single-crate structure.
+
+2. **50+ file import rewrite**: All imports were updated file-by-file using targeted Edit operations (no sed/regex) to avoid corrupting non-import code. The `crate::app::` prefix was stripped (now crate root), while `crate::common::`/`crate::core::` became `fdemon_core::` and `crate::daemon::` became `fdemon_daemon::`.
+
+3. **Backward compatibility shims**: Created 4 re-export shims in the root crate so that TUI (still in the root crate at this point) could continue compiling via `use crate::app::*`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo check` (full workspace) - Passed
+- `cargo test --lib` - Passed (433 tests, later 1,532 after all crates extracted)
+
+### Risks/Limitations
+
+1. **Largest extraction**: This was the most complex task with ~50 files across 4 source directories. The first automated attempt (using sed) corrupted files and had to be redone with targeted Edit operations.

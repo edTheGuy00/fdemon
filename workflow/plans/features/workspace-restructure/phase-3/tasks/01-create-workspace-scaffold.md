@@ -273,3 +273,51 @@ cargo check -p fdemon-tui
 - The root `Cargo.toml` needs both the workspace definition AND the binary/lib sections during the transition.
 - `fdemon-tui` has `fdemon-daemon` as a **dev-dependency** only (for test utilities like `Device` construction in tests).
 - `crossterm` is a dependency of `fdemon-app` because `Message::Key(KeyEvent)` uses `crossterm::event::KeyEvent`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | Transformed from single-crate to workspace root. Added `[workspace]` section with member crates and shared dependencies. Kept existing `[package]`, `[[bin]]`, and `[lib]` sections for backward compatibility during transition. |
+| `crates/fdemon-core/Cargo.toml` | **NEW** - Core domain types crate configuration with dependencies on serde, chrono, thiserror, tracing, regex, dirs. |
+| `crates/fdemon-core/src/lib.rs` | **NEW** - Empty placeholder with module documentation. |
+| `crates/fdemon-daemon/Cargo.toml` | **NEW** - Flutter process management crate with dependencies on fdemon-core, tokio, serde, tracing, regex. |
+| `crates/fdemon-daemon/src/lib.rs` | **NEW** - Empty placeholder with module documentation. |
+| `crates/fdemon-app/Cargo.toml` | **NEW** - Application orchestration crate with dependencies on fdemon-core, fdemon-daemon, and full app stack (tokio, crossterm, config, file watching). |
+| `crates/fdemon-app/src/lib.rs` | **NEW** - Empty placeholder with module documentation. |
+| `crates/fdemon-tui/Cargo.toml` | **NEW** - Terminal UI crate with dependencies on fdemon-core, fdemon-app, ratatui, crossterm. Dev-dependency on fdemon-daemon for test utilities. |
+| `crates/fdemon-tui/src/lib.rs` | **NEW** - Empty placeholder with module documentation. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Workspace dependencies centralized**: All external dependencies are declared in `[workspace.dependencies]` to ensure version consistency across crates and simplify future updates.
+
+2. **Root package kept during transition**: The root `Cargo.toml` maintains both workspace configuration AND the existing package/lib/bin sections. This allows the binary to continue functioning while source code is migrated in later tasks (03-07).
+
+3. **Full dependency list in root**: Root package temporarily declares all existing dependencies to maintain backward compatibility. These will be removed as source code moves to the workspace crates.
+
+4. **Clean build required**: After transformation, a `cargo clean` was necessary to resolve stale build artifacts. Subsequent builds compile successfully.
+
+### Testing Performed
+
+- `cargo check` - **PASSED** (all workspace crates + root binary compile)
+- `cargo check -p fdemon-core` - **PASSED**
+- `cargo check -p fdemon-daemon` - **PASSED**
+- `cargo check -p fdemon-app` - **PASSED**
+- `cargo check -p fdemon-tui` - **PASSED**
+- `cargo test --lib` - **PASSED** (1538 tests, 8 ignored)
+- `cargo fmt --check` - **PASSED** (no formatting issues)
+
+### Risks/Limitations
+
+1. **Build cache sensitivity**: Initial `cargo check` after transformation failed due to stale build artifacts. Running `cargo clean` resolved this. Future developers should be aware that a clean build may be necessary after pulling this change.
+
+2. **Transition state complexity**: The root `Cargo.toml` is temporarily complex, containing both workspace configuration and legacy package configuration. This is intentional and documented in the task notes, but could confuse contributors who aren't aware of the phased migration plan.
+
+3. **No functional changes**: All existing functionality remains in `src/`, and the new workspace crates are empty scaffolds. This task only establishes structure for future migration.

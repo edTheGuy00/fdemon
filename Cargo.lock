@@ -641,6 +641,79 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "fdemon-app"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "color-eyre",
+ "crossterm",
+ "dirs",
+ "fdemon-core",
+ "fdemon-daemon",
+ "fs2",
+ "mockall",
+ "notify",
+ "notify-debouncer-full",
+ "rand",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tokio",
+ "tokio-test",
+ "toml",
+ "tracing",
+ "trait-variant",
+]
+
+[[package]]
+name = "fdemon-core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dirs",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.17",
+ "tracing",
+ "tracing-appender",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fdemon-daemon"
+version = "0.1.0"
+dependencies = [
+ "fdemon-core",
+ "regex",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tokio-test",
+ "tracing",
+]
+
+[[package]]
+name = "fdemon-tui"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "crossterm",
+ "fdemon-app",
+ "fdemon-core",
+ "fdemon-daemon",
+ "insta",
+ "ratatui",
+ "tempfile",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "file-id"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -697,29 +770,21 @@ dependencies = [
  "chrono",
  "clap",
  "color-eyre",
- "crossterm",
- "dirs",
  "expectrl",
- "fs2",
+ "fdemon-app",
+ "fdemon-core",
+ "fdemon-daemon",
+ "fdemon-tui",
  "insta",
  "mockall",
- "notify",
- "notify-debouncer-full",
- "rand",
- "ratatui",
  "regex",
  "serde",
  "serde_json",
  "serial_test",
  "tempfile",
- "thiserror 2.0.17",
  "tokio",
  "tokio-test",
- "toml",
  "tracing",
- "tracing-appender",
- "tracing-subscriber",
- "trait-variant",
 ]
 
 [[package]]

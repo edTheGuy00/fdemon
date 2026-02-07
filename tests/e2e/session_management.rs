@@ -4,13 +4,13 @@
 
 use super::mock_daemon::MockScenarioBuilder;
 use crate::{test_app_state, test_device};
-use flutter_demon::app::handler::update;
-use flutter_demon::app::message::Message;
-use flutter_demon::app::session::Session;
-use flutter_demon::app::SessionManager;
-use flutter_demon::core::AppPhase;
-use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::DaemonCommand;
+use fdemon_app::handler::update;
+use fdemon_app::message::Message;
+use fdemon_app::session::Session;
+use fdemon_app::SessionManager;
+use fdemon_core::AppPhase;
+use fdemon_core::DaemonEvent;
+use fdemon_daemon::DaemonCommand;
 
 // ─────────────────────────────────────────────────────────
 // Session Creation Tests
@@ -172,7 +172,7 @@ fn test_session_logs_accumulate() {
         device.emulator,
     );
 
-    use flutter_demon::core::{LogEntry, LogLevel, LogSource};
+    use fdemon_core::{LogEntry, LogLevel, LogSource};
 
     session.add_log(LogEntry::new(LogLevel::Info, LogSource::Flutter, "Log 1"));
     session.add_log(LogEntry::new(LogLevel::Info, LogSource::Flutter, "Log 2"));
@@ -364,7 +364,7 @@ fn test_operations_on_empty_session_manager() {
     manager.select_by_index(5);
 
     // Remove non-existent should return None
-    let fake_id = flutter_demon::app::session::next_session_id();
+    let fake_id = fdemon_app::session::next_session_id();
     assert!(manager.remove_session(fake_id).is_none());
 }
 

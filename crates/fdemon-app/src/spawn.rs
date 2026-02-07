@@ -1,0 +1,396 @@
+//! Background task spawning for async operations
+//!
+//! Contains functions that spawn background tokio tasks for:
+//! - Device discovery
+//! - Emulator discovery and launch
+//! - iOS Simulator launch
+//! - Auto-launch device discovery and selection
+
+use std::path::{Path, PathBuf};
+use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
+
+use crate::config::{
+    get_first_auto_start, get_first_config, load_last_selection, validate_last_selection,
+    LoadedConfigs,
+};
+use crate::message::{AutoLaunchSuccess, Message};
+use fdemon_daemon::{devices, emulators, Device, ToolAvailability};
+
+/// Spawn device discovery in background (foreground mode - shows errors to user)
+pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        match devices::discover_devices().await {
+            Ok(result) => {
+                let _ = msg_tx
+                    .send(Message::DevicesDiscovered {
+                        devices: result.devices,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceDiscoveryFailed {
+                        error: e.to_string(),
+                        is_background: false,
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn device discovery in background (background mode - errors logged only)
+/// Used when refreshing device cache while user already has cached devices to select from
+pub fn spawn_device_discovery_background(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        match devices::discover_devices().await {
+            Ok(result) => {
+                let _ = msg_tx
+                    .send(Message::DevicesDiscovered {
+                        devices: result.devices,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceDiscoveryFailed {
+                        error: e.to_string(),
+                        is_background: true,
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn emulator discovery in background
+pub fn spawn_emulator_discovery(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        match emulators::discover_emulators().await {
+            Ok(result) => {
+                let _ = msg_tx
+                    .send(Message::EmulatorsDiscovered {
+                        emulators: result.emulators,
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::EmulatorDiscoveryFailed {
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn emulator launch in background
+pub fn spawn_emulator_launch(msg_tx: mpsc::Sender<Message>, emulator_id: String) {
+    tokio::spawn(async move {
+        match emulators::launch_emulator(&emulator_id).await {
+            Ok(result) => {
+                let _ = msg_tx.send(Message::EmulatorLaunched { result }).await;
+            }
+            Err(e) => {
+                // Create a failed result
+                let result = emulators::EmulatorLaunchResult {
+                    success: false,
+                    emulator_id,
+                    message: Some(e.to_string()),
+                    elapsed: std::time::Duration::from_secs(0),
+                };
+                let _ = msg_tx.send(Message::EmulatorLaunched { result }).await;
+            }
+        }
+    });
+}
+
+/// Spawn iOS Simulator launch in background (macOS only)
+pub fn spawn_ios_simulator_launch(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        match emulators::launch_ios_simulator().await {
+            Ok(result) => {
+                let _ = msg_tx.send(Message::EmulatorLaunched { result }).await;
+            }
+            Err(e) => {
+                let result = emulators::EmulatorLaunchResult {
+                    success: false,
+                    emulator_id: "apple_ios_simulator".to_string(),
+                    message: Some(e.to_string()),
+                    elapsed: std::time::Duration::from_secs(0),
+                };
+                let _ = msg_tx.send(Message::EmulatorLaunched { result }).await;
+            }
+        }
+    });
+}
+
+/// Spawn auto-launch task for device discovery and session launch
+///
+/// Discovers devices, validates last selection or finds auto-start config,
+/// and sends result back via message channel.
+pub fn spawn_auto_launch(
+    msg_tx: mpsc::Sender<Message>,
+    configs: LoadedConfigs,
+    project_path: PathBuf,
+) {
+    tokio::spawn(async move {
+        // Step 1: Update progress
+        let _ = msg_tx
+            .send(Message::AutoLaunchProgress {
+                message: "Detecting devices...".to_string(),
+            })
+            .await;
+
+        // Step 2: Discover devices
+        let discovery_result = devices::discover_devices().await;
+
+        let devices = match discovery_result {
+            Ok(result) => {
+                // Update device cache for future dialogs (Phase 3, Task 01)
+                let _ = msg_tx
+                    .send(Message::DevicesDiscovered {
+                        devices: result.devices.clone(),
+                    })
+                    .await;
+
+                result.devices
+            }
+            Err(e) => {
+                // Send error result with helpful context
+                let error_msg = format!(
+                    "Device discovery failed: {}. Check Flutter SDK installation.",
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::AutoLaunchResult {
+                        result: Err(error_msg),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        if devices.is_empty() {
+            let _ = msg_tx
+                .send(Message::AutoLaunchResult {
+                    result: Err(
+                        "No devices found. Connect a device or start an emulator.".to_string()
+                    ),
+                })
+                .await;
+            return;
+        }
+
+        // Step 3: Update progress
+        let _ = msg_tx
+            .send(Message::AutoLaunchProgress {
+                message: "Preparing launch...".to_string(),
+            })
+            .await;
+
+        // Step 4: Try to find best device/config combination
+        let success = find_auto_launch_target(&configs, &devices, &project_path);
+
+        // Step 5: Send result
+        let _ = msg_tx
+            .send(Message::AutoLaunchResult {
+                result: Ok(success),
+            })
+            .await;
+    });
+}
+
+/// Find the best device/config combination for auto-launch
+fn find_auto_launch_target(
+    configs: &LoadedConfigs,
+    devices: &[Device],
+    project_path: &Path,
+) -> AutoLaunchSuccess {
+    // Priority 1: Check settings.local.toml for saved selection
+    if let Some(selection) = load_last_selection(project_path) {
+        if let Some(validated) = validate_last_selection(&selection, configs, devices) {
+            let config = validated.config_idx.and_then(|i| configs.configs.get(i));
+            if let Some(device) = validated.device_idx.and_then(|i| devices.get(i)) {
+                return AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: config.map(|c| c.config.clone()),
+                };
+            } else {
+                tracing::warn!(
+                    "Saved device index {} not found in {} available devices, falling back to Priority 2",
+                    validated.device_idx.unwrap_or(0),
+                    devices.len()
+                );
+            }
+        } else {
+            tracing::debug!("Saved selection validation failed, falling back to Priority 2");
+        }
+    }
+
+    // Priority 2: Find auto_start config or first config
+    let config = get_first_auto_start(configs).or_else(|| get_first_config(configs));
+
+    if let Some(sourced) = config {
+        // Find matching device
+        let device = if sourced.config.device == "auto" {
+            devices.first()
+        } else {
+            let found = devices::find_device(devices, &sourced.config.device);
+            if found.is_none() {
+                tracing::warn!(
+                    "Configured device '{}' not found, falling back to first available device",
+                    sourced.config.device
+                );
+            }
+            found.or_else(|| devices.first())
+        };
+
+        if let Some(device) = device {
+            return AutoLaunchSuccess {
+                device: device.clone(),
+                config: Some(sourced.config.clone()),
+            };
+        }
+    }
+
+    // Priority 3: Bare run with first device
+    AutoLaunchSuccess {
+        device: devices
+            .first()
+            .expect("devices non-empty; checked at spawn_auto_launch line 137")
+            .clone(),
+        config: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_find_auto_launch_target_uses_first_device() {
+        let configs = LoadedConfigs::default();
+        let devices = vec![Device {
+            id: "device1".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            emulator_id: None,
+            ephemeral: false,
+            category: None,
+            platform_type: None,
+        }];
+        let project_path = Path::new("/tmp/test");
+
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        assert_eq!(result.device.id, "device1");
+        assert!(result.config.is_none()); // No configs = bare run
+    }
+
+    #[test]
+    fn test_tool_check_timeout_is_reasonable() {
+        // Verify timeout is set to a reasonable value (10 seconds)
+        assert_eq!(TOOL_CHECK_TIMEOUT.as_secs(), 10);
+    }
+}
+
+/// Timeout for tool availability checks
+const TOOL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Spawn tool availability check in background (Phase 4, Task 05)
+pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        let availability = match timeout(TOOL_CHECK_TIMEOUT, ToolAvailability::check()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "Tool availability check timed out after {:?}, assuming no tools available",
+                    TOOL_CHECK_TIMEOUT
+                );
+                ToolAvailability::default()
+            }
+        };
+
+        let _ = msg_tx
+            .send(Message::ToolAvailabilityChecked { availability })
+            .await;
+    });
+}
+
+/// Spawn bootable device discovery in background (Phase 4, Task 05)
+pub fn spawn_bootable_device_discovery(
+    msg_tx: mpsc::Sender<Message>,
+    tool_availability: ToolAvailability,
+) {
+    tokio::spawn(async move {
+        // Discover iOS simulators and Android AVDs in parallel
+        let (ios_result, android_result) = tokio::join!(
+            fdemon_daemon::list_ios_simulators(),
+            fdemon_daemon::list_android_avds(&tool_availability)
+        );
+
+        let ios_simulators = ios_result.unwrap_or_default();
+        let android_avds = android_result.unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::BootableDevicesDiscovered {
+                ios_simulators,
+                android_avds,
+            })
+            .await;
+    });
+}
+
+/// Spawn device boot in background (Phase 4, Task 05)
+pub fn spawn_device_boot(
+    msg_tx: mpsc::Sender<Message>,
+    device_id: String,
+    platform: fdemon_core::Platform,
+    tool_availability: ToolAvailability,
+) {
+    tokio::spawn(async move {
+        use fdemon_core::Platform;
+        let result = match platform {
+            Platform::IOS => fdemon_daemon::boot_simulator(&device_id).await,
+            Platform::Android => fdemon_daemon::boot_avd(&device_id, &tool_availability).await,
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootCompleted {
+                        device_id: device_id.clone(),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootFailed {
+                        device_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn entry point discovery in background (Phase 3, Task 09)
+pub fn spawn_entry_point_discovery(msg_tx: mpsc::Sender<Message>, project_path: PathBuf) {
+    tokio::spawn(async move {
+        // Use spawn_blocking since discover_entry_points is sync I/O
+        let entry_points = tokio::task::spawn_blocking(move || {
+            fdemon_core::discovery::discover_entry_points(&project_path)
+        })
+        .await
+        .unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::EntryPointsDiscovered { entry_points })
+            .await;
+    });
+}

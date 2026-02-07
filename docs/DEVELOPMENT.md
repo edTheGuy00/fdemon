@@ -5,41 +5,52 @@ This document provides the development workflow, build commands, and tooling inf
 ## Build System
 
 **Language:** Rust
-**Build Tool:** Cargo
+**Build Tool:** Cargo (workspace with 4 library crates + 1 binary)
 **Minimum Rust Version:** 1.70+
 
-### Commands
+### Workspace Structure
+
+Flutter Demon is organized as a Cargo workspace:
+- **fdemon-core** — Domain types (zero internal deps)
+- **fdemon-daemon** — Flutter process management
+- **fdemon-app** — Application state and orchestration
+- **fdemon-tui** — Terminal UI
+- **flutter-demon** — Binary crate (main.rs + headless mode)
+
+### Build Commands
 
 | Command | Purpose |
 |---------|---------|
-| `cargo build` | Build the project |
+| `cargo build` | Build all crates and binary |
 | `cargo build --release` | Build optimized release binary |
-| `cargo run` | Run the application |
-| `cargo run -- <args>` | Run with arguments |
+| `cargo build -p fdemon-core` | Build specific crate only |
+| `cargo run` | Run the binary application |
+| `cargo run -- <args>` | Run binary with arguments |
 
 ### Verification Commands
 
 Run these commands before committing changes:
 
 ```bash
-cargo fmt              # Format code
-cargo check            # Fast compilation check
-cargo test             # Run all tests
-cargo clippy           # Run lints
+cargo fmt --all              # Format all crates
+cargo check --workspace      # Check all crates compile
+cargo test --workspace       # Test all crates
+cargo clippy --workspace     # Lint all crates
 ```
 
-**Full verification:**
+**Full verification (quality gate):**
 
 ```bash
-cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings
+cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings
 ```
 
 ### Test Commands
 
 | Command | Purpose |
 |---------|---------|
-| `cargo test` | Run all tests |
-| `cargo test --lib` | Run unit tests only |
+| `cargo test --workspace` | Run all tests in all crates |
+| `cargo test --lib` | Run unit tests only (all crates) |
+| `cargo test -p fdemon-core` | Test specific crate only |
 | `cargo test <pattern>` | Run tests matching pattern |
 | `cargo test -- --nocapture` | Show println! output |
 | `cargo nextest run --test e2e` | Run E2E tests with retry (requires nextest) |
@@ -48,6 +59,24 @@ cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings
 **Install cargo-nextest for enhanced testing with automatic retry:**
 ```bash
 cargo install cargo-nextest --locked
+```
+
+### Per-Crate Commands
+
+Test crate isolation:
+
+```bash
+# Check each crate builds independently
+cargo check -p fdemon-core
+cargo check -p fdemon-daemon
+cargo check -p fdemon-app
+cargo check -p fdemon-tui
+
+# Test each crate independently
+cargo test -p fdemon-core
+cargo test -p fdemon-daemon
+cargo test -p fdemon-app
+cargo test -p fdemon-tui
 ```
 
 ## File Extensions

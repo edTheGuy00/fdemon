@@ -1,16 +1,18 @@
 //! Flutter Demon - A high-performance TUI for Flutter development
 //!
-//! This is the binary entry point. All logic lives in the library.
+//! This is the binary entry point.
+
+mod headless;
 
 use std::path::PathBuf;
 
 use clap::Parser;
-use flutter_demon::common::prelude::*;
-use flutter_demon::core::{
+use fdemon_core::prelude::*;
+use fdemon_core::{
     discover_flutter_projects, get_project_type, is_runnable_flutter_project, ProjectType,
     DEFAULT_MAX_DEPTH,
 };
-use flutter_demon::tui::{select_project, SelectionResult};
+use fdemon_tui::{select_project, SelectionResult};
 
 /// Flutter Demon - A high-performance TUI for Flutter development
 #[derive(Parser, Debug)]
@@ -28,6 +30,16 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize error handling (must happen once at binary startup)
+    color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
+
+    // Initialize logging (to file, since TUI owns stdout)
+    fdemon_core::logging::init()?;
+
+    info!("═══════════════════════════════════════════════════════");
+    info!("Flutter Demon starting");
+    info!("═══════════════════════════════════════════════════════");
+
     let args = Args::parse();
 
     // Get base path from args or use current directory
@@ -37,10 +49,11 @@ async fn main() -> Result<()> {
 
     // Step 1: Check if base_path is directly a runnable Flutter project
     if is_runnable_flutter_project(&base_path) {
+        info!("Project path: {}", base_path.display());
         return if args.headless {
-            flutter_demon::run_headless(&base_path).await
+            headless::runner::run_headless(&base_path).await
         } else {
-            flutter_demon::run_with_project(&base_path).await
+            fdemon_tui::run_with_project(&base_path).await
         };
     }
 
@@ -107,10 +120,11 @@ async fn main() -> Result<()> {
             // Exactly one runnable project found - auto-select
             let project = &discovery.projects[0];
             eprintln!("✅ Found Flutter project: {}", project.display());
+            info!("Project path: {}", project.display());
             if args.headless {
-                flutter_demon::run_headless(project).await
+                headless::runner::run_headless(project).await
             } else {
-                flutter_demon::run_with_project(project).await
+                fdemon_tui::run_with_project(project).await
             }
         }
         _ => {
@@ -122,11 +136,13 @@ async fn main() -> Result<()> {
                     "Multiple projects found, using first: {}",
                     project.display()
                 );
-                flutter_demon::run_headless(project).await
+                info!("Project path: {}", project.display());
+                headless::runner::run_headless(project).await
             } else {
                 match select_project(&discovery.projects, &discovery.searched_from)? {
                     SelectionResult::Selected(project) => {
-                        flutter_demon::run_with_project(&project).await
+                        info!("Project path: {}", project.display());
+                        fdemon_tui::run_with_project(&project).await
                     }
                     SelectionResult::Cancelled => {
                         eprintln!("Selection cancelled.");

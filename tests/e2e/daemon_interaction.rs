@@ -3,8 +3,8 @@
 //! Tests for daemon connection, disconnection, and device discovery.
 
 use super::mock_daemon::{MockFlutterDaemon, MockScenarioBuilder};
-use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::{DaemonCommand, DaemonMessage};
+use fdemon_core::DaemonEvent;
+use fdemon_daemon::{DaemonCommand, DaemonMessage};
 
 // ─────────────────────────────────────────────────────────
 // Daemon Connection Tests

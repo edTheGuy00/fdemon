@@ -234,27 +234,41 @@ This provides:
 
 ### Layered Architecture
 
-Each layer has clear responsibilities and dependencies flow downward:
+The workspace crates enforce clean layer boundaries with **compile-time guarantees**:
 
-| Layer | Responsibility | Dependencies |
+| Crate | Responsibility | Dependencies |
 |-------|----------------|--------------|
-| **Binary** | CLI, entry point | All |
-| **App** | State, orchestration, TEA, action dispatch | Core, Daemon, Config, Services, Watcher, Common |
-| **Services** | Reusable controllers | Core, Daemon, Common |
-| **TUI** | Presentation | Core, Daemon, Config, App, Common |
-| **Headless** | NDJSON event output | Core, Daemon, Config, App, Common |
-| **Daemon** | Flutter process I/O | Core |
-| **Config** | Configuration parsing | Common |
-| **Watcher** | File system watching | None (emits WatcherEvent) |
-| **Core** | Domain types, events | None |
-| **Common** | Utilities, error types | None |
+| **flutter-demon (binary)** | CLI, entry point, headless mode | fdemon-core, fdemon-daemon, fdemon-app, fdemon-tui |
+| **fdemon-tui** | Terminal UI presentation | fdemon-core, fdemon-app |
+| **fdemon-app** | State, orchestration, TEA, Engine, services, config, watcher | fdemon-core, fdemon-daemon |
+| **fdemon-daemon** | Flutter process I/O, device/emulator management | fdemon-core |
+| **fdemon-core** | Domain types, events, discovery, error handling | **None** (zero internal deps) |
+
+**Dependency Flow:**
+```
+fdemon-core (foundation)
+    ↓
+fdemon-daemon (Flutter I/O)
+    ↓
+fdemon-app (orchestration)
+    ↓
+fdemon-tui (presentation)
+    ↓
+flutter-demon (binary)
+```
 
 ### Layer Dependencies Note
 
-The TUI layer depends on App because of the TEA pattern:
+The TUI crate depends on App because of the TEA pattern:
 - **View** (`tui::render`) must receive **Model** (`AppState`) to render it
 - This is the fundamental TEA contract: `View: State → UI`
 - The dependency is intentional and necessary, not a violation
+
+**Workspace Benefits:**
+- **Compile-time enforcement**: Cargo prevents circular dependencies and violations
+- **Independent testing**: Each crate can be tested in isolation
+- **Clear boundaries**: Module structure matches crate boundaries
+- **Future extensibility**: Crates can be published, reused, or replaced independently
 
 ### Error Handling
 
@@ -267,126 +281,180 @@ The TUI layer depends on App because of the TEA pattern:
 
 ## Project Structure
 
+Flutter Demon is organized as a **Cargo workspace** with 4 library crates and 1 binary:
+
 ```
-src/
-├── main.rs              # Binary entry point, CLI handling
-├── lib.rs               # Library public API
+flutter-demon/
+├── Cargo.toml                    # Workspace root + binary configuration
+├── src/
+│   ├── main.rs                   # Binary entry point, CLI handling
+│   └── headless/                 # Headless NDJSON mode
+│       ├── mod.rs                # HeadlessEvent types
+│       └── runner.rs             # Headless runner (uses Engine)
 │
-├── common/              # Shared utilities (no dependencies)
-│   ├── error.rs         # Error types and Result alias
-│   ├── logging.rs       # File-based logging setup
-│   └── prelude.rs       # Common imports
+├── crates/
+│   ├── fdemon-core/              # Domain types (zero internal deps)
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── types.rs          # LogEntry, LogLevel, AppPhase
+│   │       ├── events.rs         # DaemonMessage, DaemonEvent + 9 event structs
+│   │       ├── discovery.rs      # Flutter project detection
+│   │       ├── stack_trace.rs    # Stack trace parsing
+│   │       ├── ansi.rs           # ANSI escape sequence handling
+│   │       ├── error.rs          # Error types and Result alias
+│   │       ├── logging.rs        # File-based logging setup
+│   │       └── prelude.rs        # Common imports
+│   │
+│   ├── fdemon-daemon/            # Flutter process management
+│   │   ├── Cargo.toml            # depends: fdemon-core
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── process.rs        # FlutterProcess spawning/lifecycle
+│   │       ├── protocol.rs       # DaemonMessage::parse() implementation
+│   │       ├── commands.rs       # Command sending with request tracking
+│   │       ├── devices.rs        # Device discovery
+│   │       ├── emulators.rs      # Emulator discovery and launch
+│   │       ├── avds.rs           # Android AVD utilities
+│   │       ├── simulators.rs     # iOS simulator utilities
+│   │       ├── tool_availability.rs  # Tool detection
+│   │       └── test_utils.rs     # Test helpers
+│   │
+│   ├── fdemon-app/               # Application state and orchestration
+│   │   ├── Cargo.toml            # depends: fdemon-core, fdemon-daemon
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── engine.rs         # Engine - shared orchestration core
+│   │       ├── engine_event.rs   # EngineEvent - domain events
+│   │       ├── state.rs          # AppState (the Model)
+│   │       ├── message.rs        # Message enum (all events)
+│   │       ├── signals.rs        # SIGINT/SIGTERM handling
+│   │       ├── handler/          # TEA update function + helpers
+│   │       ├── session.rs        # Per-device session state
+│   │       ├── session_manager.rs  # Multi-session coordination
+│   │       ├── watcher.rs        # File system watching
+│   │       ├── config/           # Configuration parsing
+│   │       │   ├── types.rs      # LaunchConfig, Settings types
+│   │       │   ├── settings.rs   # .fdemon/config.toml loader
+│   │       │   ├── launch.rs     # .fdemon/launch.toml loader
+│   │       │   └── vscode.rs     # .vscode/launch.json compatibility
+│   │       ├── services/         # Reusable service layer
+│   │       │   ├── flutter_controller.rs  # Reload/restart operations
+│   │       │   ├── log_service.rs         # Log buffer access
+│   │       │   └── state_service.rs       # Shared state management
+│   │       ├── editor.rs         # Editor integration
+│   │       ├── settings_items.rs # Setting item generators
+│   │       ├── log_view_state.rs # Scroll/viewport state
+│   │       ├── hyperlinks.rs     # Link detection and state
+│   │       ├── confirm_dialog.rs # Dialog state
+│   │       └── new_session_dialog/  # New session dialog state
+│   │           ├── state.rs
+│   │           ├── fuzzy.rs
+│   │           ├── target_selector_state.rs
+│   │           └── device_groups.rs
+│   │
+│   └── fdemon-tui/               # Terminal UI (Ratatui)
+│       ├── Cargo.toml            # depends: fdemon-core, fdemon-app
+│       └── src/
+│           ├── lib.rs
+│           ├── runner.rs         # TUI runner (creates Engine)
+│           ├── startup.rs        # TUI-specific startup
+│           ├── render/           # State → UI rendering
+│           │   ├── mod.rs
+│           │   └── tests.rs
+│           ├── layout.rs         # Layout calculations
+│           ├── event.rs          # Terminal event handling
+│           ├── terminal.rs       # Terminal setup/restore
+│           ├── selector.rs       # Project selection UI
+│           ├── test_utils.rs     # TestTerminal wrapper
+│           └── widgets/          # Reusable UI components
+│               ├── header.rs
+│               ├── tabs.rs
+│               ├── log_view/     # Scrollable log display
+│               │   ├── mod.rs
+│               │   ├── styles.rs
+│               │   └── tests.rs
+│               ├── status_bar.rs
+│               ├── device_selector.rs
+│               ├── settings_panel/
+│               │   ├── mod.rs
+│               │   └── styles.rs
+│               ├── confirm_dialog.rs
+│               └── new_session_dialog/
+│                   ├── mod.rs
+│                   └── target_selector.rs
 │
-├── core/                # Domain types (pure business logic)
-│   ├── types.rs         # LogEntry, LogLevel, AppPhase
-│   ├── events.rs        # DaemonMessage, DaemonEvent + 9 event structs
-│   ├── discovery.rs     # Flutter project detection
-│   ├── stack_trace.rs   # Stack trace parsing
-│   └── ansi.rs          # ANSI escape sequence handling
-│
-├── config/              # Configuration parsing
-│   ├── types.rs         # LaunchConfig, Settings types
-│   ├── settings.rs      # .fdemon/config.toml loader
-│   ├── launch.rs        # .fdemon/launch.toml loader
-│   └── vscode.rs        # .vscode/launch.json compatibility
-│
-├── daemon/              # Flutter process management
-│   ├── process.rs       # FlutterProcess spawning/lifecycle
-│   ├── protocol.rs      # DaemonMessage::parse() implementation
-│   ├── commands.rs      # Command sending with request tracking
-│   ├── devices.rs       # Device discovery
-│   └── emulators.rs     # Emulator discovery and launch
-│
-├── watcher/             # File system watching
-│   └── mod.rs           # FileWatcher emitting WatcherEvent
-│
-├── services/            # Reusable service layer
-│   ├── flutter_controller.rs  # Reload/restart operations
-│   ├── log_service.rs         # Log buffer access
-│   └── state_service.rs       # Shared state management
-│
-├── app/                 # Application layer (TEA)
-│   ├── mod.rs           # Entry point, tui::run_with_project call
-│   ├── state.rs         # AppState (the Model)
-│   ├── message.rs       # Message enum (all events)
-│   ├── signals.rs       # SIGINT/SIGTERM handling (moved from common/)
-│   ├── process.rs       # TEA message processing loop (moved from tui/)
-│   ├── actions.rs       # Action dispatch, SessionTaskMap (moved from tui/)
-│   ├── spawn.rs         # Session spawning logic (moved from tui/)
-│   ├── editor.rs        # Editor integration (moved from tui/)
-│   ├── settings_items.rs  # Setting item generators (moved from tui/)
-│   ├── log_view_state.rs  # Scroll/viewport state (moved from tui/)
-│   ├── hyperlinks.rs    # Link detection and state (moved from tui/)
-│   ├── confirm_dialog.rs  # Dialog state (moved from tui/)
-│   ├── handler/         # TEA update function + helpers
-│   ├── session.rs       # Per-device session state
-│   ├── session_manager.rs  # Multi-session coordination
-│   └── new_session_dialog/
-│       ├── state.rs
-│       ├── fuzzy.rs     # Fuzzy filtering (moved from tui/)
-│       ├── target_selector_state.rs  # Target selector state (moved from tui/)
-│       └── device_groups.rs  # Device grouping (moved from tui/)
-│
-├── tui/                 # Terminal UI (ratatui)
-│   ├── mod.rs           # Main event loop
-│   ├── render/          # State → UI rendering
-│   │   ├── mod.rs
-│   │   └── tests.rs
-│   ├── layout.rs        # Layout calculations
-│   ├── event.rs         # Terminal event handling
-│   ├── terminal.rs      # Terminal setup/restore
-│   ├── selector.rs      # Project selection UI
-│   ├── test_utils.rs    # TestTerminal wrapper
-│   └── widgets/         # Reusable UI components
-│       ├── header.rs
-│       ├── tabs.rs
-│       ├── log_view/    # Scrollable log display
-│       │   ├── mod.rs
-│       │   ├── styles.rs
-│       │   └── tests.rs
-│       ├── status_bar.rs
-│       ├── device_selector.rs
-│       ├── settings_panel/
-│       │   ├── mod.rs
-│       │   └── styles.rs
-│       ├── confirm_dialog.rs
-│       └── new_session_dialog/
-│           ├── mod.rs
-│           └── target_selector.rs
-│
-└── headless/            # NDJSON event output (no tui dependency)
-    └── mod.rs
+└── tests/                        # Integration tests (binary crate)
+    ├── common/
+    └── e2e/
 ```
 
 ---
 
 ## Module Reference
 
-### `common/` — Shared Utilities
+### `fdemon-core` — Domain Types (Foundation Crate)
 
-Infrastructure code with no domain dependencies.
-
-| File | Purpose |
-|------|---------|
-| `error.rs` | Custom `Error` enum with variants for each error category. Includes `Result<T>` alias and `ResultExt` trait for error context. |
-| `logging.rs` | Sets up file-based logging via `tracing` (stdout is owned by TUI). |
-| `prelude.rs` | Re-exports common types (`Result`, `Error`, tracing macros). |
-
-### `core/` — Domain Types
-
-Pure business logic types with no external dependencies.
+**Location**: `crates/fdemon-core/`
+**Dependencies**: Zero internal dependencies (only external crates)
+**Purpose**: Pure business logic types with no infrastructure dependencies
 
 | File | Purpose |
 |------|---------|
 | `types.rs` | `AppPhase`, `LogEntry`, `LogLevel`, `LogSource` — core domain types. |
-| `events.rs` | `DaemonMessage`, `DaemonEvent`, and all 9 event structs (`AppStart`, `AppLog`, `DeviceInfo`, etc.) — events from the Flutter process (moved from daemon/). |
+| `events.rs` | `DaemonMessage`, `DaemonEvent`, and all 9 event structs (`AppStart`, `AppLog`, `DeviceInfo`, etc.) — events from the Flutter process. |
 | `discovery.rs` | Flutter project detection: `is_runnable_flutter_project()`, `discover_flutter_projects()`, `ProjectType` enum. |
 | `stack_trace.rs` | Stack trace parsing and rendering. |
 | `ansi.rs` | ANSI escape sequence handling. |
+| `error.rs` | Custom `Error` enum with variants for each error category. Includes `Result<T>` alias and `ResultExt` trait for error context. |
+| `logging.rs` | Sets up file-based logging via `tracing` (stdout is owned by TUI). |
+| `prelude.rs` | Re-exports common types (`Result`, `Error`, tracing macros). |
 
-### `config/` — Configuration
+### `fdemon-daemon` — Flutter Process Infrastructure
 
-Handles loading and parsing configuration from multiple sources.
+**Location**: `crates/fdemon-daemon/`
+**Dependencies**: `fdemon-core`
+**Purpose**: Manages Flutter child processes and JSON-RPC communication
+
+| File | Purpose |
+|------|---------|
+| `process.rs` | `FlutterProcess` — spawns `flutter run --machine`, manages stdin/stdout/stderr streams. |
+| `protocol.rs` | `DaemonMessage::parse()` — converts JSON-RPC to typed events (event types in `fdemon-core`). |
+| `commands.rs` | `CommandSender`, `DaemonCommand`, `RequestTracker` — send commands with request ID tracking. |
+| `devices.rs` | `Device` type, `discover_devices()` — finds connected devices. |
+| `emulators.rs` | `Emulator` type, `discover_emulators()`, `launch_emulator()`. |
+| `avds.rs` | Android AVD utilities. |
+| `simulators.rs` | iOS simulator utilities. |
+| `tool_availability.rs` | Tool detection (Android SDK, iOS simulators). |
+| `test_utils.rs` | Test helpers for device/emulator testing. |
+
+**Key Protocol:**
+- Flutter's `--machine` flag outputs JSON-RPC over stdout
+- Messages wrapped in `[...]` brackets
+- Events: `daemon.connected`, `app.start`, `app.log`, `device.added`, etc.
+- Commands: `app.restart`, `app.stop`, `daemon.shutdown`, etc.
+
+### `fdemon-app` — Application State and Orchestration
+
+**Location**: `crates/fdemon-app/`
+**Dependencies**: `fdemon-core`, `fdemon-daemon`
+**Purpose**: TEA pattern implementation, Engine orchestration, services, config, watcher
+
+**Core Modules:**
+
+| File | Purpose |
+|------|---------|
+| `engine.rs` | `Engine` struct — shared orchestration core for TUI and headless runners. |
+| `engine_event.rs` | `EngineEvent` enum — domain events broadcast to external consumers. |
+| `state.rs` | `AppState` — complete application state (the Model). |
+| `message.rs` | `Message` enum — all possible events/actions. |
+| `signals.rs` | Signal handling for SIGINT/SIGTERM. |
+| `handler/` | `update()` function and handler helpers (TEA). |
+| `session.rs` | `Session`, `SessionHandle` — per-device session state. |
+| `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions. |
+| `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent`. |
+
+**Configuration (`config/`):**
 
 | File | Purpose |
 |------|---------|
@@ -400,119 +468,26 @@ Handles loading and parsing configuration from multiple sources.
 - `.fdemon/launch.toml` — Launch configurations (device, mode, flavor, etc.)
 - `.vscode/launch.json` — VSCode Dart launch configs (auto-converted)
 
-### `daemon/` — Flutter Process Infrastructure
+**Services (`services/`):**
 
-Manages Flutter child processes and JSON-RPC communication.
-
-| File | Purpose |
-|------|---------|
-| `process.rs` | `FlutterProcess` — spawns `flutter run --machine`, manages stdin/stdout/stderr streams. |
-| `protocol.rs` | `DaemonMessage::parse()` — converts JSON-RPC to typed events (event types now in `core/events.rs`). |
-| `commands.rs` | `CommandSender`, `DaemonCommand`, `RequestTracker` — send commands with request ID tracking. |
-| `devices.rs` | `Device` type, `discover_devices()` — finds connected devices. |
-| `emulators.rs` | `Emulator` type, `discover_emulators()`, `launch_emulator()`. |
-
-**Key Protocol:**
-- Flutter's `--machine` flag outputs JSON-RPC over stdout
-- Messages wrapped in `[...]` brackets
-- Events: `daemon.connected`, `app.start`, `app.log`, `device.added`, etc.
-- Commands: `app.restart`, `app.stop`, `daemon.shutdown`, etc.
-
-### `watcher/` — File System Watching
-
-Watches for Dart file changes to trigger auto-reload.
+The services layer provides trait-based abstractions for Flutter control operations, managed by the Engine.
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` (no longer depends on `app::Message`). |
+| `flutter_controller.rs` | `FlutterController` trait — `reload()`, `restart()`, `stop()`, `is_running()`. |
+| `log_service.rs` | `LogService` trait — log buffer access and filtering. |
+| `state_service.rs` | `SharedState` — thread-safe state with `Arc<RwLock<>>`. |
 
-**Configuration:**
-- Default watch path: `lib/`
-- Default debounce: 500ms
-- Default extensions: `.dart`
-
-### `services/` — Service Layer (Wired via Engine)
-
-The services layer provides trait-based abstractions for Flutter control operations. These are instantiated and managed by the Engine, providing a clean API for external consumers.
-
-**Architecture:**
-```
-┌─────────────┐     ┌─────────────┐
-│     TUI     │     │  MCP Server │  (future)
-└──────┬──────┘     └──────┬──────┘
-       │                   │
-       └─────────┬─────────┘
-                 │
-          ┌──────▼──────┐
-          │   Engine    │
-          │             │
-          │ • Services  │
-          │ • SharedState│
-          └──────┬──────┘
-                 │
-       ┌─────────┼─────────┐
-       ▼         ▼         ▼
-┌──────────┐ ┌────────┐ ┌──────────┐
-│ Flutter  │ │  Log   │ │  State   │
-│Controller│ │Service │ │ Service  │
-└──────────┘ └────────┘ └──────────┘
-```
-
-**Service Interfaces:**
-
-| Service | Purpose |
-|---------|---------|
-| `FlutterController` | Hot reload/restart operations via `CommandSender` |
-| `LogService` | Log buffer access and filtering via `SharedState` |
-| `StateService` | App run state access via `SharedState` |
-
-**Usage Example:**
-```rust
-// Get FlutterController for current session
-let controller = engine.flutter_controller().unwrap();
-controller.reload().await?;
-
-// Get LogService for log buffer access
-let logs = engine.log_service();
-let entries = logs.get_logs(100).await;
-
-// Get StateService for app state access
-let state_service = engine.state_service();
-let app_state = state_service.get_app_state().await;
-```
-
-**Implementation Details:**
+**UI State:**
 
 | File | Purpose |
 |------|---------|
-| `flutter_controller.rs` | `FlutterController` trait — `reload()`, `restart()`, `stop()`, `is_running()`. Implemented by `CommandSenderController`. |
-| `log_service.rs` | `LogService` trait — log buffer access and filtering. Implemented by `SharedLogService`. |
-| `state_service.rs` | `SharedState` — thread-safe state with `Arc<RwLock<>>`. Synchronized from `AppState` after each message. |
-
-### `app/` — Application Layer
-
-TEA pattern implementation — state management and orchestration.
-
-| File | Purpose |
-|------|---------|
-| `engine.rs` | `Engine` struct — shared orchestration core for TUI and headless runners. |
-| `engine_event.rs` | `EngineEvent` enum — domain events broadcast to external consumers. |
-| `state.rs` | `AppState` — complete application state (the Model). |
-| `message.rs` | `Message` enum — all possible events/actions. |
-| `signals.rs` | Signal handling for SIGINT/SIGTERM (moved from `common/`). |
-| `process.rs` | TEA message processing loop (moved from `tui/`). |
-| `actions.rs` | Action dispatch, `SessionTaskMap` (moved from `tui/`). |
-| `spawn.rs` | Session spawning logic (moved from `tui/`). |
-| `editor.rs` | `open_in_editor()` function (moved from `tui/`). |
-| `settings_items.rs` | Setting item generators: `project_settings_items()`, `user_prefs_items()`, etc. (moved from `tui/widgets/settings_panel/items.rs`). |
-| `log_view_state.rs` | `LogViewState`, scroll/viewport state (moved from `tui/widgets/log_view/`). |
-| `hyperlinks.rs` | `LinkHighlightState`, link detection (moved from `tui/`). |
-| `confirm_dialog.rs` | `ConfirmDialogState` (moved from `tui/widgets/confirm_dialog/`). |
-| `handler/` | `update()` function and handler helpers. |
-| `session.rs` | `Session`, `SessionHandle` — per-device session state. |
-| `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions. |
-| `new_session_dialog/` | New session dialog state and logic (fuzzy filtering, target selector, device groups). |
-| `mod.rs` | `run()`, `run_with_project()` — entry points that call `tui::run_with_project()`. |
+| `editor.rs` | `open_in_editor()` function for file navigation. |
+| `settings_items.rs` | Setting item generators for settings panel. |
+| `log_view_state.rs` | `LogViewState` — scroll/viewport state. |
+| `hyperlinks.rs` | `LinkHighlightState` — link detection and navigation. |
+| `confirm_dialog.rs` | `ConfirmDialogState` — confirmation dialog state. |
+| `new_session_dialog/` | New session dialog state (fuzzy filtering, target selector, device groups). |
 
 **Message Categories:**
 - Keyboard events (`Key`)
@@ -522,9 +497,11 @@ TEA pattern implementation — state management and orchestration.
 - Session management (`NextSession`, `CloseCurrentSession`)
 - Device/emulator management (`ShowDeviceSelector`, `LaunchEmulator`)
 
-### `tui/` — Terminal UI (Engine Consumer)
+### `fdemon-tui` — Terminal UI (Presentation Layer)
 
-Presentation layer using `ratatui` for rendering. The TUI runner creates an Engine and uses it for all state management and message processing.
+**Location**: `crates/fdemon-tui/`
+**Dependencies**: `fdemon-core`, `fdemon-app`
+**Purpose**: Presentation layer using `ratatui`. The TUI runner creates an Engine and uses it for all state management.
 
 **Key Architecture:**
 - **Runner** (`runner.rs`): Main entry point, creates Engine, runs event loop
@@ -534,8 +511,9 @@ Presentation layer using `ratatui` for rendering. The TUI runner creates an Engi
 
 | File | Purpose |
 |------|---------|
-| `runner.rs` | Main entry point, Engine creation, event loop (was `mod.rs`). |
-| `render/mod.rs` | State → UI rendering (was render.rs). |
+| `runner.rs` | Main entry point, Engine creation, event loop. |
+| `startup.rs` | TUI-specific startup logic. |
+| `render/mod.rs` | State → UI rendering. |
 | `render/tests.rs` | Full-screen snapshot and transition tests. |
 | `layout.rs` | Layout calculations for different UI modes. |
 | `event.rs` | Terminal event polling (keyboard, resize). |
@@ -547,25 +525,29 @@ Presentation layer using `ratatui` for rendering. The TUI runner creates an Engi
 
 | Widget | Purpose |
 |--------|---------|
-| `Header` | Application title bar with project name |
-| `SessionTabs` | Tab bar for multi-session navigation (1-9) |
-| `LogView` | Scrollable log display with syntax highlighting |
-| `StatusBar` | Bottom bar showing phase, device, reload count |
-| `DeviceSelector` | Modal for device/emulator selection |
+| `header.rs` | Application title bar with project name |
+| `tabs.rs` | Tab bar for multi-session navigation (1-9) |
+| `log_view/` | Scrollable log display with syntax highlighting |
+| `status_bar.rs` | Bottom bar showing phase, device, reload count |
+| `device_selector.rs` | Modal for device/emulator selection |
+| `settings_panel/` | Settings editor (project, user prefs, launch configs, VSCode) |
+| `confirm_dialog.rs` | Confirmation dialog widget |
+| `new_session_dialog/` | New session creation dialog |
 
-### `headless/` — NDJSON Event Output (Engine Consumer)
+### `flutter-demon` (Binary) — Headless Mode
+
+**Location**: `src/headless/`
+**Dependencies**: `fdemon-core`, `fdemon-daemon`, `fdemon-app`, `fdemon-tui`
+**Purpose**: Binary entry point, CLI parsing, headless NDJSON mode
+
+**Headless Mode:**
 
 Headless mode provides a non-TUI interface for E2E testing and automation. It creates an Engine and outputs structured NDJSON events to stdout.
-
-**Key Architecture:**
-- **Runner** (`runner.rs`): Main entry point, creates Engine, runs event loop
-- **Stdin Reader**: Reads commands from stdin (`r` = reload, `q` = quit)
-- **Event Emission**: Converts `AppState` changes to `HeadlessEvent` and emits NDJSON
 
 | File | Purpose |
 |------|---------|
 | `mod.rs` | `HeadlessEvent` enum and NDJSON serialization. |
-| `runner.rs` | Main entry point, Engine creation, stdin reader, event loop. |
+| `runner.rs` | Headless runner, Engine creation, stdin reader, event loop. |
 
 **HeadlessEvent Types:**
 - `DaemonConnected`, `DaemonDisconnected`
@@ -583,30 +565,38 @@ cargo run -- --headless /path/to/flutter/project > events.ndjson
 echo "r" | cargo run -- --headless /path/to/flutter/project
 ```
 
-### Restructuring Notes (Phase 1 & 2)
+### Restructuring Notes (Phases 1-3)
 
-Several types and functions were relocated to enforce clean layer boundaries:
+The project was incrementally restructured from a single-crate architecture to a workspace with 4 library crates:
 
 **Phase 1 (Clean Dependencies):**
-- **Event types** (`DaemonMessage`, event structs) moved from `daemon/` to `core/` — core is now a true leaf module with no dependencies
-- **State types** (`LogViewState`, `LinkHighlightState`, `ConfirmDialogState`) moved from `tui/` to `app/` — app no longer depends on tui for state
-- **Logic functions** (`process_message`, `handle_action`, `open_in_editor`, `fuzzy_filter`, setting item generators) moved from `tui/` to `app/` — headless no longer depends on tui
-- **Signal handler** moved from `common/` to `app/` — common is now a true leaf module
-- **File watcher** emits its own `WatcherEvent` instead of constructing `Message` — watcher is now independent of app
+- **Event types** (`DaemonMessage`, event structs) moved from `daemon/` to `core/` — core became a true leaf module with no dependencies
+- **State types** (`LogViewState`, `LinkHighlightState`, `ConfirmDialogState`) moved from `tui/` to `app/` — removed tui → app dependency inversion
+- **Logic functions** (`process_message`, `handle_action`, `open_in_editor`, `fuzzy_filter`, setting item generators) moved from `tui/` to `app/` — enabled headless mode without tui dependency
+- **Signal handler** moved from `common/` to `app/` — common became a true leaf module
+- **File watcher** emits its own `WatcherEvent` instead of constructing `Message` — watcher became independent of app
 
 **Phase 2 (Engine Abstraction):**
 - **Engine struct** (`app/engine.rs`) — encapsulates all shared state between TUI and headless runners
 - **EngineEvent enum** (`app/engine_event.rs`) — domain events for external consumers (future MCP server)
 - **TUI refactor** (`tui/runner.rs`) — uses Engine for all state management
 - **Headless refactor** (`headless/runner.rs`) — uses Engine for all state management
-- **Services wiring** — `FlutterController`, `LogService`, `StateService` now accessible via Engine
+- **Services wiring** — `FlutterController`, `LogService`, `StateService` accessible via Engine
 
-This restructuring enables:
-- Clean dependency flow (no circular dependencies)
-- Headless mode with zero TUI dependencies
-- Shared Engine abstraction for TUI and headless
-- Event broadcasting for pro feature consumers
-- Future workspace split (engine crate extraction)
+**Phase 3 (Workspace Split):**
+- **fdemon-core** — Created from `src/core/` + `src/common/` (243 unit tests)
+- **fdemon-daemon** — Created from `src/daemon/` (136 unit tests)
+- **fdemon-app** — Created from `src/app/`, `src/config/`, `src/services/`, `src/watcher/` (726 unit tests)
+- **fdemon-tui** — Created from `src/tui/` (427 unit tests)
+- **Binary** — `src/main.rs` + `src/headless/` depends on all 4 crates
+
+**Benefits:**
+- **Compile-time enforcement**: Cargo prevents circular dependencies and layer violations
+- **Independent testing**: Each crate can be tested in isolation (1,532 total unit tests)
+- **Clear boundaries**: Module structure matches crate boundaries
+- **Future extensibility**: Crates can be published, reused, or replaced independently
+- **Parallel compilation**: Cargo can build independent crates concurrently
+- **MCP readiness**: Event broadcasting and service layer ready for MCP server integration
 
 ---
 
@@ -980,17 +970,16 @@ cargo test test_hot_reload_flow
 
 ## Future Considerations
 
-1. **MCP Server** — Services layer and EngineEvent broadcasting designed for MCP (Model Context Protocol) integration. External consumers can subscribe to `engine.subscribe()` and use `engine.flutter_controller()`, `engine.log_service()`, and `engine.state_service()` for control operations.
+1. **MCP Server** — Services layer and EngineEvent broadcasting designed for MCP (Model Context Protocol) integration. External consumers can subscribe to `engine.subscribe()` and use `engine.flutter_controller()`, `engine.log_service()`, and `engine.state_service()` for control operations. The workspace structure enables a future `fdemon-mcp` crate that depends only on `fdemon-app`.
 
-2. **Workspace Split** — The Engine abstraction enables clean crate boundaries:
-   - `fdemon-core`: Domain types (no Engine dependency)
-   - `fdemon-daemon`: Flutter process management (no Engine dependency)
-   - `fdemon-app`: Engine + state + handlers + services
-   - `fdemon-tui`: TUI runner (creates Engine, adds terminal)
-   - `fdemon-headless`: Headless runner (creates Engine, adds NDJSON)
+2. **Crate Publishing** — The workspace structure enables independent crate publishing:
+   - `fdemon-core`: Reusable domain types for Flutter tooling
+   - `fdemon-daemon`: Reusable Flutter process management
+   - `fdemon-app`: Reusable Engine for custom Flutter frontends
+   - `fdemon-tui`: Reference TUI implementation
 
 3. **Plugin System** — Core/service separation enables plugin extensions. Plugins can subscribe to EngineEvents and access services via the Engine.
 
-4. **Remote Devices** — Device abstraction supports remote device connections. Future work could add SSH transport layer.
+4. **Remote Devices** — Device abstraction supports remote device connections. Future work could add SSH transport layer in `fdemon-daemon`.
 
-5. **Themes** — UI settings include theme configuration placeholder.
+5. **Themes** — UI settings include theme configuration placeholder in `fdemon-app`.

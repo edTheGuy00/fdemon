@@ -26,6 +26,7 @@ use std::io::{self, Write};
 /// Events emitted in headless mode
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "event", rename_all = "snake_case")]
+#[allow(dead_code)] // Future functionality - variants will be used when headless mode is fully implemented
 pub enum HeadlessEvent {
     /// Flutter daemon connected successfully
     DaemonConnected { device: String, timestamp: i64 },
@@ -102,6 +103,7 @@ pub enum HeadlessEvent {
     SessionRemoved { session_id: String, timestamp: i64 },
 }
 
+#[allow(dead_code)] // Future functionality - constructors will be used when headless mode is fully implemented
 impl HeadlessEvent {
     /// Emit this event to stdout as JSON
     pub fn emit(&self) {

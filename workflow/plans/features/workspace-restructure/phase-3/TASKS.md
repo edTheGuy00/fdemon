@@ -74,16 +74,16 @@ Wave 4 (final verification):
 
 | # | Task | Status | Depends On | Est. Hours | Key Modules |
 |---|------|--------|------------|------------|-------------|
-| 1 | [01-create-workspace-scaffold](tasks/01-create-workspace-scaffold.md) | Not Started | - | 2-3h | `Cargo.toml`, `crates/*/Cargo.toml` |
-| 2 | [02-decouple-app-from-tui-entry](tasks/02-decouple-app-from-tui-entry.md) | Not Started | - | 1-2h | `app/mod.rs`, `main.rs` |
-| 3 | [03-extract-fdemon-core](tasks/03-extract-fdemon-core.md) | Not Started | 1, 2 | 3-5h | `common/`, `core/` -> `crates/fdemon-core/` |
-| 4 | [04-extract-fdemon-daemon](tasks/04-extract-fdemon-daemon.md) | Not Started | 3 | 3-4h | `daemon/` -> `crates/fdemon-daemon/` |
-| 5 | [05-extract-fdemon-app](tasks/05-extract-fdemon-app.md) | Not Started | 4 | 5-7h | `app/`, `config/`, `services/`, `watcher/` -> `crates/fdemon-app/` |
-| 6 | [06-extract-fdemon-tui](tasks/06-extract-fdemon-tui.md) | Not Started | 5 | 3-5h | `tui/` -> `crates/fdemon-tui/` |
-| 7 | [07-update-binary-and-headless](tasks/07-update-binary-and-headless.md) | Not Started | 6 | 2-3h | `src/main.rs`, `headless/` |
-| 8 | [08-migrate-integration-tests](tasks/08-migrate-integration-tests.md) | Not Started | 7 | 2-3h | `tests/`, dev-dependencies |
-| 9 | [09-cleanup-re-exports-and-paths](tasks/09-cleanup-re-exports-and-paths.md) | Not Started | 8 | 2-3h | All `pub use` re-exports, visibility audit |
-| 10 | [10-verify-and-document](tasks/10-verify-and-document.md) | Not Started | 9 | 2-3h | `docs/ARCHITECTURE.md`, CI |
+| 1 | [01-create-workspace-scaffold](tasks/01-create-workspace-scaffold.md) | Done | - | 2-3h | `Cargo.toml`, `crates/*/Cargo.toml` |
+| 2 | [02-decouple-app-from-tui-entry](tasks/02-decouple-app-from-tui-entry.md) | Done | - | 1-2h | `app/mod.rs`, `main.rs` |
+| 3 | [03-extract-fdemon-core](tasks/03-extract-fdemon-core.md) | Done | 1, 2 | 3-5h | `common/`, `core/` -> `crates/fdemon-core/` |
+| 4 | [04-extract-fdemon-daemon](tasks/04-extract-fdemon-daemon.md) | Done | 3 | 3-4h | `daemon/` -> `crates/fdemon-daemon/` |
+| 5 | [05-extract-fdemon-app](tasks/05-extract-fdemon-app.md) | Done | 4 | 5-7h | `app/`, `config/`, `services/`, `watcher/` -> `crates/fdemon-app/` |
+| 6 | [06-extract-fdemon-tui](tasks/06-extract-fdemon-tui.md) | Done | 5 | 3-5h | `tui/` -> `crates/fdemon-tui/` |
+| 7 | [07-update-binary-and-headless](tasks/07-update-binary-and-headless.md) | Done | 6 | 2-3h | `src/main.rs`, `headless/` |
+| 8 | [08-migrate-integration-tests](tasks/08-migrate-integration-tests.md) | Done | 7 | 2-3h | `tests/`, dev-dependencies |
+| 9 | [09-cleanup-re-exports-and-paths](tasks/09-cleanup-re-exports-and-paths.md) | Done | 8 | 2-3h | All `pub use` re-exports, visibility audit |
+| 10 | [10-verify-and-document](tasks/10-verify-and-document.md) | Done | 9 | 2-3h | `docs/ARCHITECTURE.md`, CI |
 
 ## Success Criteria
 

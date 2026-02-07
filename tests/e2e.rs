@@ -14,8 +14,8 @@ mod e2e {
     mod tui_workflows;
 }
 
-use flutter_demon::app::state::AppState;
-use flutter_demon::daemon::Device;
+use fdemon_app::state::AppState;
+use fdemon_daemon::Device;
 
 // ─────────────────────────────────────────────────────────
 // Test Data Helpers
@@ -72,8 +72,8 @@ pub fn test_app_id() -> String {
 }
 
 /// Generate a unique session ID for testing
-pub fn test_session_id() -> flutter_demon::app::session::SessionId {
-    flutter_demon::app::session::next_session_id()
+pub fn test_session_id() -> fdemon_app::session::SessionId {
+    fdemon_app::session::next_session_id()
 }
 
 // ─────────────────────────────────────────────────────────
@@ -92,9 +92,9 @@ pub fn load_fixture(name: &str) -> String {
 }
 
 /// Load and parse a fixture as a DaemonMessage
-pub fn load_daemon_message(name: &str) -> flutter_demon::daemon::DaemonMessage {
+pub fn load_daemon_message(name: &str) -> fdemon_daemon::DaemonMessage {
     let json = load_fixture(name);
-    flutter_demon::daemon::DaemonMessage::parse(&json)
+    fdemon_daemon::DaemonMessage::parse(&json)
         .unwrap_or_else(|| panic!("Failed to parse fixture {} as DaemonMessage", name))
 }
 

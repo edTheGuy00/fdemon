@@ -158,3 +158,50 @@ cargo test
 - The `BootCommand` enum and `From<BootCommand> for BootableDevice` impl stay in `fdemon-daemon` since `BootCommand` wraps daemon-specific types (`IosSimulator`, `AndroidAvd`) and converts to core types.
 - `protocol.rs` has inline tests that use `DaemonMessage::parse()` - these should work after updating imports to `fdemon_core`.
 - The `LaunchConfig` decoupling is the trickiest part. Investigate `FlutterProcess::spawn()` signature carefully before deciding the approach.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/Cargo.toml` | Created new crate manifest with dependencies on fdemon-core and external crates |
+| `crates/fdemon-daemon/src/lib.rs` | Created library root with module declarations, public API re-exports, and BootCommand implementation |
+| `crates/fdemon-daemon/src/*.rs` | Copied all daemon source files and updated imports from `crate::common::prelude` to `fdemon_core::prelude` and from `crate::core` to `fdemon_core::events` |
+| `crates/fdemon-daemon/src/process.rs` | Refactored `spawn_with_config` to `spawn_with_args` - now accepts pre-built Vec<String> instead of LaunchConfig, eliminating circular dependency |
+| `crates/fdemon-daemon/src/commands.rs` | Changed `new_for_test()` visibility to `#[cfg(any(test, debug_assertions))]` for external test access |
+| `crates/fdemon-daemon/src/lib.rs` | Changed `test_utils` module visibility to `#[cfg(any(test, debug_assertions))]` for external test access |
+| `src/daemon/mod.rs` | Replaced with thin re-export shim: `pub use fdemon_daemon::*;` |
+| `src/app/actions.rs` | Updated `spawn_session` to build args from LaunchConfig and call `spawn_with_args` instead of `spawn_with_config` |
+| `src/app/process.rs` | Updated imports: moved `DaemonMessage` from `daemon` to `core` |
+| `src/app/handler/session.rs` | Updated imports: moved `DaemonMessage` from `daemon` to `core` |
+| `src/services/state_service.rs` | Updated test imports: moved `DaemonConnected` from `daemon` to `core` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Refactored spawn_with_config to spawn_with_args**: Instead of passing LaunchConfig directly (which would create a circular dependency), the daemon crate now accepts pre-built `Vec<String>` arguments. The conversion from `LaunchConfig` to args happens in the app layer via `config.build_flutter_args()`, maintaining clean layer separation.
+
+2. **Test utility visibility**: Changed test utilities (`new_for_test()`, `test_utils` module) from `#[cfg(test)]` to `#[cfg(any(test, debug_assertions))]` to allow external crates (like the main crate's tests) to access them in dev builds while excluding them from release builds.
+
+3. **DaemonMessage location**: Event types like `DaemonMessage`, `DaemonConnected`, etc. are now properly sourced from `fdemon_core::events` rather than being re-exported through the daemon crate, enforcing proper layer boundaries.
+
+4. **BootCommand stays in daemon**: The `BootCommand` enum and its conversion to `BootableDevice` remain in fdemon-daemon since it wraps daemon-specific types and provides the conversion logic to core types.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed (daemon crate compiles independently)
+- `cargo test -p fdemon-daemon` - Passed (136 tests)
+- `cargo check` - Passed (full workspace compiles)
+- `cargo test --lib` - Passed (1159 tests, 0 failed, 5 ignored)
+
+### Risks/Limitations
+
+1. **Test utility visibility**: Using `debug_assertions` instead of a proper feature flag means test utilities are available in all dev builds, not just test runs. This is acceptable for internal crates but should be noted for future refactoring.
+
+2. **spawn_with_config removed**: The old `spawn_with_config` method still exists in the moved file but is now named `spawn_with_args`. Any external code (scripts, docs) referencing the old name will need updates.
+
+3. **Re-export shim temporary**: The `src/daemon/mod.rs` shim is temporary and should be removed in task 07 when finalizing the workspace split.

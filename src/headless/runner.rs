@@ -8,22 +8,14 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use crate::app::message::Message;
-use crate::app::state::AppState;
-use crate::app::Engine;
-use crate::common::prelude::*;
-use crate::daemon::devices;
+use fdemon_app::{actions::handle_action, message::Message, state::AppState, Engine, UpdateAction};
+use fdemon_core::prelude::*;
+use fdemon_daemon::devices;
 
 use super::HeadlessEvent;
 
 /// Run in headless mode - output JSON events instead of TUI
 pub async fn run_headless(project_path: &Path) -> Result<()> {
-    // Initialize error handling
-    color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
-
-    // Initialize logging
-    crate::common::logging::init()?;
-
     info!("═══════════════════════════════════════════════════════");
     info!("Flutter Demon starting in HEADLESS mode");
     info!("Project: {}", project_path.display());
@@ -106,10 +98,10 @@ fn emit_post_message_events(state: &AppState) {
         for log in session.session.logs.iter().rev().take(1) {
             // Convert LogLevel to string
             let level_str = match log.level {
-                crate::core::LogLevel::Debug => "debug",
-                crate::core::LogLevel::Info => "info",
-                crate::core::LogLevel::Warning => "warning",
-                crate::core::LogLevel::Error => "error",
+                fdemon_core::LogLevel::Debug => "debug",
+                fdemon_core::LogLevel::Info => "info",
+                fdemon_core::LogLevel::Warning => "warning",
+                fdemon_core::LogLevel::Error => "error",
             };
             HeadlessEvent::log(
                 level_str,
@@ -174,9 +166,6 @@ fn spawn_stdin_reader_blocking(msg_tx: mpsc::Sender<Message>) {
 
 /// Auto-start in headless mode: discover devices and create session
 async fn headless_auto_start(engine: &mut Engine) {
-    use crate::app::actions::handle_action;
-    use crate::app::UpdateAction;
-
     // Discover devices
     info!("Discovering devices for headless auto-start...");
     match devices::discover_devices().await {

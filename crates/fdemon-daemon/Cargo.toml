@@ -1,0 +1,18 @@
+[package]
+name = "fdemon-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Flutter process management for Flutter Demon"
+
+[dependencies]
+fdemon-core.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+regex.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio-test.workspace = true

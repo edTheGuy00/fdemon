@@ -1,72 +1,101 @@
-[package]
-name = "flutter-demon"
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
-description = "A high-performance TUI for Flutter development"
 license = "BSL-1.1"
 
-# Separate library and binary
+[workspace.dependencies]
+# Internal crate dependencies
+fdemon-core = { path = "crates/fdemon-core" }
+fdemon-daemon = { path = "crates/fdemon-daemon" }
+fdemon-app = { path = "crates/fdemon-app" }
+fdemon-tui = { path = "crates/fdemon-tui" }
+
+# Shared external dependencies (deduplicate versions)
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
+tracing-appender = "0.2"
+thiserror = "2"
+regex = "1"
+color-eyre = "0.6"
+
+# TUI-specific
+ratatui = { version = "0.30", features = ["all-widgets"] }
+crossterm = "0.29"
+
+# Config
+toml = "0.8"
+dirs = "5"
+fs2 = "0.4"
+
+# Async
+trait-variant = "0.1"
+notify = "7"
+notify-debouncer-full = "0.4"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Misc
+rand = "0.8"
+
+# Dev
+tempfile = "3"
+tokio-test = "0.4"
+mockall = "0.13"
+serial_test = "3"
+expectrl = "0.7"
+insta = { version = "1.41", features = ["filters"] }
+
+# Root package (binary + lib during transition)
+[package]
+name = "flutter-demon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "A high-performance TUI for Flutter development"
+
+# The binary crate
 [[bin]]
 name = "fdemon"
 path = "src/main.rs"
 
-[lib]
-name = "flutter_demon"
-path = "src/lib.rs"
-
 [dependencies]
-# TUI Framework
-ratatui = { version = "0.30", features = ["all-widgets"] }
-crossterm = "0.29"
+# Internal workspace crates
+fdemon-core.workspace = true
+fdemon-daemon.workspace = true
+fdemon-app.workspace = true
+fdemon-tui.workspace = true
 
-# Async Runtime
-tokio = { version = "1", features = ["full"] }
+# CLI
+clap.workspace = true
 
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
+# Async
+tokio.workspace = true
 
-# Error Handling
-color-eyre = "0.6"
-thiserror = "2"
+# Error handling
+color-eyre.workspace = true
 
 # Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "chrono"] }
-tracing-appender = "0.2"
+tracing.workspace = true
 
-# Time handling
-chrono = { version = "0.4", features = ["serde"] }
-
-# CLI parsing
-clap = { version = "4", features = ["derive"] }
-
-# Utilities
-dirs = "5"
-regex = "1"
-rand = "0.8"
-
-# File watching
-notify = "7"
-notify-debouncer-full = "0.4"
-
-# Async trait helpers
-trait-variant = "0.1"
-
-# File locking
-fs2 = "0.4"
+# Headless mode dependencies
+chrono.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
-tokio-test = "0.4"
-tempfile = "3"
-
-# E2E Testing
-mockall = "0.13"
-serial_test = "3"
-
-# PTY-based TUI testing
-expectrl = "0.7"           # PTY spawn and interaction
-
-# Snapshot testing
-insta = { version = "1.41", features = ["filters"] }
+tempfile.workspace = true
+tokio-test.workspace = true
+mockall.workspace = true
+serial_test.workspace = true
+expectrl.workspace = true
+insta.workspace = true
+regex.workspace = true

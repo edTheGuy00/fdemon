@@ -137,3 +137,45 @@ cargo test
 - `discovery.rs` has tests using `tempfile` (dev-dependency). These should work as-is since `tempfile` is in `fdemon-core`'s `[dev-dependencies]`.
 - The `prelude` module provides `Error`, `Result`, `ResultExt`, and `tracing` macros. All other crates will use `use fdemon_core::prelude::*`.
 - Do NOT remove the original files from `src/common/` and `src/core/` in this task. Only add the re-export shims. The originals are deleted when no longer needed (cleanup in task 09).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/lib.rs` | Created with module declarations, prelude, and root-level re-exports |
+| `crates/fdemon-core/src/error.rs` | Moved from `src/common/error.rs`, updated internal imports |
+| `crates/fdemon-core/src/logging.rs` | Moved from `src/common/logging.rs`, updated internal imports |
+| `crates/fdemon-core/src/prelude.rs` | Created from `src/common/mod.rs` prelude |
+| `crates/fdemon-core/src/types.rs` | Moved from `src/core/types.rs`, updated internal imports |
+| `crates/fdemon-core/src/events.rs` | Moved from `src/core/events.rs`, plus `DaemonMessage` impl block and `LogEntryInfo` struct moved here from `src/daemon/protocol.rs` to resolve orphan rule |
+| `crates/fdemon-core/src/discovery.rs` | Moved from `src/core/discovery.rs`, fixed doctests |
+| `crates/fdemon-core/src/stack_trace.rs` | Moved from `src/core/stack_trace.rs`, updated imports |
+| `crates/fdemon-core/src/ansi.rs` | Moved from `src/core/ansi.rs`, fixed doctests |
+| `crates/fdemon-core/Cargo.toml` | Updated with required dependencies (serde, serde_json, etc.) |
+| `src/common/mod.rs` | Replaced with fdemon_core re-export shim |
+| `src/core/mod.rs` | Replaced with fdemon_core re-export shim |
+| `src/daemon/protocol.rs` | Removed `impl DaemonMessage` block and `LogEntryInfo` (moved to core) |
+| `src/daemon/mod.rs` | Updated re-exports to include `LogEntryInfo` from core |
+
+### Notable Decisions/Tradeoffs
+
+1. **Orphan rule resolution**: The `impl DaemonMessage` block with `parse()`, `to_log_entry()`, and `parse_flutter_log()` methods had to move from `src/daemon/protocol.rs` into `crates/fdemon-core/src/events.rs` because Rust's orphan rule prevents adding inherent methods to a type defined in another crate. The `LogEntryInfo` struct moved along with it.
+
+2. **serde_json dependency in core**: Added `serde_json` to fdemon-core because `DaemonMessage::parse()` (now in events.rs) requires JSON parsing. This is acceptable since event parsing is a core domain concern.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test -p fdemon-core` - Passed (243 tests)
+- `cargo test --lib` - Passed (1,295 tests across workspace)
+- `cargo clippy` - Passed
+
+### Risks/Limitations
+
+1. **Larger core crate**: Moving the parsing logic into fdemon-core makes it slightly larger than originally planned, but keeps the type and its methods together (Rust best practice).

@@ -1,0 +1,1648 @@
+//! Field widgets for the Launch Context pane
+//!
+//! This module provides individual field widgets used in the Launch Context pane:
+//! - LaunchContextStyles: Styling constants for all field widgets
+//! - DropdownField: Dropdown-style field that opens fuzzy modal
+//! - ModeSelector: Radio button group for Debug/Profile/Release
+//! - ActionField: Field that opens a modal (for Dart Defines)
+//! - LaunchButton: Launch button with focused/enabled states
+
+use fdemon_app::config::FlutterMode;
+use ratatui::{
+    buffer::Buffer,
+    layout::{Alignment, Constraint, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{BorderType, Paragraph, Widget},
+};
+
+/// Styles for Launch Context fields
+pub struct LaunchContextStyles {
+    pub label: Style,
+    pub value_normal: Style,
+    pub value_focused: Style,
+    pub value_disabled: Style,
+    pub placeholder: Style,
+    pub button_normal: Style,
+    pub button_focused: Style,
+    pub mode_selected: Style,
+    pub mode_unselected: Style,
+    pub suffix: Style,
+}
+
+impl Default for LaunchContextStyles {
+    fn default() -> Self {
+        Self {
+            label: Style::default().fg(Color::Gray),
+            value_normal: Style::default().fg(Color::White),
+            value_focused: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            value_disabled: Style::default().fg(Color::DarkGray),
+            placeholder: Style::default().fg(Color::DarkGray),
+            button_normal: Style::default().fg(Color::Green),
+            button_focused: Style::default()
+                .fg(Color::Black)
+                .bg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            mode_selected: Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+            mode_unselected: Style::default().fg(Color::DarkGray),
+            suffix: Style::default().fg(Color::DarkGray),
+        }
+    }
+}
+
+/// A dropdown-style field that opens a fuzzy modal
+pub struct DropdownField {
+    label: String,
+    value: String,
+    is_focused: bool,
+    is_disabled: bool,
+    suffix: Option<String>,
+    styles: LaunchContextStyles,
+}
+
+impl DropdownField {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            is_focused: false,
+            is_disabled: false,
+            suffix: None,
+            styles: LaunchContextStyles::default(),
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.is_focused = focused;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.is_disabled = disabled;
+        self
+    }
+
+    pub fn suffix(mut self, suffix: impl Into<String>) -> Self {
+        self.suffix = Some(suffix.into());
+        self
+    }
+}
+
+impl Widget for DropdownField {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        // Layout: label + value box
+        let chunks = Layout::horizontal([
+            Constraint::Length(15), // Label
+            Constraint::Min(20),    // Value
+        ])
+        .split(area);
+
+        // Render label
+        let label = Paragraph::new(format!("  {}:", self.label)).style(self.styles.label);
+        label.render(chunks[0], buf);
+
+        // Determine value style
+        let value_style = if self.is_disabled {
+            self.styles.value_disabled
+        } else if self.is_focused {
+            self.styles.value_focused
+        } else {
+            self.styles.value_normal
+        };
+
+        // Format value with dropdown indicator and suffix
+        let display_value = if self.value.is_empty() || self.value == "(none)" {
+            "(none)".to_string()
+        } else {
+            self.value.clone()
+        };
+
+        let dropdown_indicator = if self.is_disabled { " " } else { " ▼" };
+        let suffix_text = self.suffix.map(|s| format!("  {}", s)).unwrap_or_default();
+
+        let value_line = Line::from(vec![
+            Span::styled(format!("[ {}", display_value), value_style),
+            Span::styled(dropdown_indicator, value_style),
+            Span::styled(" ]", value_style),
+            Span::styled(suffix_text, self.styles.suffix),
+        ]);
+
+        Paragraph::new(value_line).render(chunks[1], buf);
+    }
+}
+
+/// Radio button group for Flutter mode selection
+pub struct ModeSelector {
+    selected: FlutterMode,
+    is_focused: bool,
+    is_disabled: bool,
+    styles: LaunchContextStyles,
+}
+
+impl ModeSelector {
+    pub fn new(selected: FlutterMode) -> Self {
+        Self {
+            selected,
+            is_focused: false,
+            is_disabled: false,
+            styles: LaunchContextStyles::default(),
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.is_focused = focused;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.is_disabled = disabled;
+        self
+    }
+
+    fn mode_style(&self, mode: FlutterMode) -> Style {
+        if self.is_disabled {
+            self.styles.value_disabled
+        } else if mode == self.selected && self.is_focused {
+            self.styles.value_focused
+        } else if mode == self.selected {
+            self.styles.mode_selected
+        } else {
+            self.styles.mode_unselected
+        }
+    }
+
+    fn mode_indicator(&self, mode: FlutterMode) -> &'static str {
+        if mode == self.selected {
+            "(●)"
+        } else {
+            "(○)"
+        }
+    }
+}
+
+impl Widget for ModeSelector {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let chunks = Layout::horizontal([
+            Constraint::Length(15), // Label
+            Constraint::Min(40),    // Radio buttons
+        ])
+        .split(area);
+
+        // Render label
+        let label = Paragraph::new("  Mode:").style(self.styles.label);
+        label.render(chunks[0], buf);
+
+        // Render radio buttons
+        let debug_style = self.mode_style(FlutterMode::Debug);
+        let profile_style = self.mode_style(FlutterMode::Profile);
+        let release_style = self.mode_style(FlutterMode::Release);
+
+        let line = Line::from(vec![
+            Span::styled(
+                format!("{} Debug", self.mode_indicator(FlutterMode::Debug)),
+                debug_style,
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} Profile", self.mode_indicator(FlutterMode::Profile)),
+                profile_style,
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{} Release", self.mode_indicator(FlutterMode::Release)),
+                release_style,
+            ),
+        ]);
+
+        Paragraph::new(line).render(chunks[1], buf);
+    }
+}
+
+/// A field that opens a modal when activated
+pub struct ActionField {
+    label: String,
+    value: String,
+    action_indicator: &'static str,
+    is_focused: bool,
+    is_disabled: bool,
+    styles: LaunchContextStyles,
+}
+
+impl ActionField {
+    pub fn new(label: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            value: value.into(),
+            action_indicator: "▶",
+            is_focused: false,
+            is_disabled: false,
+            styles: LaunchContextStyles::default(),
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.is_focused = focused;
+        self
+    }
+
+    pub fn disabled(mut self, disabled: bool) -> Self {
+        self.is_disabled = disabled;
+        self
+    }
+}
+
+impl Widget for ActionField {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let chunks = Layout::horizontal([
+            Constraint::Length(15), // Label
+            Constraint::Min(20),    // Value
+        ])
+        .split(area);
+
+        // Render label
+        let label = Paragraph::new(format!("  {}:", self.label)).style(self.styles.label);
+        label.render(chunks[0], buf);
+
+        // Determine value style
+        let value_style = if self.is_disabled {
+            self.styles.value_disabled
+        } else if self.is_focused {
+            self.styles.value_focused
+        } else {
+            self.styles.value_normal
+        };
+
+        let indicator = if self.is_disabled {
+            " "
+        } else {
+            self.action_indicator
+        };
+
+        let value_line = Line::from(vec![
+            Span::styled(format!("[ {} ", self.value), value_style),
+            Span::styled(indicator, value_style),
+            Span::styled(" ]", value_style),
+        ]);
+
+        Paragraph::new(value_line).render(chunks[1], buf);
+    }
+}
+
+/// The launch button at the bottom of Launch Context
+pub struct LaunchButton {
+    is_focused: bool,
+    is_enabled: bool,
+    styles: LaunchContextStyles,
+}
+
+impl LaunchButton {
+    pub fn new() -> Self {
+        Self {
+            is_focused: false,
+            is_enabled: true,
+            styles: LaunchContextStyles::default(),
+        }
+    }
+
+    pub fn focused(mut self, focused: bool) -> Self {
+        self.is_focused = focused;
+        self
+    }
+
+    pub fn enabled(mut self, enabled: bool) -> Self {
+        self.is_enabled = enabled;
+        self
+    }
+}
+
+impl Default for LaunchButton {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Widget for LaunchButton {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let style = if !self.is_enabled {
+            Style::default().fg(Color::DarkGray)
+        } else if self.is_focused {
+            self.styles.button_focused
+        } else {
+            self.styles.button_normal
+        };
+
+        let text = if self.is_enabled {
+            "    LAUNCH (Enter)    "
+        } else {
+            "    SELECT DEVICE     "
+        };
+
+        let button = Paragraph::new(format!("[{}]", text))
+            .style(style)
+            .alignment(Alignment::Center);
+
+        button.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn test_dropdown_field_renders() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = DropdownField::new("Config", "Development").focused(true);
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Config"));
+        assert!(content.contains("Development"));
+    }
+
+    #[test]
+    fn test_mode_selector_renders() {
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = ModeSelector::new(FlutterMode::Debug).focused(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Debug"));
+        assert!(content.contains("Profile"));
+        assert!(content.contains("Release"));
+    }
+
+    #[test]
+    fn test_launch_button_renders() {
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let button = LaunchButton::new().focused(true);
+                f.render_widget(button, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("LAUNCH"));
+    }
+
+    #[test]
+    fn test_disabled_field_styling() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = DropdownField::new("Flavor", "dev")
+                    .disabled(true)
+                    .suffix("(from config)");
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("from config"));
+    }
+
+    #[test]
+    fn test_action_field_renders() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = ActionField::new("Dart Defines", "2 defined").focused(true);
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Dart Defines"));
+        assert!(content.contains("2 defined"));
+    }
+
+    #[test]
+    fn test_dropdown_field_none_value() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = DropdownField::new("Config", "");
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("(none)"));
+    }
+
+    #[test]
+    fn test_mode_selector_indicators() {
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = ModeSelector::new(FlutterMode::Profile);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check for filled/empty radio button indicators
+        assert!(content.contains("(○)") || content.contains("(●)"));
+    }
+
+    #[test]
+    fn test_launch_button_disabled_text() {
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let button = LaunchButton::new().enabled(false);
+                f.render_widget(button, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("SELECT DEVICE"));
+    }
+
+    #[test]
+    fn test_dropdown_field_disabled_no_indicator() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = DropdownField::new("Config", "test").disabled(true);
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Disabled field should not have dropdown indicator
+        // Just check that content renders without panic
+        assert!(content.contains("Config"));
+    }
+
+    #[test]
+    fn test_action_field_disabled_no_indicator() {
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let field = ActionField::new("Defines", "none").disabled(true);
+                f.render_widget(field, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Disabled field should not have action indicator
+        assert!(content.contains("Defines"));
+    }
+}
+
+// ============================================================================
+// Main LaunchContext Widget
+// ============================================================================
+
+use super::state::LaunchContextState;
+use fdemon_app::config::ConfigSource;
+use ratatui::widgets::{Block, Borders};
+
+// ============================================================================
+// Shared Helper Functions
+// ============================================================================
+
+/// Check if a field should show "(from config)" suffix
+fn should_show_disabled_suffix(
+    state: &LaunchContextState,
+    field: super::state::LaunchContextField,
+) -> bool {
+    !state.is_field_editable(field)
+        && matches!(state.selected_config_source(), Some(ConfigSource::VSCode))
+}
+
+/// Render the configuration dropdown field
+fn render_config_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let config_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::Config;
+    let config_field =
+        DropdownField::new("Configuration", state.config_display()).focused(config_focused);
+    config_field.render(area, buf);
+}
+
+/// Render the mode selector (Debug/Profile/Release radio buttons)
+fn render_mode_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let mode_focused = is_focused && state.focused_field == super::state::LaunchContextField::Mode;
+    let mode_disabled = !state.is_mode_editable();
+    let mode_selector = ModeSelector::new(state.mode)
+        .focused(mode_focused)
+        .disabled(mode_disabled);
+    mode_selector.render(area, buf);
+}
+
+/// Render the flavor dropdown field
+fn render_flavor_field(area: Rect, buf: &mut Buffer, state: &LaunchContextState, is_focused: bool) {
+    let flavor_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::Flavor;
+    let flavor_disabled = !state.is_flavor_editable();
+    let flavor_suffix =
+        if should_show_disabled_suffix(state, super::state::LaunchContextField::Flavor) {
+            Some("(from config)")
+        } else {
+            None
+        };
+    let mut flavor_field =
+        DropdownField::new("Flavor", state.flavor_display()).focused(flavor_focused);
+    flavor_field = flavor_field.disabled(flavor_disabled);
+    if let Some(suffix) = flavor_suffix {
+        flavor_field = flavor_field.suffix(suffix);
+    }
+    flavor_field.render(area, buf);
+}
+
+/// Render the entry point dropdown field
+fn render_entry_point_field(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    let entry_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::EntryPoint;
+    let entry_disabled = !state.is_entry_point_editable();
+
+    let display = state.entry_point_display();
+
+    let suffix = if should_show_disabled_suffix(state, super::state::LaunchContextField::EntryPoint)
+    {
+        Some("(from config)")
+    } else {
+        None
+    };
+
+    let mut field = DropdownField::new("Entry Point", display)
+        .focused(entry_focused)
+        .disabled(entry_disabled);
+
+    if let Some(s) = suffix {
+        field = field.suffix(s);
+    }
+
+    field.render(area, buf);
+}
+
+/// Render the dart defines action field
+fn render_dart_defines_field(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    let defines_focused =
+        is_focused && state.focused_field == super::state::LaunchContextField::DartDefines;
+    let defines_disabled = !state.are_dart_defines_editable();
+    let defines_field = ActionField::new("Dart Defines", state.dart_defines_display())
+        .focused(defines_focused)
+        .disabled(defines_disabled);
+    defines_field.render(area, buf);
+}
+
+/// Calculate the layout for all fields
+fn calculate_fields_layout(inner: Rect) -> [Rect; 13] {
+    let chunks = Layout::vertical([
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Config field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Mode field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Flavor field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Entry Point field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Dart Defines field
+        Constraint::Length(1), // Spacer
+        Constraint::Length(1), // Launch button
+        Constraint::Min(0),    // Rest (empty)
+    ])
+    .split(inner);
+
+    [
+        chunks[0], chunks[1], chunks[2], chunks[3], chunks[4], chunks[5], chunks[6], chunks[7],
+        chunks[8], chunks[9], chunks[10], chunks[11], chunks[12],
+    ]
+}
+
+/// Render the border block and return the inner area
+fn render_border(area: Rect, buf: &mut Buffer, is_focused: bool) -> Rect {
+    let border_color = if is_focused {
+        Color::Cyan
+    } else {
+        Color::DarkGray
+    };
+
+    let block = Block::default()
+        .title(" Launch Context ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color));
+
+    let inner = block.inner(area);
+    block.render(area, buf);
+    inner
+}
+
+/// Render all common fields (config, mode, flavor, entry point, dart defines)
+fn render_common_fields(
+    chunks: &[Rect; 13],
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    render_config_field(chunks[1], buf, state, is_focused);
+    render_mode_field(chunks[3], buf, state, is_focused);
+    render_flavor_field(chunks[5], buf, state, is_focused);
+    render_entry_point_field(chunks[7], buf, state, is_focused);
+    render_dart_defines_field(chunks[9], buf, state, is_focused);
+}
+
+// ============================================================================
+// LaunchContext Widget
+// ============================================================================
+
+/// The Launch Context widget (right pane of NewSessionDialog)
+pub struct LaunchContext<'a> {
+    state: &'a LaunchContextState,
+    is_focused: bool,
+}
+
+impl<'a> LaunchContext<'a> {
+    pub fn new(state: &'a LaunchContextState, is_focused: bool) -> Self {
+        Self { state, is_focused }
+    }
+
+    /// Calculate minimum height needed
+    pub fn min_height() -> u16 {
+        14 // 1 border + 12 content + 1 border
+    }
+}
+
+impl Widget for LaunchContext<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        let inner = render_border(area, buf, self.is_focused);
+        let chunks = calculate_fields_layout(inner);
+
+        render_common_fields(&chunks, buf, self.state, self.is_focused);
+
+        // Render Launch button
+        let launch_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
+        let launch_button = LaunchButton::new().focused(launch_focused);
+        launch_button.render(chunks[11], buf);
+    }
+}
+
+// ============================================================================
+// LaunchContextWithDevice Widget
+// ============================================================================
+
+/// Launch Context with device selection awareness
+pub struct LaunchContextWithDevice<'a> {
+    state: &'a LaunchContextState,
+    is_focused: bool,
+    has_device_selected: bool,
+    compact: bool,
+}
+
+impl<'a> LaunchContextWithDevice<'a> {
+    pub fn new(state: &'a LaunchContextState, is_focused: bool, has_device_selected: bool) -> Self {
+        Self {
+            state,
+            is_focused,
+            has_device_selected,
+            compact: false,
+        }
+    }
+
+    /// Enable compact mode for narrow terminals
+    pub fn compact(mut self, compact: bool) -> Self {
+        self.compact = compact;
+        self
+    }
+}
+
+impl Widget for LaunchContextWithDevice<'_> {
+    fn render(self, area: Rect, buf: &mut Buffer) {
+        if self.compact {
+            self.render_compact(area, buf);
+        } else {
+            self.render_full(area, buf);
+        }
+    }
+}
+
+impl LaunchContextWithDevice<'_> {
+    /// Render full (horizontal layout) mode
+    fn render_full(&self, area: Rect, buf: &mut Buffer) {
+        let inner = render_border(area, buf, self.is_focused);
+        let chunks = calculate_fields_layout(inner);
+
+        render_common_fields(&chunks, buf, self.state, self.is_focused);
+
+        // Render Launch button with device awareness
+        let launch_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
+        let launch_button = LaunchButton::new()
+            .focused(launch_focused)
+            .enabled(self.has_device_selected);
+        launch_button.render(chunks[11], buf);
+    }
+
+    /// Render compact (vertical layout) mode - with border, tighter spacing, inline mode selector
+    fn render_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Add border with title
+        let border_style = if self.is_focused {
+            Style::default().fg(Color::Cyan)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+
+        let block = Block::default()
+            .title(" Launch Context ")
+            .borders(Borders::ALL)
+            .border_type(BorderType::Plain)
+            .border_style(border_style);
+
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        // Compact layout: fewer spacers, inline mode
+        let chunks = Layout::vertical([
+            Constraint::Length(1), // Config field
+            Constraint::Length(1), // Mode inline
+            Constraint::Length(1), // Flavor field
+            Constraint::Length(1), // Entry Point field
+            Constraint::Length(1), // Dart Defines field
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Launch button
+            Constraint::Min(0),    // Rest
+        ])
+        .split(inner);
+
+        // Render config field
+        render_config_field(chunks[0], buf, self.state, self.is_focused);
+
+        // Render mode inline (abbreviated)
+        self.render_mode_inline(chunks[1], buf);
+
+        // Render flavor field
+        render_flavor_field(chunks[2], buf, self.state, self.is_focused);
+
+        // Render entry point field
+        render_entry_point_field(chunks[3], buf, self.state, self.is_focused);
+
+        // Render dart defines field
+        render_dart_defines_field(chunks[4], buf, self.state, self.is_focused);
+
+        // Render launch button
+        let launch_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
+        let launch_button = LaunchButton::new()
+            .focused(launch_focused)
+            .enabled(self.has_device_selected);
+        launch_button.render(chunks[6], buf);
+    }
+
+    /// Render mode selector as inline radio buttons with responsive labels
+    fn render_mode_inline(&self, area: Rect, buf: &mut Buffer) {
+        /// Minimum width to show full mode labels ("Debug", "Profile", "Release").
+        /// This threshold applies to the inner content area width (after borders).
+        /// For a widget with 2-column border overhead, this requires a total width of 50.
+        const MODE_FULL_LABEL_MIN_WIDTH: u16 = 48;
+
+        let mode_focused =
+            self.is_focused && self.state.focused_field == super::state::LaunchContextField::Mode;
+        let mode_disabled = !self.state.is_mode_editable();
+
+        let style_selected = if mode_disabled {
+            Style::default().fg(Color::DarkGray)
+        } else if mode_focused {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
+        };
+
+        let style_unselected = Style::default().fg(Color::DarkGray);
+
+        let style_label = Style::default().fg(Color::Gray);
+
+        // Determine if we have space for full labels
+        // Full labels need ~42 chars, abbreviated need ~24 chars
+        // Add buffer for "Mode: " prefix (8 chars) and margins
+        let use_full_labels = area.width >= MODE_FULL_LABEL_MIN_WIDTH;
+
+        let (debug_label, profile_label, release_label) = if use_full_labels {
+            ("Debug", "Profile", "Release")
+        } else {
+            ("Dbg", "Prof", "Rel")
+        };
+
+        use fdemon_app::config::FlutterMode;
+
+        let mode_indicator = |mode: FlutterMode| -> &'static str {
+            if self.state.mode == mode {
+                "(●) "
+            } else {
+                "(○) "
+            }
+        };
+
+        let debug_style = if self.state.mode == FlutterMode::Debug {
+            style_selected
+        } else {
+            style_unselected
+        };
+
+        let profile_style = if self.state.mode == FlutterMode::Profile {
+            style_selected
+        } else {
+            style_unselected
+        };
+
+        let release_style = if self.state.mode == FlutterMode::Release {
+            style_selected
+        } else {
+            style_unselected
+        };
+
+        let mode_str = vec![
+            ratatui::text::Span::styled("  Mode: ", style_label),
+            ratatui::text::Span::styled(
+                format!("{}{}", mode_indicator(FlutterMode::Debug), debug_label),
+                debug_style,
+            ),
+            ratatui::text::Span::raw("  "),
+            ratatui::text::Span::styled(
+                format!("{}{}", mode_indicator(FlutterMode::Profile), profile_label),
+                profile_style,
+            ),
+            ratatui::text::Span::raw("  "),
+            ratatui::text::Span::styled(
+                format!("{}{}", mode_indicator(FlutterMode::Release), release_label),
+                release_style,
+            ),
+        ];
+
+        let paragraph = Paragraph::new(Line::from(mode_str));
+        paragraph.render(area, buf);
+    }
+}
+
+#[cfg(test)]
+mod launch_context_tests {
+    use super::*;
+    use fdemon_app::config::{ConfigSource, LaunchConfig, LoadedConfigs, SourcedConfig};
+    use ratatui::{backend::TestBackend, Terminal};
+
+    #[test]
+    fn test_launch_context_renders() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Launch Context"));
+        assert!(content.contains("Configuration"));
+        assert!(content.contains("Mode"));
+        assert!(content.contains("Flavor"));
+        assert!(content.contains("Dart Defines"));
+        assert!(content.contains("LAUNCH"));
+    }
+
+    #[test]
+    fn test_launch_context_shows_disabled_suffix() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                flavor: Some("prod".to_string()),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode Config".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.select_config(Some(0));
+
+        let backend = TestBackend::new(60, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("from config"));
+    }
+
+    #[test]
+    fn test_launch_context_focused_field() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.focused_field = super::super::state::LaunchContextField::Flavor;
+
+        let backend = TestBackend::new(50, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Verify Flavor field is highlighted (visual verification via styling)
+        // The test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_launch_context_with_device_renders() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Launch Context"));
+        assert!(content.contains("LAUNCH"));
+    }
+
+    #[test]
+    fn test_launch_context_with_device_no_selection() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, false);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("SELECT DEVICE"));
+    }
+
+    #[test]
+    fn test_min_height() {
+        assert_eq!(LaunchContext::min_height(), 14);
+    }
+
+    #[test]
+    fn test_unfocused_border_color() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, false);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Test passes if rendering doesn't panic
+        // Border color is DarkGray when not focused
+    }
+
+    #[test]
+    fn test_all_fields_disabled_for_vscode_config() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                flavor: Some("prod".to_string()),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode Config".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.select_config(Some(0));
+
+        let backend = TestBackend::new(60, 15);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Test that all fields render correctly even when disabled
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Configuration"));
+        assert!(content.contains("Mode"));
+        assert!(content.contains("Flavor"));
+        assert!(content.contains("Dart Defines"));
+    }
+
+    #[test]
+    fn test_mode_inline_full_labels_wide_area() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.mode = FlutterMode::Debug;
+
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                // Render mode inline directly on the full area
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(content.contains("Debug"), "Should show full 'Debug' label");
+        assert!(
+            content.contains("Profile"),
+            "Should show full 'Profile' label"
+        );
+        assert!(
+            content.contains("Release"),
+            "Should show full 'Release' label"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_abbreviated_labels_narrow_area() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.mode = FlutterMode::Debug;
+
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content.contains("Dbg"),
+            "Should show abbreviated 'Dbg' label"
+        );
+        assert!(
+            content.contains("Prof"),
+            "Should show abbreviated 'Prof' label"
+        );
+        assert!(
+            content.contains("Rel"),
+            "Should show abbreviated 'Rel' label"
+        );
+        assert!(
+            !content.contains("Debug"),
+            "Should NOT show full 'Debug' label"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_threshold_boundary() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Exactly at threshold (48)
+        let backend_at = TestBackend::new(48, 1);
+        let mut terminal_at = Terminal::new(backend_at).unwrap();
+
+        terminal_at
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer_at = terminal_at.backend().buffer();
+        let content_at: String = buffer_at.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_at.contains("Debug"),
+            "At threshold should use full labels"
+        );
+
+        // Just below threshold (47)
+        let backend_below = TestBackend::new(47, 1);
+        let mut terminal_below = Terminal::new(backend_below).unwrap();
+
+        terminal_below
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, false).compact(true);
+                widget.render_mode_inline(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+
+        let buffer_below = terminal_below.backend().buffer();
+        let content_below: String = buffer_below.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_below.contains("Dbg"),
+            "Below threshold should use abbreviated labels"
+        );
+    }
+
+    #[test]
+    fn test_mode_inline_with_borders_threshold() {
+        // Verify that the threshold accounts for the 2-column border overhead.
+        // When the compact widget (with borders) is rendered at width 50,
+        // the inner content area is 48 columns, which should trigger full labels.
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        // Test at width 50: should show full labels
+        let backend_50 = TestBackend::new(50, 10);
+        let mut terminal_50 = Terminal::new(backend_50).unwrap();
+
+        terminal_50
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_50 = terminal_50.backend().buffer();
+        let content_50: String = buffer_50.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_50.contains("Debug")
+                && content_50.contains("Profile")
+                && content_50.contains("Release"),
+            "Width 50 should show full labels (inner width 48)"
+        );
+        assert!(
+            !content_50.contains("Dbg"),
+            "Width 50 should not show abbreviated 'Dbg' label"
+        );
+
+        // Test at width 49: should show abbreviated labels
+        let backend_49 = TestBackend::new(49, 10);
+        let mut terminal_49 = Terminal::new(backend_49).unwrap();
+
+        terminal_49
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_49 = terminal_49.backend().buffer();
+        let content_49: String = buffer_49.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_49.contains("Dbg") && content_49.contains("Prof") && content_49.contains("Rel"),
+            "Width 49 should show abbreviated labels (inner width 47)"
+        );
+
+        // Test at width 48: should show abbreviated labels
+        let backend_48 = TestBackend::new(48, 10);
+        let mut terminal_48 = Terminal::new(backend_48).unwrap();
+
+        terminal_48
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer_48 = terminal_48.backend().buffer();
+        let content_48: String = buffer_48.content().iter().map(|c| c.symbol()).collect();
+
+        assert!(
+            content_48.contains("Dbg") && content_48.contains("Prof") && content_48.contains("Rel"),
+            "Width 48 should show abbreviated labels (inner width 46)"
+        );
+    }
+
+    // Tests for Task 01 - Compact Borders and Titles
+
+    #[test]
+    fn test_launch_context_compact_has_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that title is rendered
+        assert!(
+            content.contains("Launch Context"),
+            "Compact mode should show 'Launch Context' title"
+        );
+
+        // Check for border characters (Plain style uses │ and ─)
+        assert!(
+            content.contains("│") || content.contains("─"),
+            "Compact mode should have border characters"
+        );
+    }
+
+    #[test]
+    fn test_launch_context_compact_focused_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test focused
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Visual test - focused border should be cyan (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_launch_context_compact_unfocused_border() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Test unfocused
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, false, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        // Visual test - unfocused border should be dark gray (can't easily test color)
+        // Test passes if rendering doesn't panic
+    }
+
+    #[test]
+    fn test_launch_context_compact_content_readable() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                flavor: Some("production".to_string()),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "Production".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.select_config(Some(0));
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Check that content is still readable within borders
+        assert!(
+            content.contains("Production") || content.contains("Configuration"),
+            "Content should be visible within borders"
+        );
+    }
+
+    // =========================================================================
+    // Phase 3 Task 04: Entry Point Field Rendering Tests
+    // =========================================================================
+
+    /// Helper function to convert buffer to string
+    fn buffer_to_string(buf: &ratatui::buffer::Buffer) -> String {
+        buf.content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>()
+    }
+
+    #[test]
+    fn test_render_entry_point_field_default() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let backend = TestBackend::new(40, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("(default)"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_with_value() {
+        use std::path::PathBuf;
+
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.set_entry_point(Some(PathBuf::from("lib/main_dev.dart")));
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("lib/main_dev.dart"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_vscode_config_shows_suffix() {
+        use std::path::PathBuf;
+
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                entry_point: Some(PathBuf::from("lib/main_vscode.dart")),
+                ..Default::default()
+            },
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+        state.set_entry_point(Some(PathBuf::from("lib/main_vscode.dart")));
+
+        let backend = TestBackend::new(60, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, false);
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+        assert!(content.contains("(from config)"));
+    }
+
+    #[test]
+    fn test_render_entry_point_field_focused() {
+        let mut state = LaunchContextState::new(LoadedConfigs::default());
+        state.focused_field = super::super::state::LaunchContextField::EntryPoint;
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        // Test passes if rendering doesn't panic
+        // Visual verification: field should be highlighted when focused
+    }
+
+    #[test]
+    fn test_render_entry_point_field_disabled() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig::default(),
+            source: ConfigSource::VSCode,
+            display_name: "VSCode".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+        state.selected_config_index = Some(0);
+
+        let backend = TestBackend::new(50, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                render_entry_point_field(f.area(), f.buffer_mut(), &state, true);
+            })
+            .unwrap();
+
+        // Test passes if rendering doesn't panic
+        // Visual verification: field should be grayed out when disabled
+    }
+
+    #[test]
+    fn test_min_height_updated_for_entry_point() {
+        // Verify that min_height accounts for the entry point field
+        assert_eq!(LaunchContext::min_height(), 14);
+    }
+
+    #[test]
+    fn test_launch_context_includes_entry_point() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(60, 18);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContext::new(&state, true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+
+        // Verify all fields are present including entry point
+        assert!(content.contains("Configuration"));
+        assert!(content.contains("Mode"));
+        assert!(content.contains("Flavor"));
+        assert!(content.contains("Entry Point"));
+        assert!(content.contains("Dart Defines"));
+        assert!(content.contains("LAUNCH"));
+    }
+
+    // =========================================================================
+    // Phase 3 Task 05: Layout verification tests
+    // =========================================================================
+
+    #[test]
+    fn test_layout_has_entry_point_row() {
+        let area = Rect::new(0, 0, 60, 20);
+        let chunks = calculate_fields_layout(area);
+
+        // Verify we have 13 chunks
+        assert_eq!(chunks.len(), 13);
+
+        // Verify Entry Point row (index 7) has height 1
+        assert_eq!(chunks[7].height, 1);
+
+        // Verify the layout order:
+        // 0: Spacer, 1: Config, 2: Spacer, 3: Mode, 4: Spacer, 5: Flavor
+        // 6: Spacer, 7: Entry Point, 8: Spacer, 9: Dart Defines
+        // 10: Spacer, 11: Launch button, 12: Remaining space
+
+        // Entry Point should be between Flavor (5) and Dart Defines (9)
+        assert!(
+            chunks[7].y > chunks[5].y,
+            "Entry Point should be after Flavor"
+        );
+        assert!(
+            chunks[7].y < chunks[9].y,
+            "Entry Point should be before Dart Defines"
+        );
+    }
+
+    #[test]
+    fn test_compact_layout_includes_entry_point() {
+        let state = LaunchContextState::new(LoadedConfigs::default());
+
+        let backend = TestBackend::new(50, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let widget = LaunchContextWithDevice::new(&state, true, true).compact(true);
+                f.render_widget(widget, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content = buffer_to_string(buffer);
+
+        // Verify Entry Point field is present in compact mode
+        assert!(content.contains("Entry Point"));
+
+        // Verify all fields are present in correct order
+        let config_pos = content.find("Configuration");
+        let mode_pos = content.find("Mode");
+        let flavor_pos = content.find("Flavor");
+        let entry_pos = content.find("Entry Point");
+        let defines_pos = content.find("Dart Defines");
+
+        assert!(config_pos.is_some());
+        assert!(mode_pos.is_some());
+        assert!(flavor_pos.is_some());
+        assert!(entry_pos.is_some());
+        assert!(defines_pos.is_some());
+
+        // Entry Point should appear between Flavor and Dart Defines
+        assert!(
+            entry_pos.unwrap() > flavor_pos.unwrap(),
+            "Entry Point should be after Flavor"
+        );
+        assert!(
+            entry_pos.unwrap() < defines_pos.unwrap(),
+            "Entry Point should be before Dart Defines"
+        );
+    }
+}

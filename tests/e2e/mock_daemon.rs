@@ -84,8 +84,8 @@
 //! - Configurable timeouts
 //! - Full TUI event loop integration tests
 
-use flutter_demon::core::DaemonEvent;
-use flutter_demon::daemon::DaemonCommand;
+use fdemon_core::DaemonEvent;
+use fdemon_daemon::DaemonCommand;
 use serde_json::json;
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
