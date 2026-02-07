@@ -4,3 +4,4 @@ pub mod footer;
 pub mod badge;
 pub mod code_block;
 pub mod terminal_mockup;
+pub mod diagrams;
