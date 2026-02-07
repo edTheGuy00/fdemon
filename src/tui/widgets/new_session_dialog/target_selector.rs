@@ -263,7 +263,7 @@ impl TargetSelector<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::daemon::{AndroidAvd, Device, IosSimulator, SimulatorState};
+    use crate::daemon::{AndroidAvd, Device, IosSimulator};
     use crate::tui::test_utils::test_device_full;
     use ratatui::{backend::TestBackend, Terminal};
 

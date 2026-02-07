@@ -207,4 +207,36 @@ Additional manual testing:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/tui/runner.rs` | Complete refactor to use Engine. Replaced 7-parameter run_loop with 2-parameter version. Eliminated all manual channel, watcher, and session task setup. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simplified run_with_project()**: Reduced from ~130 lines to ~55 lines by delegating all shared initialization to `Engine::new()`. The TUI runner now only handles terminal-specific concerns (setup, rendering, event polling, teardown).
+
+2. **Eliminated run_loop() parameters**: Changed from 7 parameters `(terminal, state, msg_rx, msg_tx, session_tasks, shutdown_rx, project_path)` to just 2 `(terminal, engine)`. This is a massive simplification and makes the event loop much clearer.
+
+3. **Engine owns cleanup**: Replaced manual `file_watcher.stop()` and `startup::cleanup_sessions()` with a single `engine.shutdown().await` call. The Engine handles all cleanup logic internally.
+
+4. **Preserved TUI-specific code**: Terminal setup/teardown (`ratatui::init()`/`ratatui::restore()`), panic hook installation, startup dialog flow, and event polling (`event::poll()`) all remain in the TUI runner as they are presentation-specific.
+
+5. **Updated run() test mode**: Applied the same pattern to the demo/test entry point for consistency.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1525 tests, 0 failed)
+- `cargo clippy -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Behavior preserved**: No user-visible changes. The refactoring is purely structural and maintains identical runtime behavior.
+
+2. **startup::cleanup_sessions() still exists**: The function is now orphaned but left in place for potential future use or to be removed in a cleanup task. Engine.shutdown() has replaced its functionality.
+
+3. **Pattern established**: This refactoring establishes the pattern that Task 04 (headless runner) will follow, validating the Engine abstraction with the more complex frontend first.

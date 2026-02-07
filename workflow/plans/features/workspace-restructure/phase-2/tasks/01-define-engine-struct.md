@@ -347,4 +347,46 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/engine.rs` | Created new file with Engine struct (246 lines) |
+| `src/app/mod.rs` | Added `pub mod engine;` declaration and re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tokio Runtime Requirement**: The `Engine::new()` constructor spawns the signal handler immediately, which requires a Tokio runtime context. All tests using `Engine::new()` must be marked with `#[tokio::test]` instead of `#[test]`. This is acceptable since the Engine is always used in an async context.
+
+2. **Watcher Initialization Non-Fatal**: File watcher initialization is allowed to fail (returns `Option<FileWatcher>`). This matches the existing pattern in both TUI and headless runners where watcher failures are logged but don't prevent application startup.
+
+3. **Session Task Cleanup Timeout**: The `shutdown()` method uses a 2-second timeout per session when cleaning up tasks. This prevents indefinite hangs while allowing graceful shutdown in most cases.
+
+### Testing Performed
+
+- `cargo check` - Passed (no warnings)
+- `cargo test --lib` - Passed (1525 tests, including 4 new Engine tests)
+- `cargo clippy --lib` - Passed (no warnings)
+
+### Verification
+
+All acceptance criteria met:
+1. ✅ `src/app/engine.rs` exists with `Engine` struct and all required methods
+2. ✅ `src/app/mod.rs` declares `pub mod engine;` and re-exports `Engine`
+3. ✅ `Engine::new()` performs full initialization (config, state, channels, watcher, signal handler)
+4. ✅ `Engine::process_message()` delegates to `process::process_message()`
+5. ✅ `Engine::drain_pending_messages()` drains via `try_recv()`
+6. ✅ `Engine::flush_pending_logs()` delegates to `session_manager.flush_all_pending_logs()`
+7. ✅ `Engine::shutdown()` stops watcher, sends shutdown signal, drains tasks with timeout
+8. ✅ `Engine` has NO dependencies on ratatui, crossterm, or TUI-specific types
+9. ✅ `cargo build` succeeds
+10. ✅ `cargo test` passes (all tests including new engine tests)
+11. ✅ `cargo clippy` is clean (no warnings)
+
+### Risks/Limitations
+
+1. **File Watcher Bridge Task**: The watcher-to-message bridge spawns an unbounded tokio task in `start_file_watcher()`. This task will run until the watcher channel is dropped. Not a leak since the watcher is stopped in `shutdown()`, but worth noting for future monitoring.
+
+2. **Signal Handler Spawned Eagerly**: The signal handler is spawned immediately in `Engine::new()`, before the event loop starts. This is safe but means SIGINT/SIGTERM could queue messages before the event loop is ready to process them. The message channel has capacity 256 which should be sufficient.

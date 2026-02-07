@@ -249,4 +249,47 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/app/engine.rs` | Added SharedState field, initialized in new(), implemented sync_shared_state_nonblocking(), added service accessors (flutter_controller, log_service, state_service, shared_state), updated flush_pending_logs to call sync, added comprehensive tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Non-blocking sync with try_write()**: Used `try_write()` instead of `.await` to avoid blocking the main loop. If a service consumer holds the lock, that sync cycle is skipped (eventual consistency). This prevents deadlocks and keeps the TUI responsive.
+
+2. **Single-session sync model**: SharedState reflects only the currently selected session. Multi-session support for services is deferred to Phase 4 (MCP server needs). This keeps the implementation simple and matches current TUI behavior.
+
+3. **VecDeque to Vec conversion**: Session logs are stored in VecDeque for performance, but SharedState expects Vec. The sync does a full copy conversion. This is acceptable for now as it happens on every render cycle (~60fps) and log buffers are capped at 10,000 entries.
+
+4. **CommandSenderController over DaemonFlutterController**: Used CommandSenderController for flutter_controller() accessor because it works directly with the session's cmd_sender. DaemonFlutterController would require a separate command channel which adds unnecessary indirection.
+
+5. **ProjectInfo derived from path**: state_service() creates ProjectInfo from the project_path filename. This is simple and sufficient for current needs. A more sophisticated implementation could cache the project name from pubspec.yaml.
+
+### Testing Performed
+
+- `cargo check` - Passed
+- `cargo test --lib` - Passed (1531 tests, 0 failed)
+- `cargo clippy` - Passed (no new warnings)
+- `cargo fmt` - Applied formatting
+
+All new accessor methods tested:
+- `test_shared_state_initialized` - Verifies SharedState is created with correct defaults
+- `test_shared_state_sync_after_flush` - Verifies sync is called and handles no-session case
+- `test_log_service_accessor` - Verifies log_service() returns working service
+- `test_state_service_accessor` - Verifies state_service() returns working service
+- `test_flutter_controller_none_without_session` - Verifies flutter_controller() returns None when no session
+- `test_shared_state_reference` - Verifies shared_state() returns valid reference
+
+### Risks/Limitations
+
+1. **Log sync performance**: Currently copies all logs on every flush (~60fps). For sessions with 10,000 logs, this is ~160MB/sec of copying. Future optimization could use dirty flags or incremental sync.
+
+2. **Eventual consistency**: Non-blocking sync means service consumers may see slightly stale data (up to one frame old). This is acceptable for current use cases but may need addressing for real-time MCP operations.
+
+3. **No device list sync**: SharedState has a devices field but it's not populated. Device discovery happens in AppState but isn't synced. This will be needed when MCP server wants to query available devices.
+
+4. **devtools_uri not synced**: Session doesn't track devtools_uri yet, so it's always None in SharedState. This will be needed for MCP server devtools integration.

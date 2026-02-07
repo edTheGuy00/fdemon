@@ -6,21 +6,12 @@
 //! - `run_loop`: Main event loop processing terminal and daemon events
 
 use std::path::Path;
-use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch, Mutex};
-use tracing::{error, warn};
+use tracing::error;
 
-use crate::app::actions::SessionTaskMap;
-use crate::app::message::Message;
-use crate::app::process;
-use crate::app::signals;
 use crate::app::spawn;
-use crate::app::state::AppState;
+use crate::app::Engine;
 use crate::common::prelude::*;
-use crate::config;
-use crate::core::LogSource;
-use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
 
 use super::{event, render, startup, terminal};
 
@@ -29,103 +20,32 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Install panic hook for terminal restoration
     terminal::install_panic_hook();
 
-    // Initialize .fdemon directory and gitignore
-    if let Err(e) = config::init_fdemon_directory(project_path) {
-        warn!("Failed to initialize .fdemon directory: {}", e);
-        // Non-fatal - continue with defaults
-    }
+    // Create the engine (handles all shared initialization)
+    let mut engine = Engine::new(project_path.to_path_buf());
 
-    // Load configuration
-    let settings = config::load_settings(project_path);
-    info!(
-        "Loaded settings: auto_start={}",
-        settings.behavior.auto_start
-    );
-
-    // Initialize terminal
+    // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
-    // Create initial state with settings
-    let mut state = AppState::with_settings(project_path.to_path_buf(), settings.clone());
+    // TUI-specific startup: show NewSessionDialog, load configs
+    let _startup_result =
+        startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
 
-    // Create unified message channel (for signal handler, etc.)
-    let (msg_tx, msg_rx) = mpsc::channel::<Message>(256);
-
-    // Spawn signal handler (sends Message::Quit on SIGINT/SIGTERM)
-    signals::spawn_signal_handler(msg_tx.clone());
-
-    // Per-session task handles - for cleanup (HashMap allows multiple concurrent sessions)
-    let session_tasks: SessionTaskMap = Arc::new(Mutex::new(std::collections::HashMap::new()));
-
-    // Shutdown signal for background tasks
-    let (shutdown_tx, shutdown_rx) = watch::channel(false);
-
-    // Initialize startup state - shows NewSessionDialog
-    let _startup_result = startup::startup_flutter(&mut state, &settings, project_path);
-
-    // Render first frame - show NewSessionDialog
-    if let Err(e) = term.draw(|frame| render::view(frame, &mut state)) {
+    // Render first frame
+    if let Err(e) = term.draw(|frame| render::view(frame, &mut engine.state)) {
         error!("Failed to render initial frame: {}", e);
     }
 
-    // Trigger tool availability check at startup (async, non-blocking)
-    spawn::spawn_tool_availability_check(msg_tx.clone());
-
-    // Trigger device discovery at startup (async, non-blocking)
-    spawn::spawn_device_discovery(msg_tx.clone());
-
-    // Start file watcher for auto-reload
-    let mut file_watcher = FileWatcher::new(
-        project_path.to_path_buf(),
-        WatcherConfig::new()
-            .with_debounce_ms(settings.watcher.debounce_ms)
-            .with_auto_reload(settings.watcher.auto_reload),
-    );
-
-    // Create watcher-specific channel
-    let (watcher_tx, mut watcher_rx) = mpsc::channel::<WatcherEvent>(32);
-
-    if let Err(e) = file_watcher.start(watcher_tx) {
-        warn!("Failed to start file watcher: {}", e);
-        if let Some(session) = state.session_manager.selected_mut() {
-            session.session.log_error(
-                LogSource::Watcher,
-                format!("Failed to start file watcher: {}", e),
-            );
-        }
-    }
-
-    // Bridge watcher events to app messages
-    let watcher_msg_tx = msg_tx.clone();
-    tokio::spawn(async move {
-        while let Some(event) = watcher_rx.recv().await {
-            let msg = match event {
-                WatcherEvent::AutoReloadTriggered => Message::AutoReloadTriggered,
-                WatcherEvent::FilesChanged { count } => Message::FilesChanged { count },
-                WatcherEvent::Error { message } => Message::WatcherError { message },
-            };
-            let _ = watcher_msg_tx.send(msg).await;
-        }
-    });
+    // Trigger startup discovery (non-blocking)
+    spawn::spawn_tool_availability_check(engine.msg_sender());
+    spawn::spawn_device_discovery(engine.msg_sender());
 
     // Run the main loop
-    let result = run_loop(
-        &mut term,
-        &mut state,
-        msg_rx,
-        msg_tx,
-        session_tasks.clone(),
-        shutdown_rx,
-        project_path,
-    );
+    let result = run_loop(&mut term, &mut engine);
 
-    // Stop file watcher
-    file_watcher.stop();
+    // Shutdown engine (stops watcher, cleans up sessions)
+    engine.shutdown().await;
 
-    // Cleanup Flutter sessions gracefully
-    startup::cleanup_sessions(&mut state, &mut term, session_tasks, shutdown_tx).await;
-
-    // Restore terminal
+    // Restore terminal (TUI-specific)
     ratatui::restore();
 
     result
@@ -134,67 +54,40 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 /// Run TUI without Flutter (for testing/demo)
 pub async fn run() -> Result<()> {
     terminal::install_panic_hook();
+
+    // Create engine with dummy path
+    let dummy_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mut engine = Engine::new(dummy_path);
+
+    // Initialize terminal
     let mut term = ratatui::init();
-    let mut state = AppState::new();
 
-    let (msg_tx, msg_rx) = mpsc::channel::<Message>(1);
-    let session_tasks: SessionTaskMap = Arc::new(Mutex::new(std::collections::HashMap::new()));
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Run the main loop
+    let result = run_loop(&mut term, &mut engine);
 
-    let dummy_path = Path::new(".");
-    let result = run_loop(
-        &mut term,
-        &mut state,
-        msg_rx,
-        msg_tx,
-        session_tasks,
-        shutdown_rx,
-        dummy_path,
-    );
+    // Shutdown engine
+    engine.shutdown().await;
+
+    // Restore terminal
     ratatui::restore();
     result
 }
 
 /// Main event loop
-fn run_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    state: &mut AppState,
-    mut msg_rx: mpsc::Receiver<Message>,
-    msg_tx: mpsc::Sender<Message>,
-    session_tasks: SessionTaskMap,
-    shutdown_rx: watch::Receiver<bool>,
-    project_path: &Path,
-) -> Result<()> {
-    while !state.should_quit() {
-        // Process external messages (from signal handler, session tasks, etc.)
-        while let Ok(msg) = msg_rx.try_recv() {
-            process::process_message(
-                state,
-                msg,
-                &msg_tx,
-                &session_tasks,
-                &shutdown_rx,
-                project_path,
-            );
-        }
+fn run_loop(terminal: &mut ratatui::DefaultTerminal, engine: &mut Engine) -> Result<()> {
+    while !engine.should_quit() {
+        // Drain and process all pending messages
+        engine.drain_pending_messages();
 
-        // Flush any pending batched logs before rendering (Task 04)
-        // This ensures logs are processed at ~60fps during high-volume bursts
-        state.session_manager.flush_all_pending_logs();
+        // Flush batched logs
+        engine.flush_pending_logs();
 
         // Render
-        terminal.draw(|frame| render::view(frame, state))?;
+        terminal.draw(|frame| render::view(frame, &mut engine.state))?;
 
-        // Handle terminal events
+        // Handle terminal events (TUI-specific)
         if let Some(message) = event::poll()? {
-            process::process_message(
-                state,
-                message,
-                &msg_tx,
-                &session_tasks,
-                &shutdown_rx,
-                project_path,
-            );
+            engine.process_message(message);
         }
     }
 

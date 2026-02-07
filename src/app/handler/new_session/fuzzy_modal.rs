@@ -278,7 +278,6 @@ mod tests {
     #[test]
     fn test_entry_point_confirm_with_default() {
         use crate::app::handler::update;
-        use crate::app::message::Message;
         use crate::app::new_session_dialog::FuzzyModalState;
         use std::path::PathBuf;
 

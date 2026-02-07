@@ -51,13 +51,13 @@ Create a shared `Engine` abstraction that both TUI and headless runners use, eli
 
 | # | Task | Status | Depends On | Est. Hours | Key Modules |
 |---|------|--------|------------|------------|-------------|
-| 1 | [01-define-engine-struct](tasks/01-define-engine-struct.md) | Not Started | - | 4-5h | `app/engine.rs` **NEW** |
-| 2 | [02-define-engine-event](tasks/02-define-engine-event.md) | Not Started | - | 2-3h | `app/engine_event.rs` **NEW** |
-| 3 | [03-refactor-tui-runner](tasks/03-refactor-tui-runner.md) | Not Started | 1, 2 | 5-7h | `tui/runner.rs`, `tui/startup.rs` |
-| 4 | [04-refactor-headless-runner](tasks/04-refactor-headless-runner.md) | Not Started | 3 | 4-6h | `headless/runner.rs`, `headless/mod.rs` |
-| 5 | [05-wire-services-layer](tasks/05-wire-services-layer.md) | Not Started | 4 | 4-5h | `services/`, `app/engine.rs` |
-| 6 | [06-add-event-broadcasting](tasks/06-add-event-broadcasting.md) | Not Started | 5 | 3-4h | `app/engine.rs`, `app/engine_event.rs` |
-| 7 | [07-verify-and-document](tasks/07-verify-and-document.md) | Not Started | 6 | 2-4h | `docs/ARCHITECTURE.md` |
+| 1 | [01-define-engine-struct](tasks/01-define-engine-struct.md) | Done | - | 4-5h | `app/engine.rs` **NEW** |
+| 2 | [02-define-engine-event](tasks/02-define-engine-event.md) | Done | - | 2-3h | `app/engine_event.rs` **NEW** |
+| 3 | [03-refactor-tui-runner](tasks/03-refactor-tui-runner.md) | Done | 1, 2 | 5-7h | `tui/runner.rs`, `tui/startup.rs` |
+| 4 | [04-refactor-headless-runner](tasks/04-refactor-headless-runner.md) | Done | 3 | 4-6h | `headless/runner.rs`, `headless/mod.rs` |
+| 5 | [05-wire-services-layer](tasks/05-wire-services-layer.md) | Done | 4 | 4-5h | `services/`, `app/engine.rs` |
+| 6 | [06-add-event-broadcasting](tasks/06-add-event-broadcasting.md) | Done | 5 | 3-4h | `app/engine.rs`, `app/engine_event.rs` |
+| 7 | [07-verify-and-document](tasks/07-verify-and-document.md) | Done | 6 | 2-4h | `docs/ARCHITECTURE.md` |
 
 ## Success Criteria
 

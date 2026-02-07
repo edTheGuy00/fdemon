@@ -3,6 +3,8 @@
 pub mod actions;
 pub mod confirm_dialog;
 pub mod editor;
+pub mod engine;
+pub mod engine_event;
 pub mod handler;
 pub mod hyperlinks;
 pub mod log_view_state;
@@ -22,6 +24,9 @@ pub use handler::{Task, UpdateAction, UpdateResult};
 // Re-export session types
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
+
+// Re-export Engine
+pub use engine::Engine;
 
 use std::path::PathBuf;
 

@@ -19,33 +19,198 @@ This document describes the internal architecture of Flutter Demon, a high-perfo
 
 Flutter Demon is a terminal-based Flutter development environment that manages Flutter processes, provides real-time log viewing, and supports multi-device sessions. The application is built with a layered architecture separating concerns between domain logic, infrastructure, and presentation.
 
+The core of the application is the **Engine** (`app/engine.rs`), which provides shared orchestration for both TUI and headless runners. The Engine encapsulates all state management, message processing, session tracking, and event broadcasting.
+
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                        Binary (main.rs)                         │
 │                   CLI parsing, project discovery                │
 └─────────────────────────────────────────────────────────────────┘
                                  │
+                   ┌─────────────┴─────────────┐
+                   ▼                           ▼
+           ┌───────────────┐           ┌───────────────┐
+           │  TUI Runner   │           │    Headless   │
+           │ (tui/runner)  │           │   (headless)  │
+           │ Terminal I/O  │           │  NDJSON out   │
+           └───────┬───────┘           └───────┬───────┘
+                   │                           │
+                   └─────────────┬─────────────┘
                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       Application Layer                         │
-│              State management, message handling (TEA)           │
-│                         (app/, services/)                       │
-└─────────────────────────────────────────────────────────────────┘
-                                 │
-              ┌──────────────────┼──────────────────┐
-              ▼                  ▼                  ▼
-┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐
-│   Presentation    │ │   Infrastructure  │ │      Domain       │
-│   (tui/)          │ │   (daemon/)       │ │      (core/)      │
-│   Terminal UI     │ │   Process mgmt    │ │   Business types  │
-│   Widgets         │ │   JSON-RPC        │ │   Discovery       │
-└───────────────────┘ └───────────────────┘ └───────────────────┘
-                                 │
-                                 ▼
-                    ┌───────────────────────┐
-                    │    Flutter Process    │
-                    │   (flutter run)       │
-                    └───────────────────────┘
+                    ┌─────────────────────────┐
+                    │       Engine            │◄──── signal handler
+                    │   (app/engine.rs)       │◄──── file watcher
+                    │                         │
+                    │ • AppState (TEA model)  │
+                    │ • Message channel       │
+                    │ • Session tasks         │
+                    │ • SharedState           │
+                    │ • Event broadcast       │
+                    └────────┬────────────────┘
+                             │
+              ┌──────────────┼──────────────┐
+              ▼              ▼              ▼
+    ┌───────────────┐ ┌──────────┐ ┌──────────────┐
+    │  Services     │ │ Daemon   │ │    Core      │
+    │ (controllers) │ │(process) │ │ (domain)     │
+    └───────────────┘ └──────────┘ └──────────────┘
+                             │
+                             ▼
+                  ┌───────────────────────┐
+                  │   Flutter Process     │
+                  │   (flutter run)       │
+                  └───────────────────────┘
+```
+
+---
+
+## Engine Architecture
+
+### Engine (`app/engine.rs`)
+
+The Engine is the shared orchestration core used by both TUI and headless runners. It encapsulates all application state and coordination logic in a single, testable struct.
+
+**Core Responsibilities:**
+- **State Management**: Owns the `AppState` (TEA model)
+- **Message Channel**: Unified message channel for all events (keyboard, daemon, watcher, signals)
+- **Session Task Tracking**: Manages background tasks for each Flutter session
+- **Signal Handling**: SIGINT/SIGTERM handling via `shutdown_tx`/`shutdown_rx`
+- **File Watcher**: Integrates file watcher with message bridge
+- **Shared State**: Provides `SharedState` for service layer consumers
+- **Event Broadcasting**: Emits `EngineEvent` to external subscribers (future MCP server)
+
+**Key Methods:**
+```rust
+// Initialization
+Engine::new(project_path)           // Creates engine with full initialization
+
+// Message processing
+engine.process_message(msg)         // Process single message through TEA
+engine.drain_pending_messages()     // Process all pending messages
+engine.flush_pending_logs()         // Flush batched logs and sync SharedState
+
+// Service accessors
+engine.flutter_controller()         // Get controller for current session
+engine.log_service()                // Get log buffer access
+engine.state_service()              // Get app state access
+
+// Event broadcasting
+engine.subscribe()                  // Subscribe to EngineEvents
+
+// Lifecycle
+engine.shutdown().await             // Stop watcher, cleanup sessions
+```
+
+**Event Flow:**
+```
+Input Sources → Message Channel → Engine.process_message() → handler::update()
+                                                          ↓
+Signal Handler ──────────────────────────────────────────┘
+File Watcher   ──────────────────────────────────────────┘
+Daemon Tasks   ──────────────────────────────────────────┘
+TUI/Headless   ──────────────────────────────────────────┘
+                                                          ↓
+                                        ┌─────────────────┴─────────────────┐
+                                        ▼                                   ▼
+                                  handle_action()                  emit_events()
+                                  (side effects)                   (EngineEvent)
+                                        │                                   │
+                                        ▼                                   ▼
+                            Spawn session tasks                     Broadcast to
+                            Update SharedState                      subscribers
+```
+
+### EngineEvent (`app/engine_event.rs`)
+
+Domain events emitted by the Engine after each message processing cycle. This is the primary extension point for pro features.
+
+**Event Categories:**
+- **Session Lifecycle**: `SessionCreated`, `SessionStarted`, `SessionStopped`, `SessionRemoved`
+- **Phase Changes**: `PhaseChanged` (Initializing → Running → Reloading, etc.)
+- **Hot Reload/Restart**: `ReloadStarted`, `ReloadCompleted`, `ReloadFailed`, `RestartStarted`, `RestartCompleted`
+- **Logging**: `LogEntry`, `LogBatch` (for high-volume logging)
+- **Device Discovery**: `DevicesDiscovered`
+- **File Watcher**: `FilesChanged`
+- **Engine Lifecycle**: `Shutdown`
+
+**Usage Example:**
+```rust
+let mut rx = engine.subscribe();
+
+tokio::spawn(async move {
+    while let Ok(event) = rx.recv().await {
+        match event {
+            EngineEvent::ReloadStarted { session_id } => {
+                // Track reload start time
+            }
+            EngineEvent::ReloadCompleted { session_id, time_ms } => {
+                // Report reload performance
+            }
+            EngineEvent::LogBatch { session_id, entries } => {
+                // Forward logs to MCP server
+            }
+            _ => {}
+        }
+    }
+});
+```
+
+### Runner Implementations
+
+Both runners create an Engine and use it as the single source of truth.
+
+**TUI Runner** (`tui/runner.rs`):
+```rust
+pub async fn run_with_project(project_path: &Path) -> Result<()> {
+    let mut engine = Engine::new(project_path.to_path_buf());
+    let mut term = ratatui::init();
+
+    // TUI-specific startup
+    startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
+
+    // Main loop
+    while !engine.should_quit() {
+        engine.drain_pending_messages();
+        engine.flush_pending_logs();
+        term.draw(|frame| render::view(frame, &mut engine.state))?;
+        if let Some(message) = event::poll()? {
+            engine.process_message(message);
+        }
+    }
+
+    engine.shutdown().await;
+    ratatui::restore();
+    Ok(())
+}
+```
+
+**Headless Runner** (`headless/runner.rs`):
+```rust
+pub async fn run_headless(project_path: &Path) -> Result<()> {
+    let mut engine = Engine::new(project_path.to_path_buf());
+
+    // Headless-specific stdin reader
+    spawn_stdin_reader(engine.msg_sender());
+
+    // Auto-start Flutter session
+    headless_auto_start(&mut engine).await;
+
+    // Main loop
+    loop {
+        if engine.should_quit() { break; }
+        match engine.msg_rx.recv().await {
+            Some(msg) => {
+                engine.process_message(msg);
+                engine.flush_pending_logs();
+                emit_headless_events(&engine.state);
+            }
+            None => break,
+        }
+    }
+
+    engine.shutdown().await;
+    Ok(())
+}
 ```
 
 ---
@@ -266,15 +431,9 @@ Watches for Dart file changes to trigger auto-reload.
 - Default debounce: 500ms
 - Default extensions: `.dart`
 
-### `services/` — Service Layer
+### `services/` — Service Layer (Wired via Engine)
 
-Abstractions for Flutter control operations, usable by TUI and future MCP server.
-
-| File | Purpose |
-|------|---------|
-| `flutter_controller.rs` | `FlutterController` trait — `reload()`, `restart()`, `stop()`, `is_running()`. |
-| `log_service.rs` | `LogService` trait — log buffer access and filtering. |
-| `state_service.rs` | `SharedState` — thread-safe state with `Arc<RwLock<>>`. |
+The services layer provides trait-based abstractions for Flutter control operations. These are instantiated and managed by the Engine, providing a clean API for external consumers.
 
 **Architecture:**
 ```
@@ -285,14 +444,50 @@ Abstractions for Flutter control operations, usable by TUI and future MCP server
        └─────────┬─────────┘
                  │
           ┌──────▼──────┐
-          │  Services   │
-          │  (traits)   │
+          │   Engine    │
+          │             │
+          │ • Services  │
+          │ • SharedState│
           └──────┬──────┘
                  │
-          ┌──────▼──────┐
-          │ SharedState │
-          └─────────────┘
+       ┌─────────┼─────────┐
+       ▼         ▼         ▼
+┌──────────┐ ┌────────┐ ┌──────────┐
+│ Flutter  │ │  Log   │ │  State   │
+│Controller│ │Service │ │ Service  │
+└──────────┘ └────────┘ └──────────┘
 ```
+
+**Service Interfaces:**
+
+| Service | Purpose |
+|---------|---------|
+| `FlutterController` | Hot reload/restart operations via `CommandSender` |
+| `LogService` | Log buffer access and filtering via `SharedState` |
+| `StateService` | App run state access via `SharedState` |
+
+**Usage Example:**
+```rust
+// Get FlutterController for current session
+let controller = engine.flutter_controller().unwrap();
+controller.reload().await?;
+
+// Get LogService for log buffer access
+let logs = engine.log_service();
+let entries = logs.get_logs(100).await;
+
+// Get StateService for app state access
+let state_service = engine.state_service();
+let app_state = state_service.get_app_state().await;
+```
+
+**Implementation Details:**
+
+| File | Purpose |
+|------|---------|
+| `flutter_controller.rs` | `FlutterController` trait — `reload()`, `restart()`, `stop()`, `is_running()`. Implemented by `CommandSenderController`. |
+| `log_service.rs` | `LogService` trait — log buffer access and filtering. Implemented by `SharedLogService`. |
+| `state_service.rs` | `SharedState` — thread-safe state with `Arc<RwLock<>>`. Synchronized from `AppState` after each message. |
 
 ### `app/` — Application Layer
 
@@ -300,6 +495,8 @@ TEA pattern implementation — state management and orchestration.
 
 | File | Purpose |
 |------|---------|
+| `engine.rs` | `Engine` struct — shared orchestration core for TUI and headless runners. |
+| `engine_event.rs` | `EngineEvent` enum — domain events broadcast to external consumers. |
 | `state.rs` | `AppState` — complete application state (the Model). |
 | `message.rs` | `Message` enum — all possible events/actions. |
 | `signals.rs` | Signal handling for SIGINT/SIGTERM (moved from `common/`). |
@@ -325,30 +522,19 @@ TEA pattern implementation — state management and orchestration.
 - Session management (`NextSession`, `CloseCurrentSession`)
 - Device/emulator management (`ShowDeviceSelector`, `LaunchEmulator`)
 
-### `tui/` — Terminal UI
+### `tui/` — Terminal UI (Engine Consumer)
 
-Presentation layer using `ratatui` for rendering.
+Presentation layer using `ratatui` for rendering. The TUI runner creates an Engine and uses it for all state management and message processing.
 
-### Restructuring Notes (Phase 1)
-
-Several types and functions were relocated to enforce clean layer boundaries:
-
-- **Event types** (`DaemonMessage`, event structs) moved from `daemon/` to `core/` — core is now a true leaf module with no dependencies
-- **State types** (`LogViewState`, `LinkHighlightState`, `ConfirmDialogState`) moved from `tui/` to `app/` — app no longer depends on tui for state
-- **Logic functions** (`process_message`, `handle_action`, `open_in_editor`, `fuzzy_filter`, setting item generators) moved from `tui/` to `app/` — headless no longer depends on tui
-- **Signal handler** moved from `common/` to `app/` — common is now a true leaf module
-- **File watcher** emits its own `WatcherEvent` instead of constructing `Message` — watcher is now independent of app
-
-This restructuring enables:
-- Clean dependency flow (no circular dependencies)
-- Headless mode with zero TUI dependencies
-- Future workspace split (engine crate extraction)
-
----
+**Key Architecture:**
+- **Runner** (`runner.rs`): Main entry point, creates Engine, runs event loop
+- **Event Polling** (`event.rs`): Polls terminal for keyboard/resize events, converts to `Message`
+- **Rendering** (`render/`): Renders `AppState` to terminal using ratatui widgets
+- **Widgets** (`widgets/`): Reusable UI components (header, tabs, log view, status bar, dialogs)
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | Main event loop, message channel setup, task spawning. |
+| `runner.rs` | Main entry point, Engine creation, event loop (was `mod.rs`). |
 | `render/mod.rs` | State → UI rendering (was render.rs). |
 | `render/tests.rs` | Full-screen snapshot and transition tests. |
 | `layout.rs` | Layout calculations for different UI modes. |
@@ -367,31 +553,112 @@ This restructuring enables:
 | `StatusBar` | Bottom bar showing phase, device, reload count |
 | `DeviceSelector` | Modal for device/emulator selection |
 
+### `headless/` — NDJSON Event Output (Engine Consumer)
+
+Headless mode provides a non-TUI interface for E2E testing and automation. It creates an Engine and outputs structured NDJSON events to stdout.
+
+**Key Architecture:**
+- **Runner** (`runner.rs`): Main entry point, creates Engine, runs event loop
+- **Stdin Reader**: Reads commands from stdin (`r` = reload, `q` = quit)
+- **Event Emission**: Converts `AppState` changes to `HeadlessEvent` and emits NDJSON
+
+| File | Purpose |
+|------|---------|
+| `mod.rs` | `HeadlessEvent` enum and NDJSON serialization. |
+| `runner.rs` | Main entry point, Engine creation, stdin reader, event loop. |
+
+**HeadlessEvent Types:**
+- `DaemonConnected`, `DaemonDisconnected`
+- `AppStarted`, `AppStopped`
+- `HotReloadStarted`, `HotReloadCompleted`, `HotReloadFailed`
+- `Log`, `Error`
+- `SessionCreated`, `SessionRemoved`
+
+**Usage:**
+```bash
+# Run in headless mode
+cargo run -- --headless /path/to/flutter/project > events.ndjson
+
+# Send commands via stdin
+echo "r" | cargo run -- --headless /path/to/flutter/project
+```
+
+### Restructuring Notes (Phase 1 & 2)
+
+Several types and functions were relocated to enforce clean layer boundaries:
+
+**Phase 1 (Clean Dependencies):**
+- **Event types** (`DaemonMessage`, event structs) moved from `daemon/` to `core/` — core is now a true leaf module with no dependencies
+- **State types** (`LogViewState`, `LinkHighlightState`, `ConfirmDialogState`) moved from `tui/` to `app/` — app no longer depends on tui for state
+- **Logic functions** (`process_message`, `handle_action`, `open_in_editor`, `fuzzy_filter`, setting item generators) moved from `tui/` to `app/` — headless no longer depends on tui
+- **Signal handler** moved from `common/` to `app/` — common is now a true leaf module
+- **File watcher** emits its own `WatcherEvent` instead of constructing `Message` — watcher is now independent of app
+
+**Phase 2 (Engine Abstraction):**
+- **Engine struct** (`app/engine.rs`) — encapsulates all shared state between TUI and headless runners
+- **EngineEvent enum** (`app/engine_event.rs`) — domain events for external consumers (future MCP server)
+- **TUI refactor** (`tui/runner.rs`) — uses Engine for all state management
+- **Headless refactor** (`headless/runner.rs`) — uses Engine for all state management
+- **Services wiring** — `FlutterController`, `LogService`, `StateService` now accessible via Engine
+
+This restructuring enables:
+- Clean dependency flow (no circular dependencies)
+- Headless mode with zero TUI dependencies
+- Shared Engine abstraction for TUI and headless
+- Event broadcasting for pro feature consumers
+- Future workspace split (engine crate extraction)
+
 ---
 
 ## Key Patterns
 
-### TEA Message Flow
+### TEA Message Flow (via Engine)
+
+The Engine acts as the central hub for all message processing. Both TUI and headless runners send messages to the Engine, which processes them through the TEA update cycle.
 
 ```
-┌──────────────────────────────────────────────────────────────┐
-│                        Event Loop                            │
-│                                                              │
-│   ┌─────────┐    ┌─────────┐    ┌─────────┐    ┌─────────┐  │
-│   │ Terminal│───▶│ Message │───▶│ Update  │───▶│ Render  │  │
-│   │  Event  │    │         │    │(handler)│    │  (view) │  │
-│   └─────────┘    └─────────┘    └────┬────┘    └─────────┘  │
-│                                      │                       │
-│   ┌─────────┐                   ┌────▼────┐                  │
-│   │ Daemon  │───▶Message───────▶│  State  │                  │
-│   │  Event  │                   │(AppState)│                  │
-│   └─────────┘                   └─────────┘                  │
-│                                                              │
-│   ┌─────────┐                                                │
-│   │  Timer  │───▶Message::Tick                               │
-│   └─────────┘                                                │
-└──────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                          Event Loop                              │
+│                                                                  │
+│  Input Sources                     Engine                        │
+│  ┌─────────┐                  ┌──────────────┐                  │
+│  │ Terminal│─────┐            │ msg_channel  │                  │
+│  │  Event  │     │            │      ↓       │                  │
+│  └─────────┘     │            │ process_msg  │                  │
+│                  ├───Message──▶│      ↓       │                  │
+│  ┌─────────┐     │            │  update()    │───Action────┐    │
+│  │ Daemon  │─────┤            │      ↓       │             │    │
+│  │  Event  │     │            │  AppState    │             ▼    │
+│  └─────────┘     │            │      ↓       │      handle_action() │
+│                  │            │emit_events() │      sync_shared_state() │
+│  ┌─────────┐     │            └──────┬───────┘             │    │
+│  │ Watcher │─────┤                   │                     │    │
+│  │  Event  │     │                   ▼                     ▼    │
+│  └─────────┘     │            EngineEvent            UpdateAction│
+│                  │            (broadcast)            (side effects)│
+│  ┌─────────┐     │                                                │
+│  │ Signal  │─────┘                                                │
+│  │ Handler │                                                      │
+│  └─────────┘                                                      │
+│                                                                  │
+│  ┌─────────────────────────────────────────────────────────┐    │
+│  │ TUI Runner: Render after drain_pending_messages()       │    │
+│  │ Headless Runner: Emit NDJSON events after process_msg() │    │
+│  └─────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
 ```
+
+**Message Processing Steps:**
+1. Input source (terminal, daemon, watcher, signal) sends `Message` to Engine's channel
+2. Engine calls `process_message(msg)`:
+   - Captures state snapshot (pre)
+   - Calls `handler::update(state, msg)` → returns `(new_state, action)`
+   - Calls `handle_action(action)` → spawns tasks, updates SharedState
+   - Captures state snapshot (post)
+   - Calls `emit_events(pre, post)` → broadcasts `EngineEvent` to subscribers
+3. Runner-specific handling:
+   - **TUI**: Drains all messages, flushes logs, renders frame
+   - **Headless**: Processes one message, flushes logs, emits NDJSON
 
 ### Multi-Session Architecture
 
@@ -697,6 +964,8 @@ cargo test test_hot_reload_flow
 
 | Module | Test File | Coverage |
 |--------|-----------|----------|
+| `app/engine` | inline | Engine initialization, message processing, event broadcasting |
+| `app/engine_event` | inline | Event type labels, serialization, all event variants |
 | `app/handler` | `tests.rs` | Message handling, state transitions |
 | `app/session` | `tests.rs` | Session lifecycle, log management |
 | `core/discovery` | inline | Project detection logic |
@@ -705,12 +974,23 @@ cargo test test_hot_reload_flow
 | `tui/render` | `render/tests.rs` | Full-screen snapshots, UI transitions |
 | `tui/widgets/log_view` | `tests.rs` | Widget rendering, scrolling |
 | `tui/widgets/status_bar` | inline | Widget rendering, phase display |
+| `headless` | inline | NDJSON serialization, event constructors |
 
 ---
 
 ## Future Considerations
 
-1. **MCP Server** — Services layer designed for MCP (Model Context Protocol) integration
-2. **Plugin System** — Core/service separation enables plugin extensions
-3. **Remote Devices** — Device abstraction supports remote device connections
-4. **Themes** — UI settings include theme configuration placeholder
+1. **MCP Server** — Services layer and EngineEvent broadcasting designed for MCP (Model Context Protocol) integration. External consumers can subscribe to `engine.subscribe()` and use `engine.flutter_controller()`, `engine.log_service()`, and `engine.state_service()` for control operations.
+
+2. **Workspace Split** — The Engine abstraction enables clean crate boundaries:
+   - `fdemon-core`: Domain types (no Engine dependency)
+   - `fdemon-daemon`: Flutter process management (no Engine dependency)
+   - `fdemon-app`: Engine + state + handlers + services
+   - `fdemon-tui`: TUI runner (creates Engine, adds terminal)
+   - `fdemon-headless`: Headless runner (creates Engine, adds NDJSON)
+
+3. **Plugin System** — Core/service separation enables plugin extensions. Plugins can subscribe to EngineEvents and access services via the Engine.
+
+4. **Remote Devices** — Device abstraction supports remote device connections. Future work could add SSH transport layer.
+
+5. **Themes** — UI settings include theme configuration placeholder.

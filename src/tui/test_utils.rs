@@ -20,7 +20,6 @@
 //! }
 //! ```
 
-use crate::daemon::Device;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
