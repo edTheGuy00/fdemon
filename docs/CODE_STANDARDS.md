@@ -193,3 +193,186 @@ When reviewing code, assess these dimensions:
 | **Testing** | Coverage, edge cases, test quality |
 | **Documentation** | Public API docs, module headers |
 | **Maintainability** | Code organization, naming, complexity |
+
+---
+
+## Architectural Code Patterns
+
+These patterns show how the key architectural components are used throughout the codebase.
+
+### Engine Usage
+
+```rust
+// Initialization
+Engine::new(project_path)           // Creates engine with full initialization
+
+// Message processing
+engine.process_message(msg)         // Process single message through TEA
+engine.drain_pending_messages()     // Process all pending messages
+engine.flush_pending_logs()         // Flush batched logs and sync SharedState
+
+// Service accessors
+engine.flutter_controller()         // Get controller for current session
+engine.log_service()                // Get log buffer access
+engine.state_service()              // Get app state access
+
+// Event broadcasting
+engine.subscribe()                  // Subscribe to EngineEvents
+
+// Lifecycle
+engine.shutdown().await             // Stop watcher, cleanup sessions
+```
+
+### TUI Runner Pattern
+
+```rust
+pub async fn run_with_project(project_path: &Path) -> Result<()> {
+    let mut engine = Engine::new(project_path.to_path_buf());
+    let mut term = ratatui::init();
+
+    // TUI-specific startup
+    startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
+
+    // Main loop
+    while !engine.should_quit() {
+        engine.drain_pending_messages();
+        engine.flush_pending_logs();
+        term.draw(|frame| render::view(frame, &mut engine.state))?;
+        if let Some(message) = event::poll()? {
+            engine.process_message(message);
+        }
+    }
+
+    engine.shutdown().await;
+    ratatui::restore();
+    Ok(())
+}
+```
+
+### Headless Runner Pattern
+
+```rust
+pub async fn run_headless(project_path: &Path) -> Result<()> {
+    let mut engine = Engine::new(project_path.to_path_buf());
+
+    // Headless-specific stdin reader
+    spawn_stdin_reader(engine.msg_sender());
+
+    // Auto-start Flutter session
+    headless_auto_start(&mut engine).await;
+
+    // Main loop
+    loop {
+        if engine.should_quit() { break; }
+        match engine.msg_rx.recv().await {
+            Some(msg) => {
+                engine.process_message(msg);
+                engine.flush_pending_logs();
+                emit_headless_events(&engine.state);
+            }
+            None => break,
+        }
+    }
+
+    engine.shutdown().await;
+    Ok(())
+}
+```
+
+### EngineEvent Subscription
+
+```rust
+let mut rx = engine.subscribe();
+
+tokio::spawn(async move {
+    while let Ok(event) = rx.recv().await {
+        match event {
+            EngineEvent::ReloadStarted { session_id } => {
+                // Track reload start time
+            }
+            EngineEvent::ReloadCompleted { session_id, time_ms } => {
+                // Report reload performance
+            }
+            EngineEvent::LogBatch { session_id, entries } => {
+                // Forward logs to MCP server
+            }
+            _ => {}
+        }
+    }
+});
+```
+
+### Key Type Definitions
+
+**AppState (Model):**
+```rust
+pub struct AppState {
+    // UI mode
+    pub ui_mode: UiMode,  // Normal, DeviceSelector, Loading, etc.
+
+    // Multi-session support
+    pub session_manager: SessionManager,
+    pub device_selector: DeviceSelectorState,
+
+    // Configuration
+    pub settings: Settings,
+    pub project_path: PathBuf,
+    pub project_name: Option<String>,
+
+    // Legacy single-session (backward compat)
+    pub phase: AppPhase,
+    pub logs: Vec<LogEntry>,
+    pub log_view_state: LogViewState,
+    pub current_app_id: Option<String>,
+    pub device_name: Option<String>,
+    pub reload_count: u32,
+    // ...
+}
+```
+
+**Message (Events):**
+```rust
+pub enum Message {
+    // Input
+    Key(KeyEvent),
+    Daemon(DaemonEvent),
+    Tick,
+
+    // Navigation
+    ScrollUp, ScrollDown, PageUp, PageDown,
+
+    // Control
+    HotReload, HotRestart, StopApp,
+    ReloadStarted, ReloadCompleted { time_ms: u64 }, ReloadFailed { reason: String },
+
+    // File watcher
+    FilesChanged { count: usize },
+    AutoReloadTriggered,
+
+    // Device/session management
+    ShowDeviceSelector, HideDeviceSelector,
+    DeviceSelected { device: Device },
+    SelectSessionByIndex(usize),
+    NextSession, PreviousSession,
+    CloseCurrentSession,
+
+    // Lifecycle
+    Quit,
+}
+```
+
+**UpdateResult (Update Output):**
+```rust
+pub struct UpdateResult {
+    pub message: Option<Message>,  // Follow-up message
+    pub action: Option<UpdateAction>,  // Side effect for event loop
+}
+
+pub enum UpdateAction {
+    SpawnTask(Task),
+    DiscoverDevices,
+    DiscoverEmulators,
+    LaunchEmulator { emulator_id: String },
+    SpawnSession { device: Device, config: Option<Box<LaunchConfig>> },
+}
+```
