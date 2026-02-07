@@ -185,3 +185,38 @@ Update scrollbar symbols to use theme-appropriate styling. The scrollbar current
 - **Blinking cursor**: `Modifier::SLOW_BLINK` support varies by terminal. Some terminals ignore it. This is acceptable — it's a polish feature.
 - **Source tag color change**: Changing App from Magenta to Green and Flutter from Blue to Indigo is an intentional design change, not a regression. The new colors match the design reference.
 - **The bottom metadata bar is NOT in this task** — that's Task 04 (merge status bar). This task handles the top metadata bar only.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Redesigned glass container with rounded borders, added top metadata bar with "TERMINAL LOGS" label and "LIVE FEED" badge, updated log entry styling with bullet separator, changed source tag colors (App→Green, Flutter→Indigo, Watcher→Blue), added blinking cursor for auto-scroll mode, updated empty/no-matches states with themed styles, adjusted visible_lines calculation to account for metadata bar |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Updated test expectation for search highlights (level indicator icon removed in redesign) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Level indicator icon removed**: The redesign replaces the level icon (✗, ⚠, •, ·) with a bullet separator between timestamp and source tag. This matches the design specification and simplifies the visual hierarchy.
+2. **Metadata bar includes filter/search indicators**: Filter and search status are now shown inline with "TERMINAL LOGS" label using bullet separator (e.g., "TERMINAL LOGS • Error • Search: 3/10"), providing better visibility than the previous title-based approach.
+3. **Blinking cursor conditional**: Cursor only appears when `state.auto_scroll` is true, indicating live feed mode. This provides visual feedback that new content is being tracked.
+4. **Visible_lines adjustment**: Content area height is reduced by 1 to account for the metadata bar, ensuring scroll calculations remain accurate.
+5. **Source tag color changes**: Intentional design change - App (Magenta→Green), Flutter (Blue→Indigo), Watcher (Cyan→Blue) to match the Cyber-Glass design reference.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - 473/474 tests passed (1 pre-existing header test failure unrelated to this task)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- Snapshot tests updated and accepted for visual changes (rounded borders, metadata bar)
+
+### Risks/Limitations
+
+1. **Terminal support for SLOW_BLINK**: Some terminals may not render the blinking cursor animation. This is acceptable as it's a visual enhancement, not a functional requirement.
+2. **One header test failure**: `widgets::header::tests::test_header_with_keybindings` fails, but this is out of scope for this task (header.rs modifications are handled by other tasks per task specification).
+3. **Visual regression intentional**: The removal of level indicator icons and change to rounded borders are intentional design changes, not bugs.

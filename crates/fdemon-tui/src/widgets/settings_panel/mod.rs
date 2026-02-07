@@ -17,6 +17,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, StatefulWidget, Widget},
 };
 
+use crate::theme::palette;
+
 use std::path::Path;
 
 use fdemon_app::config::{SettingItem, Settings, SettingsTab, UserPreferences};
@@ -67,7 +69,7 @@ impl StatefulWidget for SettingsPanel<'_> {
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
         // Clear the background with a solid color
-        let bg_style = Style::default().bg(Color::Black);
+        let bg_style = Style::default().bg(palette::DEEPEST_BG);
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {
                 buf[(x, y)].set_style(bg_style).set_char(' ');
@@ -154,7 +156,7 @@ impl SettingsPanel<'_> {
                 hint_x,
                 area.y,
                 close_hint,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             );
         }
     }
@@ -169,17 +171,17 @@ impl SettingsPanel<'_> {
 
         let (num_style, label_style, bg_style) = if is_active {
             (
-                Style::default().fg(Color::DarkGray).bg(Color::Cyan),
+                Style::default().fg(palette::TEXT_MUTED).bg(palette::ACCENT),
                 Style::default()
                     .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .bg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
-                Style::default().bg(Color::Cyan),
+                Style::default().bg(palette::ACCENT),
             )
         } else {
             (
-                Style::default().fg(Color::DarkGray),
-                Style::default().fg(Color::White),
+                Style::default().fg(palette::TEXT_MUTED),
+                Style::default().fg(palette::TEXT_PRIMARY),
                 Style::default(),
             )
         };
@@ -215,7 +217,7 @@ impl SettingsPanel<'_> {
             if x < area.right() {
                 buf[(x, area.y)]
                     .set_char('─')
-                    .set_style(Style::default().fg(Color::Cyan));
+                    .set_style(Style::default().fg(palette::ACCENT));
             }
         }
     }
@@ -260,7 +262,7 @@ impl SettingsPanel<'_> {
 
         let footer = Paragraph::new(shortcuts)
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::DarkGray));
+            .style(Style::default().fg(palette::TEXT_MUTED));
 
         footer.render(inner, buf);
     }
@@ -445,14 +447,14 @@ impl SettingsPanel<'_> {
                 Span::raw("  "),
                 Span::styled(
                     "These settings are stored in .fdemon/settings.local.toml",
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT_PRIMARY),
                 ),
             ]),
             Line::from(vec![
                 Span::raw("  "),
                 Span::styled(
                     "They are gitignored and override project settings for you only.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]),
         ]);
@@ -626,16 +628,16 @@ impl SettingsPanel<'_> {
             Line::from(""),
             Line::from(vec![Span::styled(
                 "No launch configurations found",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::STATUS_YELLOW),
             )]),
             Line::from(""),
             Line::from(vec![
                 Span::styled(
                     "Create .fdemon/launch.toml or press ",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::TEXT_MUTED),
                 ),
-                Span::styled("n", Style::default().fg(Color::Cyan)),
-                Span::styled(" to create one.", Style::default().fg(Color::DarkGray)),
+                Span::styled("n", Style::default().fg(palette::ACCENT)),
+                Span::styled(" to create one.", Style::default().fg(palette::TEXT_MUTED)),
             ]),
         ])
         .alignment(Alignment::Center);
@@ -766,14 +768,14 @@ impl SettingsPanel<'_> {
                 Span::raw("  🔒 "),
                 Span::styled(
                     "Read-only view of .vscode/launch.json (Dart configurations only)",
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::TEXT_PRIMARY),
                 ),
             ]),
             Line::from(vec![
                 Span::raw("     "),
                 Span::styled(
                     "Edit this file directly in VSCode for changes.",
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(palette::TEXT_MUTED),
                 ),
             ]),
         ]);
@@ -786,16 +788,16 @@ impl SettingsPanel<'_> {
             Line::from(""),
             Line::from(vec![Span::styled(
                 "No .vscode/launch.json found",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::STATUS_YELLOW),
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Create launch configurations in VSCode:",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )]),
             Line::from(vec![Span::styled(
                 "Run > Add Configuration > Dart & Flutter",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(palette::ACCENT),
             )]),
         ])
         .alignment(Alignment::Center);
@@ -808,16 +810,16 @@ impl SettingsPanel<'_> {
             Line::from(""),
             Line::from(vec![Span::styled(
                 "launch.json exists but has no Dart configurations",
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::STATUS_YELLOW),
             )]),
             Line::from(""),
             Line::from(vec![Span::styled(
                 "Add a Dart configuration in VSCode:",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )]),
             Line::from(vec![Span::styled(
                 "Run > Add Configuration > Dart: Flutter",
-                Style::default().fg(Color::Cyan),
+                Style::default().fg(palette::ACCENT),
             )]),
         ])
         .alignment(Alignment::Center);

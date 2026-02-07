@@ -197,3 +197,55 @@ Recommendation: keep the module for now but remove the `pub use` from `widgets/m
 - **Gap row consideration**: The 1-row gap costs vertical space. If it feels too tight on 24-row terminals, remove the gap and let the header and log panel borders touch. The color difference (`CARD_BG` containers on `DEEPEST_BG` background) still provides visual separation.
 - **Session data availability**: The `view()` function has `&mut AppState`, so all session data is accessible. No new data plumbing is needed.
 - **Overlay positioning**: The search/link overlays currently use hardcoded offsets from the log area bounds. A cleaner approach would be for the LogView to report its content area bounds, but that requires passing information back through the render call — not straightforward with ratatui's widget model. The hardcoded offset approach is pragmatic.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/layout.rs` | Removed `status` field from `ScreenAreas` struct, updated `create_with_sessions()` to add 1-row gap between header and logs, renamed `use_compact_status()` to `use_compact_footer()`, updated all tests to reflect new layout proportions |
+| `crates/fdemon-tui/src/render/mod.rs` | Removed standalone status bar rendering (lines 87-91), updated overlay positioning in `SearchInput`, `Normal`, and `LinkHighlight` modes to use `-3` offset (above bottom metadata bar instead of `-2`) |
+| `crates/fdemon-tui/src/render/snapshots/*.snap` | Updated 4 snapshot files to reflect new layout (gap row visible, no standalone status bar) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Gap implementation**: Added 1-row gap (Constraint::Length(1)) between header and logs to provide visual breathing room. The gap shows DEEPEST_BG background color, creating clear separation between glass containers.
+
+2. **Overlay positioning**: Changed overlay y-position from `height - 2` to `height - 3` to position search/link bars above the bottom metadata bar. The metadata bar is at `height - 2`, so overlays must be at `height - 3`.
+
+3. **ScreenAreas simplification**: Removed the `status` field entirely rather than making it `Option<Rect>`, as the standalone status bar is permanently replaced by the integrated metadata bars in LogView.
+
+4. **use_compact_footer function**: Marked with `#[allow(dead_code)]` as it's currently unused but provided for future enhancement when the log view might want to conditionally format the status footer based on terminal width.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (473/474 tests, 1 pre-existing failure in `test_header_with_keybindings` unrelated to layout changes)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- Snapshot tests updated via `cargo insta test --accept` for 4 render snapshots
+
+### Layout Verification
+
+On a 24-row terminal:
+- Header: rows 0-2 (3 rows)
+- Gap: row 3 (1 row, shows DEEPEST_BG)
+- Logs: rows 4-23 (20 rows, includes top+bottom metadata bars internally)
+
+Effective log content area: 16 lines (20 rows - 2 borders - 2 metadata bars)
+Previous effective area: 17 lines (19 rows - 2 borders, before metadata bars)
+
+Net change: -1 line of log content, but significantly improved visual hierarchy and information density through integrated metadata bars.
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: The `test_header_with_keybindings` test was already failing before these changes. This test checks for keybindings display in the header widget and is unrelated to layout proportions.
+
+2. **Overlay positioning assumption**: The overlay positioning assumes the bottom metadata bar is always at `height - 2`. If the LogView layout changes internally, these offsets may need adjustment. A future enhancement could have LogView expose its content area bounds.
+
+3. **Gap on small terminals**: On very small terminals (< 20 rows), the 1-row gap may feel wasteful. The layout could be enhanced to conditionally remove the gap when `area.height < 20`.

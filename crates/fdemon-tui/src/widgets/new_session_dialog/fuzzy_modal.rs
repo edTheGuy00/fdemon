@@ -10,21 +10,7 @@ use ratatui::{
 };
 
 use super::state::FuzzyModalState;
-
-/// Style constants for fuzzy modal
-mod styles {
-    use super::*;
-
-    pub const MODAL_BG: Color = Color::Rgb(40, 40, 50);
-    pub const HEADER_FG: Color = Color::Cyan;
-    pub const QUERY_FG: Color = Color::White;
-    pub const QUERY_BG: Color = Color::Rgb(60, 60, 70);
-    pub const ITEM_FG: Color = Color::White;
-    pub const SELECTED_FG: Color = Color::Black;
-    pub const SELECTED_BG: Color = Color::Cyan;
-    pub const HINT_FG: Color = Color::DarkGray;
-    pub const NO_MATCH_FG: Color = Color::Yellow;
-}
+use crate::theme::palette;
 
 /// Fuzzy search modal widget
 pub struct FuzzyModal<'a> {
@@ -85,14 +71,16 @@ impl<'a> FuzzyModal<'a> {
             Span::styled(
                 title,
                 Style::default()
-                    .fg(styles::HEADER_FG)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(hint, Style::default().fg(styles::HINT_FG)),
+            Span::styled(hint, Style::default().fg(palette::TEXT_MUTED)),
             Span::raw("  "),
             Span::styled(
                 query_display,
-                Style::default().fg(styles::QUERY_FG).bg(styles::QUERY_BG),
+                Style::default()
+                    .fg(palette::TEXT_PRIMARY)
+                    .bg(palette::MODAL_FUZZY_QUERY_BG),
             ),
         ]);
 
@@ -105,7 +93,7 @@ impl<'a> FuzzyModal<'a> {
         if self.loading {
             let msg = "Discovering entry points...";
             let para = Paragraph::new(msg)
-                .style(Style::default().fg(Color::Yellow))
+                .style(Style::default().fg(palette::STATUS_YELLOW))
                 .alignment(Alignment::Center);
             para.render(area, buf);
             return;
@@ -121,7 +109,7 @@ impl<'a> FuzzyModal<'a> {
             };
 
             let para = Paragraph::new(msg)
-                .style(Style::default().fg(styles::NO_MATCH_FG))
+                .style(Style::default().fg(palette::STATUS_YELLOW))
                 .alignment(Alignment::Center);
             para.render(area, buf);
             return;
@@ -154,11 +142,11 @@ impl<'a> FuzzyModal<'a> {
 
                 let style = if is_selected {
                     Style::default()
-                        .fg(styles::SELECTED_FG)
-                        .bg(styles::SELECTED_BG)
+                        .fg(Color::Black)
+                        .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(styles::ITEM_FG)
+                    Style::default().fg(palette::TEXT_PRIMARY)
                 };
 
                 ListItem::new(text).style(style)
@@ -178,7 +166,7 @@ impl<'a> FuzzyModal<'a> {
         };
 
         Paragraph::new(hints)
-            .style(Style::default().fg(styles::HINT_FG))
+            .style(Style::default().fg(palette::TEXT_MUTED))
             .alignment(Alignment::Center)
             .render(area, buf);
     }
@@ -194,7 +182,7 @@ impl Widget for FuzzyModal<'_> {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(styles::MODAL_BG));
+            .style(Style::default().bg(palette::MODAL_FUZZY_BG));
 
         let inner = block.inner(modal_area);
         block.render(modal_area, buf);
@@ -213,7 +201,7 @@ impl Widget for FuzzyModal<'_> {
         // Separator line
         let sep = "─".repeat(chunks[1].width as usize);
         Paragraph::new(sep)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(palette::BORDER_DIM))
             .render(chunks[1], buf);
 
         self.render_list(chunks[2], buf);
@@ -231,7 +219,11 @@ pub fn render_dim_overlay(area: Rect, buf: &mut Buffer) {
         for x in area.x..x_end {
             if let Some(cell) = buf.cell_mut((x, y)) {
                 // Dim the existing content
-                cell.set_style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+                cell.set_style(
+                    Style::default()
+                        .fg(palette::TEXT_MUTED)
+                        .bg(palette::DEEPEST_BG),
+                );
             }
         }
     }

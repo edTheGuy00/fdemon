@@ -10,10 +10,12 @@ use crate::widgets::LogViewState;
 use fdemon_app::state::{AppState, LoadingState, UiMode};
 use fdemon_core::LogEntry;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+use crate::theme::palette;
 
 /// Render the complete UI (View function in TEA)
 ///
@@ -21,6 +23,11 @@ use ratatui::Frame;
 /// except for widget state that tracks rendering info (scroll position).
 pub fn view(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
+
+    // Fill entire terminal with deepest background color
+    let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
+    frame.render_widget(bg_block, area);
+
     let session_count = state.session_manager.len();
     let areas = layout::create_with_sessions(area, session_count);
 
@@ -44,6 +51,29 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             log_view = log_view.link_highlight_state(&handle.session.link_highlight_state);
         }
 
+        // Build status info for bottom metadata bar (Phase 2 Task 4)
+        let duration = handle.session.session_duration().and_then(|d| {
+            let secs = d.num_seconds();
+            if secs >= 0 {
+                Some(std::time::Duration::from_secs(secs as u64))
+            } else {
+                None
+            }
+        });
+        let status_info = widgets::StatusInfo {
+            phase: &handle.session.phase,
+            is_busy: handle.session.is_busy(),
+            mode: handle.session.launch_config.as_ref().map(|cfg| &cfg.mode),
+            flavor: handle
+                .session
+                .launch_config
+                .as_ref()
+                .and_then(|cfg| cfg.flavor.as_deref()),
+            duration,
+            error_count: handle.session.error_count(),
+        };
+        log_view = log_view.with_status(status_info);
+
         frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
     } else {
         // No session selected - show empty log view
@@ -53,12 +83,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);
     }
 
-    // Status bar - use session data if available, otherwise use global state
-    if layout::use_compact_status(area) {
-        frame.render_widget(widgets::StatusBarCompact::new(state), areas.status);
-    } else {
-        frame.render_widget(widgets::StatusBar::new(state), areas.status);
-    }
+    // Status bar removed - status info is now integrated into the log view's bottom metadata bar
+    // (see StatusInfo building above, passed to LogView::with_status())
 
     // Render modal overlays based on UI mode
     match state.ui_mode {
@@ -88,12 +114,13 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             }
         }
         UiMode::SearchInput => {
-            // Render search input at bottom of log area
+            // Render search input at bottom of log area, above bottom metadata bar
             if let Some(handle) = state.session_manager.selected() {
-                // Calculate position for inline search (bottom of log area, inside border)
+                // Calculate position for inline search
+                // Position it above the bottom metadata bar (which is at height - 2)
                 let search_area = Rect::new(
                     areas.logs.x + 1,
-                    areas.logs.y + areas.logs.height.saturating_sub(2),
+                    areas.logs.y + areas.logs.height.saturating_sub(3),
                     areas.logs.width.saturating_sub(2),
                     1,
                 );
@@ -110,10 +137,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // No overlay - but show search status if search has results
             if let Some(handle) = state.session_manager.selected() {
                 if !handle.session.search_state.query.is_empty() {
-                    // Show mini search status at bottom of log area
+                    // Show mini search status above bottom metadata bar
                     let search_area = Rect::new(
                         areas.logs.x + 1,
-                        areas.logs.y + areas.logs.height.saturating_sub(2),
+                        areas.logs.y + areas.logs.height.saturating_sub(3),
                         areas.logs.width.saturating_sub(2),
                         1,
                     );
@@ -133,10 +160,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             if let Some(handle) = state.session_manager.selected() {
                 let link_count = handle.session.link_highlight_state.link_count();
 
-                // Calculate position for instruction bar (bottom of log area, inside border)
+                // Calculate position for instruction bar above bottom metadata bar
                 let bar_area = Rect::new(
                     areas.logs.x + 1,
-                    areas.logs.y + areas.logs.height.saturating_sub(2),
+                    areas.logs.y + areas.logs.height.saturating_sub(3),
                     areas.logs.width.saturating_sub(2),
                     1,
                 );
@@ -150,11 +177,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                     Line::from(vec![
                         Span::styled(
                             " No links found in viewport ",
-                            Style::default().fg(Color::DarkGray),
+                            Style::default().fg(palette::TEXT_MUTED),
                         ),
-                        Span::styled("│ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                        Span::styled(" to exit", Style::default().fg(Color::DarkGray)),
+                        Span::styled("│ ", Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled("Esc", Style::default().fg(palette::STATUS_YELLOW)),
+                        Span::styled(" to exit", Style::default().fg(palette::TEXT_MUTED)),
                     ])
                 } else {
                     // Determine shortcut range text
@@ -169,25 +196,25 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                     };
 
                     Line::from(vec![
-                        Span::styled(" Links: ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(" Links: ", Style::default().fg(palette::TEXT_MUTED)),
                         Span::styled(
                             link_count.to_string(),
                             Style::default()
-                                .fg(Color::Cyan)
+                                .fg(palette::ACCENT)
                                 .add_modifier(Modifier::BOLD),
                         ),
-                        Span::styled(" │ Press ", Style::default().fg(Color::DarkGray)),
-                        Span::styled(shortcut_range, Style::default().fg(Color::Yellow)),
-                        Span::styled(" to open │ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                        Span::styled(" cancel │ ", Style::default().fg(Color::DarkGray)),
-                        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
-                        Span::styled(" scroll", Style::default().fg(Color::DarkGray)),
+                        Span::styled(" │ Press ", Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled(shortcut_range, Style::default().fg(palette::STATUS_YELLOW)),
+                        Span::styled(" to open │ ", Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled("Esc", Style::default().fg(palette::STATUS_YELLOW)),
+                        Span::styled(" cancel │ ", Style::default().fg(palette::TEXT_MUTED)),
+                        Span::styled("↑↓", Style::default().fg(palette::STATUS_YELLOW)),
+                        Span::styled(" scroll", Style::default().fg(palette::TEXT_MUTED)),
                     ])
                 };
 
                 let bar =
-                    Paragraph::new(instruction).style(Style::default().bg(Color::Rgb(30, 30, 30)));
+                    Paragraph::new(instruction).style(Style::default().bg(palette::LINK_BAR_BG));
 
                 frame.render_widget(bar, bar_area);
             }
@@ -251,7 +278,7 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
     lines.push(Line::from(vec![Span::styled(
         app_name,
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::ACCENT)
             .add_modifier(Modifier::BOLD),
     )]));
 
@@ -262,18 +289,21 @@ fn render_loading_screen(frame: &mut Frame, state: &AppState, loading: &LoadingS
         Span::styled(
             spinner_char,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(" ", Style::default()),
-        Span::styled(&loading.message, Style::default().fg(Color::Gray)),
+        Span::styled(
+            &loading.message,
+            Style::default().fg(palette::TEXT_SECONDARY),
+        ),
     ]));
 
     // Create block with border
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray))
-        .style(Style::default().bg(Color::Black));
+        .border_style(Style::default().fg(palette::BORDER_DIM))
+        .style(Style::default().bg(palette::DEEPEST_BG));
 
     // Create paragraph with centered content
     let paragraph = Paragraph::new(lines)

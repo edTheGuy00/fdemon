@@ -16,44 +16,9 @@ use ratatui::{
     widgets::{BorderType, Paragraph, Widget},
 };
 
-/// Styles for Launch Context fields
-pub struct LaunchContextStyles {
-    pub label: Style,
-    pub value_normal: Style,
-    pub value_focused: Style,
-    pub value_disabled: Style,
-    pub placeholder: Style,
-    pub button_normal: Style,
-    pub button_focused: Style,
-    pub mode_selected: Style,
-    pub mode_unselected: Style,
-    pub suffix: Style,
-}
+use crate::theme::palette;
 
-impl Default for LaunchContextStyles {
-    fn default() -> Self {
-        Self {
-            label: Style::default().fg(Color::Gray),
-            value_normal: Style::default().fg(Color::White),
-            value_focused: Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            value_disabled: Style::default().fg(Color::DarkGray),
-            placeholder: Style::default().fg(Color::DarkGray),
-            button_normal: Style::default().fg(Color::Green),
-            button_focused: Style::default()
-                .fg(Color::Black)
-                .bg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-            mode_selected: Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            mode_unselected: Style::default().fg(Color::DarkGray),
-            suffix: Style::default().fg(Color::DarkGray),
-        }
-    }
-}
+// Removed LaunchContextStyles struct - using palette constants directly
 
 /// A dropdown-style field that opens a fuzzy modal
 pub struct DropdownField {
@@ -62,7 +27,6 @@ pub struct DropdownField {
     is_focused: bool,
     is_disabled: bool,
     suffix: Option<String>,
-    styles: LaunchContextStyles,
 }
 
 impl DropdownField {
@@ -73,7 +37,6 @@ impl DropdownField {
             is_focused: false,
             is_disabled: false,
             suffix: None,
-            styles: LaunchContextStyles::default(),
         }
     }
 
@@ -103,16 +66,20 @@ impl Widget for DropdownField {
         .split(area);
 
         // Render label
-        let label = Paragraph::new(format!("  {}:", self.label)).style(self.styles.label);
+        let label = Paragraph::new(format!("  {}:", self.label))
+            .style(Style::default().fg(palette::TEXT_SECONDARY));
         label.render(chunks[0], buf);
 
         // Determine value style
         let value_style = if self.is_disabled {
-            self.styles.value_disabled
+            Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
-            self.styles.value_focused
+            Style::default()
+                .fg(Color::Black)
+                .bg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
-            self.styles.value_normal
+            Style::default().fg(palette::TEXT_PRIMARY)
         };
 
         // Format value with dropdown indicator and suffix
@@ -129,7 +96,7 @@ impl Widget for DropdownField {
             Span::styled(format!("[ {}", display_value), value_style),
             Span::styled(dropdown_indicator, value_style),
             Span::styled(" ]", value_style),
-            Span::styled(suffix_text, self.styles.suffix),
+            Span::styled(suffix_text, Style::default().fg(palette::TEXT_MUTED)),
         ]);
 
         Paragraph::new(value_line).render(chunks[1], buf);
@@ -141,7 +108,6 @@ pub struct ModeSelector {
     selected: FlutterMode,
     is_focused: bool,
     is_disabled: bool,
-    styles: LaunchContextStyles,
 }
 
 impl ModeSelector {
@@ -150,7 +116,6 @@ impl ModeSelector {
             selected,
             is_focused: false,
             is_disabled: false,
-            styles: LaunchContextStyles::default(),
         }
     }
 
@@ -166,13 +131,18 @@ impl ModeSelector {
 
     fn mode_style(&self, mode: FlutterMode) -> Style {
         if self.is_disabled {
-            self.styles.value_disabled
+            Style::default().fg(palette::TEXT_MUTED)
         } else if mode == self.selected && self.is_focused {
-            self.styles.value_focused
+            Style::default()
+                .fg(Color::Black)
+                .bg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else if mode == self.selected {
-            self.styles.mode_selected
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
-            self.styles.mode_unselected
+            Style::default().fg(palette::TEXT_MUTED)
         }
     }
 
@@ -194,7 +164,7 @@ impl Widget for ModeSelector {
         .split(area);
 
         // Render label
-        let label = Paragraph::new("  Mode:").style(self.styles.label);
+        let label = Paragraph::new("  Mode:").style(Style::default().fg(palette::TEXT_SECONDARY));
         label.render(chunks[0], buf);
 
         // Render radio buttons
@@ -230,7 +200,6 @@ pub struct ActionField {
     action_indicator: &'static str,
     is_focused: bool,
     is_disabled: bool,
-    styles: LaunchContextStyles,
 }
 
 impl ActionField {
@@ -241,7 +210,6 @@ impl ActionField {
             action_indicator: "▶",
             is_focused: false,
             is_disabled: false,
-            styles: LaunchContextStyles::default(),
         }
     }
 
@@ -265,16 +233,20 @@ impl Widget for ActionField {
         .split(area);
 
         // Render label
-        let label = Paragraph::new(format!("  {}:", self.label)).style(self.styles.label);
+        let label = Paragraph::new(format!("  {}:", self.label))
+            .style(Style::default().fg(palette::TEXT_SECONDARY));
         label.render(chunks[0], buf);
 
         // Determine value style
         let value_style = if self.is_disabled {
-            self.styles.value_disabled
+            Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
-            self.styles.value_focused
+            Style::default()
+                .fg(Color::Black)
+                .bg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD)
         } else {
-            self.styles.value_normal
+            Style::default().fg(palette::TEXT_PRIMARY)
         };
 
         let indicator = if self.is_disabled {
@@ -297,7 +269,6 @@ impl Widget for ActionField {
 pub struct LaunchButton {
     is_focused: bool,
     is_enabled: bool,
-    styles: LaunchContextStyles,
 }
 
 impl LaunchButton {
@@ -305,7 +276,6 @@ impl LaunchButton {
         Self {
             is_focused: false,
             is_enabled: true,
-            styles: LaunchContextStyles::default(),
         }
     }
 
@@ -329,11 +299,14 @@ impl Default for LaunchButton {
 impl Widget for LaunchButton {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let style = if !self.is_enabled {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::TEXT_MUTED)
         } else if self.is_focused {
-            self.styles.button_focused
+            Style::default()
+                .fg(Color::Black)
+                .bg(palette::STATUS_GREEN)
+                .add_modifier(Modifier::BOLD)
         } else {
-            self.styles.button_normal
+            Style::default().fg(palette::STATUS_GREEN)
         };
 
         let text = if self.is_enabled {
@@ -681,9 +654,9 @@ fn calculate_fields_layout(inner: Rect) -> [Rect; 13] {
 /// Render the border block and return the inner area
 fn render_border(area: Rect, buf: &mut Buffer, is_focused: bool) -> Rect {
     let border_color = if is_focused {
-        Color::Cyan
+        palette::ACCENT
     } else {
-        Color::DarkGray
+        palette::BORDER_DIM
     };
 
     let block = Block::default()
@@ -806,9 +779,9 @@ impl LaunchContextWithDevice<'_> {
     fn render_compact(&self, area: Rect, buf: &mut Buffer) {
         // Add border with title
         let border_style = if self.is_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(palette::ACCENT)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::BORDER_DIM)
         };
 
         let block = Block::default()
@@ -869,21 +842,21 @@ impl LaunchContextWithDevice<'_> {
         let mode_disabled = !self.state.is_mode_editable();
 
         let style_selected = if mode_disabled {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::TEXT_MUTED)
         } else if mode_focused {
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         };
 
-        let style_unselected = Style::default().fg(Color::DarkGray);
+        let style_unselected = Style::default().fg(palette::TEXT_MUTED);
 
-        let style_label = Style::default().fg(Color::Gray);
+        let style_label = Style::default().fg(palette::TEXT_SECONDARY);
 
         // Determine if we have space for full labels
         // Full labels need ~42 chars, abbreviated need ~24 chars

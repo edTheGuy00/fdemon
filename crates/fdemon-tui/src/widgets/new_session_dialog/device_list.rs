@@ -6,7 +6,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{List, ListItem, Widget},
 };
@@ -17,39 +17,11 @@ use super::device_groups::{
 };
 use fdemon_app::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
+use crate::theme::palette;
+
 /// Minimum width (in columns) to show verbose scroll indicators ("↑ more").
 /// Below this threshold, compact indicators ("↑") are shown.
 const VERBOSE_INDICATOR_WIDTH_THRESHOLD: u16 = 50;
-
-/// Styling configuration for device list rendering.
-///
-/// Defines colors and styles for headers, devices, selection indicators,
-/// and various device states (connected, disconnected, booting).
-#[derive(Debug, Clone)]
-pub struct DeviceListStyles {
-    pub header: Style,
-    pub device_normal: Style,
-    pub device_selected: Style,
-    pub device_selected_focused: Style,
-    pub info: Style,
-}
-
-impl Default for DeviceListStyles {
-    fn default() -> Self {
-        Self {
-            header: Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-            device_normal: Style::default(),
-            device_selected: Style::default().add_modifier(Modifier::BOLD),
-            device_selected_focused: Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-            info: Style::default().fg(Color::DarkGray),
-        }
-    }
-}
 
 /// Widget for rendering connected devices with grouping
 pub struct ConnectedDeviceList<'a> {
@@ -57,7 +29,6 @@ pub struct ConnectedDeviceList<'a> {
     selected_index: usize,
     is_focused: bool,
     scroll_offset: usize,
-    styles: DeviceListStyles,
 }
 
 impl<'a> ConnectedDeviceList<'a> {
@@ -72,7 +43,6 @@ impl<'a> ConnectedDeviceList<'a> {
             selected_index,
             is_focused,
             scroll_offset,
-            styles: DeviceListStyles::default(),
         }
     }
 
@@ -83,18 +53,26 @@ impl<'a> ConnectedDeviceList<'a> {
         area_width: u16,
     ) -> ListItem<'static> {
         match item {
-            DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
-                Span::styled("  ", self.styles.device_normal),
-                Span::styled(header.clone(), self.styles.header),
-            ])),
+            DeviceListItem::Header(header) => {
+                let header_style = Style::default()
+                    .fg(palette::STATUS_YELLOW)
+                    .add_modifier(Modifier::BOLD);
+                ListItem::new(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(header.clone(), header_style),
+                ]))
+            }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
-                    self.styles.device_selected_focused
+                    Style::default()
+                        .fg(ratatui::style::Color::Black)
+                        .bg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    self.styles.device_selected
+                    Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    self.styles.device_normal
+                    Style::default()
                 };
 
                 let indicator = if is_selected { "▶ " } else { "  " };
@@ -124,7 +102,7 @@ impl<'a> ConnectedDeviceList<'a> {
                 ListItem::new(Line::from(vec![
                     Span::styled(indicator, style),
                     Span::styled(name, style),
-                    Span::styled(type_suffix, self.styles.info),
+                    Span::styled(type_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
             }
         }
@@ -152,7 +130,7 @@ impl<'a> ConnectedDeviceList<'a> {
                 x,
                 area.top(),
                 up_indicator,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::BORDER_DIM),
             );
         }
 
@@ -160,7 +138,12 @@ impl<'a> ConnectedDeviceList<'a> {
         if end < total {
             let x = area.right().saturating_sub(down_indicator.len() as u16 + 1);
             let y = area.bottom().saturating_sub(1);
-            buf.set_string(x, y, down_indicator, Style::default().fg(Color::DarkGray));
+            buf.set_string(
+                x,
+                y,
+                down_indicator,
+                Style::default().fg(palette::BORDER_DIM),
+            );
         }
     }
 }
@@ -201,7 +184,6 @@ pub struct BootableDeviceList<'a> {
     is_focused: bool,
     scroll_offset: usize,
     tool_availability: &'a ToolAvailability,
-    styles: DeviceListStyles,
 }
 
 impl<'a> BootableDeviceList<'a> {
@@ -220,7 +202,6 @@ impl<'a> BootableDeviceList<'a> {
             is_focused,
             scroll_offset,
             tool_availability,
-            styles: DeviceListStyles::default(),
         }
     }
 
@@ -231,18 +212,26 @@ impl<'a> BootableDeviceList<'a> {
         area_width: u16,
     ) -> ListItem<'static> {
         match item {
-            DeviceListItem::Header(header) => ListItem::new(Line::from(vec![
-                Span::styled("  ", self.styles.device_normal),
-                Span::styled(header.clone(), self.styles.header),
-            ])),
+            DeviceListItem::Header(header) => {
+                let header_style = Style::default()
+                    .fg(palette::STATUS_YELLOW)
+                    .add_modifier(Modifier::BOLD);
+                ListItem::new(Line::from(vec![
+                    Span::styled("  ", Style::default()),
+                    Span::styled(header.clone(), header_style),
+                ]))
+            }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
                 let style = if is_selected && self.is_focused {
-                    self.styles.device_selected_focused
+                    Style::default()
+                        .fg(ratatui::style::Color::Black)
+                        .bg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    self.styles.device_selected
+                    Style::default().add_modifier(Modifier::BOLD)
                 } else {
-                    self.styles.device_normal
+                    Style::default()
                 };
 
                 let indicator = if is_selected { "▶ " } else { "  " };
@@ -264,7 +253,7 @@ impl<'a> BootableDeviceList<'a> {
                 ListItem::new(Line::from(vec![
                     Span::styled(indicator, style),
                     Span::styled(name, style),
-                    Span::styled(runtime_suffix, self.styles.info),
+                    Span::styled(runtime_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
             }
         }
@@ -279,14 +268,14 @@ impl<'a> BootableDeviceList<'a> {
         if let Some(msg) = self.tool_availability.ios_unavailable_message() {
             messages.push(Line::from(Span::styled(
                 msg,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::STATUS_YELLOW),
             )));
         }
 
         if let Some(msg) = self.tool_availability.android_unavailable_message() {
             messages.push(Line::from(Span::styled(
                 msg,
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::STATUS_YELLOW),
             )));
         }
 
@@ -319,7 +308,7 @@ impl<'a> BootableDeviceList<'a> {
                 x,
                 area.top(),
                 up_indicator,
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::BORDER_DIM),
             );
         }
 
@@ -327,7 +316,12 @@ impl<'a> BootableDeviceList<'a> {
         if end < total {
             let x = area.right().saturating_sub(down_indicator.len() as u16 + 1);
             let y = area.bottom().saturating_sub(1);
-            buf.set_string(x, y, down_indicator, Style::default().fg(Color::DarkGray));
+            buf.set_string(
+                x,
+                y,
+                down_indicator,
+                Style::default().fg(palette::BORDER_DIM),
+            );
         }
     }
 }
@@ -354,7 +348,7 @@ impl Widget for BootableDeviceList<'_> {
 
             let msg = Paragraph::new("No bootable devices found")
                 .alignment(Alignment::Center)
-                .style(Style::default().fg(Color::DarkGray));
+                .style(Style::default().fg(palette::TEXT_MUTED));
             msg.render(area, buf);
             return;
         }
@@ -608,10 +602,5 @@ mod tests {
         assert_eq!(device.runtime_info(), "Unknown API");
     }
 
-    #[test]
-    fn test_device_list_styles_default() {
-        let styles = DeviceListStyles::default();
-        assert_eq!(styles.header.fg, Some(Color::Yellow));
-        assert_eq!(styles.device_selected_focused.bg, Some(Color::Cyan));
-    }
+    // Removed test_device_list_styles_default - DeviceListStyles struct was removed in theme migration
 }

@@ -3,12 +3,14 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
 use fdemon_core::SearchState;
+
+use crate::theme::palette;
 
 /// Search input prompt widget
 pub struct SearchInput<'a> {
@@ -51,15 +53,21 @@ impl SearchInput<'_> {
             Span::styled(
                 "/",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::STATUS_YELLOW)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(&self.search_state.query, Style::default().fg(Color::White)),
+            Span::styled(
+                &self.search_state.query,
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ),
         ];
 
         // Add cursor
         if self.search_state.is_active {
-            spans.push(Span::styled("_", Style::default().fg(Color::Yellow)));
+            spans.push(Span::styled(
+                "_",
+                Style::default().fg(palette::STATUS_YELLOW),
+            ));
         }
 
         // Add match count if query is not empty
@@ -70,9 +78,9 @@ impl SearchInput<'_> {
 
                 // Color based on whether matches were found
                 let status_style = if self.search_state.has_matches() {
-                    Style::default().fg(Color::Green)
+                    Style::default().fg(palette::STATUS_GREEN)
                 } else {
-                    Style::default().fg(Color::Red)
+                    Style::default().fg(palette::STATUS_RED)
                 };
                 spans.push(Span::styled(status, status_style));
             }
@@ -88,7 +96,7 @@ impl SearchInput<'_> {
                 };
                 spans.push(Span::styled(
                     format!("({})", short_error),
-                    Style::default().fg(Color::Red),
+                    Style::default().fg(palette::STATUS_RED),
                 ));
             }
         }
@@ -115,7 +123,7 @@ impl SearchInput<'_> {
         let block = Block::default()
             .title(" Search ")
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(palette::STATUS_YELLOW));
 
         let inner = block.inner(popup_area);
         block.render(popup_area, buf);
@@ -125,11 +133,14 @@ impl SearchInput<'_> {
             Span::styled(
                 "/",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::STATUS_YELLOW)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(&self.search_state.query, Style::default().fg(Color::White)),
-            Span::styled("_", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                &self.search_state.query,
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ),
+            Span::styled("_", Style::default().fg(palette::STATUS_YELLOW)),
         ];
 
         // Add status on same line if room
@@ -137,9 +148,9 @@ impl SearchInput<'_> {
         if !status.is_empty() && inner.width > 30 {
             spans.push(Span::raw("  "));
             let status_style = if self.search_state.has_matches() {
-                Style::default().fg(Color::Green)
+                Style::default().fg(palette::STATUS_GREEN)
             } else {
-                Style::default().fg(Color::Red)
+                Style::default().fg(palette::STATUS_RED)
             };
             spans.push(Span::styled(status, status_style));
         }

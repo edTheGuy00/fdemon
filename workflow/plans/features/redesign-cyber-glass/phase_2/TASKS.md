@@ -44,12 +44,12 @@ Transform the main log screen (header + log panel + status bar) to match the Cyb
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-terminal-background](tasks/01-terminal-background.md) | Not Started | - | `render/mod.rs` |
-| 2 | [02-redesign-header](tasks/02-redesign-header.md) | Not Started | - | `widgets/header.rs`, `widgets/tabs.rs` |
-| 3 | [03-redesign-log-view](tasks/03-redesign-log-view.md) | Not Started | - | `widgets/log_view/mod.rs`, `widgets/log_view/styles.rs` |
-| 4 | [04-merge-status-into-log](tasks/04-merge-status-into-log.md) | Not Started | 3 | `widgets/log_view/mod.rs`, `widgets/status_bar/mod.rs` |
-| 5 | [05-update-layout](tasks/05-update-layout.md) | Not Started | 2, 3, 4 | `layout.rs`, `render/mod.rs` |
-| 6 | [06-update-tests](tasks/06-update-tests.md) | Not Started | 1, 2, 3, 4, 5 | All test files |
+| 1 | [01-terminal-background](tasks/01-terminal-background.md) | Done | - | `render/mod.rs` |
+| 2 | [02-redesign-header](tasks/02-redesign-header.md) | Done | - | `widgets/header.rs`, `widgets/tabs.rs` |
+| 3 | [03-redesign-log-view](tasks/03-redesign-log-view.md) | Done | - | `widgets/log_view/mod.rs`, `widgets/log_view/styles.rs` |
+| 4 | [04-merge-status-into-log](tasks/04-merge-status-into-log.md) | Done | 3 | `widgets/log_view/mod.rs`, `widgets/status_bar/mod.rs` |
+| 5 | [05-update-layout](tasks/05-update-layout.md) | Done | 2, 3, 4 | `layout.rs`, `render/mod.rs` |
+| 6 | [06-update-tests](tasks/06-update-tests.md) | Done | 1, 2, 3, 4, 5 | All test files |
 
 ## Execution Strategy
 

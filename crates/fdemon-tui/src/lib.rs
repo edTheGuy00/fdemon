@@ -26,6 +26,7 @@ pub mod runner;
 pub mod selector;
 pub(crate) mod startup;
 pub(crate) mod terminal;
+pub(crate) mod theme;
 pub mod widgets;
 
 #[cfg(test)]

@@ -1,7 +1,8 @@
 //! Styling helpers for settings panel rendering
 
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 
+use crate::theme::palette;
 use fdemon_app::config::SettingValue;
 
 /// Layout constants for setting rows
@@ -22,20 +23,20 @@ pub fn value_style(value: &SettingValue, is_selected: bool) -> Style {
     };
 
     match value {
-        SettingValue::Bool(true) => base.fg(Color::Green),
-        SettingValue::Bool(false) => base.fg(Color::Red),
-        SettingValue::Number(_) | SettingValue::Float(_) => base.fg(Color::Cyan),
-        SettingValue::String(s) if s.is_empty() => base.fg(Color::DarkGray),
-        SettingValue::String(_) => base.fg(Color::White),
-        SettingValue::Enum { .. } => base.fg(Color::Magenta),
-        SettingValue::List(_) => base.fg(Color::Blue),
+        SettingValue::Bool(true) => base.fg(palette::STATUS_GREEN),
+        SettingValue::Bool(false) => base.fg(palette::STATUS_RED),
+        SettingValue::Number(_) | SettingValue::Float(_) => base.fg(palette::ACCENT),
+        SettingValue::String(s) if s.is_empty() => base.fg(palette::TEXT_MUTED),
+        SettingValue::String(_) => base.fg(palette::TEXT_PRIMARY),
+        SettingValue::Enum { .. } => base.fg(palette::STATUS_INDIGO),
+        SettingValue::List(_) => base.fg(palette::STATUS_BLUE),
     }
 }
 
 /// Style for selection indicator
 pub fn indicator_style(is_selected: bool) -> Style {
     if is_selected {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT)
     } else {
         Style::default()
     }
@@ -44,9 +45,9 @@ pub fn indicator_style(is_selected: bool) -> Style {
 /// Style for override indicator
 pub fn override_indicator_style(is_override: bool, is_selected: bool) -> Style {
     if is_override {
-        Style::default().fg(Color::Yellow)
+        Style::default().fg(palette::STATUS_YELLOW)
     } else if is_selected {
-        Style::default().fg(Color::Cyan)
+        Style::default().fg(palette::ACCENT)
     } else {
         Style::default()
     }
@@ -63,63 +64,65 @@ pub fn label_style(is_selected: bool) -> Style {
 
 /// Style for editing mode
 pub fn editing_style() -> Style {
-    Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+    Style::default()
+        .fg(palette::STATUS_YELLOW)
+        .bg(palette::BORDER_DIM)
 }
 
 /// Style for section headers
 pub fn section_header_style() -> Style {
     Style::default()
-        .fg(Color::Yellow)
+        .fg(palette::STATUS_YELLOW)
         .add_modifier(Modifier::BOLD)
 }
 
 /// Style for config headers (launch configs)
 pub fn config_header_style() -> Style {
-    Style::default().fg(Color::Cyan)
+    Style::default().fg(palette::ACCENT)
 }
 
 /// Style for VSCode config headers
 pub fn vscode_header_style() -> Style {
-    Style::default().fg(Color::Blue)
+    Style::default().fg(palette::STATUS_BLUE)
 }
 
 /// Style for descriptions (dimmed)
 pub fn description_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(palette::TEXT_MUTED)
 }
 
 /// Style for read-only labels
 pub fn readonly_label_style(is_selected: bool) -> Style {
     if is_selected {
-        Style::default().fg(Color::White)
+        Style::default().fg(palette::TEXT_PRIMARY)
     } else {
-        Style::default().fg(Color::Gray)
+        Style::default().fg(palette::TEXT_SECONDARY)
     }
 }
 
 /// Style for read-only values
 pub fn readonly_value_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(palette::TEXT_MUTED)
 }
 
 /// Style for read-only indicator
 pub fn readonly_indicator_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    Style::default().fg(palette::TEXT_MUTED)
 }
 
 /// Style for info box borders
 pub fn info_border_style() -> Style {
-    Style::default().fg(Color::Blue)
+    Style::default().fg(palette::STATUS_BLUE)
 }
 
 /// Style for "Add New" option
 pub fn add_new_style(is_selected: bool) -> Style {
     if is_selected {
         Style::default()
-            .fg(Color::Green)
+            .fg(palette::STATUS_GREEN)
             .add_modifier(Modifier::BOLD)
     } else {
-        Style::default().fg(Color::Green)
+        Style::default().fg(palette::STATUS_GREEN)
     }
 }
 

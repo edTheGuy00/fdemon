@@ -3,7 +3,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     symbols,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Widget},
@@ -11,6 +11,8 @@ use ratatui::{
 
 // Import state from app layer (re-exported at widgets/mod.rs level)
 use fdemon_app::confirm_dialog::ConfirmDialogState;
+
+use crate::theme::palette;
 
 /// Confirmation dialog widget
 pub struct ConfirmDialog<'a> {
@@ -47,7 +49,7 @@ impl Widget for ConfirmDialog<'_> {
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(Color::DarkGray));
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(modal_area);
         block.render(modal_area, buf);
@@ -66,31 +68,33 @@ impl Widget for ConfirmDialog<'_> {
         // Session count message
         let message = Paragraph::new(self.state.message.as_str())
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::Yellow));
+            .style(Style::default().fg(palette::STATUS_YELLOW));
         message.render(chunks[1], buf);
 
         // Warning message
         let warning = Paragraph::new("All Flutter processes will be terminated.")
             .alignment(Alignment::Center)
-            .style(Style::default().fg(Color::White));
+            .style(Style::default().fg(palette::TEXT_PRIMARY));
         warning.render(chunks[2], buf);
 
         // Buttons
         let buttons = Line::from(vec![
-            Span::styled("[", Style::default().fg(Color::DarkGray)),
+            Span::styled("[", Style::default().fg(palette::BORDER_DIM)),
             Span::styled(
                 "y",
                 Style::default()
-                    .fg(Color::Green)
+                    .fg(palette::STATUS_GREEN)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] Yes  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("[", Style::default().fg(Color::DarkGray)),
+            Span::styled("] Yes  ", Style::default().fg(palette::BORDER_DIM)),
+            Span::styled("[", Style::default().fg(palette::BORDER_DIM)),
             Span::styled(
                 "n",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(palette::STATUS_RED)
+                    .add_modifier(Modifier::BOLD),
             ),
-            Span::styled("] No", Style::default().fg(Color::DarkGray)),
+            Span::styled("] No", Style::default().fg(palette::BORDER_DIM)),
         ]);
 
         let buttons_para = Paragraph::new(buttons).alignment(Alignment::Center);

@@ -5,7 +5,7 @@
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Line,
     widgets::{Block, BorderType, Borders, Paragraph, Widget},
 };
@@ -15,6 +15,8 @@ use super::device_list::{BootableDeviceList, ConnectedDeviceList};
 use super::tab_bar::TabBar;
 use super::TargetTab;
 use fdemon_app::ToolAvailability;
+
+use crate::theme::palette;
 
 // Re-export TargetSelectorState from app layer for backward compatibility
 pub use fdemon_app::new_session_dialog::TargetSelectorState;
@@ -63,9 +65,9 @@ impl TargetSelector<'_> {
     fn render_full(&self, area: Rect, buf: &mut Buffer) {
         // Main block
         let border_color = if self.is_focused {
-            Color::Cyan
+            palette::BORDER_ACTIVE
         } else {
-            Color::DarkGray
+            palette::BORDER_DIM
         };
 
         let block = Block::default()
@@ -126,9 +128,9 @@ impl TargetSelector<'_> {
     fn render_compact(&self, area: Rect, buf: &mut Buffer) {
         // Add border with title
         let border_style = if self.is_focused {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(palette::BORDER_ACTIVE)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(palette::BORDER_DIM)
         };
 
         let block = Block::default()
@@ -190,14 +192,14 @@ impl TargetSelector<'_> {
 
         let style_active = if self.is_focused {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
             Style::default()
-                .fg(Color::Gray)
+                .fg(palette::TEXT_SECONDARY)
                 .add_modifier(Modifier::BOLD)
         };
-        let style_inactive = Style::default().fg(Color::DarkGray);
+        let style_inactive = Style::default().fg(palette::TEXT_MUTED);
 
         let tabs = vec![
             Span::styled(
@@ -235,14 +237,14 @@ impl TargetSelector<'_> {
 impl TargetSelector<'_> {
     fn render_loading(&self, area: Rect, buf: &mut Buffer) {
         let text = Paragraph::new("Discovering devices...")
-            .style(Style::default().fg(Color::Yellow))
+            .style(Style::default().fg(palette::STATUS_YELLOW))
             .alignment(Alignment::Center);
         text.render(area, buf);
     }
 
     fn render_error(&self, area: Rect, buf: &mut Buffer, error: &str) {
         let text = Paragraph::new(error)
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(palette::STATUS_RED))
             .alignment(Alignment::Center);
         text.render(area, buf);
     }
@@ -254,7 +256,7 @@ impl TargetSelector<'_> {
         };
 
         let text = Paragraph::new(hints)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(palette::BORDER_DIM))
             .alignment(Alignment::Center);
         text.render(area, buf);
     }

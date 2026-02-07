@@ -426,8 +426,8 @@ fn test_format_entry_with_search_highlights() {
     let line = view.format_entry(&logs[0], 0);
 
     // Should have at least 2 spans for message: "error" (highlighted) + " occurred"
-    // Plus the level indicator span
-    assert!(line.spans.len() >= 3, "Got {} spans", line.spans.len());
+    // (Phase 2: Level indicator icon removed from redesign)
+    assert!(line.spans.len() >= 2, "Got {} spans", line.spans.len());
 }
 
 // ─────────────────────────────────────────────────────────

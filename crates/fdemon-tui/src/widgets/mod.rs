@@ -3,6 +3,7 @@
 mod confirm_dialog;
 mod header;
 mod log_view;
+pub mod modal_overlay;
 pub mod new_session_dialog;
 mod search_input;
 pub mod settings_panel;
@@ -11,7 +12,7 @@ mod tabs;
 
 pub use confirm_dialog::ConfirmDialog;
 pub use header::MainHeader;
-pub use log_view::LogView;
+pub use log_view::{LogView, StatusInfo};
 pub use new_session_dialog::*;
 pub use search_input::SearchInput;
 pub use settings_panel::SettingsPanel;

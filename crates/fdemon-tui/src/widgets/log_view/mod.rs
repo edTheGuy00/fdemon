@@ -1,12 +1,14 @@
 //! Scrollable log view widget with rich formatting
 
 use std::collections::VecDeque;
+use std::time::Duration;
 
+use fdemon_app::config::FlutterMode;
 use fdemon_app::hyperlinks::LinkHighlightState;
 use fdemon_app::log_view_state::{FocusInfo, LogViewState};
 use fdemon_core::{
-    FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter, SearchState,
-    StackFrame,
+    AppPhase, FilterState, LogEntry, LogLevel, LogLevelFilter, LogSource, LogSourceFilter,
+    SearchState, StackFrame,
 };
 use ratatui::{
     buffer::Buffer,
@@ -14,13 +16,26 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, StatefulWidget,
-        Widget,
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        StatefulWidget, Widget,
     },
 };
 
+use crate::theme::styles as theme_styles;
+use crate::theme::{icons, palette};
+
 /// Stack trace styling constants
 pub mod styles;
+
+/// Status information for the bottom metadata bar
+pub struct StatusInfo<'a> {
+    pub phase: &'a AppPhase,
+    pub is_busy: bool,
+    pub mode: Option<&'a FlutterMode>,
+    pub flavor: Option<&'a str>,
+    pub duration: Option<Duration>,
+    pub error_count: usize,
+}
 
 /// Log view widget with rich formatting
 pub struct LogView<'a> {
@@ -40,6 +55,8 @@ pub struct LogView<'a> {
     max_collapsed_frames: usize,
     /// Link highlight state for rendering shortcut badges (Phase 3.1)
     link_highlight_state: Option<&'a LinkHighlightState>,
+    /// Status info for bottom metadata bar (Phase 2 Task 4)
+    status_info: Option<StatusInfo<'a>>,
 }
 
 impl<'a> LogView<'a> {
@@ -55,6 +72,7 @@ impl<'a> LogView<'a> {
             default_collapsed: true,
             max_collapsed_frames: 3,
             link_highlight_state: None,
+            status_info: None,
         }
     }
 
@@ -111,37 +129,35 @@ impl<'a> LogView<'a> {
         self
     }
 
+    /// Set status info for bottom metadata bar (Phase 2 Task 4)
+    pub fn with_status(mut self, status: StatusInfo<'a>) -> Self {
+        self.status_info = Some(status);
+        self
+    }
+
     /// Get style for log level - returns (level_style, message_style)
     fn level_style(level: LogLevel) -> (Style, Style) {
         match level {
             LogLevel::Error => (
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::LightRed),
+                Style::default()
+                    .fg(palette::LOG_ERROR)
+                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(palette::LOG_ERROR_MSG),
             ),
             LogLevel::Warning => (
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::LOG_WARNING)
                     .add_modifier(Modifier::BOLD),
-                Style::default().fg(Color::Yellow),
+                Style::default().fg(palette::LOG_WARNING_MSG),
             ),
             LogLevel::Info => (
-                Style::default().fg(Color::Green),
-                Style::default().fg(Color::White), // Brighter for better readability
+                Style::default().fg(palette::LOG_INFO),
+                Style::default().fg(palette::LOG_INFO_MSG),
             ),
             LogLevel::Debug => (
-                Style::default().fg(Color::DarkGray),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::LOG_DEBUG),
+                Style::default().fg(palette::LOG_DEBUG_MSG),
             ),
-        }
-    }
-
-    /// Get icon for log level
-    fn level_icon(level: LogLevel) -> &'static str {
-        match level {
-            LogLevel::Error => "✗",
-            LogLevel::Warning => "⚠",
-            LogLevel::Info => "•",
-            LogLevel::Debug => "·",
         }
     }
 
@@ -149,13 +165,16 @@ impl<'a> LogView<'a> {
     fn format_message(message: &str, base_style: Style) -> Span<'static> {
         // Highlight reload success
         if message.contains("Reloaded") || message.contains("reloaded") {
-            Span::styled(message.to_string(), base_style.fg(Color::Green))
+            Span::styled(message.to_string(), base_style.fg(palette::STATUS_GREEN))
         } else if message.contains("Exception") || message.contains("Error") {
             // Highlight exceptions
-            Span::styled(message.to_string(), base_style.fg(Color::LightRed))
+            Span::styled(message.to_string(), base_style.fg(palette::LOG_ERROR_MSG))
         } else if message.starts_with("    ") {
             // Stack trace lines (indented)
-            Span::styled(message.to_string(), Style::default().fg(Color::DarkGray))
+            Span::styled(
+                message.to_string(),
+                Style::default().fg(palette::TEXT_MUTED),
+            )
         } else {
             Span::styled(message.to_string(), base_style)
         }
@@ -164,11 +183,11 @@ impl<'a> LogView<'a> {
     /// Get style for log source
     fn source_style(source: LogSource) -> Style {
         match source {
-            LogSource::App => Style::default().fg(Color::Magenta),
-            LogSource::Daemon => Style::default().fg(Color::Yellow),
-            LogSource::Flutter => Style::default().fg(Color::Blue),
-            LogSource::FlutterError => Style::default().fg(Color::Red),
-            LogSource::Watcher => Style::default().fg(Color::Cyan),
+            LogSource::App => Style::default().fg(palette::STATUS_GREEN),
+            LogSource::Daemon => Style::default().fg(palette::STATUS_YELLOW),
+            LogSource::Flutter => Style::default().fg(palette::STATUS_INDIGO),
+            LogSource::FlutterError => Style::default().fg(palette::STATUS_RED),
+            LogSource::Watcher => Style::default().fg(palette::STATUS_BLUE),
         }
     }
 
@@ -182,7 +201,7 @@ impl<'a> LogView<'a> {
             format!("[{}]", shortcut),
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
         )
     }
@@ -190,7 +209,7 @@ impl<'a> LogView<'a> {
     /// Style for highlighted file reference text in link mode
     fn link_text_style() -> Style {
         Style::default()
-            .fg(Color::Cyan)
+            .fg(palette::ACCENT)
             .add_modifier(Modifier::UNDERLINED)
     }
 
@@ -244,7 +263,7 @@ impl<'a> LogView<'a> {
 
     /// Format a single log entry as a styled Line with icons
     fn format_entry(&self, entry: &LogEntry, entry_index: usize) -> Line<'static> {
-        let (level_style, msg_style) = Self::level_style(entry.level);
+        let (_level_style, msg_style) = Self::level_style(entry.level);
         let source_style = Self::source_style(entry.source);
 
         let mut spans = Vec::with_capacity(8);
@@ -253,16 +272,19 @@ impl<'a> LogView<'a> {
         if self.show_timestamps {
             spans.push(Span::styled(
                 entry.formatted_time(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             ));
-            spans.push(Span::raw(" "));
         }
 
-        // Level indicator with icon: "✗ " or "• " etc.
-        spans.push(Span::styled(
-            format!("{} ", Self::level_icon(entry.level)),
-            level_style,
-        ));
+        // Bullet separator: " • " between timestamp and source tag
+        if self.show_timestamps && self.show_source {
+            spans.push(Span::styled(
+                " • ",
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+        } else if self.show_timestamps {
+            spans.push(Span::raw(" "));
+        }
 
         // Source: "[flutter] " or "[app] "
         if self.show_source {
@@ -321,11 +343,11 @@ impl<'a> LogView<'a> {
 
         // Highlight styles
         let highlight_style = Style::default()
-            .bg(Color::Yellow)
+            .bg(palette::SEARCH_HIGHLIGHT_BG)
             .fg(Color::Black)
             .add_modifier(Modifier::BOLD);
         let current_highlight_style = Style::default()
-            .bg(Color::LightYellow)
+            .bg(palette::SEARCH_CURRENT_BG)
             .fg(Color::Black)
             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED);
 
@@ -538,11 +560,14 @@ impl<'a> LogView<'a> {
 
         Line::from(vec![
             Span::styled(INDENT.to_string(), Style::default()),
-            Span::styled("▶ ".to_string(), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "▶ ".to_string(),
+                Style::default().fg(palette::SEARCH_HIGHLIGHT_BG),
+            ),
             Span::styled(
                 text,
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::BORDER_DIM)
                     .add_modifier(Modifier::ITALIC),
             ),
         ])
@@ -580,9 +605,10 @@ impl<'a> LogView<'a> {
     /// Render empty state with centered message
     fn render_empty(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
-            .title(self.title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .style(Style::default().bg(palette::CARD_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -593,13 +619,13 @@ impl<'a> LogView<'a> {
             Line::from(Span::styled(
                 "Not Connected",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(palette::TEXT_MUTED)
                     .add_modifier(Modifier::BOLD),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "Press + to start a new session",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )),
         ];
 
@@ -608,7 +634,169 @@ impl<'a> LogView<'a> {
             .render(inner, buf);
     }
 
-    /// Generate the title string including filter and search indicators
+    /// Render the top metadata bar with label and status badge
+    fn render_metadata_bar(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        let mut spans = Vec::new();
+
+        // Left side: icon + "TERMINAL LOGS" label
+        spans.push(Span::styled(
+            format!("{} ", icons::ICON_TERMINAL),
+            Style::default().fg(palette::TEXT_SECONDARY),
+        ));
+        spans.push(Span::styled(
+            "TERMINAL LOGS",
+            Style::default().fg(palette::TEXT_SECONDARY),
+        ));
+
+        // Add filter/search indicators if present
+        let mut indicator_parts = Vec::new();
+        if let Some(filter) = self.filter_state {
+            if filter.is_active() {
+                if filter.level_filter != LogLevelFilter::All {
+                    indicator_parts.push(filter.level_filter.display_name().to_string());
+                }
+                if filter.source_filter != LogSourceFilter::All {
+                    indicator_parts.push(filter.source_filter.display_name().to_string());
+                }
+            }
+        }
+        if let Some(search) = self.search_state {
+            if !search.query.is_empty() {
+                let status = search.display_status();
+                if !status.is_empty() {
+                    indicator_parts.push(status);
+                }
+            }
+        }
+
+        if !indicator_parts.is_empty() {
+            spans.push(Span::styled(
+                format!(" • {}", indicator_parts.join(" | ")),
+                Style::default().fg(palette::TEXT_SECONDARY),
+            ));
+        }
+
+        // Right side: "LIVE FEED" badge
+        // Calculate position based on available width
+        let right_badge = " LIVE FEED ";
+        let left_text_len: usize = spans.iter().map(|s| s.content.len()).sum();
+        let badge_len = right_badge.len();
+
+        // Fill space between left text and right badge
+        let padding = if area.width as usize > left_text_len + badge_len {
+            area.width as usize - left_text_len - badge_len
+        } else {
+            1
+        };
+
+        spans.push(Span::raw(" ".repeat(padding)));
+        spans.push(Span::styled(
+            right_badge,
+            Style::default()
+                .fg(palette::TEXT_MUTED)
+                .bg(palette::DEEPEST_BG),
+        ));
+
+        let line = Line::from(spans);
+        buf.set_line(area.x, area.y, &line, area.width);
+    }
+
+    /// Render the bottom metadata bar with status info
+    fn render_bottom_metadata(area: Rect, buf: &mut Buffer, status: &StatusInfo, compact: bool) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        // Get phase indicator based on busy state
+        let (icon, label, phase_style) = if status.is_busy {
+            theme_styles::phase_indicator_busy()
+        } else {
+            theme_styles::phase_indicator(status.phase)
+        };
+
+        // Left side: phase indicator
+        let mut spans = vec![
+            Span::raw(" "),
+            Span::styled(icon, phase_style),
+            Span::raw(" "),
+            Span::styled(label, phase_style),
+        ];
+
+        // For compact mode, only show phase indicator and errors (if > 0)
+        if compact {
+            if status.error_count > 0 {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    format!("{} {}", icons::ICON_ALERT, status.error_count),
+                    theme_styles::status_red().add_modifier(Modifier::BOLD),
+                ));
+            }
+        } else {
+            // Full mode: add mode badge
+            if let Some(mode) = status.mode {
+                let mode_text = match mode {
+                    FlutterMode::Debug => "Debug",
+                    FlutterMode::Profile => "Profile",
+                    FlutterMode::Release => "Release",
+                };
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(mode_text, theme_styles::accent()));
+                if let Some(flavor) = status.flavor {
+                    spans.push(Span::styled(
+                        format!(" ({})", flavor),
+                        theme_styles::text_secondary(),
+                    ));
+                }
+            }
+        }
+
+        // Right-aligned section: uptime + errors (only in full mode)
+        if !compact {
+            let mut right_spans = Vec::new();
+
+            // Uptime timer
+            if let Some(duration) = status.duration {
+                let mins = duration.as_secs() / 60;
+                let secs = duration.as_secs() % 60;
+                right_spans.push(Span::styled(
+                    format!("{} {}:{:02}", icons::ICON_ACTIVITY, mins, secs),
+                    theme_styles::text_secondary(),
+                ));
+                right_spans.push(Span::raw("  "));
+            }
+
+            // Error count
+            if status.error_count > 0 {
+                right_spans.push(Span::styled(
+                    format!("{} {}", icons::ICON_ALERT, status.error_count),
+                    theme_styles::status_red().add_modifier(Modifier::BOLD),
+                ));
+            } else {
+                right_spans.push(Span::styled(
+                    format!("{} 0", icons::ICON_ALERT),
+                    theme_styles::text_muted(),
+                ));
+            }
+
+            // Calculate padding between left and right sections
+            let left_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let right_width: usize = right_spans.iter().map(|s| s.content.chars().count()).sum();
+            let padding = (area.width as usize).saturating_sub(left_width + right_width + 1);
+
+            spans.push(Span::raw(" ".repeat(padding)));
+            spans.extend(right_spans);
+        }
+
+        let line = Line::from(spans);
+        buf.set_line(area.x, area.y, &line, area.width);
+    }
+
+    /// Generate the title string including filter and search indicators (deprecated - now in metadata bar)
+    #[allow(dead_code)]
     fn build_title(&self) -> String {
         let base = self.title.trim();
         let mut parts = Vec::new();
@@ -648,33 +836,46 @@ impl<'a> LogView<'a> {
 
     /// Render empty filtered state
     fn render_no_matches(&self, area: Rect, buf: &mut Buffer) {
-        let title = self.build_title();
         let block = Block::default()
-            .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .style(Style::default().bg(palette::CARD_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
+
+        // Render metadata bar
+        if inner.height > 0 {
+            self.render_metadata_bar(Rect::new(inner.x, inner.y, inner.width, 1), buf);
+        }
+
+        // Content area starts 1 line below metadata bar
+        let content_area = Rect::new(
+            inner.x,
+            inner.y.saturating_add(1),
+            inner.width,
+            inner.height.saturating_sub(1),
+        );
 
         let message = vec![
             Line::from(""),
             Line::from(Span::styled(
                 "No logs match current filter",
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::STATUS_YELLOW)
                     .add_modifier(Modifier::ITALIC),
             )),
             Line::from(""),
             Line::from(Span::styled(
                 "Press Ctrl+f to reset filters",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::TEXT_MUTED),
             )),
         ];
 
         Paragraph::new(message)
             .alignment(ratatui::layout::Alignment::Center)
-            .render(inner, buf);
+            .render(content_area, buf);
     }
 
     /// Calculate the display width of a Line (sum of span content widths)
@@ -733,7 +934,7 @@ impl<'a> LogView<'a> {
         if has_more_left {
             spans.push(Span::styled(
                 "←".to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::BORDER_DIM),
             ));
         }
 
@@ -762,7 +963,7 @@ impl<'a> LogView<'a> {
         if has_more_right {
             spans.push(Span::styled(
                 "→".to_string(),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(palette::BORDER_DIM),
             ));
         }
 
@@ -798,22 +999,54 @@ impl<'a> StatefulWidget for LogView<'a> {
             return;
         }
 
-        // Create bordered block with dynamic title
-        let title = self.build_title();
+        // Create glass container with rounded borders
         let block = Block::default()
-            .title(title)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray));
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .style(Style::default().bg(palette::CARD_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
+
+        // Render top metadata bar in first line of inner area
+        if inner.height > 0 {
+            self.render_metadata_bar(Rect::new(inner.x, inner.y, inner.width, 1), buf);
+        }
+
+        // Determine if we have a bottom metadata bar
+        let has_footer = self.status_info.is_some();
+        let footer_height = if has_footer { 1 } else { 0 };
+
+        // Render bottom metadata bar (if status_info is present)
+        if let Some(ref status) = self.status_info {
+            if inner.height > 1 {
+                // Check for compact mode (< 60 columns)
+                let compact = area.width < 60;
+                let meta_bottom = Rect::new(
+                    inner.x,
+                    inner.y + inner.height.saturating_sub(1),
+                    inner.width,
+                    1,
+                );
+                Self::render_bottom_metadata(meta_bottom, buf, status, compact);
+            }
+        }
+
+        // Content area: between top and bottom metadata bars
+        let content_area = Rect::new(
+            inner.x,
+            inner.y.saturating_add(1),
+            inner.width,
+            inner.height.saturating_sub(1 + footer_height),
+        );
 
         // Calculate total lines including stack traces (accounting for collapse state)
         let total_lines: usize = filtered_indices
             .iter()
             .map(|&idx| self.calculate_entry_lines(&self.logs[idx]))
             .sum();
-        let visible_lines = inner.height as usize;
+        let visible_lines = content_area.height as usize;
 
         // Update state with content dimensions (now using total lines, not entry count)
         state.update_content_size(total_lines, visible_lines);
@@ -945,7 +1178,7 @@ impl<'a> StatefulWidget for LogView<'a> {
             .map(|l| Self::line_width(l))
             .max()
             .unwrap_or(0);
-        let visible_width = inner.width as usize;
+        let visible_width = content_area.width as usize;
 
         // Update horizontal dimensions in state
         state.update_horizontal_size(max_line_width, visible_width);
@@ -956,8 +1189,21 @@ impl<'a> StatefulWidget for LogView<'a> {
             .map(|line| Self::apply_horizontal_scroll(line, state.h_offset, visible_width))
             .collect();
 
+        // Add blinking cursor at end if auto-scroll is active
+        let mut final_lines = scrolled_lines;
+        if state.auto_scroll && !final_lines.is_empty() {
+            // Add cursor to a new line after the last entry
+            let cursor_line = Line::from(vec![Span::styled(
+                "█",
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::SLOW_BLINK),
+            )]);
+            final_lines.push(cursor_line);
+        }
+
         // Render log content WITHOUT wrapping (lines are truncated/scrolled)
-        Paragraph::new(scrolled_lines).render(inner, buf);
+        Paragraph::new(final_lines).render(content_area, buf);
 
         // Render scrollbar if content exceeds visible area
         if total_lines > visible_lines {

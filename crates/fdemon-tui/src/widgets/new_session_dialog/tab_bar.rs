@@ -6,10 +6,12 @@ use super::TargetTab;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Paragraph, Widget},
 };
+
+use crate::theme::palette;
 
 /// Tab bar widget for switching between Connected and Bootable views
 pub struct TabBar {
@@ -31,15 +33,15 @@ impl TabBar {
 
         if is_active && self.pane_focused {
             Style::default()
-                .fg(Color::Black)
-                .bg(Color::Cyan)
+                .fg(ratatui::style::Color::Black)
+                .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else if is_active {
             Style::default()
-                .fg(Color::Cyan)
+                .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(palette::TEXT_SECONDARY)
         }
     }
 }

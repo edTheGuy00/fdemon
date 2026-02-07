@@ -10,21 +10,7 @@ use ratatui::{
 };
 
 use super::state::{DartDefinesEditField, DartDefinesModalState, DartDefinesPane};
-
-/// Style constants for dart defines modal
-mod styles {
-    use super::*;
-
-    pub const MODAL_BG: Color = Color::Rgb(30, 30, 40);
-    pub const BORDER_FOCUSED: Color = Color::Cyan;
-    pub const BORDER_UNFOCUSED: Color = Color::DarkGray;
-    pub const HEADER_FG: Color = Color::Cyan;
-    pub const ITEM_FG: Color = Color::White;
-    pub const SELECTED_FG: Color = Color::Black;
-    pub const SELECTED_BG: Color = Color::Cyan;
-    pub const ADD_NEW_FG: Color = Color::Green;
-    pub const HINT_FG: Color = Color::DarkGray;
-}
+use crate::theme::palette;
 
 /// Widget for the left pane (list of defines)
 pub struct DartDefinesListPane<'a> {
@@ -44,22 +30,22 @@ impl<'a> DartDefinesListPane<'a> {
 impl Widget for DartDefinesListPane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let border_color = if self.is_focused() {
-            styles::BORDER_FOCUSED
+            palette::ACCENT
         } else {
-            styles::BORDER_UNFOCUSED
+            palette::BORDER_DIM
         };
 
         let block = Block::default()
             .title(" Active Variables ")
             .title_style(
                 Style::default()
-                    .fg(styles::HEADER_FG)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(styles::MODAL_BG));
+            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -79,11 +65,14 @@ impl Widget for DartDefinesListPane<'_> {
                 let (text, base_style) = if is_add_new {
                     (
                         "[+] Add New".to_string(),
-                        Style::default().fg(styles::ADD_NEW_FG),
+                        Style::default().fg(palette::STATUS_GREEN),
                     )
                 } else {
                     let define = &self.state.defines[idx];
-                    (define.key.clone(), Style::default().fg(styles::ITEM_FG))
+                    (
+                        define.key.clone(),
+                        Style::default().fg(palette::TEXT_PRIMARY),
+                    )
                 };
 
                 let indicator = if is_selected { "> " } else { "  " };
@@ -91,8 +80,8 @@ impl Widget for DartDefinesListPane<'_> {
 
                 let style = if is_selected {
                     Style::default()
-                        .fg(styles::SELECTED_FG)
-                        .bg(styles::SELECTED_BG)
+                        .fg(Color::Black)
+                        .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else {
                     base_style
@@ -114,7 +103,7 @@ impl Widget for DartDefinesListPane<'_> {
                 let x = inner.x + inner.width - info_width;
                 let y = area.y; // Top border
 
-                buf.set_string(x, y, &scroll_info, Style::default().fg(styles::HINT_FG));
+                buf.set_string(x, y, &scroll_info, Style::default().fg(palette::TEXT_MUTED));
             }
         }
     }
@@ -138,9 +127,13 @@ impl<'a> DartDefinesEditPane<'a> {
         let is_active = self.is_focused() && self.state.edit_field == field;
 
         if is_active {
-            Style::default().fg(Color::White).bg(Color::Rgb(60, 60, 80))
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .bg(palette::MODAL_DART_DEFINES_INPUT_ACTIVE_BG)
         } else {
-            Style::default().fg(Color::Gray).bg(Color::Rgb(40, 40, 50))
+            Style::default()
+                .fg(palette::TEXT_SECONDARY)
+                .bg(palette::MODAL_DART_DEFINES_INPUT_INACTIVE_BG)
         }
     }
 
@@ -150,16 +143,18 @@ impl<'a> DartDefinesEditPane<'a> {
         if is_active {
             Style::default()
                 .fg(Color::Black)
-                .bg(Color::Cyan)
+                .bg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(Color::White).bg(Color::Rgb(50, 50, 60))
+            Style::default()
+                .fg(palette::TEXT_PRIMARY)
+                .bg(palette::MODAL_DART_DEFINES_BUTTON_INACTIVE_BG)
         }
     }
 
     fn render_label(&self, area: Rect, buf: &mut Buffer, text: &str) {
         Paragraph::new(text)
-            .style(Style::default().fg(styles::ITEM_FG))
+            .style(Style::default().fg(palette::TEXT_PRIMARY))
             .render(area, buf);
     }
 
@@ -199,9 +194,9 @@ impl<'a> DartDefinesEditPane<'a> {
 impl Widget for DartDefinesEditPane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let border_color = if self.is_focused() {
-            styles::BORDER_FOCUSED
+            palette::ACCENT
         } else {
-            styles::BORDER_UNFOCUSED
+            palette::BORDER_DIM
         };
 
         let title = if self.state.is_new {
@@ -214,13 +209,13 @@ impl Widget for DartDefinesEditPane<'_> {
             .title(title)
             .title_style(
                 Style::default()
-                    .fg(styles::HEADER_FG)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
             .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(styles::MODAL_BG));
+            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -284,7 +279,7 @@ impl Widget for DartDefinesEditPane<'_> {
                 y,
                 indicator,
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(palette::STATUS_YELLOW)
                     .add_modifier(Modifier::ITALIC),
             );
         }
@@ -360,7 +355,7 @@ mod list_tests {
         // Check that focused border style is applied
         // Border cells should have cyan color
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, styles::BORDER_FOCUSED);
+        assert_eq!(border_color, palette::ACCENT);
     }
 
     #[test]
@@ -374,7 +369,7 @@ mod list_tests {
 
         // Check that unfocused border style is applied
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, styles::BORDER_UNFOCUSED);
+        assert_eq!(border_color, palette::BORDER_DIM);
     }
 
     #[test]
@@ -541,7 +536,7 @@ mod edit_tests {
 
         // Check that focused border style is applied
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, styles::BORDER_FOCUSED);
+        assert_eq!(border_color, palette::ACCENT);
     }
 
     #[test]
@@ -555,7 +550,7 @@ mod edit_tests {
 
         // Check that unfocused border style is applied
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, styles::BORDER_UNFOCUSED);
+        assert_eq!(border_color, palette::BORDER_DIM);
     }
 }
 
@@ -585,7 +580,7 @@ impl<'a> DartDefinesModal<'a> {
             Span::styled(
                 "📝 Manage Dart Defines",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
             ),
         ]);
@@ -604,7 +599,7 @@ impl<'a> DartDefinesModal<'a> {
         };
 
         Paragraph::new(hints)
-            .style(Style::default().fg(styles::HINT_FG))
+            .style(Style::default().fg(palette::TEXT_MUTED))
             .alignment(Alignment::Center)
             .render(area, buf);
     }
@@ -666,7 +661,7 @@ impl Widget for DartDefinesModal<'_> {
             for x in area.x..area.x + area.width {
                 if let Some(cell) = buf.cell_mut((x, y)) {
                     cell.reset();
-                    cell.set_style(Style::default().bg(Color::Rgb(20, 20, 30)));
+                    cell.set_style(Style::default().bg(palette::MODAL_DART_DEFINES_CLEAR_BG));
                 }
             }
         }
@@ -677,8 +672,8 @@ impl Widget for DartDefinesModal<'_> {
         let outer_block = Block::default()
             .borders(Borders::ALL)
             .border_set(symbols::border::DOUBLE)
-            .border_style(Style::default().fg(Color::Cyan))
-            .style(Style::default().bg(styles::MODAL_BG));
+            .border_style(Style::default().fg(palette::ACCENT))
+            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
 
         let inner = outer_block.inner(modal_area);
         outer_block.render(modal_area, buf);
@@ -697,7 +692,11 @@ pub fn render_dart_defines_dim_overlay(area: Rect, buf: &mut Buffer) {
     for y in area.y..area.y + area.height {
         for x in area.x..area.x + area.width {
             if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_style(Style::default().fg(Color::DarkGray).bg(Color::Black));
+                cell.set_style(
+                    Style::default()
+                        .fg(palette::TEXT_MUTED)
+                        .bg(palette::DEEPEST_BG),
+                );
             }
         }
     }

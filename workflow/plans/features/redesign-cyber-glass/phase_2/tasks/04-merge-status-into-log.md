@@ -235,3 +235,46 @@ For now, both can render simultaneously during development. Task 05 removes the 
 - **Scroll indicator removal**: The current status bar shows "Auto"/"Manual" scroll mode. This info may not fit in the compact footer. Consider removing it — the scrollbar thumb position already indicates scroll state.
 - **Log position removal**: The "42-60/120" position indicator may also be dropped from the footer. The scrollbar provides this visually.
 - **Data plumbing**: The `view()` function already has access to `state.session_manager.selected()` which contains all the session data needed for `StatusInfo`. Building the struct is straightforward.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `StatusInfo` struct, `with_status()` builder method, `render_bottom_metadata()` function, updated render logic to account for bottom metadata bar (1 line height), adjusted content area calculation to subtract footer height |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Exported `StatusInfo` from log_view module |
+| `crates/fdemon-tui/src/render/mod.rs` | Built `StatusInfo` from selected session data and passed to LogView via `with_status()` builder method |
+
+### Notable Decisions/Tradeoffs
+
+1. **StatusInfo struct**: Created a dedicated struct to cleanly bundle all status data (phase, busy state, mode, flavor, duration, error count) and pass to LogView. This keeps the builder pattern clean and allows easy extension.
+
+2. **Module naming conflict**: Encountered naming conflict between stack trace `styles` module and theme `styles` module. Resolved by importing theme styles as `theme_styles` to avoid shadowing.
+
+3. **Duration conversion**: Session uses `chrono::Duration` but bottom bar needs `std::time::Duration` for display formatting. Converted via `num_seconds()` method.
+
+4. **Compact mode threshold**: Reused existing `< 60 columns` threshold for compact display. In compact mode, only shows phase indicator and errors (if > 0), omitting mode badge and uptime timer.
+
+5. **Scroll indicators removed**: Following task notes, removed scroll mode ("Auto"/"Manual") and log position ("42-60/120") indicators from bottom bar. The scrollbar provides this visual feedback.
+
+6. **Standalone StatusBar unchanged**: As specified in task notes, left the standalone StatusBar widgets in place. Task 05 will handle layout changes and removal.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - 473/474 tests passed (1 pre-existing failure in header widget, unrelated to this task)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No visual verification**: Implementation is code-complete but not visually tested in a running TUI. The bottom metadata bar renders inside the log view glass container as specified, but actual appearance should be verified when running the application.
+
+2. **Content area height**: Reduced content area by 1 line for the bottom metadata bar. All scroll calculations updated to account for this, but edge cases with very small terminals (< 5 rows) should be tested.
+
+3. **Pre-existing test failure**: One test (`widgets::header::tests::test_header_with_keybindings`) was failing before this task and remains failing. This is unrelated to the bottom metadata bar implementation.

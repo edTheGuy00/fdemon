@@ -4,7 +4,6 @@
 
 use fdemon_app::config::FlutterMode;
 use fdemon_app::state::AppState;
-use fdemon_core::AppPhase;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -25,52 +24,13 @@ impl<'a> StatusBar<'a> {
 
     /// Get the state indicator with appropriate styling
     fn state_indicator(&self) -> Span<'static> {
-        // If no sessions exist, show "Not Connected"
-        if self.state.session_manager.is_empty() {
-            return Span::styled("○ Not Connected", Style::default().fg(Color::DarkGray));
-        }
-
-        // Use selected session's phase if available, otherwise fall back to global phase
-        let phase = self
-            .state
-            .session_manager
-            .selected()
-            .map(|h| h.session.phase)
-            .unwrap_or(self.state.phase);
-
-        // Check if selected session is busy (for Running state)
-        let session_busy = self
-            .state
-            .session_manager
-            .selected()
-            .map(|h| h.session.is_busy())
-            .unwrap_or(false);
-
-        match phase {
-            AppPhase::Initializing => {
-                Span::styled("○ Starting", Style::default().fg(Color::DarkGray))
-            }
-            AppPhase::Running if session_busy => Span::styled(
-                "↻ Reloading",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            AppPhase::Running => Span::styled(
-                "● Running",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            AppPhase::Reloading => Span::styled(
-                "↻ Reloading",
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            AppPhase::Stopped => Span::styled("○ Stopped", Style::default().fg(Color::DarkGray)),
-            AppPhase::Quitting => Span::styled("○ Stopping", Style::default().fg(Color::DarkGray)),
-        }
+        let session = self.state.session_manager.selected();
+        let (icon, label, style) = match session {
+            None => crate::theme::styles::phase_indicator_disconnected(),
+            Some(s) if s.session.is_busy() => crate::theme::styles::phase_indicator_busy(),
+            Some(s) => crate::theme::styles::phase_indicator(&s.session.phase),
+        };
+        Span::styled(format!("{} {}", icon, label), style)
     }
 
     /// Get build configuration info span (Debug/Profile/Release + optional flavor)
@@ -271,40 +231,23 @@ impl Widget for StatusBarCompact<'_> {
         let inner = block.inner(area);
         block.render(area, buf);
 
-        // If no sessions exist, show "Not Connected"
-        if self.state.session_manager.is_empty() {
+        let session = self.state.session_manager.selected();
+        let (icon, label, style) = match session {
+            Some(s) if s.session.is_busy() => crate::theme::styles::phase_indicator_busy(),
+            Some(s) => crate::theme::styles::phase_indicator(&s.session.phase),
+            None => crate::theme::styles::phase_indicator_disconnected(),
+        };
+
+        // Show "Not Connected" label when no sessions exist
+        if session.is_none() {
             let spans = vec![
                 Span::raw(" "),
-                Span::styled("○ Not Connected", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} {}", icon, label), style),
             ];
             let line = Line::from(spans);
             Paragraph::new(line).render(inner, buf);
             return;
         }
-
-        // Use selected session's phase if available, otherwise fall back to global phase
-        let phase = self
-            .state
-            .session_manager
-            .selected()
-            .map(|h| h.session.phase)
-            .unwrap_or(self.state.phase);
-
-        // Check if selected session is busy
-        let session_busy = self
-            .state
-            .session_manager
-            .selected()
-            .map(|h| h.session.is_busy())
-            .unwrap_or(false);
-
-        // Compact: just state and timer
-        let (state_char, color) = match phase {
-            AppPhase::Running if session_busy => ("↻", Color::Yellow),
-            AppPhase::Running => ("●", Color::Green),
-            AppPhase::Reloading => ("↻", Color::Yellow),
-            _ => ("○", Color::DarkGray),
-        };
 
         let timer = self
             .state
@@ -323,10 +266,7 @@ impl Widget for StatusBarCompact<'_> {
 
         let mut spans = vec![
             Span::raw(" "),
-            Span::styled(
-                state_char,
-                Style::default().fg(color).add_modifier(Modifier::BOLD),
-            ),
+            Span::styled(icon, style),
             Span::raw(" "),
             Span::styled(timer, Style::default().fg(Color::Gray)),
         ];

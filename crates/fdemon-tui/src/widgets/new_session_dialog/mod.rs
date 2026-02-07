@@ -29,12 +29,14 @@ pub use target_selector::*;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Color, Style},
+    style::Style,
     symbols,
     widgets::{Block, Borders, Clear, Paragraph, Widget},
 };
 
 use fdemon_app::ToolAvailability;
+
+use crate::theme::palette;
 
 // ============================================================================
 // Text Truncation Utilities
@@ -242,7 +244,7 @@ impl<'a> NewSessionDialog<'a> {
     /// Render footer
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
         let text = Paragraph::new(self.footer_text())
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(palette::BORDER_DIM))
             .alignment(Alignment::Center);
         text.render(area, buf);
     }
@@ -291,7 +293,7 @@ impl<'a> NewSessionDialog<'a> {
         );
 
         let paragraph = Paragraph::new(message)
-            .style(Style::default().fg(Color::Red))
+            .style(Style::default().fg(palette::STATUS_RED))
             .alignment(Alignment::Center);
 
         // Center vertically
@@ -316,7 +318,7 @@ impl<'a> NewSessionDialog<'a> {
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(Color::DarkGray));
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
@@ -359,7 +361,7 @@ impl<'a> NewSessionDialog<'a> {
             .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(Color::DarkGray));
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
@@ -389,7 +391,7 @@ impl<'a> NewSessionDialog<'a> {
             chunks[1].x,
             chunks[1].y,
             &separator,
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::BORDER_DIM),
         );
 
         // Render Launch Context (bottom, compact mode)
@@ -442,7 +444,7 @@ impl<'a> NewSessionDialog<'a> {
         };
 
         let paragraph = Paragraph::new(hints)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(palette::TEXT_MUTED))
             .alignment(Alignment::Center);
         paragraph.render(area, buf);
     }

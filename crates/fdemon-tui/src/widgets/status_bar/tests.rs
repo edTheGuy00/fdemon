@@ -2,7 +2,9 @@ use super::*;
 use chrono::{Duration, Local};
 use fdemon_app::config::LaunchConfig;
 use fdemon_app::Device;
+use fdemon_core::AppPhase;
 use ratatui::backend::TestBackend;
+use ratatui::style::Color;
 use ratatui::Terminal;
 
 fn create_test_state() -> AppState {
@@ -94,7 +96,8 @@ fn test_state_indicator_quitting() {
     let bar = StatusBar::new(&state);
     let indicator = bar.state_indicator();
 
-    assert!(indicator.style.fg == Some(Color::DarkGray));
+    // Quitting uses STATUS_RED (Color::Red) per consolidated phase mapping
+    assert!(indicator.style.fg == Some(Color::Red));
     assert!(indicator.content.to_string().contains("Stopping"));
 }
 

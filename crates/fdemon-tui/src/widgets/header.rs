@@ -5,12 +5,14 @@
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Widget},
+    widgets::Widget,
 };
 
 use fdemon_app::session_manager::SessionManager;
+
+use crate::theme::{icons, palette, styles};
 
 use super::SessionTabs;
 
@@ -38,77 +40,193 @@ impl<'a> MainHeader<'a> {
 
 impl Widget for MainHeader<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Render border
-        Block::default().borders(Borders::ALL).render(area, buf);
+        // Render glass container with rounded borders
+        let block = styles::glass_block(false).style(Style::default().bg(palette::CARD_BG));
 
-        let title = Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD);
-        let dim = Style::default().fg(Color::DarkGray);
-        let key = Style::default().fg(Color::Yellow);
-        let project = Style::default().fg(Color::White);
+        // Get inner content area (inside borders) before rendering
+        let inner = block.inner(area);
 
-        let project_name = self.project_name.unwrap_or("flutter");
+        // Now render the block
+        block.render(area, buf);
 
-        // Build keybindings
-        let keybindings = vec![
-            Span::styled("[", dim),
-            Span::styled("r", key),
-            Span::styled("]", dim),
-            Span::raw(" "),
-            Span::styled("[", dim),
-            Span::styled("R", key),
-            Span::styled("]", dim),
-            Span::raw(" "),
-            Span::styled("[", dim),
-            Span::styled("x", key),
-            Span::styled("]", dim),
-            Span::raw(" "),
-            Span::styled("[", dim),
-            Span::styled("d", key),
-            Span::styled("]", dim),
-            Span::raw(" "),
-            Span::styled("[", dim),
-            Span::styled("q", key),
-            Span::styled("]", dim),
-        ];
-
-        let keybindings_width: u16 = 23; // "[r] [R] [x] [d] [q]"
-
-        // Build left content (title + project name)
-        let left_content = Line::from(vec![
-            Span::styled(" Flutter Demon", title),
-            Span::styled("  │  ", dim),
-            Span::styled(project_name, project),
-        ]);
-
-        // Render title/project on the top border line (y = area.y)
-        buf.set_line(area.x, area.y, &left_content, area.width);
-
-        // Render right-aligned keybindings on the top border line
-        if area.width > keybindings_width + 2 {
-            let x = area.x + area.width - keybindings_width - 1;
-            let right_content = Line::from(keybindings);
-            buf.set_line(x, area.y, &right_content, keybindings_width);
+        if inner.height == 0 || inner.width == 0 {
+            return;
         }
 
-        // Render session tabs inside the bordered area (if we have sessions)
-        if let Some(session_manager) = self.session_manager {
-            if !session_manager.is_empty() {
-                // Content area is inside the border (y + 1, with padding)
-                let tabs_area = Rect {
-                    x: area.x + 1,
-                    y: area.y + 1,
-                    width: area.width.saturating_sub(2),
-                    height: area.height.saturating_sub(2),
-                };
+        // Check if we have multiple sessions (need to show tabs)
+        let has_multiple_sessions = self.session_manager.map(|sm| sm.len() > 1).unwrap_or(false);
 
-                if tabs_area.height > 0 && tabs_area.width > 0 {
+        if has_multiple_sessions {
+            // Multi-session mode: split into title row and tabs row
+            if inner.height >= 2 {
+                // Title row
+                let title_area = Rect {
+                    x: inner.x,
+                    y: inner.y,
+                    width: inner.width,
+                    height: 1,
+                };
+                self.render_title_row(title_area, buf, false);
+
+                // Tabs row
+                let tabs_area = Rect {
+                    x: inner.x,
+                    y: inner.y + 1,
+                    width: inner.width,
+                    height: inner.height.saturating_sub(1),
+                };
+                if let Some(session_manager) = self.session_manager {
                     let tabs = SessionTabs::new(session_manager);
                     tabs.render(tabs_area, buf);
                 }
+            } else {
+                // Not enough space for both rows, just render title
+                self.render_title_row(inner, buf, false);
             }
+        } else {
+            // Single session or no session: render title + shortcuts + device pill in one row
+            self.render_title_row(inner, buf, true);
         }
+    }
+}
+
+impl MainHeader<'_> {
+    /// Render the title row with status dot, project name, shortcuts, and optional device pill
+    fn render_title_row(&self, area: Rect, buf: &mut Buffer, show_device: bool) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        let project_name = self.project_name.unwrap_or("flutter");
+
+        // Get status dot and device info from selected session
+        let (status_icon, status_style, device_name, device_platform) =
+            if let Some(session_manager) = self.session_manager {
+                if let Some(handle) = session_manager.selected() {
+                    let session = &handle.session;
+                    let (icon, _label, style) = styles::phase_indicator(&session.phase);
+                    (
+                        icon,
+                        style,
+                        Some(session.device_name.as_str()),
+                        Some(session.platform.as_str()),
+                    )
+                } else {
+                    ("○", Style::default().fg(palette::TEXT_MUTED), None, None)
+                }
+            } else {
+                ("○", Style::default().fg(palette::TEXT_MUTED), None, None)
+            };
+
+        // Build left section: status dot + "Flutter Demon" + "/" + project name
+        let left_spans = vec![
+            Span::raw(" "),
+            Span::styled(status_icon, status_style),
+            Span::raw(" "),
+            Span::styled(
+                "Flutter Demon",
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("/", Style::default().fg(palette::TEXT_MUTED)),
+            Span::raw(" "),
+            Span::styled(project_name, Style::default().fg(palette::TEXT_SECONDARY)),
+        ];
+
+        let left_line = Line::from(left_spans.clone());
+        let left_width = left_line.width() as u16;
+
+        // Build shortcut hints (center section)
+        let shortcuts = vec![
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("r", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] Run  ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("R", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] Restart  ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("x", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] Stop  ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("d", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] Debug  ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("q", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] Quit", Style::default().fg(palette::TEXT_MUTED)),
+        ];
+        let shortcuts_line = Line::from(shortcuts.clone());
+        let shortcuts_width = shortcuts_line.width() as u16;
+
+        // Build device pill (right section) if single session
+        let device_content = if show_device && device_name.is_some() {
+            let device_icon = device_icon_for_platform(device_platform);
+            let device_spans = vec![
+                Span::raw(" "),
+                Span::raw(device_icon),
+                Span::raw(" "),
+                Span::styled(
+                    device_name.unwrap_or(""),
+                    Style::default().fg(palette::ACCENT),
+                ),
+                Span::raw(" "),
+            ];
+            Some(Line::from(device_spans))
+        } else {
+            None
+        };
+        let device_width = device_content
+            .as_ref()
+            .map(|l| l.width() as u16)
+            .unwrap_or(0);
+
+        // Calculate available space and positioning
+        let total_content_width = left_width + shortcuts_width + device_width + 4; // 4 for padding
+
+        if total_content_width <= area.width {
+            // Everything fits: left | center | right layout
+            buf.set_line(area.x, area.y, &left_line, area.width);
+
+            // Center the shortcuts
+            let shortcuts_x = area.x + left_width + 2;
+            if shortcuts_x + shortcuts_width <= area.x + area.width {
+                buf.set_line(shortcuts_x, area.y, &shortcuts_line, shortcuts_width);
+            }
+
+            // Right-align device pill
+            if let Some(device_line) = device_content {
+                let device_x = area.x + area.width - device_width;
+                if device_x >= area.x + left_width + shortcuts_width + 4 {
+                    buf.set_line(device_x, area.y, &device_line, device_width);
+                }
+            }
+        } else if left_width + device_width + 2 <= area.width {
+            // Shortcuts don't fit, but left + device does
+            buf.set_line(area.x, area.y, &left_line, area.width);
+
+            if let Some(device_line) = device_content {
+                let device_x = area.x + area.width - device_width;
+                if device_x >= area.x + left_width + 2 {
+                    buf.set_line(device_x, area.y, &device_line, device_width);
+                }
+            }
+        } else {
+            // Only left section fits
+            buf.set_line(area.x, area.y, &left_line, area.width);
+        }
+    }
+}
+
+/// Map platform string to device icon
+fn device_icon_for_platform(platform: Option<&str>) -> &'static str {
+    match platform {
+        Some(p) if p.contains("ios") || p.contains("simulator") => icons::ICON_SMARTPHONE,
+        Some(p) if p.contains("web") || p.contains("chrome") => icons::ICON_GLOBE,
+        Some(p) if p.contains("macos") || p.contains("linux") || p.contains("windows") => {
+            icons::ICON_MONITOR
+        }
+        _ => icons::ICON_CPU,
     }
 }
 
@@ -231,20 +349,24 @@ mod tests {
 
     #[test]
     fn test_header_with_keybindings() {
-        let mut term = TestTerminal::new();
+        // Use wider terminal (120 cols) to ensure shortcuts fit
+        let mut term = TestTerminal::with_size(120, 24);
         let header = MainHeader::new(Some("test_project"));
 
         term.render_widget(header, term.area());
 
-        // Verify keybindings are present
-        assert!(term.buffer_contains("[r]"), "Should show reload key");
-        assert!(term.buffer_contains("[R]"), "Should show restart key");
-        assert!(term.buffer_contains("[x]"), "Should show stop key");
+        // Verify keybindings are present with new format (includes labels)
+        assert!(term.buffer_contains("[r] Run"), "Should show reload key");
         assert!(
-            term.buffer_contains("[d]"),
-            "Should show device selector key"
+            term.buffer_contains("[R] Restart"),
+            "Should show restart key"
         );
-        assert!(term.buffer_contains("[q]"), "Should show quit key");
+        assert!(term.buffer_contains("[x] Stop"), "Should show stop key");
+        assert!(
+            term.buffer_contains("[d] Debug"),
+            "Should show debug/device selector key"
+        );
+        assert!(term.buffer_contains("[q] Quit"), "Should show quit key");
     }
 
     #[test]

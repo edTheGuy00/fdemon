@@ -14,15 +14,8 @@ pub struct ScreenAreas {
     /// Main header area (title + project name + keybindings)
     pub header: Rect,
 
-    /// Tab subheader area (only when multiple sessions)
-    #[allow(dead_code)]
-    pub tabs: Option<Rect>,
-
-    /// Main content area (log view)
+    /// Main content area (log view with integrated metadata bars)
     pub logs: Rect,
-
-    /// Status bar area
-    pub status: Rect,
 }
 
 /// Layout mode based on terminal size
@@ -68,30 +61,30 @@ pub fn create(area: Rect) -> ScreenAreas {
 /// * `area` - Total screen area
 /// * `session_count` - Number of active sessions (determines header height for tabs)
 pub fn create_with_sessions(area: Rect, session_count: usize) -> ScreenAreas {
-    // Header: 3 rows (top border + 1 content row + bottom border)
-    // Tabs render in the single content row when sessions exist
-    let header_height = 3;
-    let status_height = 2; // 1 for border + 1 for content
     let _ = session_count; // Used by header widget to decide whether to show tabs
 
+    // New layout: Header (3 rows) + Gap (1 row) + Logs (remaining)
+    // The gap provides visual breathing room between header and log panel
     let constraints = vec![
-        Constraint::Length(header_height),
-        Constraint::Min(3), // Content area
-        Constraint::Length(status_height),
+        Constraint::Length(3), // Header (glass container)
+        Constraint::Length(1), // Gap (breathing room, DEEPEST_BG shows through)
+        Constraint::Min(3),    // Logs (glass container with top+bottom metadata bars)
     ];
 
     let chunks = Layout::vertical(constraints).split(area);
 
     ScreenAreas {
         header: chunks[0],
-        tabs: None, // Tabs are now rendered inside the header
-        logs: chunks[1],
-        status: chunks[2],
+        logs: chunks[2], // Skip the gap at chunks[1]
     }
 }
 
-/// Check if we should use compact status bar
-pub fn use_compact_status(area: Rect) -> bool {
+/// Whether to use compact mode for the integrated status footer
+///
+/// This controls the formatting of the status info displayed in the log view's
+/// bottom metadata bar. Currently unused but available for future enhancement.
+#[allow(dead_code)]
+pub fn use_compact_footer(area: Rect) -> bool {
     area.width < MIN_FULL_STATUS_WIDTH
 }
 
@@ -158,12 +151,11 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 1);
 
-        // Tabs are rendered inside the header, not as a separate area
-        assert!(layout.tabs.is_none());
         // Header is always 3 rows (top border + content + bottom border)
         assert_eq!(layout.header.height, 3);
-        assert!(layout.logs.height > 0);
-        assert!(layout.status.height > 0);
+        // Log view gets remaining space after header (3) + gap (1)
+        assert_eq!(layout.logs.height, 20); // 24 - 3 - 1 = 20
+        assert_eq!(layout.logs.y, 4); // Starts after header (3) + gap (1)
     }
 
     #[test]
@@ -171,9 +163,9 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 3);
 
-        // Tabs are rendered inside header
-        assert!(layout.tabs.is_none());
+        // Header is 3 rows regardless of session count
         assert_eq!(layout.header.height, 3);
+        assert_eq!(layout.logs.height, 20);
     }
 
     #[test]
@@ -181,8 +173,8 @@ mod tests {
         let area = Rect::new(0, 0, 80, 24);
         let layout = create_with_sessions(area, 0);
 
-        assert!(layout.tabs.is_none());
         assert_eq!(layout.header.height, 3);
+        assert_eq!(layout.logs.height, 20);
     }
 
     #[test]
@@ -194,11 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn test_use_compact_status() {
-        assert!(use_compact_status(Rect::new(0, 0, 40, 24)));
-        assert!(use_compact_status(Rect::new(0, 0, 59, 24)));
-        assert!(!use_compact_status(Rect::new(0, 0, 60, 24)));
-        assert!(!use_compact_status(Rect::new(0, 0, 100, 24)));
+    fn test_use_compact_footer() {
+        assert!(use_compact_footer(Rect::new(0, 0, 40, 24)));
+        assert!(use_compact_footer(Rect::new(0, 0, 59, 24)));
+        assert!(!use_compact_footer(Rect::new(0, 0, 60, 24)));
+        assert!(!use_compact_footer(Rect::new(0, 0, 100, 24)));
     }
 
     #[test]
@@ -225,22 +217,20 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_areas_sum_to_total() {
+    fn test_layout_areas_with_gap() {
         let area = Rect::new(0, 0, 80, 24);
 
         // No sessions
         let layout = create_with_sessions(area, 0);
-        let total = layout.header.height + layout.logs.height + layout.status.height;
-        assert_eq!(total, area.height);
+        // Header (3) + gap (1) + logs (20) = 24
+        assert_eq!(layout.header.height + 1 + layout.logs.height, area.height);
 
-        // Single session (tabs are inside header now)
+        // Single session
         let layout = create_with_sessions(area, 1);
-        let total = layout.header.height + layout.logs.height + layout.status.height;
-        assert_eq!(total, area.height);
+        assert_eq!(layout.header.height + 1 + layout.logs.height, area.height);
 
-        // Multiple sessions (tabs are inside header now)
+        // Multiple sessions
         let layout = create_with_sessions(area, 3);
-        let total = layout.header.height + layout.logs.height + layout.status.height;
-        assert_eq!(total, area.height);
+        assert_eq!(layout.header.height + 1 + layout.logs.height, area.height);
     }
 }

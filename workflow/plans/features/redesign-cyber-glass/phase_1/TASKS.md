@@ -33,11 +33,11 @@ Create the centralized theme module and migrate all color/style definitions to u
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-create-theme-module](tasks/01-create-theme-module.md) | Not Started | - | `theme/mod.rs`, `theme/palette.rs`, `theme/styles.rs`, `theme/icons.rs`, `lib.rs` |
-| 2 | [02-create-modal-overlay](tasks/02-create-modal-overlay.md) | Not Started | - | `widgets/modal_overlay.rs`, `widgets/mod.rs` |
-| 3 | [03-migrate-widget-styles](tasks/03-migrate-widget-styles.md) | Not Started | 1 | 15 widget files (see task details) |
-| 4 | [04-consolidate-phase-mapping](tasks/04-consolidate-phase-mapping.md) | Not Started | 1 | `tabs.rs`, `status_bar/mod.rs`, `theme/styles.rs` |
-| 5 | [05-update-tests](tasks/05-update-tests.md) | Not Started | 3, 4 | 4 test files + inline test modules |
+| 1 | [01-create-theme-module](tasks/01-create-theme-module.md) | Done | - | `theme/mod.rs`, `theme/palette.rs`, `theme/styles.rs`, `theme/icons.rs`, `lib.rs` |
+| 2 | [02-create-modal-overlay](tasks/02-create-modal-overlay.md) | Done | - | `widgets/modal_overlay.rs`, `widgets/mod.rs` |
+| 3 | [03-migrate-widget-styles](tasks/03-migrate-widget-styles.md) | Done | 1 | 15 widget files (see task details) |
+| 4 | [04-consolidate-phase-mapping](tasks/04-consolidate-phase-mapping.md) | Done | 1 | `tabs.rs`, `status_bar/mod.rs`, `theme/styles.rs` |
+| 5 | [05-update-tests](tasks/05-update-tests.md) | Done | 3, 4 | 4 test files + inline test modules |
 
 ## Execution Strategy
 

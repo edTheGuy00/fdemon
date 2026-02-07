@@ -11,7 +11,6 @@ use ratatui::{
 };
 
 use fdemon_app::session_manager::SessionManager;
-use fdemon_core::AppPhase;
 
 /// Widget displaying session tabs in a standalone subheader row
 pub struct SessionTabs<'a> {
@@ -30,19 +29,18 @@ impl<'a> SessionTabs<'a> {
             .map(|handle| {
                 let session = &handle.session;
 
-                // Status icon with color
-                let (icon, _icon_color) = match session.phase {
-                    AppPhase::Running => ("●", Color::Green),
-                    AppPhase::Reloading => ("↻", Color::Yellow),
-                    AppPhase::Initializing => ("○", Color::DarkGray),
-                    AppPhase::Stopped => ("○", Color::DarkGray),
-                    AppPhase::Quitting => ("✗", Color::Red),
-                };
+                // Status icon with color from theme
+                let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase);
 
                 // Truncate device name if too long
                 let name = truncate_name(&session.device_name, 12);
 
-                Line::from(format!(" {} {} ", icon, name))
+                // Build line with styled icon span
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(icon, style),
+                    Span::raw(format!(" {} ", name)),
+                ])
             })
             .collect()
     }
@@ -54,20 +52,14 @@ impl<'a> SessionTabs<'a> {
         if let Some(handle) = self.session_manager.selected() {
             let session = &handle.session;
 
-            let (icon, icon_color) = match session.phase {
-                AppPhase::Running => ("●", Color::Green),
-                AppPhase::Reloading => ("↻", Color::Yellow),
-                AppPhase::Initializing => ("○", Color::DarkGray),
-                AppPhase::Stopped => ("○", Color::DarkGray),
-                AppPhase::Quitting => ("✗", Color::Red),
-            };
+            let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase);
 
             // Truncate device name if necessary
             let max_name_len = area.width.saturating_sub(4) as usize; // 2 for icon+space, 2 for padding
             let name = truncate_name(&session.device_name, max_name_len.max(8));
 
             let content = Line::from(vec![
-                Span::styled(icon, Style::default().fg(icon_color)),
+                Span::styled(icon, style),
                 Span::raw(" "),
                 Span::raw(name),
             ]);
@@ -91,12 +83,7 @@ impl<'a> SessionTabs<'a> {
 
         let tabs = Tabs::new(titles)
             .select(selected)
-            .highlight_style(
-                Style::default()
-                    .fg(Color::Black)
-                    .bg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
+            .highlight_style(crate::theme::styles::focused_selected())
             .divider("│");
 
         // Render with left padding
@@ -262,13 +249,7 @@ fn render_single_session_header(manager: &SessionManager, area: Rect, buf: &mut 
     if let Some(handle) = manager.selected() {
         let session = &handle.session;
 
-        let (icon, icon_color) = match session.phase {
-            AppPhase::Running => ("●", Color::Green),
-            AppPhase::Reloading => ("↻", Color::Yellow),
-            AppPhase::Initializing => ("○", Color::DarkGray),
-            AppPhase::Stopped => ("○", Color::DarkGray),
-            AppPhase::Quitting => ("✗", Color::Red),
-        };
+        let (icon, _label, icon_style) = crate::theme::styles::phase_indicator(&session.phase);
 
         let title = Style::default()
             .fg(Color::Cyan)
@@ -279,7 +260,7 @@ fn render_single_session_header(manager: &SessionManager, area: Rect, buf: &mut 
         let content = Line::from(vec![
             Span::styled(" Flutter Demon", title),
             Span::raw("  "),
-            Span::styled(icon, Style::default().fg(icon_color)),
+            Span::styled(icon, icon_style),
             Span::raw(" "),
             Span::raw(session.device_name.clone()),
             Span::raw("   "),

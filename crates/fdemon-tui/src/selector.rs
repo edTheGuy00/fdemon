@@ -8,13 +8,15 @@ use std::path::{Path, PathBuf};
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Flex, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
     Frame,
 };
 
 use fdemon_core::prelude::*;
+
+use crate::theme::palette;
 
 /// Maximum number of projects to display (limited by single-digit selection)
 const MAX_DISPLAY_PROJECTS: usize = 9;
@@ -166,9 +168,9 @@ fn render_selector(
     // Outer block with title
     let outer_block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
+        .border_style(Style::default().fg(palette::ACCENT))
         .title(" Flutter Demon ")
-        .title_style(Style::default().fg(Color::Cyan).bold());
+        .title_style(Style::default().fg(palette::ACCENT).bold());
 
     let inner_area = outer_block.inner(modal_area);
     frame.render_widget(outer_block, modal_area);
@@ -186,7 +188,7 @@ fn render_selector(
         Line::from("Multiple Flutter projects found in:"),
         Line::from(Span::styled(
             truncate_path(searched_from, (modal_width - 4) as usize),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(palette::TEXT_MUTED),
         )),
     ];
     let header = Paragraph::new(header_text).alignment(Alignment::Center);
@@ -202,7 +204,7 @@ fn render_selector(
             let content = Line::from(vec![
                 Span::styled(
                     format!("[{}] ", i + 1),
-                    Style::default().fg(Color::Yellow).bold(),
+                    Style::default().fg(palette::STATUS_YELLOW).bold(),
                 ),
                 Span::raw(relative_path),
             ]);
@@ -214,13 +216,13 @@ fn render_selector(
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(palette::BORDER_DIM))
                 .title(" Select a project ")
-                .title_style(Style::default().fg(Color::White)),
+                .title_style(Style::default().fg(palette::TEXT_PRIMARY)),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(palette::POPUP_BG)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("> ");
@@ -229,13 +231,13 @@ fn render_selector(
 
     // Footer - help text
     let footer_text = Line::from(vec![
-        Span::styled("↑/↓", Style::default().fg(Color::Yellow)),
+        Span::styled("↑/↓", Style::default().fg(palette::STATUS_YELLOW)),
         Span::raw(" Navigate  "),
-        Span::styled("Enter", Style::default().fg(Color::Yellow)),
+        Span::styled("Enter", Style::default().fg(palette::STATUS_YELLOW)),
         Span::raw(" Select  "),
-        Span::styled("1-9", Style::default().fg(Color::Yellow)),
+        Span::styled("1-9", Style::default().fg(palette::STATUS_YELLOW)),
         Span::raw(" Quick select  "),
-        Span::styled("q", Style::default().fg(Color::Yellow)),
+        Span::styled("q", Style::default().fg(palette::STATUS_YELLOW)),
         Span::raw(" Quit"),
     ]);
     let footer = Paragraph::new(footer_text).alignment(Alignment::Center);

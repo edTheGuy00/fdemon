@@ -215,3 +215,35 @@ mod tests {
 - `render_shadow` is new functionality — not currently used anywhere. It will be used in Phase 3 when modals are redesigned.
 - The `clear_area` function is a thin wrapper around `Clear.render()` for consistency in the overlay API.
 - Consider whether `dim_background` should use the theme palette's `SHADOW` color instead of hardcoded `Color::Black`. For Phase 1 keeping it simple is fine; Phase 2 can refine.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/modal_overlay.rs` | Created new module with 5 shared utility functions: `centered_rect`, `centered_rect_percent`, `dim_background`, `render_shadow`, `clear_area`. Includes 11 comprehensive unit tests. |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod modal_overlay;` declaration to register the new module. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comprehensive Documentation**: Added detailed doc comments with examples for all public functions to ensure ease of adoption in future phases.
+2. **Overflow Safety**: Used `saturating_add` throughout to prevent overflow panics, matching the safer of the two existing implementations.
+3. **Test Coverage**: Implemented 11 tests covering normal cases, edge cases (clamping, offset areas), and boundary conditions (near-edge shadows).
+4. **Additive Only**: No existing code was modified per task requirements. Existing duplicate implementations remain in place for Phase 3 migration.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (formatting verified)
+- `cargo check -p fdemon-tui` - Passed (no compilation errors)
+- `cargo test -p fdemon-tui --lib modal_overlay` - Passed (11/11 tests passing)
+- Doc tests - Passed (all 6 doc test examples compile and run)
+
+### Risks/Limitations
+
+1. **Pre-existing Clippy Warnings**: The crate has 121 pre-existing warnings (unused icons in `theme/icons.rs`) unrelated to this implementation. Running `cargo clippy -p fdemon-tui -- -D warnings` fails due to these pre-existing issues, not due to `modal_overlay.rs` (verified: no clippy warnings for modal_overlay specifically).
+2. **Not Used Yet**: These utilities are not consumed anywhere in the codebase yet. They will be adopted in Phase 3 when existing modals are refactored to use shared utilities.
