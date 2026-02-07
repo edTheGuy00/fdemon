@@ -3,8 +3,8 @@
 //! Tests for daemon connection, disconnection, and device discovery.
 
 use super::mock_daemon::{MockFlutterDaemon, MockScenarioBuilder};
-use fdemon_core::DaemonEvent;
-use fdemon_daemon::{DaemonCommand, DaemonMessage};
+use fdemon_core::{DaemonEvent, DaemonMessage};
+use fdemon_daemon::DaemonCommand;
 
 // ─────────────────────────────────────────────────────────
 // Daemon Connection Tests
@@ -20,7 +20,7 @@ async fn test_daemon_connected_event_parsed_correctly() {
 
     if let DaemonEvent::Stdout(line) = event {
         let inner = line.trim_start_matches('[').trim_end_matches(']');
-        let msg = DaemonMessage::parse(inner);
+        let msg = fdemon_daemon::parse_daemon_message(inner);
         assert!(matches!(msg, Some(DaemonMessage::DaemonConnected(_))));
 
         if let Some(DaemonMessage::DaemonConnected(conn)) = msg {

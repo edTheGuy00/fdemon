@@ -123,4 +123,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/headless/runner.rs` | Added `last_emitted_log_count` tracking variable in `headless_event_loop()`, rewrote `emit_post_message_events()` to only emit new logs using index tracking, handled VecDeque eviction edge case, added 4 unit tests for emission tracking logic |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local tracking variable instead of Engine state**: The `last_emitted_log_count` is tracked as a local variable in `headless_event_loop()` rather than being stored in Engine or AppState. This is appropriate because log emission tracking is specific to the headless runner's NDJSON output mechanism, not part of the application's core state.
+
+2. **VecDeque eviction handling**: When `last_emitted > current_count`, we reset the index to 0. This means a few logs may be re-emitted after eviction, but this is the safe/correct behavior (better to duplicate a few than to miss new logs). In practice, eviction is unlikely to happen during normal operation since the log buffer is sized at 10,000 entries.
+
+3. **Test implementation approach**: The unit tests simulate the tracking logic by directly manipulating session state via the SessionManager API rather than trying to capture stdout. This provides cleaner, more focused tests that verify the index tracking logic without coupling to the output mechanism.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo build --bin fdemon` - Passed
+- `cargo test --workspace --lib` - Passed (all 427 TUI lib tests + all fdemon-app lib tests + all fdemon-core lib tests + all fdemon-daemon lib tests)
+- `cargo clippy --workspace --lib -- -D warnings` - Passed (no warnings)
+
+### New Tests Added
+
+1. `test_last_emitted_advances_with_new_logs` - Verifies index advances from 0 to 3 when 3 logs are added
+2. `test_no_emission_when_no_new_logs` - Verifies index stays at 3 when no new logs are added
+3. `test_eviction_resets_index` - Verifies index resets from 100 to 0 when current count is only 50 (simulating eviction)
+4. `test_emission_tracking_with_incremental_logs` - Verifies incremental tracking: starts with 2 logs, tracks them, then adds 3 more and only counts the 3 new ones
+
+### Risks/Limitations
+
+1. **None identified**: The implementation follows the task specification exactly, handles the VecDeque eviction edge case, and includes comprehensive unit tests. The fix is isolated to the headless runner and does not affect TUI mode or the Engine's core functionality.

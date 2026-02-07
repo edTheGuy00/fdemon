@@ -10,7 +10,7 @@ pub mod emulators;
 pub mod process;
 pub mod protocol;
 pub mod simulators;
-#[cfg(any(test, debug_assertions))]
+#[cfg(any(test, feature = "test-helpers"))]
 pub mod test_utils;
 pub mod tool_availability;
 
@@ -31,10 +31,13 @@ pub use emulators::{
     launch_ios_simulator, Emulator, EmulatorDiscoveryResult, EmulatorLaunchOptions,
     EmulatorLaunchResult,
 };
-pub use process::FlutterProcess;
-pub use protocol::{strip_brackets, LogEntryInfo, RawMessage};
-// Re-export DaemonMessage from core for convenience (protocol::parse returns it)
+/// Re-exported from `fdemon_core` for convenience. Canonical import: `fdemon_core::DaemonMessage`.
 pub use fdemon_core::DaemonMessage;
+pub use process::FlutterProcess;
+pub use protocol::{
+    detect_log_level, parse_daemon_message, parse_flutter_log, strip_brackets, to_log_entry,
+    LogEntryInfo, RawMessage,
+};
 pub use simulators::{
     boot_simulator, group_simulators_by_runtime, list_ios_simulators, shutdown_simulator,
     IosSimulator, SimulatorState,

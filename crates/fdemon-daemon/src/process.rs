@@ -24,10 +24,12 @@ pub struct FlutterProcess {
 }
 
 impl FlutterProcess {
-    /// Spawn a new Flutter process in the given project directory
-    ///
-    /// Events are sent to `event_tx` for processing by the TUI event loop.
-    pub async fn spawn(project_path: &Path, event_tx: mpsc::Sender<DaemonEvent>) -> Result<Self> {
+    /// Internal spawn implementation. All public methods delegate here.
+    fn spawn_internal(
+        args: &[String],
+        project_path: &Path,
+        event_tx: mpsc::Sender<DaemonEvent>,
+    ) -> Result<Self> {
         // Validate project path
         let pubspec = project_path.join("pubspec.yaml");
         if !pubspec.exists() {
@@ -36,11 +38,11 @@ impl FlutterProcess {
             });
         }
 
-        info!("Spawning Flutter process in: {}", project_path.display());
+        info!("Spawning Flutter: flutter {}", args.join(" "));
 
         // Spawn the Flutter process
         let mut child = Command::new("flutter")
-            .args(["run", "--machine"])
+            .args(args)
             .current_dir(project_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -67,19 +69,25 @@ impl FlutterProcess {
 
         // Spawn stdout reader task
         let stdout = child.stdout.take().expect("stdout was configured");
-        let stdout_tx = event_tx.clone();
-        tokio::spawn(Self::stdout_reader(stdout, stdout_tx));
+        tokio::spawn(Self::stdout_reader(stdout, event_tx.clone()));
 
         // Spawn stderr reader task
         let stderr = child.stderr.take().expect("stderr was configured");
-        let stderr_tx = event_tx.clone();
-        tokio::spawn(Self::stderr_reader(stderr, stderr_tx));
+        tokio::spawn(Self::stderr_reader(stderr, event_tx));
 
         Ok(Self {
             child,
             stdin_tx,
             pid,
         })
+    }
+
+    /// Spawn a new Flutter process in the given project directory
+    ///
+    /// Events are sent to `event_tx` for processing by the TUI event loop.
+    pub async fn spawn(project_path: &Path, event_tx: mpsc::Sender<DaemonEvent>) -> Result<Self> {
+        let args = vec!["run".to_string(), "--machine".to_string()];
+        Self::spawn_internal(&args, project_path, event_tx)
     }
 
     /// Spawn a new Flutter process with a specific device
@@ -90,62 +98,13 @@ impl FlutterProcess {
         device_id: &str,
         event_tx: mpsc::Sender<DaemonEvent>,
     ) -> Result<Self> {
-        // Validate project path
-        let pubspec = project_path.join("pubspec.yaml");
-        if !pubspec.exists() {
-            return Err(Error::NoProject {
-                path: project_path.to_path_buf(),
-            });
-        }
-
-        info!(
-            "Spawning Flutter process in: {} on device: {}",
-            project_path.display(),
-            device_id
-        );
-
-        // Spawn the Flutter process with device argument
-        let mut child = Command::new("flutter")
-            .args(["run", "--machine", "-d", device_id])
-            .current_dir(project_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Error::FlutterNotFound
-                } else {
-                    Error::ProcessSpawn {
-                        reason: e.to_string(),
-                    }
-                }
-            })?;
-
-        let pid = child.id();
-        info!("Flutter process started with PID: {:?}", pid);
-
-        // Take ownership of stdin and create command channel
-        let stdin = child.stdin.take().expect("stdin was configured");
-        let (stdin_tx, stdin_rx) = mpsc::channel::<String>(32);
-        tokio::spawn(Self::stdin_writer(stdin, stdin_rx));
-
-        // Spawn stdout reader task
-        let stdout = child.stdout.take().expect("stdout was configured");
-        let stdout_tx = event_tx.clone();
-        tokio::spawn(Self::stdout_reader(stdout, stdout_tx));
-
-        // Spawn stderr reader task
-        let stderr = child.stderr.take().expect("stderr was configured");
-        let stderr_tx = event_tx.clone();
-        tokio::spawn(Self::stderr_reader(stderr, stderr_tx));
-
-        Ok(Self {
-            child,
-            stdin_tx,
-            pid,
-        })
+        let args = vec![
+            "run".to_string(),
+            "--machine".to_string(),
+            "-d".to_string(),
+            device_id.to_string(),
+        ];
+        Self::spawn_internal(&args, project_path, event_tx)
     }
 
     /// Spawn a Flutter process with pre-built arguments
@@ -157,58 +116,7 @@ impl FlutterProcess {
         args: Vec<String>,
         event_tx: mpsc::Sender<DaemonEvent>,
     ) -> Result<Self> {
-        // Validate project path
-        let pubspec = project_path.join("pubspec.yaml");
-        if !pubspec.exists() {
-            return Err(Error::NoProject {
-                path: project_path.to_path_buf(),
-            });
-        }
-
-        info!("Spawning Flutter: flutter {}", args.join(" "));
-
-        // Spawn the Flutter process with full arguments
-        let mut child = Command::new("flutter")
-            .args(&args)
-            .current_dir(project_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Error::FlutterNotFound
-                } else {
-                    Error::ProcessSpawn {
-                        reason: e.to_string(),
-                    }
-                }
-            })?;
-
-        let pid = child.id();
-        info!("Flutter process started with PID: {:?}", pid);
-
-        // Take ownership of stdin and create command channel
-        let stdin = child.stdin.take().expect("stdin was configured");
-        let (stdin_tx, stdin_rx) = mpsc::channel::<String>(32);
-        tokio::spawn(Self::stdin_writer(stdin, stdin_rx));
-
-        // Spawn stdout reader task
-        let stdout = child.stdout.take().expect("stdout was configured");
-        let stdout_tx = event_tx.clone();
-        tokio::spawn(Self::stdout_reader(stdout, stdout_tx));
-
-        // Spawn stderr reader task
-        let stderr = child.stderr.take().expect("stderr was configured");
-        let stderr_tx = event_tx.clone();
-        tokio::spawn(Self::stderr_reader(stderr, stderr_tx));
-
-        Ok(Self {
-            child,
-            stdin_tx,
-            pid,
-        })
+        Self::spawn_internal(&args, project_path, event_tx)
     }
 
     /// Read lines from stdout and send as DaemonEvents

@@ -646,7 +646,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "color-eyre",
- "crossterm",
  "dirs",
  "fdemon-core",
  "fdemon-daemon",

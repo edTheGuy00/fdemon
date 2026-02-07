@@ -6,7 +6,7 @@
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{AppPhase, DaemonMessage, LogEntry, LogLevel, LogSource, ParsedStackTrace};
-use fdemon_daemon::protocol;
+use fdemon_daemon::{parse_daemon_message, strip_brackets, to_log_entry};
 
 use super::helpers::detect_raw_line_level;
 
@@ -15,8 +15,8 @@ use super::helpers::detect_raw_line_level;
 /// Parses daemon JSON messages and queues log entries for batched processing.
 pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: &str) {
     // Try to parse as JSON daemon message
-    if let Some(json) = protocol::strip_brackets(line) {
-        if let Some(msg) = DaemonMessage::parse(json) {
+    if let Some(json) = strip_brackets(line) {
+        if let Some(msg) = parse_daemon_message(json) {
             // Handle responses separately (they don't create log entries)
             if matches!(msg, DaemonMessage::Response { .. }) {
                 tracing::debug!("Session {} response: {}", session_id, msg.summary());
@@ -24,7 +24,7 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
             }
 
             // Convert to log entry if applicable
-            if let Some(entry_info) = msg.to_log_entry() {
+            if let Some(entry_info) = to_log_entry(&msg) {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
                     // Create log entry with parsed stack trace if present
                     let log_entry = if let Some(trace_str) = entry_info.stack_trace {

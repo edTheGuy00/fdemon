@@ -173,4 +173,38 @@ This actually simplifies the tests significantly -- no more constructing `KeyEve
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/input_key.rs` | Created new `InputKey` enum with 18 variants (Char, CharCtrl, navigation keys, action keys, function keys). Added 3 unit tests. |
+| `crates/fdemon-app/src/lib.rs` | Added `pub mod input_key;` export |
+| `crates/fdemon-app/src/message.rs` | Changed `Message::Key(KeyEvent)` to `Message::Key(InputKey)`, removed `use crossterm::event::KeyEvent` |
+| `crates/fdemon-app/src/handler/keys.rs` | Completely refactored all pattern matching from crossterm types to InputKey (1084 lines). Updated 18 handler functions and all test helpers. |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated imports to use `InputKey`, replaced 33 `KeyEvent::new()` test constructions with simpler `InputKey::Char()` etc. |
+| `crates/fdemon-app/Cargo.toml` | Removed `crossterm.workspace = true` from dependencies |
+| `crates/fdemon-tui/src/event.rs` | Added `key_event_to_input()` conversion function with 15 unit tests covering all key types |
+| `crates/fdemon-tui/src/startup.rs` | Fixed pre-existing bug: changed `.await` to `.unwrap()` for std::sync::Mutex |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simplified InputKey variants**: The InputKey enum uses simpler patterns than crossterm. For example, `Char('R')` represents uppercase R whether it came from Shift+R or Caps Lock, and `CharCtrl('c')` represents Ctrl+C regardless of other modifiers. This is sufficient for fdemon-app's needs and simplifies the API.
+
+2. **Unsupported keys return None**: The conversion function returns `Option<InputKey>`, allowing unsupported keys (like Insert, Media keys, etc.) to be silently ignored. This is appropriate since fdemon doesn't use these keys.
+
+3. **Test construction much simpler**: Before: `KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE)`. After: `InputKey::Char('r')`. This makes tests more readable and eliminates the need to import crossterm types.
+
+4. **Fixed unrelated bug**: During testing, discovered and fixed a pre-existing bug in `startup.rs` where std::sync::Mutex was being `.await`ed instead of `.unwrap()`ed.
+
+### Testing Performed
+
+- `cargo test --workspace --lib` - **Passed** (729 tests in fdemon-app, 438 tests in fdemon-tui, all passed)
+- `cargo clippy --workspace --lib -- -D warnings` - **Passed** (no warnings)
+- Added 15 new unit tests in `event.rs` for conversion function
+- All existing 729 fdemon-app tests updated to use InputKey and passing
+
+### Risks/Limitations
+
+1. **None identified**: The abstraction is complete and well-tested. The conversion from crossterm to InputKey happens at a clear boundary (TUI event polling), and all existing tests pass.

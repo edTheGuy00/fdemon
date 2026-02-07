@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
 
 use crate::config::LaunchConfig;
@@ -14,14 +14,13 @@ use crate::session::SessionId;
 use crate::UpdateAction;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
-    protocol, CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker,
-    ToolAvailability,
+    CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
 
 use super::spawn;
 
 /// Convenience type alias for session task tracking
-pub type SessionTaskMap = Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>;
+pub type SessionTaskMap = Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>;
 
 /// Execute an action by spawning a background task
 #[allow(clippy::too_many_arguments)]
@@ -241,9 +240,9 @@ fn spawn_session(
 
                                     // Capture app_id from stdout events
                                     if let DaemonEvent::Stdout(ref line) = event {
-                                        if let Some(json) = protocol::strip_brackets(line) {
+                                        if let Some(json) = fdemon_daemon::strip_brackets(line) {
                                             if let Some(DaemonMessage::AppStart(app_start)) =
-                                                DaemonMessage::parse(json)
+                                                fdemon_daemon::parse_daemon_message(json)
                                             {
                                                 app_id = Some(app_start.app_id.clone());
                                             }
@@ -317,18 +316,33 @@ fn spawn_session(
         }
 
         // Remove this session's task from the tracking map
-        session_tasks_clone.lock().await.remove(&session_id);
-        info!("Session {} task removed from tracking", session_id);
+        if let Ok(mut guard) = session_tasks_clone.lock() {
+            guard.remove(&session_id);
+            info!("Session {} task removed from tracking", session_id);
+        } else {
+            warn!(
+                "Session {} task could not be removed from tracking (poisoned lock)",
+                session_id
+            );
+        }
     });
 
     // Store the handle with session_id as key (allows multiple concurrent sessions)
-    if let Ok(mut guard) = session_tasks.try_lock() {
-        guard.insert(session_id, handle);
-        info!(
-            "Session {} task added to tracking (total: {})",
-            session_id,
-            guard.len()
-        );
+    match session_tasks.lock() {
+        Ok(mut guard) => {
+            guard.insert(session_id, handle);
+            info!(
+                "Session {} task added to tracking (total: {})",
+                session_id,
+                guard.len()
+            );
+        }
+        Err(e) => {
+            warn!(
+                "Session {} task handle could not be tracked (poisoned lock): {}",
+                session_id, e
+            );
+        }
     }
 }
 

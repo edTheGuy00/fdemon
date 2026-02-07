@@ -2,9 +2,9 @@
 #![cfg(not(feature = "skip_old_tests"))]
 
 use super::*;
+use crate::input_key::InputKey;
 use crate::message::Message;
 use crate::state::{AppState, UiMode};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use fdemon_core::{AppPhase, DaemonEvent};
 
 /// Helper function to create a test Device with minimal required fields
@@ -49,7 +49,7 @@ fn test_should_quit_returns_false_when_running() {
 #[test]
 fn test_q_key_produces_request_quit_message() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+    let key = InputKey::Char('q');
 
     let result = handle_key(&state, key);
 
@@ -59,7 +59,7 @@ fn test_q_key_produces_request_quit_message() {
 #[test]
 fn test_escape_key_produces_request_quit_message() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let key = InputKey::Esc;
 
     let result = handle_key(&state, key);
 
@@ -69,7 +69,7 @@ fn test_escape_key_produces_request_quit_message() {
 #[test]
 fn test_ctrl_c_produces_quit_message() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('c');
 
     let result = handle_key(&state, key);
 
@@ -79,7 +79,7 @@ fn test_ctrl_c_produces_quit_message() {
 #[test]
 fn test_r_key_produces_hot_reload() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE);
+    let key = InputKey::Char('r');
 
     let result = handle_key(&state, key);
 
@@ -89,7 +89,7 @@ fn test_r_key_produces_hot_reload() {
 #[test]
 fn test_shift_r_produces_hot_restart() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT);
+    let key = InputKey::Char('R');
 
     let result = handle_key(&state, key);
 
@@ -99,7 +99,7 @@ fn test_shift_r_produces_hot_restart() {
 #[test]
 fn test_s_key_produces_stop() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE);
+    let key = InputKey::Char('s');
 
     let result = handle_key(&state, key);
 
@@ -249,7 +249,7 @@ fn test_y_key_in_confirm_dialog_confirms() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
 
-    let key = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE);
+    let key = InputKey::Char('y');
     let result = handle_key(&state, key);
 
     assert!(matches!(result, Some(Message::ConfirmQuit)));
@@ -262,7 +262,7 @@ fn test_n_key_in_confirm_dialog_cancels() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
 
-    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+    let key = InputKey::Char('n');
     let result = handle_key(&state, key);
 
     assert!(matches!(result, Some(Message::CancelQuit)));
@@ -275,7 +275,7 @@ fn test_esc_in_confirm_dialog_cancels() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
 
-    let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let key = InputKey::Esc;
     let result = handle_key(&state, key);
 
     assert!(matches!(result, Some(Message::CancelQuit)));
@@ -288,7 +288,7 @@ fn test_ctrl_c_in_confirm_dialog_force_quits() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
 
-    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('c');
     let result = handle_key(&state, key);
 
     // Should force quit (bypass confirm)
@@ -302,7 +302,7 @@ fn test_q_in_confirm_dialog_confirms() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::ConfirmDialog;
 
-    let key = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE);
+    let key = InputKey::Char('q');
     let result = handle_key(&state, key);
 
     // 'q' in confirm dialog should confirm (enables "qq" quick quit)
@@ -448,11 +448,11 @@ fn test_session_spawn_failed_logs_and_removes() {
 fn test_number_keys_select_session() {
     let state = AppState::new();
 
-    let key = KeyEvent::new(KeyCode::Char('1'), KeyModifiers::NONE);
+    let key = InputKey::Char('1');
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::SelectSessionByIndex(0))));
 
-    let key = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::NONE);
+    let key = InputKey::Char('5');
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::SelectSessionByIndex(4))));
 }
@@ -461,11 +461,11 @@ fn test_number_keys_select_session() {
 fn test_tab_cycles_sessions() {
     let state = AppState::new();
 
-    let key = KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE);
+    let key = InputKey::Tab;
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::NextSession)));
 
-    let key = KeyEvent::new(KeyCode::BackTab, KeyModifiers::SHIFT);
+    let key = InputKey::BackTab;
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::PreviousSession)));
 }
@@ -519,7 +519,7 @@ fn test_next_previous_session_messages() {
 fn test_x_closes_session() {
     let state = AppState::new();
 
-    let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
+    let key = InputKey::Char('x');
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::CloseCurrentSession)));
 }
@@ -528,7 +528,7 @@ fn test_x_closes_session() {
 fn test_ctrl_w_closes_session() {
     let state = AppState::new();
 
-    let key = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('w');
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::CloseCurrentSession)));
 }
@@ -576,7 +576,7 @@ fn test_close_session_shows_device_selector_when_multiple() {
 fn test_c_clears_logs() {
     let state = AppState::new();
 
-    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::NONE);
+    let key = InputKey::Char('c');
     let result = handle_key(&state, key);
     assert!(matches!(result, Some(Message::ClearLogs)));
 }
@@ -1124,7 +1124,7 @@ fn test_any_session_busy() {
 #[test]
 fn test_f_key_produces_cycle_level_filter() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::NONE);
+    let key = InputKey::Char('f');
 
     let result = handle_key(&state, key);
 
@@ -1134,7 +1134,7 @@ fn test_f_key_produces_cycle_level_filter() {
 #[test]
 fn test_shift_f_produces_cycle_source_filter() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('F'), KeyModifiers::SHIFT);
+    let key = InputKey::Char('F');
 
     let result = handle_key(&state, key);
 
@@ -1144,7 +1144,7 @@ fn test_shift_f_produces_cycle_source_filter() {
 #[test]
 fn test_ctrl_f_produces_reset_filters() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('f'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('f');
 
     let result = handle_key(&state, key);
 
@@ -1321,7 +1321,7 @@ fn test_filter_messages_without_session() {
 #[test]
 fn test_slash_key_produces_start_search() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('/'), KeyModifiers::NONE);
+    let key = InputKey::Char('/');
 
     let result = handle_key(&state, key);
 
@@ -1384,7 +1384,7 @@ fn test_search_input_mode_escape() {
     state.session_manager.create_session(&device).unwrap();
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+    let key = InputKey::Esc;
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::CancelSearch)));
@@ -1397,7 +1397,7 @@ fn test_search_input_mode_enter() {
     state.session_manager.create_session(&device).unwrap();
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+    let key = InputKey::Enter;
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::CancelSearch)));
@@ -1415,7 +1415,7 @@ fn test_search_input_mode_backspace() {
     }
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+    let key = InputKey::Backspace;
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::SearchInput { text }) if text == "tes"));
@@ -1428,7 +1428,7 @@ fn test_search_input_mode_ctrl_u_clears() {
     state.session_manager.create_session(&device).unwrap();
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('u');
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::SearchInput { text }) if text.is_empty()));
@@ -1446,7 +1446,7 @@ fn test_search_input_mode_typing() {
     }
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE);
+    let key = InputKey::Char('t');
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::SearchInput { text }) if text == "test"));
@@ -1459,7 +1459,7 @@ fn test_search_input_mode_ctrl_c_quits() {
     state.session_manager.create_session(&device).unwrap();
 
     state.ui_mode = UiMode::SearchInput;
-    let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+    let key = InputKey::CharCtrl('c');
 
     let msg = handle_key(&state, key);
     assert!(matches!(msg, Some(Message::Quit)));
@@ -1476,7 +1476,7 @@ fn test_n_key_with_search_query_navigates() {
         handle.session.set_search_query("error");
     }
 
-    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+    let key = InputKey::Char('n');
     let msg = handle_key(&state, key);
 
     assert!(matches!(msg, Some(Message::NextSearchMatch)));
@@ -1485,7 +1485,7 @@ fn test_n_key_with_search_query_navigates() {
 #[test]
 fn test_n_key_without_search_does_nothing() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::NONE);
+    let key = InputKey::Char('n');
 
     let msg = handle_key(&state, key);
 
@@ -1496,7 +1496,7 @@ fn test_n_key_without_search_does_nothing() {
 #[test]
 fn test_shift_n_produces_prev_search_match() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('N'), KeyModifiers::SHIFT);
+    let key = InputKey::Char('N');
 
     let result = handle_key(&state, key);
 
@@ -1576,7 +1576,7 @@ fn test_clear_search_resets_ui_mode() {
 #[test]
 fn test_e_key_produces_next_error() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE);
+    let key = InputKey::Char('e');
 
     let result = handle_key(&state, key);
 
@@ -1586,7 +1586,7 @@ fn test_e_key_produces_next_error() {
 #[test]
 fn test_shift_e_produces_prev_error() {
     let state = AppState::new();
-    let key = KeyEvent::new(KeyCode::Char('E'), KeyModifiers::SHIFT);
+    let key = InputKey::Char('E');
 
     let result = handle_key(&state, key);
 

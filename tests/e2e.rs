@@ -92,9 +92,9 @@ pub fn load_fixture(name: &str) -> String {
 }
 
 /// Load and parse a fixture as a DaemonMessage
-pub fn load_daemon_message(name: &str) -> fdemon_daemon::DaemonMessage {
+pub fn load_daemon_message(name: &str) -> fdemon_core::DaemonMessage {
     let json = load_fixture(name);
-    fdemon_daemon::DaemonMessage::parse(&json)
+    fdemon_daemon::parse_daemon_message(&json)
         .unwrap_or_else(|| panic!("Failed to parse fixture {} as DaemonMessage", name))
 }
 

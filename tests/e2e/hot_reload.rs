@@ -6,8 +6,8 @@ use crate::e2e::mock_daemon::MockFlutterDaemon;
 use crate::{android_emulator, test_app_state};
 use fdemon_app::handler::update;
 use fdemon_app::message::Message;
-use fdemon_core::DaemonEvent;
-use fdemon_daemon::{DaemonCommand, DaemonMessage};
+use fdemon_core::{DaemonEvent, DaemonMessage};
+use fdemon_daemon::DaemonCommand;
 
 // ─────────────────────────────────────────────────────────
 // Hot Reload Command Tests
@@ -158,7 +158,7 @@ async fn test_progress_events_parsed_as_daemon_messages() {
 
     if let DaemonEvent::Stdout(line) = event {
         let inner = line.trim_start_matches('[').trim_end_matches(']');
-        let msg = DaemonMessage::parse(inner);
+        let msg = fdemon_daemon::parse_daemon_message(inner);
 
         // Should parse as AppProgress
         assert!(

@@ -28,7 +28,7 @@ pub use discovery::{
 pub use error::{Error, Result, ResultExt};
 pub use events::{
     AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected, DaemonEvent,
-    DaemonLogMessage, DaemonMessage, DeviceInfo, LogEntryInfo,
+    DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use stack_trace::{
     detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame,

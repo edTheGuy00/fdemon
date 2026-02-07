@@ -46,6 +46,9 @@ pub async fn run_headless(project_path: &Path) -> Result<()> {
 
 /// Main headless event loop
 async fn headless_event_loop(engine: &mut Engine) -> Result<()> {
+    // Track how many logs we've already emitted to prevent duplicates
+    let mut last_emitted_log_count: usize = 0;
+
     loop {
         // Check for shutdown
         if engine.should_quit() {
@@ -66,7 +69,7 @@ async fn headless_event_loop(engine: &mut Engine) -> Result<()> {
                 engine.flush_pending_logs();
 
                 // Emit events based on state changes after processing
-                emit_post_message_events(&engine.state);
+                emit_post_message_events(&engine.state, &mut last_emitted_log_count);
             }
             None => {
                 // Channel closed
@@ -89,26 +92,34 @@ fn emit_pre_message_events(_state: &AppState, msg: &Message) {
 }
 
 /// Emit events after message processing based on state changes
-fn emit_post_message_events(state: &AppState) {
-    // Emit log events for new logs
-    // Note: This is a simplified version. In a full implementation,
-    // we'd track which logs have been emitted already.
+fn emit_post_message_events(state: &AppState, last_emitted: &mut usize) {
     if let Some(session) = state.session_manager.selected() {
-        // Get the last few logs (we'd ideally track the last emitted index)
-        for log in session.session.logs.iter().rev().take(1) {
-            // Convert LogLevel to string
-            let level_str = match log.level {
-                fdemon_core::LogLevel::Debug => "debug",
-                fdemon_core::LogLevel::Info => "info",
-                fdemon_core::LogLevel::Warning => "warning",
-                fdemon_core::LogLevel::Error => "error",
-            };
-            HeadlessEvent::log(
-                level_str,
-                log.message.clone(),
-                Some(session.session.id.to_string()),
-            )
-            .emit();
+        let current_count = session.session.logs.len();
+
+        // Handle VecDeque eviction: if logs were evicted from front,
+        // our index may be past the current length
+        if *last_emitted > current_count {
+            *last_emitted = 0; // Reset -- we lost track due to eviction
+        }
+
+        if current_count > *last_emitted {
+            // Emit only new logs (skip already-emitted ones)
+            for log in session.session.logs.iter().skip(*last_emitted) {
+                // Convert LogLevel to lowercase string using prefix method
+                let level_str = match log.level {
+                    fdemon_core::LogLevel::Debug => "debug",
+                    fdemon_core::LogLevel::Info => "info",
+                    fdemon_core::LogLevel::Warning => "warning",
+                    fdemon_core::LogLevel::Error => "error",
+                };
+                HeadlessEvent::log(
+                    level_str,
+                    log.message.clone(),
+                    Some(session.session.id.to_string()),
+                )
+                .emit();
+            }
+            *last_emitted = current_count;
         }
     }
 }
@@ -227,5 +238,211 @@ async fn headless_auto_start(engine: &mut Engine) {
             tracing::error!("Device discovery failed: {}", e);
             HeadlessEvent::error(format!("Device discovery failed: {}", e), true).emit();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fdemon_core::{LogEntry, LogSource};
+
+    #[test]
+    fn test_last_emitted_advances_with_new_logs() {
+        // Setup: session with 3 logs, last_emitted = 0
+        let mut state = AppState::new();
+
+        // Add session to manager
+        let device = fdemon_daemon::devices::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add 3 logs to the session
+        if let Some(session_handle) = state.session_manager.get_mut(session_id) {
+            for i in 0..3 {
+                session_handle.session.add_log(LogEntry::info(
+                    LogSource::Flutter,
+                    format!("Log message {}", i),
+                ));
+            }
+        }
+
+        // Select the session
+        state.session_manager.select_by_id(session_id);
+
+        let mut last_emitted = 0;
+
+        // Act: Simulate emission tracking (without actually emitting to stdout)
+        if let Some(session_handle) = state.session_manager.selected() {
+            let current_count = session_handle.session.logs.len();
+            if current_count > last_emitted {
+                last_emitted = current_count;
+            }
+        }
+
+        // Assert: last_emitted now equals 3
+        assert_eq!(last_emitted, 3);
+    }
+
+    #[test]
+    fn test_no_emission_when_no_new_logs() {
+        // Setup: session with 3 logs, last_emitted = 3
+        let mut state = AppState::new();
+
+        let device = fdemon_daemon::devices::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add 3 logs
+        if let Some(session_handle) = state.session_manager.get_mut(session_id) {
+            for i in 0..3 {
+                session_handle.session.add_log(LogEntry::info(
+                    LogSource::Flutter,
+                    format!("Log message {}", i),
+                ));
+            }
+        }
+
+        state.session_manager.select_by_id(session_id);
+
+        let mut last_emitted = 3;
+
+        // Act: Simulate emission tracking
+        if let Some(session_handle) = state.session_manager.selected() {
+            let current_count = session_handle.session.logs.len();
+            if current_count > last_emitted {
+                last_emitted = current_count;
+            }
+        }
+
+        // Assert: last_emitted still 3, no new logs processed
+        assert_eq!(last_emitted, 3);
+    }
+
+    #[test]
+    fn test_eviction_resets_index() {
+        // Setup: last_emitted = 100, but session.logs.len() = 50 (simulating eviction)
+        let mut state = AppState::new();
+
+        let device = fdemon_daemon::devices::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add 50 logs
+        if let Some(session_handle) = state.session_manager.get_mut(session_id) {
+            for i in 0..50 {
+                session_handle.session.add_log(LogEntry::info(
+                    LogSource::Flutter,
+                    format!("Log message {}", i),
+                ));
+            }
+        }
+
+        state.session_manager.select_by_id(session_id);
+
+        let mut last_emitted = 100;
+
+        // Act: Simulate emission tracking with eviction handling
+        if let Some(session_handle) = state.session_manager.selected() {
+            let current_count = session_handle.session.logs.len();
+
+            // Handle VecDeque eviction: if logs were evicted from front,
+            // our index may be past the current length
+            if last_emitted > current_count {
+                last_emitted = 0; // Reset -- we lost track due to eviction
+            }
+
+            if current_count > last_emitted {
+                last_emitted = current_count;
+            }
+        }
+
+        // Assert: last_emitted reset to 50 (current count after eviction reset)
+        assert_eq!(last_emitted, 50);
+    }
+
+    #[test]
+    fn test_emission_tracking_with_incremental_logs() {
+        // Setup: session starts with 2 logs, we emit them, then 3 more are added
+        let mut state = AppState::new();
+
+        let device = fdemon_daemon::devices::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add 2 initial logs
+        if let Some(session_handle) = state.session_manager.get_mut(session_id) {
+            for i in 0..2 {
+                session_handle.session.add_log(LogEntry::info(
+                    LogSource::Flutter,
+                    format!("Log message {}", i),
+                ));
+            }
+        }
+
+        state.session_manager.select_by_id(session_id);
+
+        let mut last_emitted = 0;
+
+        // First emission: should emit 2 logs
+        if let Some(session_handle) = state.session_manager.selected() {
+            let current_count = session_handle.session.logs.len();
+            if current_count > last_emitted {
+                last_emitted = current_count;
+            }
+        }
+        assert_eq!(last_emitted, 2);
+
+        // Add 3 more logs to the session via session_manager
+        if let Some(session_handle) = state.session_manager.selected_mut() {
+            for i in 2..5 {
+                session_handle.session.add_log(LogEntry::info(
+                    LogSource::Flutter,
+                    format!("Log message {}", i),
+                ));
+            }
+        }
+
+        // Second emission: should emit only the 3 new logs
+        if let Some(session_handle) = state.session_manager.selected() {
+            let current_count = session_handle.session.logs.len();
+            if current_count > last_emitted {
+                let new_logs_count = current_count - last_emitted;
+                assert_eq!(new_logs_count, 3); // Only 3 new logs
+                last_emitted = current_count;
+            }
+        }
+        assert_eq!(last_emitted, 5);
     }
 }

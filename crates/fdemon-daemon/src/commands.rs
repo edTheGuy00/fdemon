@@ -275,7 +275,7 @@ impl CommandSender {
     }
 
     /// Create a CommandSender for testing (uses a dummy channel)
-    #[cfg(any(test, debug_assertions))]
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn new_for_test() -> Self {
         let (tx, _rx) = mpsc::channel(1);
         Self {

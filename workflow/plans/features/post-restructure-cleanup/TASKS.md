@@ -26,13 +26,13 @@ Wave 2 (parallel, 06 depends on 01):
 
 | # | Task | Review Issue | Severity | Status | Depends On | Modules |
 |---|------|-------------|----------|--------|------------|---------|
-| 1 | [01-move-parse-to-daemon](tasks/01-move-parse-to-daemon.md) | #1 | MAJOR | Not Started | - | `fdemon-core/events.rs`, `fdemon-daemon/protocol.rs` |
-| 2 | [02-fix-headless-log-dup](tasks/02-fix-headless-log-dup.md) | #2 | MAJOR | Not Started | - | `src/headless/runner.rs` |
-| 3 | [03-replace-eprintln](tasks/03-replace-eprintln.md) | #3 | MAJOR | Not Started | - | `src/headless/mod.rs` |
-| 4 | [04-consolidate-spawn](tasks/04-consolidate-spawn.md) | #6 | MINOR | Not Started | - | `fdemon-daemon/process.rs` |
-| 5 | [05-fix-try-lock-race](tasks/05-fix-try-lock-race.md) | #7 | MINOR | Not Started | - | `fdemon-app/actions.rs` |
-| 6 | [06-standardize-imports](tasks/06-standardize-imports.md) | #8, #10 | MINOR | Not Started | 01 | Multiple files |
-| 7 | [07-abstract-key-event](tasks/07-abstract-key-event.md) | #4 | MINOR | Not Started | - | `fdemon-app/message.rs`, `fdemon-app/handler/keys.rs`, `fdemon-tui/event.rs` |
+| 1 | [01-move-parse-to-daemon](tasks/01-move-parse-to-daemon.md) | #1 | MAJOR | Done | - | `fdemon-core/events.rs`, `fdemon-daemon/protocol.rs` |
+| 2 | [02-fix-headless-log-dup](tasks/02-fix-headless-log-dup.md) | #2 | MAJOR | Done | - | `src/headless/runner.rs` |
+| 3 | [03-replace-eprintln](tasks/03-replace-eprintln.md) | #3 | MAJOR | Done | - | `src/headless/mod.rs` |
+| 4 | [04-consolidate-spawn](tasks/04-consolidate-spawn.md) | #6 | MINOR | Done | - | `fdemon-daemon/process.rs` |
+| 5 | [05-fix-try-lock-race](tasks/05-fix-try-lock-race.md) | #7 | MINOR | Done | - | `fdemon-app/actions.rs` |
+| 6 | [06-standardize-imports](tasks/06-standardize-imports.md) | #8, #10 | MINOR | Done | 01 | Multiple files |
+| 7 | [07-abstract-key-event](tasks/07-abstract-key-event.md) | #4 | MINOR | Done | - | `fdemon-app/message.rs`, `fdemon-app/handler/keys.rs`, `fdemon-tui/event.rs` |
 
 ## Accepted / No Action
 
@@ -45,11 +45,11 @@ Wave 2 (parallel, 06 depends on 01):
 
 Post-restructure cleanup is complete when:
 
-- [ ] All 7 tasks are Done
-- [ ] `cargo fmt --all` passes
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace --lib` passes (1,532+ tests, 0 failures)
-- [ ] `cargo clippy --workspace --lib -- -D warnings` passes (0 warnings)
+- [x] All 7 tasks are Done
+- [x] `cargo fmt --all` passes
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace --lib` passes (1,546 tests, 0 failures)
+- [x] `cargo clippy --workspace --lib -- -D warnings` passes (0 warnings)
 - [ ] No regressions in TUI or headless mode
 
 ## Notes

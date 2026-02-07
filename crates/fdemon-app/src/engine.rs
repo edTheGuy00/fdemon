@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use tokio::sync::{broadcast, mpsc, watch, Mutex};
+use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
 
 use crate::actions::SessionTaskMap;
@@ -145,7 +145,7 @@ impl Engine {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         // 6. Create session task map
-        let session_tasks: SessionTaskMap = Arc::new(Mutex::new(HashMap::new()));
+        let session_tasks: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
 
         // 7. Spawn signal handler
         signals::spawn_signal_handler(msg_tx.clone());
@@ -327,8 +327,16 @@ impl Engine {
 
         // Drain remaining session tasks with timeout
         let tasks: Vec<_> = {
-            let mut map = self.session_tasks.lock().await;
-            map.drain().collect()
+            match self.session_tasks.lock() {
+                Ok(mut map) => map.drain().collect(),
+                Err(e) => {
+                    warn!(
+                        "Failed to acquire session tasks lock during shutdown (poisoned): {}",
+                        e
+                    );
+                    Vec::new()
+                }
+            }
         };
 
         for (session_id, handle) in tasks {

@@ -69,7 +69,7 @@ pub fn handle_session_daemon_event(
         }
         DaemonEvent::Message(msg) => {
             // Legacy path - convert typed message
-            if let Some(entry_info) = msg.to_log_entry() {
+            if let Some(entry_info) = fdemon_daemon::to_log_entry(&msg) {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
                     let entry =
                         LogEntry::new(entry_info.level, entry_info.source, entry_info.message);

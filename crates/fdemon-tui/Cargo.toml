@@ -17,4 +17,4 @@ chrono.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 insta.workspace = true
-fdemon-daemon.workspace = true
+fdemon-daemon = { workspace = true, features = ["test-helpers"] }

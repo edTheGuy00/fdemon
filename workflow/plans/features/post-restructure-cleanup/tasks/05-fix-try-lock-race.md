@@ -109,4 +109,55 @@ No new tests are strictly necessary, but consider adding a test that spawns two 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Blocked
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/crates/fdemon-app/src/actions.rs` | Changed `SessionTaskMap` type alias from `tokio::sync::Mutex` to `std::sync::Mutex` (line 23), replaced `try_lock()` with `lock()` and added poisoning error handling (lines 331-346), updated cleanup lock usage (lines 319-327), removed `Mutex` from tokio::sync imports (line 7) |
+| `/Users/ed/Dev/zabin/flutter-demon/crates/fdemon-app/src/engine.rs` | Updated `Mutex::new()` to `std::sync::Mutex::new()` (line 148), removed `.await` from `lock()` call and added poisoning error handling in shutdown (lines 330-336), removed `Mutex` from tokio::sync imports (line 11) |
+| `/Users/ed/Dev/zabin/flutter-demon/crates/fdemon-app/src/process.rs` | Updated `SessionTaskMap` parameter type signature to use `std::sync::Mutex` (line 27), removed `Mutex` from tokio::sync imports (line 10) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Blocking mutex**: Changed from `tokio::sync::Mutex` to `std::sync::Mutex` because critical sections are trivial HashMap operations (insert/remove/drain). This eliminates the race condition where `try_lock()` could silently drop task handles under contention.
+
+2. **Poison handling**: All `.lock()` calls now use `match` or `if let Ok()` to handle potential lock poisoning. Poisoning is logged with `warn!` instead of panicking, which is appropriate since this would only occur if a previous thread panicked while holding the lock.
+
+3. **No `.await` points**: Verified that no code holds the std::sync::Mutex guard across `.await` points, which would cause panics or deadlocks. All usage is for brief HashMap operations only.
+
+4. **Consistent error handling**: Used `warn!` for all lock failures with descriptive messages including session_id context.
+
+### Testing Performed
+
+**BLOCKED**: Cannot run tests due to unrelated uncommitted changes in the repository that break compilation.
+
+The codebase contains uncommitted work-in-progress changes that introduce compilation errors:
+- New file `crates/fdemon-app/src/input_key.rs` (not committed)
+- Partial refactoring of `crates/fdemon-app/src/handler/keys.rs` to use `InputKey` instead of `KeyEvent`
+- Many other files modified (see git status output)
+
+These changes are NOT related to this task (fixing try_lock race in session task tracking) but prevent the build from completing.
+
+**My specific changes are correct per the task specification:**
+- Changed `SessionTaskMap` from `tokio::sync::Mutex` to `std::sync::Mutex`
+- Replaced `try_lock()` with reliable `.lock()`
+- Added proper poison error handling with `warn!` logging
+- Updated all `.lock().await` to `.lock()` (blocking)
+- Removed unnecessary `Mutex` imports from tokio::sync
+
+### Verification Commands (when build is fixed)
+
+```bash
+cargo test -p fdemon-app
+cargo clippy -p fdemon-app -- -D warnings
+```
+
+### Risks/Limitations
+
+1. **Lock poisoning**: If a thread panics while holding the session_tasks lock, subsequent lock acquisitions will return `Err(PoisonError)`. This is handled by logging warnings and proceeding without tracking/cleanup. The poisoned state persists for the lifetime of the Arc, but this should be rare (only on panic).
+
+2. **Build blocked**: Cannot verify tests pass due to unrelated uncommitted changes. The changes follow the task specification exactly but need a clean codebase to verify.
+
+3. **No deadlock risk**: Verified that std::sync::Mutex is never held across `.await` points. All critical sections are trivial HashMap operations.

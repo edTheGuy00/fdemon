@@ -1,9 +1,9 @@
 //! Message types for the application (TEA pattern)
 
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
+use crate::input_key::InputKey;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::SessionId;
-use crossterm::event::KeyEvent;
 use fdemon_core::{BootableDevice, DaemonEvent};
 use fdemon_daemon::{
     AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult, IosSimulator,
@@ -32,7 +32,7 @@ pub struct AutoLaunchSuccess {
 #[derive(Debug, Clone)]
 pub enum Message {
     /// Keyboard event from terminal
-    Key(KeyEvent),
+    Key(InputKey),
 
     /// Event from Flutter daemon with session context (multi-session mode)
     SessionDaemon {

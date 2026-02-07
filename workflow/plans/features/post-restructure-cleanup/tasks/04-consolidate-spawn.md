@@ -141,4 +141,29 @@ Existing tests for `FlutterProcess` cover spawn behavior. No new tests needed --
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/crates/fdemon-daemon/src/process.rs` | Refactored three nearly-identical spawn methods into single `spawn_internal()` method with thin public wrappers. Eliminated 94 lines of duplication. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`spawn_internal` takes `&[String]` instead of `&[&str]`**: This matches the existing API of `spawn_with_args(Vec<String>)` and allows the internal method to be called without additional allocations when the caller already has a `Vec<String>`. The thin wrappers create the `Vec<String>` on the stack before delegating.
+
+2. **Unified log message**: The single internal log message `"Spawning Flutter: flutter {}"` replaces the three different log messages that existed before. This is acceptable since the args already contain all necessary context (device ID, etc.).
+
+3. **Removed `async` from `spawn_internal`**: Since the method is synchronous (doesn't await anything), the `async` keyword was removed. The public wrappers remain `async` for API compatibility.
+
+4. **Simplified stdout/stderr spawning**: Replaced separate variable bindings (`stdout_tx`, `stderr_tx`) with inline `event_tx.clone()` calls, reducing verbosity while maintaining identical behavior.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon` - Passed (136 tests passed, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None. This is a pure refactoring with no behavioral changes. All existing tests pass without modification, confirming the public API remains unchanged.

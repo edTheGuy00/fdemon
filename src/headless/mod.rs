@@ -22,6 +22,7 @@ pub mod runner;
 use chrono::Utc;
 use serde::Serialize;
 use std::io::{self, Write};
+use tracing::error;
 
 /// Events emitted in headless mode
 #[derive(Debug, Clone, Serialize)]
@@ -111,8 +112,7 @@ impl HeadlessEvent {
         let json = match serde_json::to_string(self) {
             Ok(json) => json,
             Err(e) => {
-                // Fallback error - should never happen with our types
-                eprintln!("Failed to serialize event: {}", e);
+                error!("Failed to serialize headless event: {}", e);
                 return;
             }
         };
@@ -120,13 +120,13 @@ impl HeadlessEvent {
         // Write to stdout with newline (NDJSON format)
         let mut stdout = io::stdout().lock();
         if let Err(e) = writeln!(stdout, "{}", json) {
-            eprintln!("Failed to write to stdout: {}", e);
+            error!("Failed to write headless event to stdout: {}", e);
             return;
         }
 
         // Flush to ensure immediate output
         if let Err(e) = stdout.flush() {
-            eprintln!("Failed to flush stdout: {}", e);
+            error!("Failed to flush headless stdout: {}", e);
         }
     }
 

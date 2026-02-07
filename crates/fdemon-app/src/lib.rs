@@ -12,6 +12,7 @@ pub mod engine;
 pub mod engine_event;
 pub mod handler;
 pub mod hyperlinks;
+pub mod input_key;
 pub mod log_view_state;
 pub mod message;
 pub mod new_session_dialog;

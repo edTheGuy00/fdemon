@@ -311,7 +311,7 @@ flutter-demon/
 │   │   └── src/
 │   │       ├── lib.rs
 │   │       ├── process.rs        # FlutterProcess spawning/lifecycle
-│   │       ├── protocol.rs       # DaemonMessage::parse() implementation
+│   │       ├── protocol.rs       # parse_daemon_message() and conversion functions
 │   │       ├── commands.rs       # Command sending with request tracking
 │   │       ├── devices.rs        # Device discovery
 │   │       ├── emulators.rs      # Emulator discovery and launch
@@ -419,7 +419,7 @@ flutter-demon/
 | File | Purpose |
 |------|---------|
 | `process.rs` | `FlutterProcess` — spawns `flutter run --machine`, manages stdin/stdout/stderr streams. |
-| `protocol.rs` | `DaemonMessage::parse()` — converts JSON-RPC to typed events (event types in `fdemon-core`). |
+| `protocol.rs` | `parse_daemon_message()`, `to_log_entry()`, `parse_flutter_log()`, `detect_log_level()` — converts JSON-RPC to typed events (event types in `fdemon-core`). |
 | `commands.rs` | `CommandSender`, `DaemonCommand`, `RequestTracker` — send commands with request ID tracking. |
 | `devices.rs` | `Device` type, `discover_devices()` — finds connected devices. |
 | `emulators.rs` | `Emulator` type, `discover_emulators()`, `launch_emulator()`. |
@@ -738,7 +738,7 @@ FlutterProcess
     ├── stdout reader task ──▶ DaemonEvent::Stdout(line)
     │                              │
     │                              ▼
-    │                         protocol::DaemonMessage::parse()
+    │                         protocol::parse_daemon_message()
     │                              │
     │                              ▼
     │                         DaemonEvent::Message(parsed)

@@ -5,6 +5,9 @@ edition.workspace = true
 license.workspace = true
 description = "Flutter process management for Flutter Demon"
 
+[features]
+test-helpers = []
+
 [dependencies]
 fdemon-core.workspace = true
 tokio.workspace = true

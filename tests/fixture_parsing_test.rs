@@ -1,13 +1,12 @@
 //! Tests to verify JSON fixtures parse correctly
 
-// DaemonMessage type is in core, but parse() method is in daemon/protocol
-// Re-export from daemon makes this work
-use fdemon_daemon::DaemonMessage;
+use fdemon_core::DaemonMessage;
+use fdemon_daemon::parse_daemon_message;
 
 #[test]
 fn test_daemon_connected_fixture_parses() {
     let json = include_str!("fixtures/daemon_responses/daemon_connected.json");
-    let msg = DaemonMessage::parse(json);
+    let msg = parse_daemon_message(json);
     assert!(matches!(msg, Some(DaemonMessage::DaemonConnected(_))));
 
     if let Some(DaemonMessage::DaemonConnected(conn)) = msg {
@@ -47,15 +46,15 @@ fn test_app_start_sequence_fixture_parses() {
 
     // Parse each event
     let event1_json = serde_json::to_string(&events[0]).unwrap();
-    let msg1 = DaemonMessage::parse(&event1_json);
+    let msg1 = parse_daemon_message(&event1_json);
     assert!(matches!(msg1, Some(DaemonMessage::AppStart(_))));
 
     let event2_json = serde_json::to_string(&events[1]).unwrap();
-    let msg2 = DaemonMessage::parse(&event2_json);
+    let msg2 = parse_daemon_message(&event2_json);
     assert!(matches!(msg2, Some(DaemonMessage::AppDebugPort(_))));
 
     let event3_json = serde_json::to_string(&events[2]).unwrap();
-    let msg3 = DaemonMessage::parse(&event3_json);
+    let msg3 = parse_daemon_message(&event3_json);
     assert!(matches!(msg3, Some(DaemonMessage::AppStarted(_))));
 }
 
@@ -71,7 +70,7 @@ fn test_hot_reload_success_fixture_parses() {
     // Both should be AppProgress events
     for event in events {
         let event_json = serde_json::to_string(&event).unwrap();
-        let msg = DaemonMessage::parse(&event_json);
+        let msg = parse_daemon_message(&event_json);
         assert!(matches!(msg, Some(DaemonMessage::AppProgress(_))));
     }
 }
@@ -87,11 +86,11 @@ fn test_hot_reload_error_fixture_parses() {
 
     // First is AppProgress, second is AppLog
     let event1_json = serde_json::to_string(&events[0]).unwrap();
-    let msg1 = DaemonMessage::parse(&event1_json);
+    let msg1 = parse_daemon_message(&event1_json);
     assert!(matches!(msg1, Some(DaemonMessage::AppProgress(_))));
 
     let event2_json = serde_json::to_string(&events[1]).unwrap();
-    let msg2 = DaemonMessage::parse(&event2_json);
+    let msg2 = parse_daemon_message(&event2_json);
     assert!(matches!(msg2, Some(DaemonMessage::AppLog(_))));
 
     // Verify it's an error log
@@ -103,7 +102,7 @@ fn test_hot_reload_error_fixture_parses() {
 #[test]
 fn test_app_stop_fixture_parses() {
     let json = include_str!("fixtures/daemon_responses/app_stop.json");
-    let msg = DaemonMessage::parse(json);
+    let msg = parse_daemon_message(json);
     assert!(matches!(msg, Some(DaemonMessage::AppStop(_))));
 
     if let Some(DaemonMessage::AppStop(stop)) = msg {

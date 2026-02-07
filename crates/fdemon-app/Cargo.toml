@@ -9,7 +9,6 @@ description = "Application state and orchestration for Flutter Demon"
 fdemon-core.workspace = true
 fdemon-daemon.workspace = true
 tokio.workspace = true
-crossterm.workspace = true
 chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -29,3 +28,4 @@ trait-variant.workspace = true
 tempfile.workspace = true
 tokio-test.workspace = true
 mockall.workspace = true
+fdemon-daemon = { workspace = true, features = ["test-helpers"] }

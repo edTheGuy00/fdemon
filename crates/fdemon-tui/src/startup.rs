@@ -335,7 +335,7 @@ pub async fn cleanup_sessions(
 ) {
     // Collect all session tasks and wait for them
     let tasks: Vec<(SessionId, tokio::task::JoinHandle<()>)> = {
-        let mut guard = session_tasks.lock().await;
+        let mut guard = session_tasks.lock().unwrap();
         guard.drain().collect()
     };
 

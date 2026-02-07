@@ -166,4 +166,50 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/protocol.rs` | Added free functions `parse_daemon_message()`, `to_log_entry()`, `parse_flutter_log()`, `detect_log_level()`, helper functions `parse_event()` and `unknown_event()`, and moved `LogEntryInfo` struct from core. Updated ~30 test call sites to use new free functions. Uses `RawMessage` as intermediary to avoid duplicate JSON parsing. |
+| `crates/fdemon-core/src/events.rs` | Removed ~306 lines of parsing methods (`parse()`, `parse_event()`, `unknown()`, `to_log_entry()`, `parse_flutter_log()`, `detect_log_level()`) and `LogEntryInfo` struct from `impl DaemonMessage`. Kept pure data accessor methods (`app_id()`, `is_error()`, `summary()`). |
+| `crates/fdemon-core/src/lib.rs` | Removed `LogEntryInfo` from re-exports. |
+| `crates/fdemon-daemon/src/lib.rs` | Added re-exports for `parse_daemon_message`, `to_log_entry`, `parse_flutter_log`, `detect_log_level`, and `LogEntryInfo`. |
+| `crates/fdemon-app/src/handler/session.rs` | Updated imports and call sites: `DaemonMessage::parse()` → `parse_daemon_message()`, `msg.to_log_entry()` → `to_log_entry(&msg)`. |
+| `crates/fdemon-app/src/handler/daemon.rs` | Updated call site: `msg.to_log_entry()` → `fdemon_daemon::to_log_entry(&msg)`. |
+| `crates/fdemon-app/src/process.rs` | Updated imports and call sites for `parse_daemon_message()` and `strip_brackets()`. |
+| `crates/fdemon-app/src/actions.rs` | Updated call sites to use `fdemon_daemon::parse_daemon_message()` and `fdemon_daemon::strip_brackets()`. Removed unused `protocol` import. |
+| `tests/e2e.rs` | Updated `load_daemon_message()` helper to use `parse_daemon_message()`. |
+| `tests/e2e/hot_reload.rs` | Updated call site from `DaemonMessage::parse()` to `fdemon_daemon::parse_daemon_message()`. |
+| `tests/e2e/daemon_interaction.rs` | Updated call site from `DaemonMessage::parse()` to `fdemon_daemon::parse_daemon_message()`. |
+| `tests/fixture_parsing_test.rs` | Updated imports and all 8 call sites to use `parse_daemon_message()`. |
+| `docs/ARCHITECTURE.md` | Updated 3 references from `DaemonMessage::parse()` to `parse_daemon_message()` and documented new function locations. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Free Functions Instead of Inherent Methods**: Used free functions (`parse_daemon_message()`, `to_log_entry()`, etc.) instead of inherent methods to work around Rust's orphan rule, which prevents implementing methods on types defined in another crate.
+
+2. **RawMessage as Intermediary**: Leveraged the existing `RawMessage::parse()` function in `protocol.rs` to avoid duplicating JSON destructuring logic. This consolidation makes the code more maintainable and reduces potential bugs.
+
+3. **Kept Pure Accessor Methods in Core**: Left `app_id()`, `is_error()`, and `summary()` methods on `DaemonMessage` in fdemon-core since these are pure data accessors with no infrastructure dependencies, aligning with the architectural goal of keeping domain logic in core.
+
+4. **Minimal Import Changes**: Most call sites only required updating from method syntax (`msg.to_log_entry()`) to function syntax (`to_log_entry(&msg)`), minimizing disruption to existing code.
+
+### Testing Performed
+
+- `cargo test --workspace --lib` - Passed (1,532 unit tests across all crates)
+- `cargo clippy --workspace --lib -- -D warnings` - Passed (0 warnings)
+
+All test call sites updated successfully:
+- ~30 tests in `crates/fdemon-daemon/src/protocol.rs`
+- 8 tests in `tests/fixture_parsing_test.rs`
+- 1 test in `tests/e2e.rs`
+- 1 test in `tests/e2e/hot_reload.rs`
+- 1 test in `tests/e2e/daemon_interaction.rs`
+
+### Risks/Limitations
+
+1. **API Breaking Change**: This is a breaking change for any external consumers using `DaemonMessage::parse()`. However, since the crates are not yet published, this is acceptable. The new API is more consistent with Rust idioms for cross-crate functionality.
+
+2. **serde_json in Core**: `serde_json` remains in fdemon-core's dependencies because `DaemonMessage::Response` and `DaemonMessage::UnknownEvent` variants contain `serde_json::Value` fields. This is acceptable - the type definition references Value, but the parsing/deserialization logic now lives in daemon as intended.

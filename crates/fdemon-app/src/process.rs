@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, watch, Mutex};
+use tokio::sync::{mpsc, watch};
 
 use crate::handler::Task;
 use crate::message::Message;
@@ -15,7 +15,7 @@ use crate::session::SessionId;
 use crate::state::AppState;
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
-use fdemon_daemon::{protocol, CommandSender};
+use fdemon_daemon::{parse_daemon_message, strip_brackets, CommandSender};
 
 use super::actions::handle_action;
 
@@ -24,7 +24,7 @@ pub fn process_message(
     state: &mut AppState,
     message: Message,
     msg_tx: &mpsc::Sender<Message>,
-    session_tasks: &Arc<Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
+    session_tasks: &Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: &watch::Receiver<bool>,
     project_path: &Path,
 ) {
@@ -66,8 +66,8 @@ fn route_session_daemon_response(message: &Message, state: &AppState) {
         event: DaemonEvent::Stdout(ref line),
     } = message
     {
-        if let Some(json) = protocol::strip_brackets(line) {
-            if let Some(DaemonMessage::Response { id, result, error }) = DaemonMessage::parse(json)
+        if let Some(json) = strip_brackets(line) {
+            if let Some(DaemonMessage::Response { id, result, error }) = parse_daemon_message(json)
             {
                 // Use session-specific cmd_sender for response routing
                 if let Some(handle) = state.session_manager.get(*session_id) {
