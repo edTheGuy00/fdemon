@@ -4,9 +4,9 @@
 
 use super::mock_daemon::MockScenarioBuilder;
 use crate::{test_app_state, test_device};
-use fdemon_app::handler::update;
 use fdemon_app::message::Message;
 use fdemon_app::session::Session;
+use fdemon_app::update;
 use fdemon_app::SessionManager;
 use fdemon_core::AppPhase;
 use fdemon_core::DaemonEvent;

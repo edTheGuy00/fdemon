@@ -38,25 +38,25 @@ Wave 3 (final verification):
 
 | # | Task | Status | Depends On | Severity | Key Modules |
 |---|------|--------|------------|----------|-------------|
-| 1 | [01-remove-startup-dead-code](tasks/01-remove-startup-dead-code.md) | Not Started | - | CRITICAL | `crates/fdemon-tui/src/startup.rs` |
-| 2 | [02-restrict-dispatch-action](tasks/02-restrict-dispatch-action.md) | Not Started | - | CRITICAL | `crates/fdemon-app/src/engine.rs` |
-| 3 | [03-clean-handler-dead-code](tasks/03-clean-handler-dead-code.md) | Not Started | - | MAJOR | `crates/fdemon-app/src/handler/` |
-| 4 | [04-remove-dead-statics](tasks/04-remove-dead-statics.md) | Not Started | - | MAJOR | `crates/fdemon-core/src/`, `crates/fdemon-app/src/` |
-| 5 | [05-guard-plugin-clone](tasks/05-guard-plugin-clone.md) | Not Started | - | MAJOR | `crates/fdemon-app/src/engine.rs` |
-| 6 | [06-minor-cleanups](tasks/06-minor-cleanups.md) | Not Started | - | MINOR | Multiple |
-| 7 | [07-verify-clippy-clean](tasks/07-verify-clippy-clean.md) | Not Started | 1, 2, 3, 4, 5, 6 | GATE | All crates |
+| 1 | [01-remove-startup-dead-code](tasks/01-remove-startup-dead-code.md) | [x] Done | - | CRITICAL | `crates/fdemon-tui/src/startup.rs` |
+| 2 | [02-restrict-dispatch-action](tasks/02-restrict-dispatch-action.md) | [x] Done | - | CRITICAL | `crates/fdemon-app/src/engine.rs` |
+| 3 | [03-clean-handler-dead-code](tasks/03-clean-handler-dead-code.md) | [x] Done | - | MAJOR | `crates/fdemon-app/src/handler/` |
+| 4 | [04-remove-dead-statics](tasks/04-remove-dead-statics.md) | [x] Done | - | MAJOR | `crates/fdemon-core/src/`, `crates/fdemon-app/src/` |
+| 5 | [05-guard-plugin-clone](tasks/05-guard-plugin-clone.md) | [x] Done | - | MAJOR | `crates/fdemon-app/src/engine.rs` |
+| 6 | [06-minor-cleanups](tasks/06-minor-cleanups.md) | [x] Done | - | MINOR | Multiple |
+| 7 | [07-verify-clippy-clean](tasks/07-verify-clippy-clean.md) | [x] Done | 1, 2, 3, 4, 5, 6 | GATE | All crates |
 
 ## Success Criteria
 
 Phase 4 followup is complete when:
 
-- [ ] No `unimplemented!()` calls in production code
-- [ ] No blanket `#[allow(dead_code)]` on modules
-- [ ] `dispatch_action()` has documented limitations or restricted signature
-- [ ] `cargo fmt --all` -- formatted
-- [ ] `cargo check --workspace` -- compiles
-- [ ] `cargo test --workspace --lib` -- all tests pass
-- [ ] `cargo clippy --workspace -- -D warnings` -- clean (no warnings)
+- [x] No `unimplemented!()` calls in production code
+- [x] No blanket `#[allow(dead_code)]` on modules
+- [x] `dispatch_action()` replaced with restricted `dispatch_spawn_session()`
+- [x] `cargo fmt --all` -- formatted
+- [x] `cargo check --workspace` -- compiles
+- [x] `cargo test --workspace --lib` -- 1,553 tests pass
+- [x] `cargo clippy --workspace -- -D warnings` -- clean (no warnings)
 
 ## Notes
 

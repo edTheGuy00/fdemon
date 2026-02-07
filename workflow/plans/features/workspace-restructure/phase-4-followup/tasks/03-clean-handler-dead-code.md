@@ -103,4 +103,32 @@ rg '#\[allow\(dead_code\)\]' crates/fdemon-app/src/handler/mod.rs
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Removed all 10 `#[allow(dead_code)]` attributes from submodule declarations (lines 18-37), removed incorrect comment about `pub(crate)` tracing (lines 16-17), removed unused re-exports with `#[allow(unused_imports)]` (lines 52-55), added test-only re-exports with `#[cfg(test)]` for `detect_raw_line_level` and `handle_key` |
+| `crates/fdemon-app/src/handler/log_view.rs` | Deleted 16 dead functions (`handle_clear_logs`, `handle_cycle_level_filter`, `handle_cycle_source_filter`, `handle_reset_filters`, `handle_start_search`, `handle_cancel_search`, `handle_clear_search`, `handle_search_input`, `handle_next_search_match`, `handle_prev_search_match`, `handle_search_completed`, `handle_next_error`, `handle_prev_error`, `handle_toggle_stack_trace`, `handle_enter_link_mode`, `handle_exit_link_mode`) and 1 private helper (`scroll_to_log_entry`). Kept only `handle_select_link` which is actually called from `update.rs:632`. Updated module docs to reflect new scope. |
+| `crates/fdemon-app/src/handler/helpers.rs` | Moved `is_logger_block_line` function from public scope to inside `#[cfg(test)]` block (now at line ~241-270). Function is only used in tests, so it's properly scoped as test-only code. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test re-exports with `#[cfg(test)]`**: Instead of removing the re-exports for `detect_raw_line_level` and `handle_key` entirely, I scoped them with `#[cfg(test)]` since they're needed by `handler/tests.rs`. This is cleaner than having them marked with `#[allow(unused_imports)]` in non-test builds.
+
+2. **Preserved all tests**: The `is_logger_block_line` function has comprehensive tests (40+ test cases covering Logger package output, ANSI codes, backslash escapes, etc.). Moving the function inside `#[cfg(test)]` preserves all this test coverage while correctly scoping the function as test-only.
+
+3. **Complete removal of dead code**: All 16 dead functions in `log_view.rs` were duplicates of logic already inlined in `update.rs`. The dispatcher never called these extracted functions, so they were genuinely dead code. Only `handle_select_link` is actually used.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (no compilation errors)
+- `cargo check -p fdemon-app 2>&1 | grep 'dead_code'` - Passed (zero dead_code warnings)
+- `cargo test -p fdemon-app --lib` - Passed (736 tests, up from 726+ baseline)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (code formatted)
+
+### Risks/Limitations
+
+1. **None identified**: All acceptance criteria met. The blanket `#[allow(dead_code)]` attributes were masking genuinely dead code (16 functions + 1 helper in `log_view.rs`). Removing them exposes the true state of the codebase and prevents future accumulation of dead code.

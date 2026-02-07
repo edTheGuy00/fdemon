@@ -91,4 +91,27 @@ cargo test -p fdemon-tui --lib
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/startup.rs` | Removed 341 lines of dead code (410 → 69 lines). Deleted `devices_stub` module with `unimplemented!()` stubs, `StartupAction::AutoStart` variant, and 8 dead functions (`animate_during_async`, `auto_start_session`, `try_auto_start_config`, `launch_with_validated_selection`, `launch_session`, `enter_normal_mode_disconnected`, `cleanup_sessions`). Removed all unnecessary imports. Kept only `startup_flutter()`, `StartupAction::Ready`, and two unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept `StartupAction` as enum**: Although it now has only one variant (`Ready`), keeping it as an enum preserves the API contract and allows for potential future variants without breaking changes. The alternative (converting to a unit struct or removing entirely) would require changing the function signature and updating the caller in `runner.rs`.
+
+2. **Removed all dead imports**: Cleaned up imports that were only used by dead code, reducing the dependency surface. The file now only imports what it actually needs: `Path`, config utilities (`load_all_configs`), and state types (`AppState`, `UiMode`).
+
+### Testing Performed
+
+- `rg 'unimplemented!' crates/` - No results (all `unimplemented!()` calls removed from codebase)
+- `cargo check -p fdemon-tui` - Passed with no errors
+- `cargo test -p fdemon-tui --lib` - Passed (438 tests, including the 2 tests in startup.rs)
+- `cargo clippy -p fdemon-tui` - Passed with no new warnings (existing warnings are in fdemon-app, not fdemon-tui)
+
+### Risks/Limitations
+
+1. **None identified**: The removed code was entirely dead and never executed in the current codebase. The only external caller (`runner.rs`) already ignores the return value, so this change has zero runtime impact.

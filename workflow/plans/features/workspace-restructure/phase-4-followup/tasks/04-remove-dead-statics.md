@@ -71,4 +71,34 @@ cargo test -p fdemon-core --lib
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/stack_trace.rs` | Removed `PACKAGE_PATH_REGEX` static (lines 37-44) including doc comment and `#[allow(dead_code)]` attribute |
+| `crates/fdemon-core/src/discovery.rs` | Moved `has_flutter_dependency()` function from line 73 to inside `#[cfg(test)] mod tests` block (line 655), removed `#[allow(dead_code)]` attribute |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept imports**: The `regex::Regex` and `std::sync::LazyLock` imports were kept in `stack_trace.rs` because other statics still use them (DART_VM_FRAME_REGEX, DART_VM_FRAME_NO_COL_REGEX, FRIENDLY_FRAME_REGEX, ASYNC_GAP_REGEX)
+2. **Function placement**: Placed `has_flutter_dependency()` after the helper functions in the tests module (after `create_flutter_package()`) for logical grouping with other test utilities
+3. **No visibility change**: The function remains private to the tests module (no `pub` modifier) since it's only used by two test functions in the same file
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed with no warnings
+- `cargo test -p fdemon-core --lib` - Passed (243 tests)
+- `cargo clippy -p fdemon-core -- -D warnings` - Passed with no warnings
+- `rg 'PACKAGE_PATH_REGEX' crates/` - No matches found
+- `rg 'allow\(dead_code\)' crates/fdemon-core/src/stack_trace.rs` - No matches found
+- `rg 'allow\(dead_code\)' crates/fdemon-core/src/discovery.rs` - No matches found
+
+### Risks/Limitations
+
+None. All acceptance criteria met:
+1. PACKAGE_PATH_REGEX completely removed from codebase
+2. has_flutter_dependency() only exists inside #[cfg(test)] block
+3. No #[allow(dead_code)] attributes remain on either item
+4. All compilation checks and tests pass

@@ -4,8 +4,8 @@
 
 use crate::e2e::mock_daemon::MockFlutterDaemon;
 use crate::{android_emulator, test_app_state};
-use fdemon_app::handler::update;
 use fdemon_app::message::Message;
+use fdemon_app::update;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::DaemonCommand;
 

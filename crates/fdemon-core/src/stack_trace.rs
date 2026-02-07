@@ -34,15 +34,6 @@ pub(crate) static FRIENDLY_FRAME_REGEX: LazyLock<Regex> = LazyLock::new(|| {
 pub(crate) static ASYNC_GAP_REGEX: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"<asynchronous suspension>").expect("Invalid ASYNC_GAP_REGEX"));
 
-/// Matches package frame paths (SDK/pub cache packages to dim)
-/// - `dart:` prefix (Dart SDK internals)
-/// - `package:flutter/` (Flutter SDK)
-/// - paths containing `.pub-cache` (pub packages)
-#[allow(dead_code)]
-pub(crate) static PACKAGE_PATH_REGEX: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"^(dart:|package:flutter/)|\.pub-cache").expect("Invalid PACKAGE_PATH_REGEX")
-});
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
 // ─────────────────────────────────────────────────────────────────────────────

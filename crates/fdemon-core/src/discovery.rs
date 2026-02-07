@@ -69,16 +69,6 @@ pub struct DiscoveryResult {
     pub skipped: Vec<SkippedProject>,
 }
 
-/// Check if pubspec.yaml has Flutter SDK dependency
-#[allow(dead_code)]
-pub(crate) fn has_flutter_dependency(path: &Path) -> bool {
-    let pubspec_path = path.join("pubspec.yaml");
-    match fs::read_to_string(&pubspec_path) {
-        Ok(content) => check_has_flutter_dependency(&content),
-        Err(_) => false,
-    }
-}
-
 /// Check if a project is a Flutter plugin
 pub(crate) fn is_flutter_plugin(path: &Path) -> bool {
     let pubspec_path = path.join("pubspec.yaml");
@@ -659,6 +649,15 @@ dependencies:
         .unwrap();
         fs::create_dir_all(path.join("lib")).unwrap();
         // Note: NO platform directories created
+    }
+
+    /// Check if pubspec.yaml has Flutter SDK dependency (test helper)
+    fn has_flutter_dependency(path: &Path) -> bool {
+        let pubspec_path = path.join("pubspec.yaml");
+        match fs::read_to_string(&pubspec_path) {
+            Ok(content) => check_has_flutter_dependency(&content),
+            Err(_) => false,
+        }
     }
 
     #[test]

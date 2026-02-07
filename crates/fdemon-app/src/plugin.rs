@@ -24,8 +24,8 @@ use fdemon_core::prelude::*;
 ///
 /// 1. Plugin is registered via `Engine::register_plugin()`
 /// 2. `on_start()` is called when the Engine begins its event loop
-/// 3. `on_message()` is called after each message is processed
-/// 4. `on_event()` is called for each emitted EngineEvent
+/// 3. `on_event()` is called for each emitted EngineEvent (after state change)
+/// 4. `on_message()` is called after each message is processed (with full post-state)
 /// 5. `on_shutdown()` is called when the Engine shuts down
 ///
 /// # Thread Safety

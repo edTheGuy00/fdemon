@@ -2,38 +2,6 @@
 
 use fdemon_core::{contains_word, strip_ansi_codes, LogLevel};
 
-// ─────────────────────────────────────────────────────────
-// Logger Package Block Detection (Phase 2 Task 11)
-// ─────────────────────────────────────────────────────────
-
-/// Box-drawing characters used by the Logger package for structured output
-/// Reference: https://github.com/simc/logger
-///
-/// | Character | Unicode | Name                                | Usage         |
-/// |-----------|---------|-------------------------------------|---------------|
-/// | `┌`       | U+250C  | Box Drawings Light Down and Right   | Block start   |
-/// | `└`       | U+2514  | Box Drawings Light Up and Right     | Block end     |
-/// | `│`       | U+2502  | Box Drawings Light Vertical         | Block content |
-/// | `├`       | U+251C  | Box Drawings Light Vertical + Right | Section divider |
-/// | `┄`       | U+2504  | Box Drawings Light Triple Dash Horiz| Dashed divider |
-/// | `─`       | U+2500  | Box Drawings Light Horizontal       | Horizontal line |
-///
-/// Check if a line is part of a Logger package structured block
-///
-/// Strips ANSI codes before checking for box-drawing characters to ensure
-/// reliable detection even if ANSI codes weren't stripped earlier in the pipeline.
-pub fn is_logger_block_line(message: &str) -> bool {
-    // Strip ANSI codes first for reliable detection
-    let cleaned = strip_ansi_codes(message);
-    let trimmed = cleaned.trim_start();
-    trimmed.starts_with('┌')
-        || trimmed.starts_with('│')
-        || trimmed.starts_with('├')
-        || trimmed.starts_with('└')
-        || trimmed.starts_with('┄')
-        || trimmed.starts_with('─')
-}
-
 /// Check if a line is the start of a Logger block (┌)
 ///
 /// Strips ANSI codes before checking for box-drawing characters.
@@ -268,6 +236,38 @@ fn detect_log_level_from_content(message: &str) -> LogLevel {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─────────────────────────────────────────────────────────
+    // Logger Package Block Detection (Phase 2 Task 11)
+    // ─────────────────────────────────────────────────────────
+
+    /// Box-drawing characters used by the Logger package for structured output
+    /// Reference: https://github.com/simc/logger
+    ///
+    /// | Character | Unicode | Name                                | Usage         |
+    /// |-----------|---------|-------------------------------------|---------------|
+    /// | `┌`       | U+250C  | Box Drawings Light Down and Right   | Block start   |
+    /// | `└`       | U+2514  | Box Drawings Light Up and Right     | Block end     |
+    /// | `│`       | U+2502  | Box Drawings Light Vertical         | Block content |
+    /// | `├`       | U+251C  | Box Drawings Light Vertical + Right | Section divider |
+    /// | `┄`       | U+2504  | Box Drawings Light Triple Dash Horiz| Dashed divider |
+    /// | `─`       | U+2500  | Box Drawings Light Horizontal       | Horizontal line |
+    ///
+    /// Check if a line is part of a Logger package structured block
+    ///
+    /// Strips ANSI codes before checking for box-drawing characters to ensure
+    /// reliable detection even if ANSI codes weren't stripped earlier in the pipeline.
+    fn is_logger_block_line(message: &str) -> bool {
+        // Strip ANSI codes first for reliable detection
+        let cleaned = strip_ansi_codes(message);
+        let trimmed = cleaned.trim_start();
+        trimmed.starts_with('┌')
+            || trimmed.starts_with('│')
+            || trimmed.starts_with('├')
+            || trimmed.starts_with('└')
+            || trimmed.starts_with('┄')
+            || trimmed.starts_with('─')
+    }
 
     // ─────────────────────────────────────────────────────────
     // Android Logcat Format Tests

@@ -8,7 +8,7 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use fdemon_app::{message::Message, state::AppState, Engine, UpdateAction};
+use fdemon_app::{message::Message, state::AppState, Engine};
 use fdemon_core::prelude::*;
 use fdemon_daemon::devices;
 
@@ -205,13 +205,7 @@ async fn headless_auto_start(engine: &mut Engine) {
                             .emit();
 
                         // Dispatch SpawnSession action via Engine
-                        let action = UpdateAction::SpawnSession {
-                            session_id,
-                            device: device.clone(),
-                            config: None,
-                        };
-
-                        engine.dispatch_action(action);
+                        engine.dispatch_spawn_session(session_id, device.clone(), None);
                     }
                     Err(e) => {
                         tracing::error!("Failed to create session: {}", e);

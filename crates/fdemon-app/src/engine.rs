@@ -232,8 +232,13 @@ impl Engine {
         // Snapshot state before processing
         let pre = StateSnapshot::capture(&self.state);
 
-        // Clone message for plugin notification (Message derives Clone)
-        let msg_for_plugins = msg.clone();
+        // Clone message for plugin notification only if plugins are registered.
+        // This avoids unnecessary cloning on the hot path when no plugins are active.
+        let msg_for_plugins = if self.plugins.is_empty() {
+            None
+        } else {
+            Some(msg.clone())
+        };
 
         process::process_message(
             &mut self.state,
@@ -250,8 +255,10 @@ impl Engine {
         // Emit events for any state changes
         self.emit_events(&pre, &post);
 
-        // Notify plugins after processing and event emission
-        self.notify_plugins_message(&msg_for_plugins);
+        // Notify plugins after processing and event emission (only if registered)
+        if let Some(ref m) = msg_for_plugins {
+            self.notify_plugins_message(m);
+        }
     }
 
     /// Drain and process all pending messages from the channel.
@@ -324,12 +331,22 @@ impl Engine {
         self.shutdown_rx.clone()
     }
 
-    /// Dispatch an UpdateAction (same as what process_message does internally).
+    /// Dispatches a spawn-session action to start a new Flutter process.
     ///
-    /// Used by headless runner for auto-start session spawning.
-    pub fn dispatch_action(&self, action: UpdateAction) {
+    /// This is the external API for session creation. For full action dispatch
+    /// (reload, restart, device discovery), use `process_message()` instead.
+    pub fn dispatch_spawn_session(
+        &self,
+        session_id: SessionId,
+        device: fdemon_daemon::Device,
+        config: Option<Box<crate::config::LaunchConfig>>,
+    ) {
         crate::actions::handle_action(
-            action,
+            UpdateAction::SpawnSession {
+                session_id,
+                device,
+                config,
+            },
             self.msg_tx.clone(),
             None,
             Vec::new(),

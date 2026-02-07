@@ -83,7 +83,7 @@ pub mod watcher;
 // Re-export primary types
 pub use engine::Engine;
 pub use engine_event::EngineEvent;
-pub use handler::{Task, UpdateAction, UpdateResult};
+pub use handler::{update, Task, UpdateAction, UpdateResult};
 pub use message::Message;
 pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};

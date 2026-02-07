@@ -70,4 +70,25 @@ cargo test -p fdemon-app --lib
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/engine.rs` | Modified `process_message()` method (lines 226-259) to guard `msg.clone()` behind `self.plugins.is_empty()` check, avoiding unnecessary cloning when no plugins are registered |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option<Message> pattern**: Changed from unconditional clone (`let msg_for_plugins = msg.clone()`) to conditional clone wrapped in Option (`let msg_for_plugins = if self.plugins.is_empty() { None } else { Some(msg.clone()) }`). This adds minimal overhead (one branch check) but eliminates expensive cloning in the default case (no plugins).
+2. **Hot path optimization**: This is a performance optimization for the default use case. Since `Message` can contain `Vec<LogEntry>`, device lists, and other heap-allocated data, avoiding the clone on every high-frequency message (like daemon stdout events) provides measurable savings.
+3. **Behavior preservation**: When plugins ARE registered, behavior is identical - the message is still cloned and passed to `notify_plugins_message()`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (736 passed, 0 failed, 5 ignored)
+
+### Risks/Limitations
+
+1. **None identified**: The change is a pure optimization with no behavior change. The `notify_plugins_message()` method already handles being called or not called gracefully, and the Option wrapper ensures type safety.

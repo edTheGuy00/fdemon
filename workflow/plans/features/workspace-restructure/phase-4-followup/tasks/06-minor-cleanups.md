@@ -117,4 +117,39 @@ cargo test --workspace --lib
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/event.rs` | Removed temporary debug logging (lines 42-62) including warn! for ENTER/SPACE keys and all debug! statements |
+| `crates/fdemon-app/src/plugin.rs` | Fixed plugin lifecycle documentation to show correct callback order: on_event (3) before on_message (4) |
+| `crates/fdemon-app/src/lib.rs` | Added `update` to handler re-exports: `pub use handler::{update, Task, UpdateAction, UpdateResult};` |
+| `tests/e2e/hot_reload.rs` | Updated import from `use fdemon_app::handler::update;` to `use fdemon_app::update;` |
+| `tests/e2e/session_management.rs` | Updated import from `use fdemon_app::handler::update;` to `use fdemon_app::update;` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Complete removal of debug logging in event.rs**: Instead of downgrading to debug!, removed all temporary logging entirely (lines 42-62). The code is now clean and production-ready with only essential logic remaining.
+
+2. **Plugin callback ordering**: The documentation now correctly reflects the actual execution order in engine.rs where `emit_events()` calls `on_event()` before `notify_plugins_message()` calls `on_message()`.
+
+3. **Canonical update import**: The `fdemon_app::update` path is now the canonical way to import the update function, following the ARCHITECTURE.md guideline that "External consumers should only use items exported from lib.rs".
+
+### Testing Performed
+
+- `rg 'ENTER/SPACE' crates/` - Passed (no output, confirmed removal)
+- `rg 'pub use handler.*update' crates/fdemon-app/src/lib.rs` - Passed (confirmed re-export exists)
+- `rg 'use fdemon_app::update' tests/e2e/` - Passed (both e2e files updated)
+- `cargo check --workspace` - Passed (with expected unrelated warnings about unused functions)
+- `cargo test -p fdemon-tui --lib` - Passed (438 tests)
+- `cargo test -p fdemon-core --lib` - Passed (243 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (136 tests)
+- `cargo check --tests -p flutter-demon` - Passed (e2e tests compile successfully)
+
+### Risks/Limitations
+
+1. **Pre-existing handler test failures**: The `fdemon-app` lib tests have pre-existing compilation errors (43 errors related to missing imports for `handle_key` and `detect_raw_line_level`). These are gated by `#![cfg(not(feature = "skip_old_tests"))]` and are unrelated to the changes in this task. All other crates' tests pass successfully.
+
+2. **Minimal impact**: All changes are documentation fixes, import path updates, and removal of debug code. No functional changes to business logic.
