@@ -819,12 +819,12 @@ impl<'a> LogView<'a> {
             self.render_metadata_bar(Rect::new(inner.x, inner.y, inner.width, 1), buf);
         }
 
-        // Content area starts 1 line below metadata bar
+        // Content area starts 2 lines below metadata bar (1 for bar + 1 for gap)
         let content_area = Rect::new(
             inner.x,
-            inner.y.saturating_add(1),
+            inner.y.saturating_add(2),
             inner.width,
-            inner.height.saturating_sub(1),
+            inner.height.saturating_sub(2),
         );
 
         let message = vec![
@@ -1002,12 +1002,14 @@ impl<'a> StatefulWidget for LogView<'a> {
             }
         }
 
-        // Content area: between top and bottom metadata bars
+        // Content area: between top and bottom metadata bars (with 1-line gap on each side)
+        let top_gap = 1; // 1-line gap after top metadata bar
+        let bottom_gap = if has_footer { 1 } else { 0 }; // 1-line gap before bottom metadata bar
         let content_area = Rect::new(
             inner.x,
-            inner.y.saturating_add(1),
+            inner.y.saturating_add(1 + top_gap),
             inner.width,
-            inner.height.saturating_sub(1 + footer_height),
+            inner.height.saturating_sub(1 + top_gap + footer_height + bottom_gap),
         );
 
         // Calculate total lines including stack traces (accounting for collapse state)

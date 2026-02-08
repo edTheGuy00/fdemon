@@ -970,8 +970,8 @@ fn test_footer_height_not_stolen_in_small_area() {
     use crate::test_utils::TestTerminal;
     use std::time::Duration;
 
-    // Create a terminal with 5 rows total: border(2) + top_meta(1) + content(1) + bottom_meta(1)
-    let mut term = TestTerminal::with_size(80, 5);
+    // Create a terminal with 7 rows total: border(2) + top_meta(1) + gap(1) + content(1) + gap(1) + bottom_meta(1)
+    let mut term = TestTerminal::with_size(80, 7);
 
     let logs = logs_from(vec![
         make_entry(LogLevel::Info, LogSource::App, "Line 1"),
@@ -994,11 +994,11 @@ fn test_footer_height_not_stolen_in_small_area() {
     // Render the widget
     term.render_stateful_widget(log_view, term.area(), &mut state);
 
-    // In a 5-row area:
-    // - inner height = 3 (5 - 2 for borders)
-    // - top metadata = 1
-    // - bottom metadata = 1 (footer_height)
-    // - content = 3 - 1 - 1 = 1 line visible
+    // In a 7-row area:
+    // - inner height = 5 (7 - 2 for borders)
+    // - top metadata = 1, top gap = 1
+    // - bottom metadata = 1, bottom gap = 1
+    // - content = 5 - 1 - 1 - 1 - 1 = 1 line visible
     assert_eq!(
         state.visible_lines, 1,
         "visible_lines should be calculated correctly with footer"
@@ -1011,11 +1011,11 @@ fn test_footer_height_not_stolen_in_small_area() {
     term.render_stateful_widget(log_view_no_footer, term.area(), &mut state_no_footer);
 
     // Without footer:
-    // - inner height = 3
-    // - top metadata = 1
-    // - content = 3 - 1 = 2 lines visible
+    // - inner height = 5
+    // - top metadata = 1, top gap = 1
+    // - content = 5 - 1 - 1 = 3 lines visible
     assert_eq!(
-        state_no_footer.visible_lines, 2,
+        state_no_footer.visible_lines, 3,
         "visible_lines should be higher without footer"
     );
 
