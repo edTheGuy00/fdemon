@@ -4,7 +4,7 @@
 
 Add configuration-driven icon mode to fdemon, allowing users to opt-in to Nerd Font icons via `config.toml` or `FDEMON_ICONS` env var, while defaulting to safe Unicode.
 
-**Total Tasks:** 5
+**Total Tasks:** 6
 
 ## Task Dependency Graph
 
@@ -26,7 +26,13 @@ Add configuration-driven icon mode to fdemon, allowing users to opt-in to Nerd F
 ┌─────────────────────────┐   ┌─────────────────────────────┐
 │  04-settings-panel      │   │  05-update-tests            │
 │  (settings_items.rs)    │   │  (all affected crates)      │
-└─────────────────────────┘   └─────────────────────────────┘
+└────────────┬────────────┘   └─────────────────────────────┘
+             │
+             ▼
+┌──────────────────────────────┐
+│  06-update-configuration-docs│
+│  (docs/CONFIGURATION.md)     │
+└──────────────────────────────┘
 ```
 
 ## Tasks
@@ -38,6 +44,7 @@ Add configuration-driven icon mode to fdemon, allowing users to opt-in to Nerd F
 | 3 | [03-wire-icon-set-to-tui](tasks/03-wire-icon-set-to-tui.md) | Not Started | 1, 2 | `fdemon-tui/widgets/header.rs`, `fdemon-tui/widgets/log_view/mod.rs`, `fdemon-tui/theme/styles.rs` |
 | 4 | [04-settings-panel](tasks/04-settings-panel.md) | Not Started | 1 | `fdemon-app/settings_items.rs` |
 | 5 | [05-update-tests](tasks/05-update-tests.md) | Not Started | 3, 4 | All affected crates |
+| 6 | [06-update-configuration-docs](tasks/06-update-configuration-docs.md) | Not Started | 1, 4 | `docs/CONFIGURATION.md` |
 
 ## Success Criteria
 

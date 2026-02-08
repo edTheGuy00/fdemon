@@ -29,6 +29,7 @@ These were created during the phase 2 fixes (task `02-fix-nerd-font-icons`) whic
 - `crates/fdemon-tui/src/widgets/header.rs` - Pass `IconSet` to `device_icon_for_platform()`
 - `crates/fdemon-tui/src/widgets/log_view/mod.rs` - Pass `IconSet` to icon consumers
 - `crates/fdemon-tui/src/theme/styles.rs` - Use `IconSet` for phase indicators (deduplicate inline literals)
+- `docs/CONFIGURATION.md` - Document `icons` setting and `FDEMON_ICONS` env var
 
 ---
 
@@ -138,6 +139,12 @@ FDEMON_ICONS=nerd_fonts fdemon
    - Add tests for `IconSet` method correctness
    - Add config deserialization tests for `IconMode`
 
+6. **Update configuration documentation**
+   - Add `icons` setting to the UI Settings section in `docs/CONFIGURATION.md`
+   - Document the `FDEMON_ICONS` environment variable override
+   - Update the complete `config.toml` example to include the `icons` field
+   - Update settings panel docs to list `icons` as an Enum setting
+
 **Milestone**: Users can set `icons = "nerd_fonts"` in config.toml and see Nerd Font icons, or leave default for safe Unicode.
 
 ---
@@ -194,6 +201,7 @@ FDEMON_ICONS=nerd_fonts   # or "unicode"
 - [ ] All existing tests pass, new tests cover both modes
 - [ ] `cargo check --workspace` passes
 - [ ] `cargo clippy --workspace -- -D warnings` passes
+- [ ] `docs/CONFIGURATION.md` documents the `icons` setting and `FDEMON_ICONS` env var
 - [ ] Visual verification: Nerd Font mode renders correctly in Ghostty
 - [ ] Visual verification: Unicode mode renders correctly in Zed terminal
 
