@@ -12,7 +12,7 @@ use ratatui::{
 
 use fdemon_app::session_manager::SessionManager;
 
-use crate::theme::{icons, palette, styles};
+use crate::theme::{icons::IconSet, palette, styles};
 
 use super::SessionTabs;
 
@@ -24,13 +24,15 @@ const HEADER_SECTION_PADDING: u16 = 4;
 pub struct MainHeader<'a> {
     project_name: Option<&'a str>,
     session_manager: Option<&'a SessionManager>,
+    icons: IconSet,
 }
 
 impl<'a> MainHeader<'a> {
-    pub fn new(project_name: Option<&'a str>) -> Self {
+    pub fn new(project_name: Option<&'a str>, icons: IconSet) -> Self {
         Self {
             project_name,
             session_manager: None,
+            icons,
         }
     }
 
@@ -79,7 +81,7 @@ impl Widget for MainHeader<'_> {
                     height: inner.height.saturating_sub(1),
                 };
                 if let Some(session_manager) = self.session_manager {
-                    let tabs = SessionTabs::new(session_manager);
+                    let tabs = SessionTabs::new(session_manager, self.icons);
                     tabs.render(tabs_area, buf);
                 }
             } else {
@@ -107,7 +109,7 @@ impl MainHeader<'_> {
             if let Some(session_manager) = self.session_manager {
                 if let Some(handle) = session_manager.selected() {
                     let session = &handle.session;
-                    let (icon, _label, style) = styles::phase_indicator(&session.phase);
+                    let (icon, _label, style) = styles::phase_indicator(&session.phase, &self.icons);
                     (
                         icon,
                         style,
@@ -115,10 +117,10 @@ impl MainHeader<'_> {
                         Some(session.platform.as_str()),
                     )
                 } else {
-                    ("○", Style::default().fg(palette::TEXT_MUTED), None, None)
+                    (self.icons.circle(), Style::default().fg(palette::TEXT_MUTED), None, None)
                 }
             } else {
-                ("○", Style::default().fg(palette::TEXT_MUTED), None, None)
+                (self.icons.circle(), Style::default().fg(palette::TEXT_MUTED), None, None)
             };
 
         // Build left section: status dot + "Flutter Demon" + "/" + project name
@@ -164,7 +166,7 @@ impl MainHeader<'_> {
 
         // Build device pill (right section) if single session
         let device_content = if show_device && device_name.is_some() {
-            let device_icon = device_icon_for_platform(device_platform);
+            let device_icon = device_icon_for_platform(device_platform, &self.icons);
             let device_spans = vec![
                 Span::raw(" "),
                 Span::raw(device_icon),
@@ -223,14 +225,14 @@ impl MainHeader<'_> {
 }
 
 /// Map platform string to device icon
-fn device_icon_for_platform(platform: Option<&str>) -> &'static str {
+fn device_icon_for_platform(platform: Option<&str>, icons: &IconSet) -> &'static str {
     match platform {
-        Some(p) if p.contains("ios") || p.contains("simulator") => icons::ICON_SMARTPHONE,
-        Some(p) if p.contains("web") || p.contains("chrome") => icons::ICON_GLOBE,
+        Some(p) if p.contains("ios") || p.contains("simulator") => icons.smartphone(),
+        Some(p) if p.contains("web") || p.contains("chrome") => icons.globe(),
         Some(p) if p.contains("macos") || p.contains("linux") || p.contains("windows") => {
-            icons::ICON_MONITOR
+            icons.monitor()
         }
-        _ => icons::ICON_CPU,
+        _ => icons.cpu(),
     }
 }
 
@@ -238,11 +240,13 @@ fn device_icon_for_platform(platform: Option<&str>) -> &'static str {
 mod tests {
     use super::*;
     use crate::test_utils::{test_device_with_platform, TestTerminal};
+    use fdemon_app::config::IconMode;
 
     #[test]
     fn test_header_renders_title() {
         let mut term = TestTerminal::new();
-        let header = MainHeader::new(None);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(None, icons);
 
         term.render_widget(header, term.area());
 
@@ -256,7 +260,8 @@ mod tests {
     #[test]
     fn test_header_renders_project_name() {
         let mut term = TestTerminal::new();
-        let header = MainHeader::new(Some("my_flutter_app"));
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("my_flutter_app"), icons);
 
         term.render_widget(header, term.area());
 
@@ -269,7 +274,8 @@ mod tests {
     #[test]
     fn test_header_without_project_name() {
         let mut term = TestTerminal::new();
-        let header = MainHeader::new(None);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(None, icons);
 
         term.render_widget(header, term.area());
 
@@ -296,7 +302,8 @@ mod tests {
             .create_session(&test_device_with_platform("device2", "Pixel 7", "android"))
             .unwrap();
 
-        let header = MainHeader::new(Some("test_app")).with_sessions(&session_manager);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("test_app"), icons).with_sessions(&session_manager);
 
         term.render_widget(header, term.area());
 
@@ -320,7 +327,8 @@ mod tests {
     fn test_header_truncates_long_project_name() {
         let mut term = TestTerminal::with_size(40, 5); // Narrow terminal
         let long_name = "this_is_a_very_long_flutter_project_name_that_should_truncate";
-        let header = MainHeader::new(Some(long_name));
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some(long_name), icons);
 
         term.render_widget(header, term.area());
 
@@ -338,7 +346,8 @@ mod tests {
     #[test]
     fn test_header_compact_mode() {
         let mut term = TestTerminal::compact();
-        let header = MainHeader::new(Some("app"));
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("app"), icons);
 
         term.render_widget(header, term.area());
 
@@ -355,7 +364,8 @@ mod tests {
     fn test_header_with_keybindings() {
         // Use wider terminal (120 cols) to ensure shortcuts fit
         let mut term = TestTerminal::with_size(120, 24);
-        let header = MainHeader::new(Some("test_project"));
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("test_project"), icons);
 
         term.render_widget(header, term.area());
 
@@ -378,7 +388,8 @@ mod tests {
         let mut term = TestTerminal::new();
         let session_manager = SessionManager::new(); // Empty session manager
 
-        let header = MainHeader::new(Some("test_app")).with_sessions(&session_manager);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("test_app"), icons).with_sessions(&session_manager);
 
         term.render_widget(header, term.area());
 
@@ -386,5 +397,52 @@ mod tests {
         let content = term.content();
         assert!(!content.is_empty(), "Should render without sessions");
         assert!(term.buffer_contains("test_app"), "Should show project name");
+    }
+
+    #[test]
+    fn test_header_with_nerd_fonts() {
+        let mut term = TestTerminal::new();
+        let icons = IconSet::new(IconMode::NerdFonts);
+        let header = MainHeader::new(Some("test_project"), icons);
+
+        term.render_widget(header, term.area());
+
+        // Verify header renders without errors with NerdFonts mode
+        let content = term.content();
+        assert!(!content.is_empty(), "Should render with NerdFonts mode");
+        assert!(term.buffer_contains("test_project"), "Should show project name");
+    }
+
+    #[test]
+    fn test_device_icon_for_platform_ios() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_eq!(device_icon_for_platform(Some("ios"), &icons), icons.smartphone());
+    }
+
+    #[test]
+    fn test_device_icon_for_platform_web() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_eq!(device_icon_for_platform(Some("web-chrome"), &icons), icons.globe());
+    }
+
+    #[test]
+    fn test_device_icon_for_platform_desktop() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_eq!(device_icon_for_platform(Some("macos"), &icons), icons.monitor());
+    }
+
+    #[test]
+    fn test_device_icon_for_platform_unknown() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_eq!(device_icon_for_platform(None, &icons), icons.cpu());
+    }
+
+    #[test]
+    fn test_device_icon_for_platform_nerd_fonts() {
+        let icons = IconSet::new(IconMode::NerdFonts);
+        // Just verify the function works with NerdFonts - the actual icons differ
+        assert_eq!(device_icon_for_platform(Some("ios"), &icons), icons.smartphone());
+        assert_eq!(device_icon_for_platform(Some("web"), &icons), icons.globe());
+        assert_eq!(device_icon_for_platform(Some("macos"), &icons), icons.monitor());
     }
 }

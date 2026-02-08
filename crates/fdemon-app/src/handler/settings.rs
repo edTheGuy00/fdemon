@@ -62,6 +62,16 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.ui.theme = value.clone();
             }
         }
+        "ui.icons" => {
+            if let SettingValue::Enum { value, .. } = &item.value {
+                use crate::config::IconMode;
+                settings.ui.icons = match value.as_str() {
+                    "nerd_fonts" => IconMode::NerdFonts,
+                    "unicode" => IconMode::Unicode,
+                    _ => IconMode::Unicode,
+                };
+            }
+        }
         "ui.stack_trace_collapsed" => {
             if let SettingValue::Bool(v) = &item.value {
                 settings.ui.stack_trace_collapsed = *v;

@@ -39,27 +39,27 @@ Add configuration-driven icon mode to fdemon, allowing users to opt-in to Nerd F
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-add-icon-mode-config](tasks/01-add-icon-mode-config.md) | Not Started | - | `fdemon-app/config/types.rs`, `fdemon-app/config/settings.rs` |
-| 2 | [02-create-icon-set](tasks/02-create-icon-set.md) | Not Started | - | `fdemon-tui/theme/icons.rs`, `fdemon-tui/theme/mod.rs` |
-| 3 | [03-wire-icon-set-to-tui](tasks/03-wire-icon-set-to-tui.md) | Not Started | 1, 2 | `fdemon-tui/widgets/header.rs`, `fdemon-tui/widgets/log_view/mod.rs`, `fdemon-tui/theme/styles.rs` |
-| 4 | [04-settings-panel](tasks/04-settings-panel.md) | Not Started | 1 | `fdemon-app/settings_items.rs` |
-| 5 | [05-update-tests](tasks/05-update-tests.md) | Not Started | 3, 4 | All affected crates |
-| 6 | [06-update-configuration-docs](tasks/06-update-configuration-docs.md) | Not Started | 1, 4 | `docs/CONFIGURATION.md` |
+| 1 | [01-add-icon-mode-config](tasks/01-add-icon-mode-config.md) | Done | - | `fdemon-app/config/types.rs`, `fdemon-app/config/settings.rs` |
+| 2 | [02-create-icon-set](tasks/02-create-icon-set.md) | Done | - | `fdemon-tui/theme/icons.rs`, `fdemon-tui/theme/mod.rs` |
+| 3 | [03-wire-icon-set-to-tui](tasks/03-wire-icon-set-to-tui.md) | Done | 1, 2 | `fdemon-tui/widgets/header.rs`, `fdemon-tui/widgets/log_view/mod.rs`, `fdemon-tui/theme/styles.rs` |
+| 4 | [04-settings-panel](tasks/04-settings-panel.md) | Done | 1 | `fdemon-app/settings_items.rs` |
+| 5 | [05-update-tests](tasks/05-update-tests.md) | Done | 3, 4 | All affected crates |
+| 6 | [06-update-configuration-docs](tasks/06-update-configuration-docs.md) | Done | 1, 4 | `docs/CONFIGURATION.md` |
 
 ## Success Criteria
 
 Phase 1 is complete when:
 
-- [ ] `IconMode` enum exists in `fdemon-app/config/types.rs` with serde support
-- [ ] `IconSet` struct in `fdemon-tui/theme/icons.rs` replaces dual static constants
-- [ ] `icons = "nerd_fonts"` in `config.toml` activates Nerd Font glyphs
-- [ ] `FDEMON_ICONS` env var overrides config setting
-- [ ] Default behavior (no config) renders safe Unicode (unchanged)
-- [ ] Settings panel shows icon mode as editable enum
-- [ ] Phase indicators in `styles.rs` use `IconSet` (no inline literals)
-- [ ] All existing tests pass, new tests cover both modes
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [x] `IconMode` enum exists in `fdemon-app/config/types.rs` with serde support
+- [x] `IconSet` struct in `fdemon-tui/theme/icons.rs` replaces dual static constants
+- [x] `icons = "nerd_fonts"` in `config.toml` activates Nerd Font glyphs
+- [x] `FDEMON_ICONS` env var overrides config setting
+- [x] Default behavior (no config) renders safe Unicode (unchanged)
+- [x] Settings panel shows icon mode as editable enum
+- [x] Phase indicators in `styles.rs` use `IconSet` (no inline literals)
+- [x] All existing tests pass, new tests cover both modes
+- [x] `cargo check --workspace` passes
+- [x] `cargo clippy --workspace -- -D warnings` passes
 
 ## Notes
 

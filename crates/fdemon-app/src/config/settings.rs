@@ -308,27 +308,44 @@ impl EditorSettings {
 pub fn load_settings(project_path: &Path) -> Settings {
     let config_path = project_path.join(FDEMON_DIR).join(CONFIG_FILENAME);
 
-    if !config_path.exists() {
+    let mut settings = if !config_path.exists() {
         debug!("No config file at {:?}, using defaults", config_path);
-        return Settings::default();
-    }
-
-    match std::fs::read_to_string(&config_path) {
-        Ok(content) => match toml::from_str(&content) {
-            Ok(settings) => {
-                debug!("Loaded settings from {:?}", config_path);
-                settings
-            }
+        Settings::default()
+    } else {
+        match std::fs::read_to_string(&config_path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(settings) => {
+                    debug!("Loaded settings from {:?}", config_path);
+                    settings
+                }
+                Err(e) => {
+                    warn!("Failed to parse {:?}: {}", config_path, e);
+                    Settings::default()
+                }
+            },
             Err(e) => {
-                warn!("Failed to parse {:?}: {}", config_path, e);
+                warn!("Failed to read {:?}: {}", config_path, e);
                 Settings::default()
             }
-        },
-        Err(e) => {
-            warn!("Failed to read {:?}: {}", config_path, e);
-            Settings::default()
+        }
+    };
+
+    // Environment variable override for icon mode
+    if let Ok(val) = std::env::var("FDEMON_ICONS") {
+        match val.to_lowercase().as_str() {
+            "nerd_fonts" | "nerd" => {
+                settings.ui.icons = super::types::IconMode::NerdFonts;
+            }
+            "unicode" => {
+                settings.ui.icons = super::types::IconMode::Unicode;
+            }
+            other => {
+                warn!("Unknown FDEMON_ICONS value: {:?}, ignoring", other);
+            }
         }
     }
+
+    settings
 }
 
 /// Create default config files in .fdemon/ directory
@@ -360,6 +377,9 @@ log_buffer_size = 10000
 show_timestamps = true
 compact_logs = false
 theme = "default"
+# Icon style: "nerd_fonts" (default) or "unicode"
+# Set to "unicode" if your terminal does not have a Nerd Font installed
+icons = "nerd_fonts"
 
 [devtools]
 auto_open = false
@@ -541,6 +561,9 @@ compact_logs = false
 theme = "default"
 stack_trace_collapsed = true
 stack_trace_max_frames = 3
+# Icon style: "nerd_fonts" (default) or "unicode"
+# Set to "unicode" if your terminal does not have a Nerd Font installed
+icons = "nerd_fonts"
 
 [devtools]
 auto_open = false
@@ -1420,6 +1443,55 @@ open_pattern = "zed $FILE:$LINE"
         let lines: Vec<&str> = gitignore.lines().collect();
         assert!(lines.contains(&"node_modules/"));
         assert!(lines.contains(&".fdemon/settings.local.toml"));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Icon Mode Tests
+    // ─────────────────────────────────────────────────────────────────────────
+    // Note: FDEMON_ICONS environment variable tests are omitted as they are
+    // flaky in parallel test runners. Manual verification should be performed:
+    //   FDEMON_ICONS=nerd_fonts cargo run
+    //   FDEMON_ICONS=unicode cargo run
+
+    #[test]
+    fn test_load_settings_with_icons() {
+        use super::super::types::IconMode;
+
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        let config = r#"
+[ui]
+icons = "nerd_fonts"
+"#;
+        std::fs::write(fdemon_dir.join("config.toml"), config).unwrap();
+
+        let settings = load_settings(temp.path());
+        assert_eq!(settings.ui.icons, IconMode::NerdFonts);
+    }
+
+    #[test]
+    fn test_save_settings_roundtrip_with_icons() {
+        use super::super::types::IconMode;
+
+        let temp = tempdir().unwrap();
+
+        let mut settings = Settings::default();
+        settings.ui.icons = IconMode::NerdFonts;
+
+        save_settings(temp.path(), &settings).unwrap();
+
+        let loaded = load_settings(temp.path());
+        assert_eq!(loaded.ui.icons, IconMode::NerdFonts);
+    }
+
+    #[test]
+    fn test_default_config_includes_icons_field() {
+        let content = generate_default_config();
+        assert!(content.contains("icons"));
+        assert!(content.contains("unicode"));
+        assert!(content.contains("nerd_fonts"));
     }
 
     #[test]

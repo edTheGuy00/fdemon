@@ -11,14 +11,17 @@ use ratatui::{
 
 use fdemon_app::session_manager::SessionManager;
 
+use crate::theme::icons::IconSet;
+
 /// Widget displaying session tabs in a standalone subheader row
 pub struct SessionTabs<'a> {
     session_manager: &'a SessionManager,
+    icons: IconSet,
 }
 
 impl<'a> SessionTabs<'a> {
-    pub fn new(session_manager: &'a SessionManager) -> Self {
-        Self { session_manager }
+    pub fn new(session_manager: &'a SessionManager, icons: IconSet) -> Self {
+        Self { session_manager, icons }
     }
 
     /// Create tab titles from sessions
@@ -29,7 +32,7 @@ impl<'a> SessionTabs<'a> {
                 let session = &handle.session;
 
                 // Status icon with color from theme
-                let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase);
+                let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase, &self.icons);
 
                 // Truncate device name if too long
                 let name = truncate_name(&session.device_name, 12);
@@ -51,7 +54,7 @@ impl<'a> SessionTabs<'a> {
         if let Some(handle) = self.session_manager.selected() {
             let session = &handle.session;
 
-            let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase);
+            let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase, &self.icons);
 
             // Truncate device name if necessary
             let max_name_len = area.width.saturating_sub(4) as usize; // 2 for icon+space, 2 for padding
@@ -129,6 +132,7 @@ fn truncate_name(name: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use crate::test_utils::test_device;
+    use fdemon_app::config::IconMode;
 
     #[test]
     fn test_truncate_name_short() {
@@ -168,7 +172,8 @@ mod tests {
             .create_session(&test_device("d2", "Pixel 8"))
             .unwrap();
 
-        let tabs = SessionTabs::new(&manager);
+        let icons = IconSet::new(IconMode::Unicode);
+        let tabs = SessionTabs::new(&manager, icons);
         let titles = tabs.tab_titles();
 
         assert_eq!(titles.len(), 2);
@@ -181,8 +186,10 @@ mod tests {
             .create_session(&test_device("d1", "iPhone"))
             .unwrap();
 
+        let icons = IconSet::new(IconMode::Unicode);
+
         // Initially Initializing
-        let tabs = SessionTabs::new(&manager);
+        let tabs = SessionTabs::new(&manager, icons);
         let titles = tabs.tab_titles();
         let title_str: String = titles[0]
             .spans
@@ -197,7 +204,7 @@ mod tests {
             .unwrap()
             .session
             .mark_started("app-1".to_string());
-        let tabs = SessionTabs::new(&manager);
+        let tabs = SessionTabs::new(&manager, icons);
         let titles = tabs.tab_titles();
         let title_str: String = titles[0]
             .spans
@@ -219,12 +226,13 @@ mod tests {
             .create_session(&test_device("d2", "Pixel 8"))
             .unwrap();
 
+        let icons = IconSet::new(IconMode::Unicode);
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tabs = SessionTabs::new(&manager);
+                let tabs = SessionTabs::new(&manager, icons);
                 f.render_widget(tabs, f.area());
             })
             .unwrap();
@@ -246,12 +254,13 @@ mod tests {
             .create_session(&test_device("d1", "iPhone 15"))
             .unwrap();
 
+        let icons = IconSet::new(IconMode::Unicode);
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tabs = SessionTabs::new(&manager);
+                let tabs = SessionTabs::new(&manager, icons);
                 f.render_widget(tabs, f.area());
             })
             .unwrap();
@@ -280,12 +289,13 @@ mod tests {
             .session
             .mark_started("app-1".to_string());
 
+        let icons = IconSet::new(IconMode::Unicode);
         let backend = TestBackend::new(80, 1);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tabs = SessionTabs::new(&manager);
+                let tabs = SessionTabs::new(&manager, icons);
                 f.render_widget(tabs, f.area());
             })
             .unwrap();

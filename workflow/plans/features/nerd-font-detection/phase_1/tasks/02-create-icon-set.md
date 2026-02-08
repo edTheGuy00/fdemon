@@ -284,3 +284,43 @@ mod tests {
 - This task will cause compile errors in `header.rs` and `log_view/mod.rs` because they still reference `icons::ICON_*` constants. These are resolved in task 03.
 - The `IconSet` depends on `IconMode` from `fdemon-app`. Since `fdemon-tui` already depends on `fdemon-app`, no new crate dependency is needed.
 - Methods that are currently unused will get `#[allow(dead_code)]` removed — they exist as part of the `IconSet` API and may be used in future widgets.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/icons.rs` | Replaced all `ICON_*` and `NERD_*` static constants with `IconSet` struct that resolves icons at runtime based on `IconMode`. Includes 6 unit tests. |
+| `crates/fdemon-tui/src/theme/mod.rs` | Updated module docstring to describe `icons` as "`IconSet` for runtime icon resolution (Unicode/Nerd Font)" |
+| `crates/fdemon-app/src/config/mod.rs` | Added `IconMode` to public exports (completed by task 01) |
+
+### Notable Decisions/Tradeoffs
+
+1. **IconSet is Copy + Clone**: Struct is just an enum wrapper (1 byte), making it cheap to pass around by value
+2. **Methods return &'static str**: No allocations, same performance as the old constants
+3. **Method names are lowercase**: Changed from `ICON_TERMINAL` constant to `icons.terminal()` method for better ergonomics
+4. **All icon methods public without dead_code**: Removed `#[allow(dead_code)]` since they're part of the public API
+5. **IconMode export location**: `IconMode` was already exported from `fdemon_app::config` by task 01, allowing proper import
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Expected compile errors in `header.rs` (4 errors) and `log_view/mod.rs` (5 errors) due to references to old `ICON_*` constants
+- Unit tests written (6 tests) but cannot be executed until task 03 fixes the consumer errors
+- Tests verify:
+  - Unicode icons are non-empty
+  - Nerd Font icons are non-empty
+  - Unicode and Nerd Font modes differ
+  - Terminal and command icons are distinct
+  - Phase indicator icon values match original constants
+  - IconSet is Copy
+
+### Risks/Limitations
+
+1. **Compile Errors Expected**: The crate won't compile until task 03 updates `header.rs` and `log_view/mod.rs` to use the new `IconSet` API
+2. **Test Execution Blocked**: Unit tests cannot be run until consumers are updated
+3. **No Breaking Changes to Values**: All Unicode and Nerd Font icon values are preserved exactly from the original constants

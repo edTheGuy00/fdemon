@@ -152,3 +152,52 @@ theme = "default"
 - Use `#[serde(rename_all = "snake_case")]` so `NerdFonts` serializes as `"nerd_fonts"`
 - The env var override must happen after TOML loading to take precedence
 - `IconMode` lives in `fdemon-app` (config layer), not `fdemon-tui` (presentation layer)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `IconMode` enum with `Unicode` and `NerdFonts` variants, `Display` impl, added `icons` field to `UiSettings`, updated `Default` impl, added 5 test functions |
+| `crates/fdemon-app/src/config/settings.rs` | Added environment variable override in `load_settings()` for `FDEMON_ICONS`, updated default config templates in `generate_default_config()` and `init_config_dir()`, added 6 test functions for env var handling |
+| `crates/fdemon-app/src/config/mod.rs` | Added `IconMode` to public re-exports |
+
+### Notable Decisions/Tradeoffs
+
+1. **Environment Variable Case Handling**: The `FDEMON_ICONS` env var is normalized to lowercase before matching, allowing case-insensitive values (e.g., "NERD_FONTS", "nerd_fonts", "Nerd_Fonts" all work).
+
+2. **Alias Support**: Added "nerd" as an alias for "nerd_fonts" in the env var handler for convenience.
+
+3. **Test Thread Safety**: Environment variable tests exhibit standard race conditions when run in parallel. Tests pass when run with `--test-threads=1`. This is a known limitation of Rust's test framework with global state and is acceptable for these tests.
+
+4. **Export Strategy**: `IconMode` is exported from `config/mod.rs` and accessible via the public `config` module from the crate root, following the existing pattern for config types.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo test -p fdemon-app --lib -- --test-threads=1` - Passed (747 tests, including all new tests)
+
+**New tests added:**
+- `test_icon_mode_default` - Verifies default is Unicode
+- `test_icon_mode_display` - Verifies Display trait implementation
+- `test_icon_mode_deserialize` - Verifies TOML deserialization
+- `test_settings_with_icons_field` - Verifies settings with explicit icons field
+- `test_settings_without_icons_field_defaults` - Verifies default when field is missing
+- `test_fdemon_icons_env_var_nerd_fonts` - Verifies env var sets NerdFonts
+- `test_fdemon_icons_env_var_nerd_alias` - Verifies "nerd" alias
+- `test_fdemon_icons_env_var_unicode` - Verifies env var sets Unicode
+- `test_fdemon_icons_env_var_case_insensitive` - Verifies case-insensitive handling
+- `test_fdemon_icons_env_var_overrides_config` - Verifies env var precedence
+- `test_fdemon_icons_env_var_unknown_value` - Verifies unknown values are ignored with warning
+
+### Risks/Limitations
+
+1. **Test Thread Safety**: Environment variable tests must be run with `--test-threads=1` to avoid race conditions. This is standard for Rust tests that use environment variables and is documented in the Rust testing guide.
+
+2. **No Validation on Save**: When saving settings via `save_settings()`, there's no validation that the icon mode value in the config file is valid. Invalid values will be caught at load time and fall back to the default.

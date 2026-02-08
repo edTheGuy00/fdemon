@@ -4,6 +4,7 @@ use fdemon_core::types::AppPhase;
 use ratatui::style::{Modifier, Style};
 use ratatui::widgets::{Block, BorderType, Borders};
 
+use super::icons::IconSet;
 use super::palette;
 
 // --- Text styles ---
@@ -126,34 +127,34 @@ pub fn modal_block(title: &str) -> Block<'_> {
 ///
 /// Returns `(icon_char, label, Style)` for the given AppPhase.
 /// The label is the human-readable status text (e.g., "Running", "Stopped").
-pub fn phase_indicator(phase: &AppPhase) -> (&'static str, &'static str, Style) {
+pub fn phase_indicator(phase: &AppPhase, icons: &IconSet) -> (&'static str, &'static str, Style) {
     match phase {
         AppPhase::Running => (
-            "●",
+            icons.dot(),
             "Running",
             Style::default()
                 .fg(palette::STATUS_GREEN)
                 .add_modifier(Modifier::BOLD),
         ),
         AppPhase::Reloading => (
-            "↻",
+            icons.refresh(),
             "Reloading",
             Style::default()
                 .fg(palette::STATUS_YELLOW)
                 .add_modifier(Modifier::BOLD),
         ),
-        AppPhase::Initializing => ("○", "Starting", Style::default().fg(palette::TEXT_MUTED)),
-        AppPhase::Stopped => ("○", "Stopped", Style::default().fg(palette::TEXT_MUTED)),
-        AppPhase::Quitting => ("✗", "Stopping", Style::default().fg(palette::STATUS_RED)),
+        AppPhase::Initializing => (icons.circle(), "Starting", Style::default().fg(palette::TEXT_MUTED)),
+        AppPhase::Stopped => (icons.circle(), "Stopped", Style::default().fg(palette::TEXT_MUTED)),
+        AppPhase::Quitting => (icons.close(), "Stopping", Style::default().fg(palette::STATUS_RED)),
     }
 }
 
 /// Phase indicator for "busy" override (running but currently reloading).
 ///
 /// When a session is Running but has pending operations, show the reload indicator.
-pub fn phase_indicator_busy() -> (&'static str, &'static str, Style) {
+pub fn phase_indicator_busy(icons: &IconSet) -> (&'static str, &'static str, Style) {
     (
-        "↻",
+        icons.refresh(),
         "Reloading",
         Style::default()
             .fg(palette::STATUS_YELLOW)
@@ -164,9 +165,9 @@ pub fn phase_indicator_busy() -> (&'static str, &'static str, Style) {
 /// "Not connected" indicator for when no sessions exist.
 // Kept for future multi-session UI in Phase 2+
 #[allow(dead_code)]
-pub fn phase_indicator_disconnected() -> (&'static str, &'static str, Style) {
+pub fn phase_indicator_disconnected(icons: &IconSet) -> (&'static str, &'static str, Style) {
     (
-        "○",
+        icons.circle(),
         "Not Connected",
         Style::default().fg(palette::TEXT_MUTED),
     )
@@ -175,6 +176,7 @@ pub fn phase_indicator_disconnected() -> (&'static str, &'static str, Style) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fdemon_app::config::IconMode;
 
     #[test]
     fn test_style_builders_return_styles() {
@@ -242,7 +244,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_running() {
-        let (icon, label, style) = phase_indicator(&AppPhase::Running);
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Running, &icons);
         assert_eq!(icon, "●");
         assert_eq!(label, "Running");
         assert_eq!(style.fg, Some(palette::STATUS_GREEN));
@@ -251,7 +254,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_reloading() {
-        let (icon, label, style) = phase_indicator(&AppPhase::Reloading);
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Reloading, &icons);
         assert_eq!(icon, "↻");
         assert_eq!(label, "Reloading");
         assert_eq!(style.fg, Some(palette::STATUS_YELLOW));
@@ -260,7 +264,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_initializing() {
-        let (icon, label, style) = phase_indicator(&AppPhase::Initializing);
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Initializing, &icons);
         assert_eq!(icon, "○");
         assert_eq!(label, "Starting");
         assert_eq!(style.fg, Some(palette::TEXT_MUTED));
@@ -268,7 +273,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_stopped() {
-        let (icon, label, style) = phase_indicator(&AppPhase::Stopped);
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Stopped, &icons);
         assert_eq!(icon, "○");
         assert_eq!(label, "Stopped");
         assert_eq!(style.fg, Some(palette::TEXT_MUTED));
@@ -276,7 +282,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_quitting() {
-        let (icon, label, style) = phase_indicator(&AppPhase::Quitting);
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator(&AppPhase::Quitting, &icons);
         assert_eq!(icon, "✗");
         assert_eq!(label, "Stopping");
         assert_eq!(style.fg, Some(palette::STATUS_RED));
@@ -284,6 +291,7 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_all_phases_covered() {
+        let icons = IconSet::new(IconMode::Unicode);
         // Ensure every AppPhase variant returns valid data
         for phase in [
             AppPhase::Running,
@@ -292,7 +300,7 @@ mod tests {
             AppPhase::Stopped,
             AppPhase::Quitting,
         ] {
-            let (icon, label, _style) = phase_indicator(&phase);
+            let (icon, label, _style) = phase_indicator(&phase, &icons);
             assert!(!icon.is_empty());
             assert!(!label.is_empty());
         }
@@ -300,7 +308,8 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_busy() {
-        let (icon, label, style) = phase_indicator_busy();
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator_busy(&icons);
         assert_eq!(icon, "↻");
         assert_eq!(label, "Reloading");
         assert_eq!(style.fg, Some(palette::STATUS_YELLOW));
@@ -309,9 +318,39 @@ mod tests {
 
     #[test]
     fn test_phase_indicator_disconnected() {
-        let (icon, label, style) = phase_indicator_disconnected();
+        let icons = IconSet::new(IconMode::Unicode);
+        let (icon, label, style) = phase_indicator_disconnected(&icons);
         assert_eq!(icon, "○");
         assert_eq!(label, "Not Connected");
         assert_eq!(style.fg, Some(palette::TEXT_MUTED));
+    }
+
+    // NerdFonts mode tests
+    #[test]
+    fn test_phase_indicator_running_nerd_fonts() {
+        let icons = IconSet::new(IconMode::NerdFonts);
+        let (icon, label, _) = phase_indicator(&AppPhase::Running, &icons);
+        assert_eq!(icon, icons.dot());
+        assert_eq!(label, "Running");
+    }
+
+    #[test]
+    fn test_phase_indicator_reloading_nerd_fonts() {
+        let icons = IconSet::new(IconMode::NerdFonts);
+        let (icon, label, _) = phase_indicator(&AppPhase::Reloading, &icons);
+        assert_eq!(icon, icons.refresh());
+        assert_eq!(label, "Reloading");
+    }
+
+    #[test]
+    fn test_phase_indicator_nerd_fonts_differs_from_unicode() {
+        let unicode_icons = IconSet::new(IconMode::Unicode);
+        let nerd_icons = IconSet::new(IconMode::NerdFonts);
+
+        let (unicode_icon, _, _) = phase_indicator(&AppPhase::Running, &unicode_icons);
+        let (nerd_icon, _, _) = phase_indicator(&AppPhase::Running, &nerd_icons);
+
+        // Icons should differ between modes
+        assert_ne!(unicode_icon, nerd_icon);
     }
 }

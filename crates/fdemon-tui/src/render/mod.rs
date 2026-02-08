@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-use crate::theme::palette;
+use crate::theme::{icons::IconSet, palette};
 
 /// Render search overlay at the bottom of the log area
 ///
@@ -61,15 +61,18 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let session_count = state.session_manager.len();
     let areas = layout::create_with_sessions(area, session_count);
 
+    // Construct IconSet from settings
+    let icons = IconSet::new(state.settings.ui.icons);
+
     // Main header with project name and session tabs inside
-    let header = widgets::MainHeader::new(state.project_name.as_deref())
+    let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager);
     frame.render_widget(header, areas.header);
 
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
         let mut log_view =
-            widgets::LogView::new(&handle.session.logs).filter_state(&handle.session.filter_state);
+            widgets::LogView::new(&handle.session.logs, icons).filter_state(&handle.session.filter_state);
 
         // Add search state if there's an active search
         if !handle.session.search_state.query.is_empty() {
@@ -108,7 +111,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     } else {
         // No session selected - show empty log view
         let empty_logs: VecDeque<LogEntry> = VecDeque::new();
-        let log_view = widgets::LogView::new(&empty_logs);
+        let log_view = widgets::LogView::new(&empty_logs, icons);
         let mut empty_state = LogViewState::new();
         frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);
     }

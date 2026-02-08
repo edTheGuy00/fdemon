@@ -134,3 +134,44 @@ For each caller, ensure `IconSet` is available (construct from `state.settings.u
 - The `IconSet` is cheap (`Copy`), so passing it by reference or by value is fine.
 - Keep the function signatures minimal — prefer passing `&IconSet` over storing it in widget structs.
 - Check `tabs.rs` and `status_bar.rs` for additional `phase_indicator()` callers that aren't listed in the original task scope.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/styles.rs` | Updated `phase_indicator()`, `phase_indicator_busy()`, and `phase_indicator_disconnected()` to accept `&IconSet` parameter. All inline icon literals replaced with IconSet method calls. Updated all tests to use IconSet. |
+| `crates/fdemon-tui/src/widgets/header.rs` | Updated `device_icon_for_platform()` to accept `&IconSet`. Added `icons` field to `MainHeader` struct. Updated constructor to accept IconSet. Updated all test cases to construct and pass IconSet. Changed import from `icons` module to `icons::IconSet`. |
+| `crates/fdemon-tui/src/widgets/tabs.rs` | Added `icons` field to `SessionTabs` struct. Updated constructor to accept IconSet. Updated `tab_titles()` and `render_single_session()` to use IconSet for phase indicators. Updated all test cases. |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `icons` field to `LogView` struct. Updated constructor to accept IconSet. Updated `render_metadata_bar()` to use `icons.terminal()`. Updated `render_bottom_metadata()` to accept IconSet parameter and use icon methods for alert, activity icons. Changed import from `icons` module to `icons::IconSet`. |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `test_icons()` helper function. Updated all `LogView::new()` calls to pass IconSet (25 call sites). |
+| `crates/fdemon-tui/src/render/mod.rs` | Constructed `IconSet::new(state.settings.ui.icons)` at render entry point. Passed IconSet to `MainHeader::new()` and `LogView::new()` for both active session and empty state rendering. |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated test count assertion from 16 to 17 items to account for new `ui.icons` setting from Phase 1. |
+
+### Notable Decisions/Tradeoffs
+
+1. **IconSet as struct field vs parameter**: Added IconSet as a field to widget structs (`MainHeader`, `SessionTabs`, `LogView`) rather than threading it through every method call. This keeps the API clean while allowing widgets to access icons throughout their rendering lifecycle.
+
+2. **Single construction point**: IconSet is constructed once in `render/mod.rs` from `state.settings.ui.icons` and then passed to all widgets. This ensures a consistent icon mode across the entire UI and makes it easy to change the icon set dynamically in the future.
+
+3. **Test helper function**: Created `test_icons()` helper in test modules to reduce duplication and make it easy to change test icon mode in the future if needed.
+
+4. **IconSet is Copy**: Because IconSet is a Copy type, we can pass it by value without worrying about performance or ownership issues.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (418 tests)
+- Verified no remaining references to `icons::ICON_*` static constants via grep
+
+### Risks/Limitations
+
+1. **No visual verification**: Tests verify the structure and logic are correct, but visual verification requires running the app to confirm icons render correctly with both Unicode and NerdFonts modes. This should be done in Phase 1 integration testing.
+
+2. **Settings panel test update**: Had to update test count from 16 to 17 to account for the new `ui.icons` setting added in task 01. This is expected but worth noting as it affects test stability across phase boundaries.

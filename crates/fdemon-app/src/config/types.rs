@@ -193,6 +193,29 @@ fn default_true() -> bool {
     true
 }
 
+/// Icon rendering mode for the TUI.
+///
+/// Controls whether icons use Nerd Font glyphs (default, requires a Nerd Font)
+/// or safe Unicode characters (works in all terminals).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum IconMode {
+    /// Safe Unicode characters that work in all terminals
+    Unicode,
+    /// Nerd Font glyphs — requires a Nerd Font installed in the terminal (default)
+    #[default]
+    NerdFonts,
+}
+
+impl std::fmt::Display for IconMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IconMode::Unicode => write!(f, "unicode"),
+            IconMode::NerdFonts => write!(f, "nerd_fonts"),
+        }
+    }
+}
+
 /// UI settings
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UiSettings {
@@ -219,6 +242,10 @@ pub struct UiSettings {
     /// Maximum frames to show when collapsed (default: 3)
     #[serde(default = "default_stack_trace_max_frames")]
     pub stack_trace_max_frames: usize,
+
+    /// Icon mode: "unicode" (default) or "nerd_fonts"
+    #[serde(default)]
+    pub icons: IconMode,
 }
 
 impl Default for UiSettings {
@@ -230,6 +257,7 @@ impl Default for UiSettings {
             theme: default_theme(),
             stack_trace_collapsed: true,
             stack_trace_max_frames: default_stack_trace_max_frames(),
+            icons: IconMode::default(),
         }
     }
 }
@@ -881,5 +909,51 @@ height = 1080
         assert!(prefs.window.is_some());
         assert_eq!(prefs.window.as_ref().unwrap().width, Some(1920));
         assert_eq!(prefs.window.as_ref().unwrap().height, Some(1080));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // IconMode Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_icon_mode_default() {
+        assert_eq!(IconMode::default(), IconMode::NerdFonts);
+    }
+
+    #[test]
+    fn test_icon_mode_display() {
+        assert_eq!(IconMode::Unicode.to_string(), "unicode");
+        assert_eq!(IconMode::NerdFonts.to_string(), "nerd_fonts");
+    }
+
+    #[test]
+    fn test_icon_mode_deserialize() {
+        let toml = r#"icons = "nerd_fonts""#;
+        #[derive(Deserialize)]
+        struct W {
+            icons: IconMode,
+        }
+        let w: W = toml::from_str(toml).unwrap();
+        assert_eq!(w.icons, IconMode::NerdFonts);
+    }
+
+    #[test]
+    fn test_settings_with_icons_field() {
+        let toml = r#"
+[ui]
+icons = "nerd_fonts"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.ui.icons, IconMode::NerdFonts);
+    }
+
+    #[test]
+    fn test_settings_without_icons_field_defaults() {
+        let toml = r#"
+[ui]
+theme = "default"
+"#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.ui.icons, IconMode::NerdFonts);
     }
 }

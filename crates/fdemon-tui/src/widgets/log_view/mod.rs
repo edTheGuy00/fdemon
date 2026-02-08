@@ -21,8 +21,9 @@ use ratatui::{
     },
 };
 
+use crate::theme::icons::IconSet;
 use crate::theme::styles as theme_styles;
-use crate::theme::{icons, palette};
+use crate::theme::palette;
 
 /// Stack trace styling constants
 pub mod styles;
@@ -61,10 +62,12 @@ pub struct LogView<'a> {
     link_highlight_state: Option<&'a LinkHighlightState>,
     /// Status info for bottom metadata bar (Phase 2 Task 4)
     status_info: Option<StatusInfo<'a>>,
+    /// Icon set for rendering icons
+    icons: IconSet,
 }
 
 impl<'a> LogView<'a> {
-    pub fn new(logs: &'a VecDeque<LogEntry>) -> Self {
+    pub fn new(logs: &'a VecDeque<LogEntry>, icons: IconSet) -> Self {
         Self {
             logs,
             title: " Logs ",
@@ -77,6 +80,7 @@ impl<'a> LogView<'a> {
             max_collapsed_frames: 3,
             link_highlight_state: None,
             status_info: None,
+            icons,
         }
     }
 
@@ -648,7 +652,7 @@ impl<'a> LogView<'a> {
 
         // Left side: icon + "TERMINAL LOGS" label
         spans.push(Span::styled(
-            format!("{} ", icons::ICON_TERMINAL),
+            format!("{} ", self.icons.terminal()),
             Style::default().fg(palette::TEXT_SECONDARY),
         ));
         spans.push(Span::styled(
@@ -710,16 +714,16 @@ impl<'a> LogView<'a> {
     }
 
     /// Render the bottom metadata bar with status info
-    fn render_bottom_metadata(area: Rect, buf: &mut Buffer, status: &StatusInfo, compact: bool) {
+    fn render_bottom_metadata(area: Rect, buf: &mut Buffer, status: &StatusInfo, compact: bool, icons: &IconSet) {
         if area.height == 0 || area.width == 0 {
             return;
         }
 
         // Get phase indicator based on busy state
         let (icon, label, phase_style) = if status.is_busy {
-            theme_styles::phase_indicator_busy()
+            theme_styles::phase_indicator_busy(icons)
         } else {
-            theme_styles::phase_indicator(status.phase)
+            theme_styles::phase_indicator(status.phase, icons)
         };
 
         // Left side: phase indicator
@@ -735,7 +739,7 @@ impl<'a> LogView<'a> {
             if status.error_count > 0 {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
-                    format!("{} {}", icons::ICON_ALERT, status.error_count),
+                    format!("{} {}", icons.alert(), status.error_count),
                     theme_styles::status_red().add_modifier(Modifier::BOLD),
                 ));
             }
@@ -767,7 +771,7 @@ impl<'a> LogView<'a> {
                 let mins = duration.as_secs() / 60;
                 let secs = duration.as_secs() % 60;
                 right_spans.push(Span::styled(
-                    format!("{} {}:{:02}", icons::ICON_ACTIVITY, mins, secs),
+                    format!("{} {}:{:02}", icons.activity(), mins, secs),
                     theme_styles::text_secondary(),
                 ));
                 right_spans.push(Span::raw("  "));
@@ -776,12 +780,12 @@ impl<'a> LogView<'a> {
             // Error count
             if status.error_count > 0 {
                 right_spans.push(Span::styled(
-                    format!("{} {}", icons::ICON_ALERT, status.error_count),
+                    format!("{} {}", icons.alert(), status.error_count),
                     theme_styles::status_red().add_modifier(Modifier::BOLD),
                 ));
             } else {
                 right_spans.push(Span::styled(
-                    format!("{} 0", icons::ICON_ALERT),
+                    format!("{} 0", icons.alert()),
                     theme_styles::text_muted(),
                 ));
             }
@@ -994,7 +998,7 @@ impl<'a> StatefulWidget for LogView<'a> {
                     inner.width,
                     1,
                 );
-                Self::render_bottom_metadata(meta_bottom, buf, status, compact);
+                Self::render_bottom_metadata(meta_bottom, buf, status, compact, &self.icons);
             }
         }
 

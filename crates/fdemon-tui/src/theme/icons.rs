@@ -1,183 +1,228 @@
-//! Icon constants for the TUI.
+//! Icon set for the TUI.
 //!
-//! All `ICON_*` constants use universally-supported Unicode characters.
-//! Original Nerd Font glyphs are preserved as `NERD_*` constants for future opt-in.
+//! Provides `IconSet` which resolves icons at runtime based on `IconMode`.
+//! - `IconMode::Unicode` — safe characters that work in all terminals
+//! - `IconMode::NerdFonts` — rich Nerd Font glyphs (requires Nerd Font installed)
 
-// --- Safe Unicode Icons (default) ---
-pub const ICON_TERMINAL: &str = "❯"; // Terminal prompt indicator
-pub const ICON_SMARTPHONE: &str = "[M]"; // Mobile device
-pub const ICON_GLOBE: &str = "[W]"; // Web device
-pub const ICON_MONITOR: &str = "[D]"; // Desktop device
-pub const ICON_ACTIVITY: &str = "~"; // Uptime/activity indicator
+use fdemon_app::config::IconMode;
 
-// The following icons are kept for future config opt-in (user preference to show more UI icons).
-// Once a settings panel allows "show icons for phase indicators", these will be consumed.
-#[allow(dead_code)]
-pub const ICON_PLAY: &str = "▶"; // Play/running
-#[allow(dead_code)]
-pub const ICON_STOP: &str = "■"; // Stopped
-#[allow(dead_code)]
-pub const ICON_REFRESH: &str = "↻"; // Reload/refresh
-pub const ICON_ALERT: &str = "⚠"; // Warning/error
-#[allow(dead_code)]
-pub const ICON_CHECK: &str = "✓"; // Success
-#[allow(dead_code)]
-pub const ICON_CLOSE: &str = "✗"; // Close/error
-#[allow(dead_code)]
-pub const ICON_CHEVRON_R: &str = "›"; // Right chevron
-#[allow(dead_code)]
-pub const ICON_CHEVRON_D: &str = "⌄"; // Down chevron
-#[allow(dead_code)]
-pub const ICON_DOT: &str = "●"; // Dot indicator
-#[allow(dead_code)]
-pub const ICON_LAYERS: &str = "≡"; // Layers/stack
-pub const ICON_CPU: &str = "[C]"; // Generic device fallback
-#[allow(dead_code)]
-pub const ICON_SETTINGS: &str = "⚙"; // Settings/config
-#[allow(dead_code)]
-pub const ICON_ZAP: &str = "!"; // Lightning/fast (using safe single-width)
-#[allow(dead_code)]
-pub const ICON_EYE: &str = "○"; // Visibility/watch (using safe single-width)
-#[allow(dead_code)]
-pub const ICON_CODE: &str = "</>"; // Code/source
-#[allow(dead_code)]
-pub const ICON_USER: &str = "@"; // User/profile (using safe single-width)
-#[allow(dead_code)]
-pub const ICON_INFO: &str = "ℹ"; // Information
-#[allow(dead_code)]
-pub const ICON_KEYBOARD: &str = "[K]"; // Keyboard input
-#[allow(dead_code)]
-pub const ICON_COMMAND: &str = "$"; // Command/shell prompt (distinct from TERMINAL)
-#[allow(dead_code)]
-pub const ICON_SAVE: &str = "[S]"; // Save/disk
+/// Runtime icon resolver.
+///
+/// Created from `IconMode`, returns the appropriate icon string for each
+/// icon slot based on the configured mode.
+#[derive(Debug, Clone, Copy)]
+pub struct IconSet {
+    mode: IconMode,
+}
 
-// --- Nerd Font Icons (for future opt-in) ---
-// All NERD_* constants are intentionally unused until a user config option enables Nerd Fonts.
-// This preserves the full icon set for future Phase 2+ opt-in (e.g., `use_nerd_fonts = true`).
-#[allow(dead_code)]
-pub const NERD_TERMINAL: &str = "\u{f120}"; // nf-fa-terminal
-#[allow(dead_code)]
-pub const NERD_SMARTPHONE: &str = "\u{f3cd}"; // nf-fa-mobile
-#[allow(dead_code)]
-pub const NERD_GLOBE: &str = "\u{f0ac}"; // nf-fa-globe
-#[allow(dead_code)]
-pub const NERD_MONITOR: &str = "\u{f108}"; // nf-fa-desktop
-#[allow(dead_code)]
-pub const NERD_ACTIVITY: &str = "\u{f0f1}"; // nf-fa-heartbeat
-#[allow(dead_code)]
-pub const NERD_PLAY: &str = "\u{f04b}"; // nf-fa-play
-#[allow(dead_code)]
-pub const NERD_STOP: &str = "\u{f04d}"; // nf-fa-stop
-#[allow(dead_code)]
-pub const NERD_REFRESH: &str = "\u{f021}"; // nf-fa-refresh
-#[allow(dead_code)]
-pub const NERD_ALERT: &str = "\u{f071}"; // nf-fa-warning
-#[allow(dead_code)]
-pub const NERD_CHECK: &str = "\u{f00c}"; // nf-fa-check
-#[allow(dead_code)]
-pub const NERD_CLOSE: &str = "\u{f00d}"; // nf-fa-close
-#[allow(dead_code)]
-pub const NERD_CHEVRON_R: &str = "\u{f054}"; // nf-fa-chevron_right
-#[allow(dead_code)]
-pub const NERD_CHEVRON_D: &str = "\u{f078}"; // nf-fa-chevron_down
-#[allow(dead_code)]
-pub const NERD_DOT: &str = "\u{f444}"; // nf-oct-dot_fill
-#[allow(dead_code)]
-pub const NERD_LAYERS: &str = "\u{f5fd}"; // nf-mdi-layers
-#[allow(dead_code)]
-pub const NERD_CPU: &str = "\u{f2db}"; // nf-fa-microchip
-#[allow(dead_code)]
-pub const NERD_SETTINGS: &str = "\u{f013}"; // nf-fa-cog
-#[allow(dead_code)]
-pub const NERD_ZAP: &str = "\u{f0e7}"; // nf-fa-bolt
-#[allow(dead_code)]
-pub const NERD_EYE: &str = "\u{f06e}"; // nf-fa-eye
-#[allow(dead_code)]
-pub const NERD_CODE: &str = "\u{f121}"; // nf-fa-code
-#[allow(dead_code)]
-pub const NERD_USER: &str = "\u{f007}"; // nf-fa-user
-#[allow(dead_code)]
-pub const NERD_INFO: &str = "\u{f05a}"; // nf-fa-info_circle
-#[allow(dead_code)]
-pub const NERD_KEYBOARD: &str = "\u{f11c}"; // nf-fa-keyboard_o
-#[allow(dead_code)]
-pub const NERD_COMMAND: &str = "\u{f120}"; // nf-fa-terminal (same as terminal)
-#[allow(dead_code)]
-pub const NERD_SAVE: &str = "\u{f0c7}"; // nf-fa-floppy_o
+impl IconSet {
+    pub fn new(mode: IconMode) -> Self {
+        Self { mode }
+    }
+
+    pub fn terminal(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f120}", // nf-fa-terminal
+            IconMode::Unicode => "\u{276f}",   // ❯
+        }
+    }
+
+    pub fn smartphone(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f3cd}", // nf-fa-mobile
+            IconMode::Unicode => "[M]",
+        }
+    }
+
+    pub fn globe(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f0ac}", // nf-fa-globe
+            IconMode::Unicode => "[W]",
+        }
+    }
+
+    pub fn monitor(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f108}", // nf-fa-desktop
+            IconMode::Unicode => "[D]",
+        }
+    }
+
+    pub fn activity(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f0f1}", // nf-fa-heartbeat
+            IconMode::Unicode => "~",
+        }
+    }
+
+    pub fn alert(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f071}", // nf-fa-warning
+            IconMode::Unicode => "\u{26a0}",   // ⚠
+        }
+    }
+
+    pub fn cpu(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f2db}", // nf-fa-microchip
+            IconMode::Unicode => "[C]",
+        }
+    }
+
+    // --- Phase indicator icons ---
+
+    pub fn dot(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f444}", // nf-oct-dot_fill
+            IconMode::Unicode => "\u{25cf}",   // ●
+        }
+    }
+
+    pub fn circle(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f06e}", // nf-fa-eye
+            IconMode::Unicode => "\u{25cb}",   // ○
+        }
+    }
+
+    pub fn refresh(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f021}", // nf-fa-refresh
+            IconMode::Unicode => "\u{21bb}",   // ↻
+        }
+    }
+
+    pub fn close(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f00d}", // nf-fa-close
+            IconMode::Unicode => "\u{2717}",   // ✗
+        }
+    }
+
+    // --- Reserved for future use ---
+
+    pub fn play(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f04b}", // nf-fa-play
+            IconMode::Unicode => "\u{25b6}",   // ▶
+        }
+    }
+
+    pub fn stop(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f04d}", // nf-fa-stop
+            IconMode::Unicode => "\u{25a0}",   // ■
+        }
+    }
+
+    pub fn check(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f00c}", // nf-fa-check
+            IconMode::Unicode => "\u{2713}",   // ✓
+        }
+    }
+
+    pub fn chevron_right(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f054}", // nf-fa-chevron_right
+            IconMode::Unicode => "\u{203a}",   // ›
+        }
+    }
+
+    pub fn chevron_down(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f078}", // nf-fa-chevron_down
+            IconMode::Unicode => "\u{2304}",   // ⌄
+        }
+    }
+
+    pub fn settings(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f013}", // nf-fa-cog
+            IconMode::Unicode => "\u{2699}",   // ⚙
+        }
+    }
+
+    pub fn info(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f05a}", // nf-fa-info_circle
+            IconMode::Unicode => "\u{2139}",   // ℹ
+        }
+    }
+
+    pub fn layers(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f5fd}", // nf-mdi-layers
+            IconMode::Unicode => "\u{2261}",   // ≡
+        }
+    }
+
+    pub fn command(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f120}", // nf-fa-terminal
+            IconMode::Unicode => "$",
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fdemon_app::config::IconMode;
 
     #[test]
-    fn test_icon_constants_are_non_empty() {
-        assert!(!ICON_TERMINAL.is_empty());
-        assert!(!ICON_SMARTPHONE.is_empty());
-        assert!(!ICON_GLOBE.is_empty());
-        assert!(!ICON_MONITOR.is_empty());
-        assert!(!ICON_ACTIVITY.is_empty());
+    fn test_unicode_icons_are_non_empty() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert!(!icons.terminal().is_empty());
+        assert!(!icons.smartphone().is_empty());
+        assert!(!icons.globe().is_empty());
+        assert!(!icons.monitor().is_empty());
+        assert!(!icons.activity().is_empty());
+        assert!(!icons.alert().is_empty());
+        assert!(!icons.cpu().is_empty());
     }
 
     #[test]
-    fn test_nerd_font_constants_are_non_empty() {
-        assert!(!NERD_TERMINAL.is_empty());
-        assert!(!NERD_SMARTPHONE.is_empty());
-        assert!(!NERD_GLOBE.is_empty());
-        assert!(!NERD_MONITOR.is_empty());
-        assert!(!NERD_ACTIVITY.is_empty());
+    fn test_nerd_font_icons_are_non_empty() {
+        let icons = IconSet::new(IconMode::NerdFonts);
+        assert!(!icons.terminal().is_empty());
+        assert!(!icons.smartphone().is_empty());
+        assert!(!icons.globe().is_empty());
+        assert!(!icons.monitor().is_empty());
+        assert!(!icons.activity().is_empty());
+        assert!(!icons.alert().is_empty());
+        assert!(!icons.cpu().is_empty());
     }
 
     #[test]
-    fn test_icon_play_stop_refresh_defined() {
-        assert!(!ICON_PLAY.is_empty());
-        assert!(!ICON_STOP.is_empty());
-        assert!(!ICON_REFRESH.is_empty());
-        assert!(!NERD_PLAY.is_empty());
-        assert!(!NERD_STOP.is_empty());
-        assert!(!NERD_REFRESH.is_empty());
-    }
-
-    #[test]
-    fn test_icon_navigation_defined() {
-        assert!(!ICON_CHEVRON_R.is_empty());
-        assert!(!ICON_CHEVRON_D.is_empty());
-        assert!(!NERD_CHEVRON_R.is_empty());
-        assert!(!NERD_CHEVRON_D.is_empty());
-    }
-
-    #[test]
-    fn test_icon_status_defined() {
-        assert!(!ICON_ALERT.is_empty());
-        assert!(!ICON_CHECK.is_empty());
-        assert!(!ICON_CLOSE.is_empty());
-        assert!(!NERD_ALERT.is_empty());
-        assert!(!NERD_CHECK.is_empty());
-        assert!(!NERD_CLOSE.is_empty());
-    }
-
-    #[test]
-    fn test_all_icons_have_nerd_font_variant() {
-        // Verify that key icons have both Unicode and Nerd Font variants
-        let icons = [
-            (ICON_TERMINAL, NERD_TERMINAL),
-            (ICON_SMARTPHONE, NERD_SMARTPHONE),
-            (ICON_PLAY, NERD_PLAY),
-            (ICON_STOP, NERD_STOP),
-            (ICON_REFRESH, NERD_REFRESH),
-        ];
-
-        for (unicode, nerd) in &icons {
-            assert!(!unicode.is_empty(), "Unicode icon should not be empty");
-            assert!(!nerd.is_empty(), "Nerd Font icon should not be empty");
-        }
+    fn test_unicode_and_nerd_font_differ() {
+        let unicode = IconSet::new(IconMode::Unicode);
+        let nerd = IconSet::new(IconMode::NerdFonts);
+        // At least the main icons should differ between modes
+        assert_ne!(unicode.terminal(), nerd.terminal());
+        assert_ne!(unicode.smartphone(), nerd.smartphone());
+        assert_ne!(unicode.alert(), nerd.alert());
     }
 
     #[test]
     fn test_terminal_and_command_are_distinct() {
-        // ICON_TERMINAL and ICON_COMMAND should be visually distinct
-        assert_ne!(
-            ICON_TERMINAL, ICON_COMMAND,
-            "ICON_TERMINAL and ICON_COMMAND must be different"
-        );
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_ne!(icons.terminal(), icons.command());
+    }
+
+    #[test]
+    fn test_phase_indicator_icons() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert_eq!(icons.dot(), "●");
+        assert_eq!(icons.circle(), "○");
+        assert_eq!(icons.refresh(), "↻");
+        assert_eq!(icons.close(), "✗");
+    }
+
+    #[test]
+    fn test_icon_set_is_copy() {
+        let icons = IconSet::new(IconMode::Unicode);
+        let copy = icons;
+        assert_eq!(icons.terminal(), copy.terminal());
     }
 }

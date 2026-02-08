@@ -1,6 +1,8 @@
 //! Tests for log_view widget module
 
 use super::*;
+use crate::theme::icons::IconSet;
+use fdemon_app::config::IconMode;
 use fdemon_app::session::CollapseState;
 use fdemon_core::stack_trace::ParsedStackTrace;
 use fdemon_core::{FilterState, LogLevelFilter, LogSourceFilter, SearchState};
@@ -17,6 +19,11 @@ fn make_entry(level: LogLevel, source: LogSource, msg: &str) -> LogEntry {
 /// Helper to create a VecDeque of log entries for tests
 fn logs_from(entries: Vec<LogEntry>) -> VecDeque<LogEntry> {
     VecDeque::from(entries)
+}
+
+/// Helper to create IconSet for tests (Unicode mode)
+fn test_icons() -> IconSet {
+    IconSet::new(IconMode::Unicode)
 }
 
 #[test]
@@ -89,7 +96,7 @@ fn test_page_up_down() {
 #[test]
 fn test_format_entry_includes_timestamp() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let view = LogView::new(&logs).show_timestamps(true);
+    let view = LogView::new(&logs, test_icons()).show_timestamps(true);
     let line = view.format_entry(&logs[0], 0);
 
     // Should have multiple spans including timestamp
@@ -99,11 +106,11 @@ fn test_format_entry_includes_timestamp() {
 #[test]
 fn test_format_entry_no_timestamp() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let view = LogView::new(&logs).show_timestamps(false);
+    let view = LogView::new(&logs, test_icons()).show_timestamps(false);
     let line = view.format_entry(&logs[0], 0);
 
     // Fewer spans without timestamp
-    let with_ts = LogView::new(&logs).show_timestamps(true);
+    let with_ts = LogView::new(&logs, test_icons()).show_timestamps(true);
     let line_with = with_ts.format_entry(&logs[0], 0);
     assert!(line.spans.len() < line_with.spans.len());
 }
@@ -111,11 +118,11 @@ fn test_format_entry_no_timestamp() {
 #[test]
 fn test_format_entry_no_source() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
-    let view = LogView::new(&logs).show_source(false);
+    let view = LogView::new(&logs, test_icons()).show_source(false);
     let line = view.format_entry(&logs[0], 0);
 
     // Fewer spans without source
-    let with_src = LogView::new(&logs).show_source(true);
+    let with_src = LogView::new(&logs, test_icons()).show_source(true);
     let line_with = with_src.format_entry(&logs[0], 0);
     assert!(line.spans.len() < line_with.spans.len());
 }
@@ -157,7 +164,7 @@ fn test_error_has_bold_modifier() {
 fn test_filter_state_builder() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "Test")]);
     let filter = FilterState::default();
-    let view = LogView::new(&logs).filter_state(&filter);
+    let view = LogView::new(&logs, test_icons()).filter_state(&filter);
     assert!(view.filter_state.is_some());
 }
 
@@ -227,7 +234,7 @@ fn test_format_message_with_highlights_no_search() {
         LogSource::App,
         "Hello world",
     )]);
-    let view = LogView::new(&logs);
+    let view = LogView::new(&logs, test_icons());
 
     let spans = view.format_message_with_highlights("Hello world", 0, Style::default());
 
@@ -245,7 +252,7 @@ fn test_format_message_with_highlights_with_match() {
     search.set_query("world");
     search.execute_search(&logs);
 
-    let view = LogView::new(&logs).search_state(&search);
+    let view = LogView::new(&logs, test_icons()).search_state(&search);
 
     let spans = view.format_message_with_highlights("Hello world", 0, Style::default());
 
@@ -264,7 +271,7 @@ fn test_format_message_with_highlights_multiple_matches() {
     search.set_query("test");
     search.execute_search(&logs);
 
-    let view = LogView::new(&logs).search_state(&search);
+    let view = LogView::new(&logs, test_icons()).search_state(&search);
 
     let spans = view.format_message_with_highlights("test one test two", 0, Style::default());
 
@@ -282,7 +289,7 @@ fn test_format_message_with_highlights_no_match_in_entry() {
     search.set_query("test");
     search.execute_search(&logs);
 
-    let view = LogView::new(&logs).search_state(&search);
+    let view = LogView::new(&logs, test_icons()).search_state(&search);
 
     // Entry 1 has no matches - should return single span
     let spans = view.format_message_with_highlights("no match", 1, Style::default());
@@ -297,7 +304,7 @@ fn test_format_message_with_highlights_invalid_regex() {
     search.set_query("[invalid");
     search.execute_search(&logs);
 
-    let view = LogView::new(&logs).search_state(&search);
+    let view = LogView::new(&logs, test_icons()).search_state(&search);
 
     // Invalid regex should not highlight
     let spans = view.format_message_with_highlights("test", 0, Style::default());
@@ -309,7 +316,7 @@ fn test_format_message_with_highlights_invalid_regex() {
 fn test_search_state_builder() {
     let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "test")]);
     let search = SearchState::default();
-    let view = LogView::new(&logs).search_state(&search);
+    let view = LogView::new(&logs, test_icons()).search_state(&search);
     assert!(view.search_state.is_some());
 }
 
@@ -324,7 +331,7 @@ fn test_format_entry_with_search_highlights() {
     search.set_query("error");
     search.execute_search(&logs);
 
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .show_timestamps(false)
         .show_source(false)
         .search_state(&search);
@@ -537,7 +544,7 @@ fn test_format_collapsed_indicator_has_arrow() {
 fn test_calculate_entry_lines_no_trace() {
     let entry = make_entry(LogLevel::Info, LogSource::App, "Hello");
     let logs = logs_from(vec![entry]);
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .default_collapsed(true)
         .max_collapsed_frames(3);
 
@@ -559,7 +566,7 @@ fn test_calculate_entry_lines_collapsed() {
     entry.stack_trace = Some(trace);
 
     let logs = logs_from(vec![entry]);
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .default_collapsed(true)
         .max_collapsed_frames(3);
 
@@ -585,7 +592,7 @@ fn test_calculate_entry_lines_expanded() {
     let mut collapse_state = CollapseState::new();
     collapse_state.toggle(logs[0].id, true); // Expand it
 
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .default_collapsed(true)
         .max_collapsed_frames(3)
         .collapse_state(&collapse_state);
@@ -602,7 +609,7 @@ fn test_calculate_entry_lines_few_frames() {
     entry.stack_trace = Some(trace);
 
     let logs = logs_from(vec![entry]);
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .default_collapsed(true)
         .max_collapsed_frames(3);
 
@@ -619,10 +626,10 @@ fn test_is_entry_expanded_no_collapse_state() {
     let logs = logs_from(vec![entry]);
 
     // Without collapse state, use default_collapsed setting
-    let view = LogView::new(&logs).default_collapsed(true);
+    let view = LogView::new(&logs, test_icons()).default_collapsed(true);
     assert!(!view.is_entry_expanded(&logs[0])); // Collapsed by default
 
-    let view = LogView::new(&logs).default_collapsed(false);
+    let view = LogView::new(&logs, test_icons()).default_collapsed(false);
     assert!(view.is_entry_expanded(&logs[0])); // Expanded by default
 }
 
@@ -638,7 +645,7 @@ fn test_is_entry_expanded_with_collapse_state() {
     // Toggle to expanded
     collapse_state.toggle(logs[0].id, true);
 
-    let view = LogView::new(&logs)
+    let view = LogView::new(&logs, test_icons())
         .default_collapsed(true)
         .collapse_state(&collapse_state);
 
@@ -650,7 +657,7 @@ fn test_collapse_state_builder() {
     let logs: VecDeque<LogEntry> = VecDeque::new();
     let collapse_state = CollapseState::new();
 
-    let view = LogView::new(&logs).collapse_state(&collapse_state);
+    let view = LogView::new(&logs, test_icons()).collapse_state(&collapse_state);
 
     assert!(view.collapse_state.is_some());
 }
@@ -659,7 +666,7 @@ fn test_collapse_state_builder() {
 fn test_max_collapsed_frames_builder() {
     let logs: VecDeque<LogEntry> = VecDeque::new();
 
-    let view = LogView::new(&logs).max_collapsed_frames(5);
+    let view = LogView::new(&logs, test_icons()).max_collapsed_frames(5);
 
     assert_eq!(view.max_collapsed_frames, 5);
 }
@@ -668,7 +675,7 @@ fn test_max_collapsed_frames_builder() {
 fn test_default_collapsed_builder() {
     let logs: VecDeque<LogEntry> = VecDeque::new();
 
-    let view = LogView::new(&logs).default_collapsed(false);
+    let view = LogView::new(&logs, test_icons()).default_collapsed(false);
 
     assert!(!view.default_collapsed);
 }
@@ -981,7 +988,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         error_count: 0,
     };
 
-    let log_view = LogView::new(&logs).with_status(status_info);
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
     let mut state = LogViewState::new();
 
     // Render the widget
@@ -998,7 +1005,7 @@ fn test_footer_height_not_stolen_in_small_area() {
     );
 
     // Now test without footer (no status_info)
-    let log_view_no_footer = LogView::new(&logs);
+    let log_view_no_footer = LogView::new(&logs, test_icons());
     let mut state_no_footer = LogViewState::new();
 
     term.render_stateful_widget(log_view_no_footer, term.area(), &mut state_no_footer);

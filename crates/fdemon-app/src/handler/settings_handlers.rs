@@ -348,8 +348,8 @@ pub fn handle_force_hide_settings(state: &mut AppState) -> UpdateResult {
 fn get_item_count_for_tab(_settings: &crate::config::Settings, tab: SettingsTab) -> usize {
     match tab {
         SettingsTab::Project => {
-            // behavior (2) + watcher (4) + ui (6) + devtools (2) + editor (2) = 16
-            16
+            // behavior (2) + watcher (4) + ui (7) + devtools (2) + editor (2) = 17
+            17
         }
         SettingsTab::UserPrefs => {
             // editor (2) + theme (1) + last_device (1) + last_config (1) = 5

@@ -268,6 +268,7 @@ Customize the terminal user interface.
 
 ```toml
 [ui]
+icons = "nerd_fonts"            # Icon style: "nerd_fonts" (default) or "unicode"
 log_buffer_size = 10000         # Maximum log entries to keep in memory
 show_timestamps = true          # Display timestamps in log entries
 compact_logs = false            # Collapse similar consecutive log entries
@@ -278,12 +279,17 @@ stack_trace_max_frames = 3     # Number of frames to show when collapsed
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
+| `icons` | `string` | `"nerd_fonts"` | Icon style for the TUI. `"nerd_fonts"` uses rich Nerd Font glyphs (requires a [Nerd Font](https://www.nerdfonts.com/) installed in your terminal). `"unicode"` uses safe characters that work in all terminals. |
 | `log_buffer_size` | `integer` | `10000` | Maximum number of log entries to retain. Older entries are discarded when limit is reached. |
 | `show_timestamps` | `boolean` | `true` | If `true`, displays timestamps for each log entry. |
 | `compact_logs` | `boolean` | `false` | If `true`, collapses similar consecutive log entries to reduce noise. |
 | `theme` | `string` | `"default"` | Color theme name. Currently only `"default"` is supported. |
 | `stack_trace_collapsed` | `boolean` | `true` | If `true`, stack traces start collapsed showing only the first few frames. |
 | `stack_trace_max_frames` | `integer` | `3` | Number of stack trace frames to show when collapsed. Press `Enter` to expand. |
+
+> **Environment variable override:** Set `FDEMON_ICONS=unicode` or `FDEMON_ICONS=nerd_fonts` to override the config file setting for the current session.
+
+> **No Nerd Font?** If icons appear as missing characters or boxes, your terminal font does not include Nerd Font glyphs. Add `icons = "unicode"` to your `[ui]` section in `.fdemon/config.toml`, or run with `FDEMON_ICONS=unicode` to switch to safe Unicode characters that work in all terminals. See [nerdfonts.com](https://www.nerdfonts.com/) to install a patched font.
 
 ### DevTools Settings
 
@@ -608,6 +614,7 @@ auto_reload = true
 extensions = ["dart"]
 
 [ui]
+icons = "nerd_fonts"
 log_buffer_size = 15000
 show_timestamps = true
 compact_logs = false
@@ -820,7 +827,7 @@ Different setting types have different editing behaviors:
 #### Enums
 - **Enter/Space** or **→**: Cycle to next option
 - **←**: Cycle to previous option
-- Example: `mode` (debug/profile/release), `theme`
+- Example: `mode` (debug/profile/release), `theme`, `icons` (unicode/nerd_fonts)
 
 #### Lists
 - **Enter**: Add a new item (after typing)
@@ -844,6 +851,7 @@ The **User Preferences** tab allows you to override specific project settings lo
 - **Editor command**: Your preferred editor (e.g., `nvim`, `code`)
 - **Editor open pattern**: Custom file opening pattern
 - **Theme**: UI color theme override
+- **Icons**: Icon style override (useful if your terminal has Nerd Font support but teammates don't)
 
 **How Overrides Work:**
 - Overrides are stored in `.fdemon/settings.local.toml`

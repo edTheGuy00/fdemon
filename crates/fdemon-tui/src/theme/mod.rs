@@ -3,7 +3,7 @@
 //! This module provides:
 //! - `palette` — Raw color constants
 //! - `styles` — Semantic style builder functions
-//! - `icons` — Nerd Font glyph constants with ASCII fallbacks
+//! - `icons` — `IconSet` for runtime icon resolution (Unicode/Nerd Font)
 
 pub mod icons;
 pub mod palette;
