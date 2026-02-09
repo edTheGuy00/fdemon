@@ -109,7 +109,8 @@ impl MainHeader<'_> {
             if let Some(session_manager) = self.session_manager {
                 if let Some(handle) = session_manager.selected() {
                     let session = &handle.session;
-                    let (icon, _label, style) = styles::phase_indicator(&session.phase, &self.icons);
+                    let (icon, _label, style) =
+                        styles::phase_indicator(&session.phase, &self.icons);
                     (
                         icon,
                         style,
@@ -117,10 +118,20 @@ impl MainHeader<'_> {
                         Some(session.platform.as_str()),
                     )
                 } else {
-                    (self.icons.circle(), Style::default().fg(palette::TEXT_MUTED), None, None)
+                    (
+                        self.icons.circle(),
+                        Style::default().fg(palette::TEXT_MUTED),
+                        None,
+                        None,
+                    )
                 }
             } else {
-                (self.icons.circle(), Style::default().fg(palette::TEXT_MUTED), None, None)
+                (
+                    self.icons.circle(),
+                    Style::default().fg(palette::TEXT_MUTED),
+                    None,
+                    None,
+                )
             };
 
         // Build left section: status dot + "Flutter Demon" + "/" + project name
@@ -410,25 +421,37 @@ mod tests {
         // Verify header renders without errors with NerdFonts mode
         let content = term.content();
         assert!(!content.is_empty(), "Should render with NerdFonts mode");
-        assert!(term.buffer_contains("test_project"), "Should show project name");
+        assert!(
+            term.buffer_contains("test_project"),
+            "Should show project name"
+        );
     }
 
     #[test]
     fn test_device_icon_for_platform_ios() {
         let icons = IconSet::new(IconMode::Unicode);
-        assert_eq!(device_icon_for_platform(Some("ios"), &icons), icons.smartphone());
+        assert_eq!(
+            device_icon_for_platform(Some("ios"), &icons),
+            icons.smartphone()
+        );
     }
 
     #[test]
     fn test_device_icon_for_platform_web() {
         let icons = IconSet::new(IconMode::Unicode);
-        assert_eq!(device_icon_for_platform(Some("web-chrome"), &icons), icons.globe());
+        assert_eq!(
+            device_icon_for_platform(Some("web-chrome"), &icons),
+            icons.globe()
+        );
     }
 
     #[test]
     fn test_device_icon_for_platform_desktop() {
         let icons = IconSet::new(IconMode::Unicode);
-        assert_eq!(device_icon_for_platform(Some("macos"), &icons), icons.monitor());
+        assert_eq!(
+            device_icon_for_platform(Some("macos"), &icons),
+            icons.monitor()
+        );
     }
 
     #[test]
@@ -441,8 +464,14 @@ mod tests {
     fn test_device_icon_for_platform_nerd_fonts() {
         let icons = IconSet::new(IconMode::NerdFonts);
         // Just verify the function works with NerdFonts - the actual icons differ
-        assert_eq!(device_icon_for_platform(Some("ios"), &icons), icons.smartphone());
+        assert_eq!(
+            device_icon_for_platform(Some("ios"), &icons),
+            icons.smartphone()
+        );
         assert_eq!(device_icon_for_platform(Some("web"), &icons), icons.globe());
-        assert_eq!(device_icon_for_platform(Some("macos"), &icons), icons.monitor());
+        assert_eq!(
+            device_icon_for_platform(Some("macos"), &icons),
+            icons.monitor()
+        );
     }
 }

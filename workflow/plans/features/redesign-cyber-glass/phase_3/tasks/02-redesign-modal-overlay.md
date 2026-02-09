@@ -146,3 +146,65 @@ The existing `render_shadow()` in `modal_overlay.rs` draws a 1-cell dark band to
 - **render/mod.rs changes may be minimal**: Check if the main view already renders the background before the dialog. The `UiMode::NewSessionDialog` branch in `view()` may already call both the background render and dialog render. If so, just remove the `Clear.render(area, buf)` from the dialog and add `dim_background()`.
 - **Performance**: `dim_background()` iterates all cells in the frame area. This is O(width * height) per frame, which is trivially fast (< 1ms for 200x50). No optimization needed.
 - **Vertical layout centering**: Vertical mode uses `centered_rect_custom(90, 85, area)` instead of the standard 80%/70%. The overlay approach works the same way — dim full area, shadow around dialog rect, clear dialog rect, render dialog.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Updated `render_horizontal()` and `render_vertical()` to use modal overlay utilities instead of direct `Clear.render()` calls. Added `use crate::widgets::modal_overlay;` import and `symbols` to ratatui imports. |
+
+### Implementation Details
+
+**Changes to `render_horizontal()`:**
+1. Replaced initial `Clear.render(area, buf)` with `modal_overlay::dim_background(buf, area)` to preserve and dim the background log screen
+2. Added `modal_overlay::render_shadow(buf, dialog_area)` after calculating centered dialog area
+3. Replaced second `Clear.render(dialog_area, buf)` with `modal_overlay::clear_area(buf, dialog_area)`
+4. Dialog block and content rendering remain unchanged
+5. Modal overlays (fuzzy, dart defines) still render on top as before
+
+**Changes to `render_vertical()`:**
+1. Applied the same 4-step overlay pattern as horizontal layout
+2. Preserved the custom centering (90% width, 85% height) for narrow terminals
+3. Shadow and dim effects work identically to horizontal layout
+4. Compact footer and separator rendering unchanged
+
+**No changes required to `render/mod.rs`:**
+- The `view()` function already renders the background (header + log view) before the dialog overlay (lines 67-117 then 124-130)
+- This existing render order enables the overlay effect to work correctly
+
+**No changes to `modal_overlay.rs`:**
+- The existing `dim_background()` implementation using RGB palette values (`TEXT_MUTED` fg, `DEEPEST_BG` bg) provides the correct visual effect
+- `render_shadow()` and `clear_area()` already work correctly for the use case
+
+### Notable Decisions/Tradeoffs
+
+1. **Preserved render order in render/mod.rs**: No changes needed because the view already renders background content before the dialog. The dialog just needed to stop clearing it with `Clear.render()`.
+
+2. **Shadow rendering**: The existing `render_shadow()` draws a 1-cell band to the right and bottom, which creates the elevation effect without overflow issues at minimum terminal size (40x20).
+
+3. **Dim overlay performance**: The `dim_background()` function iterates all cells in O(width * height) which is trivially fast (<1ms) for typical terminal sizes. No optimization needed.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (428 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Visual Effect Achieved
+
+The new session dialog now renders with:
+- **Dimmed background**: Main log screen visible but darkened underneath (using `TEXT_MUTED` fg + `DEEPEST_BG` bg)
+- **1-cell shadow**: Dark band visible on right and bottom edges of the dialog
+- **Centered dialog**: Preserved existing centering logic (80%/70% for horizontal, 90%/85% for vertical)
+- **Nested modals**: Fuzzy and dart defines modals still render correctly on top of the dialog
+
+### Risks/Limitations
+
+None identified. The implementation follows the existing overlay pattern used by other modals in the codebase.

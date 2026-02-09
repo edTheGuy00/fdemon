@@ -15,13 +15,45 @@ use super::device_groups::{
     flatten_groups, group_bootable_devices, group_connected_devices, DeviceListItem,
     GroupedBootableDevice,
 };
-use fdemon_app::{AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_app::{config::IconMode, AndroidAvd, Device, IosSimulator, ToolAvailability};
 
-use crate::theme::palette;
+use crate::theme::{icons::IconSet, palette};
 
 /// Minimum width (in columns) to show verbose scroll indicators ("↑ more").
 /// Below this threshold, compact indicators ("↑") are shown.
 const VERBOSE_INDICATOR_WIDTH_THRESHOLD: u16 = 50;
+
+/// Determine icon for a device based on platform_type
+fn device_icon(platform_type: &str, _is_emulator: bool, icons: &IconSet) -> &'static str {
+    let platform_lower = platform_type.to_lowercase();
+
+    if platform_lower.contains("ios") || platform_lower.contains("android") {
+        icons.smartphone()
+    } else if platform_lower.contains("web") || platform_lower.contains("chrome") {
+        icons.globe()
+    } else if platform_lower.contains("macos")
+        || platform_lower.contains("linux")
+        || platform_lower.contains("windows")
+        || platform_lower.contains("darwin")
+    {
+        icons.monitor()
+    } else {
+        icons.cpu()
+    }
+}
+
+/// Determine icon for a bootable device based on platform
+fn bootable_device_icon(platform: &str, icons: &IconSet) -> &'static str {
+    let platform_lower = platform.to_lowercase();
+
+    if platform_lower.contains("ios") || platform_lower.contains("android") {
+        icons.smartphone()
+    } else if platform_lower.contains("web") {
+        icons.globe()
+    } else {
+        icons.cpu()
+    }
+}
 
 /// Widget for rendering connected devices with grouping
 pub struct ConnectedDeviceList<'a> {
@@ -29,6 +61,7 @@ pub struct ConnectedDeviceList<'a> {
     selected_index: usize,
     is_focused: bool,
     scroll_offset: usize,
+    icons: IconSet,
 }
 
 impl<'a> ConnectedDeviceList<'a> {
@@ -43,7 +76,14 @@ impl<'a> ConnectedDeviceList<'a> {
             selected_index,
             is_focused,
             scroll_offset,
+            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
         }
+    }
+
+    /// Set the icon mode (chainable builder)
+    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
+        self.icons = IconSet::new(icon_mode);
+        self
     }
 
     fn render_item(
@@ -54,28 +94,36 @@ impl<'a> ConnectedDeviceList<'a> {
     ) -> ListItem<'static> {
         match item {
             DeviceListItem::Header(header) => {
+                // Uppercase header with ACCENT_DIM color
                 let header_style = Style::default()
-                    .fg(palette::STATUS_YELLOW)
+                    .fg(palette::ACCENT_DIM)
                     .add_modifier(Modifier::BOLD);
+                let header_upper = header.to_uppercase();
                 ListItem::new(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(header.clone(), header_style),
+                    Span::raw("  "),
+                    Span::styled(header_upper, header_style),
                 ]))
             }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
+
+                // Updated selection highlighting
                 let style = if is_selected && self.is_focused {
                     Style::default()
-                        .fg(palette::CONTRAST_FG)
+                        .fg(palette::TEXT_BRIGHT)
                         .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
                     Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
-                let indicator = if is_selected { "▶ " } else { "  " };
+                // Platform icon - use platform_type if available, fallback to platform
+                let platform = device.platform_type.as_deref().unwrap_or(&device.platform);
+                let icon = device_icon(platform, device.emulator, &self.icons);
                 let device_type = if device.emulator {
                     device
                         .emulator_id
@@ -87,9 +135,10 @@ impl<'a> ConnectedDeviceList<'a> {
                 };
 
                 // Calculate available width for device name
-                // Format: "▶ <name> (<type>)"
+                // Format: " <icon> <name> (<type>)"
+                let prefix = format!(" {} ", icon);
                 let type_suffix = format!(" ({})", device_type);
-                let reserved = indicator.len() + type_suffix.len();
+                let reserved = prefix.len() + type_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -100,7 +149,7 @@ impl<'a> ConnectedDeviceList<'a> {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(indicator, style),
+                    Span::styled(prefix, style),
                     Span::styled(name, style),
                     Span::styled(type_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
@@ -184,6 +233,7 @@ pub struct BootableDeviceList<'a> {
     is_focused: bool,
     scroll_offset: usize,
     tool_availability: &'a ToolAvailability,
+    icons: IconSet,
 }
 
 impl<'a> BootableDeviceList<'a> {
@@ -202,7 +252,14 @@ impl<'a> BootableDeviceList<'a> {
             is_focused,
             scroll_offset,
             tool_availability,
+            icons: IconSet::new(IconMode::Unicode), // Default to Unicode for compatibility
         }
+    }
+
+    /// Set the icon mode (chainable builder)
+    pub fn with_icons(mut self, icon_mode: IconMode) -> Self {
+        self.icons = IconSet::new(icon_mode);
+        self
     }
 
     fn render_item(
@@ -213,34 +270,42 @@ impl<'a> BootableDeviceList<'a> {
     ) -> ListItem<'static> {
         match item {
             DeviceListItem::Header(header) => {
+                // Uppercase header with ACCENT_DIM color
                 let header_style = Style::default()
-                    .fg(palette::STATUS_YELLOW)
+                    .fg(palette::ACCENT_DIM)
                     .add_modifier(Modifier::BOLD);
+                let header_upper = header.to_uppercase();
                 ListItem::new(Line::from(vec![
-                    Span::styled("  ", Style::default()),
-                    Span::styled(header.clone(), header_style),
+                    Span::raw("  "),
+                    Span::styled(header_upper, header_style),
                 ]))
             }
             DeviceListItem::Device(device) => {
                 let is_selected = index == self.selected_index;
+
+                // Updated selection highlighting
                 let style = if is_selected && self.is_focused {
                     Style::default()
-                        .fg(palette::CONTRAST_FG)
+                        .fg(palette::TEXT_BRIGHT)
                         .bg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD)
                 } else if is_selected {
-                    Style::default().add_modifier(Modifier::BOLD)
-                } else {
                     Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(palette::TEXT_SECONDARY)
                 };
 
-                let indicator = if is_selected { "▶ " } else { "  " };
+                // Platform icon
+                let icon = bootable_device_icon(device.platform(), &self.icons);
                 let runtime = device.runtime_info();
 
                 // Calculate available width for device name
-                // Format: "▶ <name> (<runtime>)"
+                // Format: " <icon> <name> (<runtime>)"
+                let prefix = format!(" {} ", icon);
                 let runtime_suffix = format!(" ({})", runtime);
-                let reserved = indicator.len() + runtime_suffix.len();
+                let reserved = prefix.len() + runtime_suffix.len();
                 let available_width = (area_width as usize).saturating_sub(reserved);
 
                 // Truncate device name if needed
@@ -251,7 +316,7 @@ impl<'a> BootableDeviceList<'a> {
                 };
 
                 ListItem::new(Line::from(vec![
-                    Span::styled(indicator, style),
+                    Span::styled(prefix, style),
                     Span::styled(name, style),
                     Span::styled(runtime_suffix, Style::default().fg(palette::TEXT_MUTED)),
                 ]))
@@ -432,7 +497,8 @@ mod tests {
 
         assert!(content.contains("iPhone 15"));
         assert!(content.contains("Pixel 8"));
-        assert!(content.contains("iOS Devices"));
+        // Headers are rendered in uppercase in the new design
+        assert!(content.contains("IOS DEVICES") || content.contains("ANDROID DEVICES"));
     }
 
     #[test]

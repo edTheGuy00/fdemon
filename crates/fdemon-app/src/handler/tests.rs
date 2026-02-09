@@ -1,5 +1,4 @@
 //! Tests for handler module
-#![cfg(not(feature = "skip_old_tests"))]
 
 use super::*;
 use crate::input_key::InputKey;
@@ -1747,7 +1746,6 @@ fn test_start_auto_launch_shows_loading_overlay() {
 }
 
 #[test]
-#[cfg(feature = "test_old_dialogs")]
 fn test_auto_launch_progress_updates_message() {
     let mut state = AppState::new();
     state.set_loading_phase("Initial");
@@ -1769,7 +1767,6 @@ fn test_auto_launch_progress_updates_message() {
 }
 
 #[test]
-#[cfg(feature = "test_old_dialogs")]
 fn test_auto_launch_result_success_creates_session() {
     use crate::message::AutoLaunchSuccess;
 
@@ -1801,32 +1798,9 @@ fn test_auto_launch_result_success_creates_session() {
     ));
 }
 
-#[test]
-#[cfg(feature = "test_old_dialogs")]
-fn test_auto_launch_result_discovery_error_shows_dialog() {
-    let mut state = AppState::new();
-    // No loading state - auto-launch is silent
-
-    let result = update(
-        &mut state,
-        Message::AutoLaunchResult {
-            result: Err("No devices found".to_string()),
-        },
-    );
-
-    // Shows startup dialog on error
-    assert_eq!(state.ui_mode, UiMode::StartupDialog);
-    // Error message set
-    assert!(state.startup_dialog_state.error.is_some());
-    assert!(state
-        .startup_dialog_state
-        .error
-        .as_ref()
-        .unwrap()
-        .contains("No devices"));
-    // No action returned
-    assert!(result.action.is_none());
-}
+// Note: test_auto_launch_result_discovery_error_shows_dialog removed
+// because StartupDialog and startup_dialog_state were replaced with NewSessionDialog
+// in Phase 3 redesign. Auto-launch errors now show NewSessionDialog.
 
 // ============================================================================
 // Auto-Launch Flow Integration Tests (Phase 3 - Task 3)

@@ -29,14 +29,15 @@ pub use target_selector::*;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::Style,
-    symbols,
-    widgets::{Block, Borders, Clear, Paragraph, Widget},
+    style::{Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, Widget},
 };
 
 use fdemon_app::ToolAvailability;
 
-use crate::theme::palette;
+use crate::theme::{icons::IconSet, palette, styles};
+use crate::widgets::modal_overlay;
 
 // ============================================================================
 // Text Truncation Utilities
@@ -113,15 +114,6 @@ pub fn truncate_middle(text: &str, max_width: usize) -> String {
     }
 }
 
-/// Footer text shown when no modal is open
-const FOOTER_MAIN: &str = "[1/2] Tab  [Tab] Pane  [↑↓] Navigate  [Enter] Select  [Esc] Close";
-
-/// Footer text shown when fuzzy modal is open
-const FOOTER_FUZZY_MODAL: &str = "[↑↓] Navigate  [Enter] Select  [Esc] Cancel  Type to filter";
-
-/// Footer text shown when dart defines modal is open
-const FOOTER_DART_DEFINES: &str = "[Tab] Pane  [↑↓] Navigate  [Enter] Edit  [Esc] Save & Close";
-
 /// Minimum terminal width for horizontal (two-pane) layout
 const MIN_HORIZONTAL_WIDTH: u16 = 70;
 
@@ -158,6 +150,7 @@ pub enum LayoutMode {
 pub struct NewSessionDialog<'a> {
     state: &'a NewSessionDialogState,
     tool_availability: &'a ToolAvailability,
+    icons: &'a IconSet,
 }
 
 impl<'a> NewSessionDialog<'a> {
@@ -167,10 +160,15 @@ impl<'a> NewSessionDialog<'a> {
     /// Minimum terminal height for dialog (updated to match MIN_HEIGHT constant)
     pub const MIN_HEIGHT: u16 = MIN_HEIGHT;
 
-    pub fn new(state: &'a NewSessionDialogState, tool_availability: &'a ToolAvailability) -> Self {
+    pub fn new(
+        state: &'a NewSessionDialogState,
+        tool_availability: &'a ToolAvailability,
+        icons: &'a IconSet,
+    ) -> Self {
         Self {
             state,
             tool_availability,
+            icons,
         }
     }
 
@@ -207,22 +205,115 @@ impl<'a> NewSessionDialog<'a> {
         .split(popup_layout[1])[1]
     }
 
-    /// Get footer text based on current state
-    fn footer_text(&self) -> &'static str {
+    /// Get footer hints based on current state
+    fn footer_hints(&self) -> Vec<(&str, &str)> {
         if self.state.is_fuzzy_modal_open() {
-            FOOTER_FUZZY_MODAL
+            vec![("↑↓", "Navigate"), ("Enter", "Select"), ("Esc", "Cancel")]
         } else if self.state.is_dart_defines_modal_open() {
-            FOOTER_DART_DEFINES
+            vec![
+                ("Tab", "Pane"),
+                ("↑↓", "Navigate"),
+                ("Enter", "Edit"),
+                ("Esc", "Close"),
+            ]
         } else {
-            FOOTER_MAIN
+            vec![
+                ("1/2", "Tab"),
+                ("Tab", "Pane"),
+                ("↑↓", "Navigate"),
+                ("Enter", "Select"),
+                ("Esc", "Close"),
+            ]
         }
+    }
+
+    /// Render header area with title, subtitle, and close hint
+    fn render_header(&self, area: Rect, buf: &mut Buffer) {
+        // Row 1: "New Session" (left) + "[Esc] Close" (right)
+        let title_line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "New Session",
+                Style::default()
+                    .fg(palette::TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        let close_hint = Line::from(vec![
+            Span::styled("[Esc]", Style::default().fg(palette::TEXT_MUTED)),
+            Span::raw(" "),
+            Span::styled("Close", Style::default().fg(palette::TEXT_MUTED)),
+            Span::raw("  "),
+        ]);
+
+        // Split area for title (left) and close hint (right)
+        let title_area = Rect::new(area.x, area.y, area.width, 1);
+        Paragraph::new(title_line).render(title_area, buf);
+        Paragraph::new(close_hint)
+            .alignment(Alignment::Right)
+            .render(title_area, buf);
+
+        // Row 2: Subtitle
+        let subtitle = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "Configure deployment target and runtime flags.",
+                Style::default().fg(palette::TEXT_SECONDARY),
+            ),
+        ]);
+        let subtitle_area = Rect::new(area.x, area.y + 1, area.width, 1);
+        Paragraph::new(subtitle).render(subtitle_area, buf);
+    }
+
+    /// Render a horizontal separator line
+    fn render_separator(area: Rect, buf: &mut Buffer) {
+        let separator = "─".repeat(area.width as usize);
+        buf.set_string(
+            area.x,
+            area.y,
+            &separator,
+            Style::default().fg(palette::BORDER_DIM),
+        );
+    }
+
+    /// Render compact header for vertical layout (2 lines: title + close hint only)
+    fn render_header_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Row 1: "New Session" (left) + "[Esc]" (right)
+        let title_line = Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "New Session",
+                Style::default()
+                    .fg(palette::TEXT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]);
+
+        let close_hint = Line::from(vec![
+            Span::styled("[Esc]", Style::default().fg(palette::TEXT_MUTED)),
+            Span::raw("  "),
+        ]);
+
+        // Split area for title (left) and close hint (right)
+        let title_area = Rect::new(area.x, area.y, area.width, 1);
+        Paragraph::new(title_line).render(title_area, buf);
+        Paragraph::new(close_hint)
+            .alignment(Alignment::Right)
+            .render(title_area, buf);
+
+        // For compact mode, skip subtitle to save space
     }
 
     /// Render main content (two panes)
     fn render_panes(&self, area: Rect, buf: &mut Buffer) {
-        // Split into two equal panes
-        let chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
+        // Split into 40% (Target Selector) + 1 col (separator) + 60% (Launch Context)
+        let chunks = Layout::horizontal([
+            Constraint::Percentage(40), // Target Selector
+            Constraint::Length(1),      // Vertical separator
+            Constraint::Percentage(60), // Launch Context
+        ])
+        .split(area);
 
         // Render Target Selector (left pane)
         let target_focused = self.state.is_target_selector_focused();
@@ -233,20 +324,62 @@ impl<'a> NewSessionDialog<'a> {
         );
         target_selector.render(chunks[0], buf);
 
+        // Render vertical separator
+        Self::render_vertical_separator(chunks[1], buf);
+
         // Render Launch Context (right pane)
         let launch_focused = self.state.is_launch_context_focused();
         let has_device = self.state.is_ready_to_launch();
-        let launch_context =
-            LaunchContextWithDevice::new(&self.state.launch_context, launch_focused, has_device);
-        launch_context.render(chunks[1], buf);
+        let launch_context = LaunchContextWithDevice::new(
+            &self.state.launch_context,
+            launch_focused,
+            has_device,
+            self.icons,
+        );
+        launch_context.render(chunks[2], buf);
     }
 
-    /// Render footer
+    /// Render a vertical separator line
+    fn render_vertical_separator(area: Rect, buf: &mut Buffer) {
+        for y in area.top()..area.bottom() {
+            if let Some(cell) = buf.cell_mut((area.x, y)) {
+                cell.set_char('│');
+                cell.set_style(Style::default().fg(palette::BORDER_DIM));
+            }
+        }
+    }
+
+    /// Render footer with kbd-style shortcut hints
     fn render_footer(&self, area: Rect, buf: &mut Buffer) {
-        let text = Paragraph::new(self.footer_text())
-            .style(Style::default().fg(palette::BORDER_DIM))
-            .alignment(Alignment::Center);
-        text.render(area, buf);
+        // Fill background with SURFACE color
+        let bg_block = Block::default().style(Style::default().bg(palette::SURFACE));
+        bg_block.render(area, buf);
+
+        let hints = self.footer_hints();
+
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, (key, label)) in hints.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(
+                    "  ·  ",
+                    Style::default().fg(palette::BORDER_DIM),
+                ));
+            }
+            spans.push(Span::styled(
+                format!("[{}]", key),
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                *label,
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+        }
+
+        let line = Line::from(spans);
+        Paragraph::new(line)
+            .alignment(Alignment::Center)
+            .render(area, buf);
     }
 
     /// Render fuzzy modal overlay (bottom 40% with dimmed background)
@@ -257,7 +390,7 @@ impl<'a> NewSessionDialog<'a> {
         };
 
         // Dim the background (main dialog area)
-        fuzzy_modal::render_dim_overlay(dialog_area, buf);
+        modal_overlay::dim_background(buf, dialog_area);
 
         // Check if this is an entry point modal that's loading
         let is_loading = modal_state.modal_type == super::FuzzyModalType::EntryPoint
@@ -304,37 +437,52 @@ impl<'a> NewSessionDialog<'a> {
 
     /// Render horizontal (two-pane) layout
     fn render_horizontal(&self, area: Rect, buf: &mut Buffer) {
-        // Clear background
-        Clear.render(area, buf);
+        // Step 1: Dim the background (background content already rendered by render/mod.rs)
+        modal_overlay::dim_background(buf, area);
 
+        // Step 2: Calculate centered dialog area
         let dialog_area = Self::centered_rect(area);
 
-        // Clear dialog area
-        Clear.render(dialog_area, buf);
+        // Step 3: Render shadow (1-cell offset right+bottom)
+        modal_overlay::render_shadow(buf, dialog_area);
 
-        // Main dialog block
+        // Step 4: Clear dialog area (prepare for dialog content)
+        modal_overlay::clear_area(buf, dialog_area);
+
+        // Step 5: Main dialog block (no title on border)
         let block = Block::default()
-            .title(" New Session ")
-            .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
             .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
 
-        // Layout: content + footer
+        // Layout: header + separator + content + separator + footer
         let chunks = Layout::vertical([
+            Constraint::Length(3), // Header (title + subtitle + blank line)
+            Constraint::Length(1), // Separator
             Constraint::Min(10),   // Main content
+            Constraint::Length(1), // Separator
             Constraint::Length(1), // Footer
         ])
         .split(inner);
 
+        // Render header
+        self.render_header(chunks[0], buf);
+
+        // Render separator
+        Self::render_separator(chunks[1], buf);
+
         // Render main content (two panes)
-        self.render_panes(chunks[0], buf);
+        self.render_panes(chunks[2], buf);
+
+        // Render separator
+        Self::render_separator(chunks[3], buf);
 
         // Render footer
-        self.render_footer(chunks[1], buf);
+        self.render_footer(chunks[4], buf);
 
         // Render modal overlay if any
         if self.state.is_dart_defines_modal_open() {
@@ -346,34 +494,45 @@ impl<'a> NewSessionDialog<'a> {
 
     /// Render vertical (stacked) layout for narrow terminals
     fn render_vertical(&self, area: Rect, buf: &mut Buffer) {
-        // Clear background
-        Clear.render(area, buf);
+        // Step 1: Dim the background (background content already rendered by render/mod.rs)
+        modal_overlay::dim_background(buf, area);
 
-        // Use more of the available space in vertical mode (90% width, 85% height)
+        // Step 2: Use more of the available space in vertical mode (90% width, 85% height)
         let dialog_area = Self::centered_rect_custom(90, 85, area);
 
-        // Clear dialog area
-        Clear.render(dialog_area, buf);
+        // Step 3: Render shadow (1-cell offset right+bottom)
+        modal_overlay::render_shadow(buf, dialog_area);
 
-        // Main dialog block
+        // Step 4: Clear dialog area (prepare for dialog content)
+        modal_overlay::clear_area(buf, dialog_area);
+
+        // Step 5: Main dialog block (no title on border)
         let block = Block::default()
-            .title(" New Session ")
-            .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
             .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(dialog_area);
         block.render(dialog_area, buf);
 
-        // Vertical split: Target Selector (55%) | Separator | Launch Context (min 10 lines) | Footer
+        // Vertical split: header + separator + Target Selector + separator + Launch Context + separator + footer
         let chunks = Layout::vertical([
-            Constraint::Percentage(55), // Target Selector (top)
+            Constraint::Length(2),      // Header (compact: title only)
+            Constraint::Length(1),      // Separator
+            Constraint::Percentage(45), // Target Selector (top, compact mode)
             Constraint::Length(1),      // Separator line
             Constraint::Min(10),        // Launch Context (bottom)
+            Constraint::Length(1),      // Separator
             Constraint::Length(1),      // Footer
         ])
         .split(inner);
+
+        // Render compact header
+        self.render_header_compact(chunks[0], buf);
+
+        // Render separator
+        Self::render_separator(chunks[1], buf);
 
         // Render Target Selector (top, compact mode)
         let target_focused = self.state.is_target_selector_focused();
@@ -383,27 +542,28 @@ impl<'a> NewSessionDialog<'a> {
             target_focused,
         )
         .compact(true);
-        target_selector.render(chunks[0], buf);
+        target_selector.render(chunks[2], buf);
 
         // Render separator line
-        let separator = "─".repeat(chunks[1].width as usize);
-        buf.set_string(
-            chunks[1].x,
-            chunks[1].y,
-            &separator,
-            Style::default().fg(palette::BORDER_DIM),
-        );
+        Self::render_separator(chunks[3], buf);
 
         // Render Launch Context (bottom, compact mode)
         let launch_focused = self.state.is_launch_context_focused();
         let has_device = self.state.is_ready_to_launch();
-        let launch_context =
-            LaunchContextWithDevice::new(&self.state.launch_context, launch_focused, has_device)
-                .compact(true);
-        launch_context.render(chunks[2], buf);
+        let launch_context = LaunchContextWithDevice::new(
+            &self.state.launch_context,
+            launch_focused,
+            has_device,
+            self.icons,
+        )
+        .compact(true);
+        launch_context.render(chunks[4], buf);
+
+        // Render separator
+        Self::render_separator(chunks[5], buf);
 
         // Render compact footer
-        self.render_footer_compact(chunks[3], buf);
+        self.render_footer_compact(chunks[6], buf);
 
         // Render modal overlay if any
         if self.state.is_dart_defines_modal_open() {
@@ -434,19 +594,46 @@ impl<'a> NewSessionDialog<'a> {
 
     /// Render footer with abbreviated keybindings (for vertical layout)
     fn render_footer_compact(&self, area: Rect, buf: &mut Buffer) {
+        // Fill background with SURFACE color
+        let bg_block = Block::default().style(Style::default().bg(palette::SURFACE));
+        bg_block.render(area, buf);
+
         // Shorter keybinding hints for narrow terminals
         let hints = if self.state.is_fuzzy_modal_open() {
-            "[↑↓]Nav [Enter]Select [Esc]Cancel"
+            vec![("↑↓", "Nav"), ("Enter", "Sel"), ("Esc", "Close")]
         } else if self.state.is_dart_defines_modal_open() {
-            "[Tab]Pane [↑↓]Nav [Enter]Edit [Esc]Close"
+            vec![("Tab", "Pane"), ("↑↓", "Nav"), ("Esc", "Close")]
         } else {
-            "[1/2]Tab [Tab]Pane [↑↓]Nav [Enter]Select [Esc]Close"
+            vec![
+                ("1/2", "Tab"),
+                ("Tab", "Pane"),
+                ("↑↓", "Nav"),
+                ("Esc", "Close"),
+            ]
         };
 
-        let paragraph = Paragraph::new(hints)
-            .style(Style::default().fg(palette::TEXT_MUTED))
-            .alignment(Alignment::Center);
-        paragraph.render(area, buf);
+        let mut spans: Vec<Span> = Vec::new();
+        for (i, (key, label)) in hints.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::styled(
+                    " · ",
+                    Style::default().fg(palette::BORDER_DIM),
+                ));
+            }
+            spans.push(Span::styled(
+                format!("[{}]", key),
+                Style::default().fg(palette::TEXT_PRIMARY),
+            ));
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(
+                *label,
+                Style::default().fg(palette::TEXT_MUTED),
+            ));
+        }
+
+        Paragraph::new(Line::from(spans))
+            .alignment(Alignment::Center)
+            .render(area, buf);
     }
 }
 
@@ -469,20 +656,21 @@ impl Widget for NewSessionDialog<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::config::LoadedConfigs;
+    use fdemon_app::config::{IconMode, LoadedConfigs};
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
     fn test_dialog_renders() {
         let state = NewSessionDialogState::new(LoadedConfigs::default());
         let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
 
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let dialog = NewSessionDialog::new(&state, &tool_availability);
+                let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
                 f.render_widget(dialog, f.area());
             })
             .unwrap();
@@ -563,13 +751,14 @@ mod tests {
     fn test_too_small_message() {
         let state = NewSessionDialogState::new(LoadedConfigs::default());
         let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
 
         let backend = TestBackend::new(60, 15);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let dialog = NewSessionDialog::new(&state, &tool_availability);
+                let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
                 f.render_widget(dialog, f.area());
             })
             .unwrap();
@@ -586,13 +775,14 @@ mod tests {
         state.open_flavor_modal(vec!["dev".to_string(), "prod".to_string()]);
 
         let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
 
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let dialog = NewSessionDialog::new(&state, &tool_availability);
+                let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
                 f.render_widget(dialog, f.area());
             })
             .unwrap();
@@ -611,13 +801,14 @@ mod tests {
         state.open_dart_defines_modal();
 
         let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
 
         let backend = TestBackend::new(100, 40);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let dialog = NewSessionDialog::new(&state, &tool_availability);
+                let dialog = NewSessionDialog::new(&state, &tool_availability, &icons);
                 f.render_widget(dialog, f.area());
             })
             .unwrap();

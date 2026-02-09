@@ -4,13 +4,12 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Widget},
 };
 
 use super::state::{DartDefinesEditField, DartDefinesModalState, DartDefinesPane};
-use crate::theme::palette;
+use crate::theme::{palette, styles};
 
 /// Widget for the left pane (list of defines)
 pub struct DartDefinesListPane<'a> {
@@ -29,12 +28,6 @@ impl<'a> DartDefinesListPane<'a> {
 
 impl Widget for DartDefinesListPane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let border_color = if self.is_focused() {
-            palette::ACCENT
-        } else {
-            palette::BORDER_DIM
-        };
-
         let block = Block::default()
             .title(" Active Variables ")
             .title_style(
@@ -43,9 +36,13 @@ impl Widget for DartDefinesListPane<'_> {
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
-            .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
+            .border_type(BorderType::Rounded)
+            .border_style(if self.is_focused() {
+                styles::border_active()
+            } else {
+                styles::border_inactive()
+            })
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -129,11 +126,11 @@ impl<'a> DartDefinesEditPane<'a> {
         if is_active {
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
-                .bg(palette::MODAL_DART_DEFINES_INPUT_ACTIVE_BG)
+                .bg(palette::SURFACE)
         } else {
             Style::default()
                 .fg(palette::TEXT_SECONDARY)
-                .bg(palette::MODAL_DART_DEFINES_INPUT_INACTIVE_BG)
+                .bg(palette::CARD_BG)
         }
     }
 
@@ -148,7 +145,7 @@ impl<'a> DartDefinesEditPane<'a> {
         } else {
             Style::default()
                 .fg(palette::TEXT_PRIMARY)
-                .bg(palette::MODAL_DART_DEFINES_BUTTON_INACTIVE_BG)
+                .bg(palette::CARD_BG)
         }
     }
 
@@ -193,12 +190,6 @@ impl<'a> DartDefinesEditPane<'a> {
 
 impl Widget for DartDefinesEditPane<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let border_color = if self.is_focused() {
-            palette::ACCENT
-        } else {
-            palette::BORDER_DIM
-        };
-
         let title = if self.state.is_new {
             " New Variable "
         } else {
@@ -213,9 +204,13 @@ impl Widget for DartDefinesEditPane<'_> {
                     .add_modifier(Modifier::BOLD),
             )
             .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
-            .border_style(Style::default().fg(border_color))
-            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
+            .border_type(BorderType::Rounded)
+            .border_style(if self.is_focused() {
+                styles::border_active()
+            } else {
+                styles::border_inactive()
+            })
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(area);
         block.render(area, buf);
@@ -353,9 +348,9 @@ mod list_tests {
         widget.render(rect, &mut buf);
 
         // Check that focused border style is applied
-        // Border cells should have cyan color
+        // Border cells should have BORDER_ACTIVE color
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, palette::ACCENT);
+        assert_eq!(border_color, palette::BORDER_ACTIVE);
     }
 
     #[test]
@@ -536,7 +531,7 @@ mod edit_tests {
 
         // Check that focused border style is applied
         let border_color = buf.cell((0, 0)).unwrap().fg;
-        assert_eq!(border_color, palette::ACCENT);
+        assert_eq!(border_color, palette::BORDER_ACTIVE);
     }
 
     #[test]
@@ -656,24 +651,17 @@ impl<'a> DartDefinesModal<'a> {
 
 impl Widget for DartDefinesModal<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Clear the entire area first
-        for y in area.y..area.y + area.height {
-            for x in area.x..area.x + area.width {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.reset();
-                    cell.set_style(Style::default().bg(palette::MODAL_DART_DEFINES_CLEAR_BG));
-                }
-            }
-        }
+        // Dim the background using shared overlay utility
+        crate::widgets::modal_overlay::dim_background(buf, area);
 
         let modal_area = Self::modal_rect(area);
 
         // Outer border
         let outer_block = Block::default()
             .borders(Borders::ALL)
-            .border_set(symbols::border::DOUBLE)
-            .border_style(Style::default().fg(palette::ACCENT))
-            .style(Style::default().bg(palette::MODAL_DART_DEFINES_BG));
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = outer_block.inner(modal_area);
         outer_block.render(modal_area, buf);
@@ -683,21 +671,6 @@ impl Widget for DartDefinesModal<'_> {
             self.render_vertical(inner, buf);
         } else {
             self.render_horizontal(inner, buf);
-        }
-    }
-}
-
-/// Render dimmed background for modal overlay
-pub fn render_dart_defines_dim_overlay(area: Rect, buf: &mut Buffer) {
-    for y in area.y..area.y + area.height {
-        for x in area.x..area.x + area.width {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_style(
-                    Style::default()
-                        .fg(palette::TEXT_MUTED)
-                        .bg(palette::DEEPEST_BG),
-                );
-            }
         }
     }
 }

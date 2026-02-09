@@ -22,8 +22,8 @@ use ratatui::{
 };
 
 use crate::theme::icons::IconSet;
-use crate::theme::styles as theme_styles;
 use crate::theme::palette;
+use crate::theme::styles as theme_styles;
 
 /// Stack trace styling constants
 pub mod styles;
@@ -714,7 +714,13 @@ impl<'a> LogView<'a> {
     }
 
     /// Render the bottom metadata bar with status info
-    fn render_bottom_metadata(area: Rect, buf: &mut Buffer, status: &StatusInfo, compact: bool, icons: &IconSet) {
+    fn render_bottom_metadata(
+        area: Rect,
+        buf: &mut Buffer,
+        status: &StatusInfo,
+        compact: bool,
+        icons: &IconSet,
+    ) {
         if area.height == 0 || area.width == 0 {
             return;
         }
@@ -1009,7 +1015,9 @@ impl<'a> StatefulWidget for LogView<'a> {
             inner.x,
             inner.y.saturating_add(1 + top_gap),
             inner.width,
-            inner.height.saturating_sub(1 + top_gap + footer_height + bottom_gap),
+            inner
+                .height
+                .saturating_sub(1 + top_gap + footer_height + bottom_gap),
         );
 
         // Calculate total lines including stack traces (accounting for collapse state)

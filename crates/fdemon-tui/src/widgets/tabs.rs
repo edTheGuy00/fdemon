@@ -21,7 +21,10 @@ pub struct SessionTabs<'a> {
 
 impl<'a> SessionTabs<'a> {
     pub fn new(session_manager: &'a SessionManager, icons: IconSet) -> Self {
-        Self { session_manager, icons }
+        Self {
+            session_manager,
+            icons,
+        }
     }
 
     /// Create tab titles from sessions
@@ -32,7 +35,8 @@ impl<'a> SessionTabs<'a> {
                 let session = &handle.session;
 
                 // Status icon with color from theme
-                let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase, &self.icons);
+                let (icon, _label, style) =
+                    crate::theme::styles::phase_indicator(&session.phase, &self.icons);
 
                 // Truncate device name if too long
                 let name = truncate_name(&session.device_name, 12);
@@ -54,7 +58,8 @@ impl<'a> SessionTabs<'a> {
         if let Some(handle) = self.session_manager.selected() {
             let session = &handle.session;
 
-            let (icon, _label, style) = crate::theme::styles::phase_indicator(&session.phase, &self.icons);
+            let (icon, _label, style) =
+                crate::theme::styles::phase_indicator(&session.phase, &self.icons);
 
             // Truncate device name if necessary
             let max_name_len = area.width.saturating_sub(4) as usize; // 2 for icon+space, 2 for padding

@@ -181,3 +181,42 @@ For narrow terminals (vertical layout, < 70 cols), use a compact header:
 - **Header background**: The header area uses the same `POPUP_BG` as the rest of the modal. The design reference shows `bg-white/5` for the header, which is a very subtle brightening effect. In TUI, this can be approximated with `SURFACE` (Rgb(22,27,34)) which is slightly lighter than `POPUP_BG` (Rgb(28,33,43)). Or just keep the same background for simplicity.
 - **Close button vs hint**: The TSX design shows an `X` button. In TUI, there's no clickable button, so we show `[Esc] Close` as a text hint.
 - **Title sizing**: The TSX uses `text-xl` (large). In TUI, `Modifier::BOLD` is the best emphasis available. Consider using a simple prefix like `●` or icon to add visual weight.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Redesigned dialog frame and header: removed title from border, added internal header area with title/subtitle/close hint, added horizontal separators between sections, updated both horizontal and vertical layouts |
+
+### Notable Decisions/Tradeoffs
+
+1. **Compact header for vertical layout**: For narrow terminals (vertical layout), the header is reduced to 2 lines (title + close hint only) to conserve vertical space. The subtitle is omitted in compact mode.
+
+2. **Header styling**: Title uses `TEXT_BRIGHT` with `BOLD` modifier for emphasis, subtitle uses `TEXT_SECONDARY` for hierarchy, and close hint uses `TEXT_MUTED` to keep it subtle.
+
+3. **Border styling**: Changed from `border_set(symbols::border::ROUNDED)` to `border_type(BorderType::Rounded)` and added explicit `border_style(styles::border_inactive())` for consistent use of the `BORDER_DIM` color.
+
+4. **Layout structure**: Both horizontal and vertical layouts now follow the same pattern: header → separator → content → separator → footer. This creates a consistent visual structure across both layout modes.
+
+5. **Integration with task 02**: This task was implemented concurrently with task 02 (modal overlay). The modal_overlay functions for dimming, shadow, and clearing were already integrated into both render methods, so this task focused solely on the frame styling and header area.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (428 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Vertical space**: The header and separators consume 7 lines total in horizontal mode (3 header + 1 separator + content + 1 separator + 1 footer) and 6 lines in vertical mode (2 header + 1 separator + content + 1 separator + 1 footer). This reduces the available space for content, but the minimum height requirements (20 lines) still allow for adequate content area.
+
+2. **Visual testing**: While the code compiles and all tests pass, visual verification in an actual terminal is recommended to ensure the header, separators, and close hint render as expected with the Cyber-Glass theme colors.

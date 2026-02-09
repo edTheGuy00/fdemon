@@ -7,7 +7,6 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
-    text::Span,
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
@@ -27,56 +26,51 @@ impl TabBar {
             pane_focused,
         }
     }
-
-    fn tab_style(&self, tab: TargetTab) -> Style {
-        let is_active = self.active_tab == tab;
-
-        if is_active && self.pane_focused {
-            Style::default()
-                .fg(palette::CONTRAST_FG)
-                .bg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else if is_active {
-            Style::default()
-                .fg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(palette::TEXT_SECONDARY)
-        }
-    }
 }
 
 impl Widget for TabBar {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Split area into two equal parts for tabs
-        let chunks = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
-            .split(area);
-
-        // Render Connected tab
-        let connected_style = self.tab_style(TargetTab::Connected);
-        let connected_block = Block::default()
+        // Outer container: dark background with rounded border
+        let container_bg = palette::DEEPEST_BG;
+        let container_block = Block::default()
+            .style(Style::default().bg(container_bg))
             .borders(Borders::ALL)
-            .border_style(connected_style);
+            .border_type(ratatui::widgets::BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM));
 
-        let connected_text =
-            Paragraph::new(Span::styled(TargetTab::Connected.label(), connected_style))
-                .alignment(Alignment::Center)
-                .block(connected_block);
+        let inner = container_block.inner(area);
+        container_block.render(area, buf);
 
-        connected_text.render(chunks[0], buf);
+        // Split into two equal halves for tabs
+        let tabs = Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)])
+            .split(inner);
 
-        // Render Bootable tab
-        let bootable_style = self.tab_style(TargetTab::Bootable);
-        let bootable_block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(bootable_style);
+        // Render each tab
+        for (i, tab) in [TargetTab::Connected, TargetTab::Bootable]
+            .iter()
+            .enumerate()
+        {
+            let is_active = *tab == self.active_tab;
+            let label = tab.label();
 
-        let bootable_text =
-            Paragraph::new(Span::styled(TargetTab::Bootable.label(), bootable_style))
-                .alignment(Alignment::Center)
-                .block(bootable_block);
+            let style = if is_active && self.pane_focused {
+                Style::default()
+                    .fg(palette::TEXT_BRIGHT)
+                    .bg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else if is_active {
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette::TEXT_SECONDARY)
+            };
 
-        bootable_text.render(chunks[1], buf);
+            let paragraph = Paragraph::new(label)
+                .style(style)
+                .alignment(Alignment::Center);
+            paragraph.render(tabs[i], buf);
+        }
     }
 }
 

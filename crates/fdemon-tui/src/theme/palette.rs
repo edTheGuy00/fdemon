@@ -1,63 +1,59 @@
 //! Color palette for the Cyber-Glass theme.
 //!
-//! Phase 1: Maps to existing named colors for zero visual regression.
-//! Phase 2+: Will transition to RGB design token values.
+//! Cyber-Glass design tokens using true-color RGB values.
+//!
+//! Requires terminal with true-color support. On terminals without true-color,
+//! ratatui/crossterm auto-fallback to nearest 256-color match.
 
 use ratatui::style::Color;
 
 // --- Background layers ---
-pub const DEEPEST_BG: Color = Color::Black; // Terminal background (Phase 2: Rgb(10,12,16))
-pub const CARD_BG: Color = Color::Black; // Panel/card backgrounds (Phase 2: Rgb(18,21,28))
-pub const POPUP_BG: Color = Color::DarkGray; // Modal/popup backgrounds (Phase 2: Rgb(28,33,43))
-                                             // Kept for future surface elevation hierarchy in Phase 2+
+pub const DEEPEST_BG: Color = Color::Rgb(10, 12, 16); // Terminal background
+pub const CARD_BG: Color = Color::Rgb(18, 21, 28); // Panel/card backgrounds
+pub const POPUP_BG: Color = Color::Rgb(28, 33, 43); // Modal/popup backgrounds
 #[allow(dead_code)]
-pub const SURFACE: Color = Color::Black; // Elevated surface (Phase 2: Rgb(22,27,34))
+pub const SURFACE: Color = Color::Rgb(22, 27, 34); // Elevated surface
 
 // --- Borders ---
-pub const BORDER_DIM: Color = Color::DarkGray; // Inactive borders (Phase 2: Rgb(45,51,59))
-pub const BORDER_ACTIVE: Color = Color::Cyan; // Focused borders (Phase 2: Rgb(88,166,255))
+pub const BORDER_DIM: Color = Color::Rgb(45, 51, 59); // Inactive borders
+pub const BORDER_ACTIVE: Color = Color::Rgb(88, 166, 255); // Focused borders
 
 // --- Accent ---
-pub const ACCENT: Color = Color::Cyan; // Primary accent (Phase 2: Rgb(88,166,255))
-                                       // Kept for future hover/inactive accent states in Phase 2+
-#[allow(dead_code)]
-pub const ACCENT_DIM: Color = Color::DarkGray; // Dimmed accent (Phase 2: Rgb(56,107,163))
+pub const ACCENT: Color = Color::Rgb(88, 166, 255); // Primary accent
+pub const ACCENT_DIM: Color = Color::Rgb(56, 107, 163); // Dimmed accent
 
 // --- Text ---
-pub const TEXT_PRIMARY: Color = Color::White; // Primary text (Phase 2: Rgb(201,209,217))
-pub const TEXT_SECONDARY: Color = Color::Gray; // Secondary text (Phase 2: Rgb(125,133,144))
-pub const TEXT_MUTED: Color = Color::DarkGray; // Muted text (Phase 2: Rgb(72,79,88))
-                                               // Kept for future high-emphasis text hierarchy in Phase 2+
-#[allow(dead_code)]
-pub const TEXT_BRIGHT: Color = Color::White; // Bright/emphasis text (Phase 2: Rgb(240,246,252))
+pub const TEXT_PRIMARY: Color = Color::Rgb(201, 209, 217); // Primary text
+pub const TEXT_SECONDARY: Color = Color::Rgb(125, 133, 144); // Secondary text
+pub const TEXT_MUTED: Color = Color::Rgb(72, 79, 88); // Muted text
+pub const TEXT_BRIGHT: Color = Color::Rgb(240, 246, 252); // Bright/emphasis text
 
 // --- Status ---
-pub const STATUS_GREEN: Color = Color::Green; // Running/success (Phase 2: Rgb(16,185,129))
-pub const STATUS_RED: Color = Color::Red; // Error/stopped (Phase 2: Rgb(244,63,94))
-pub const STATUS_YELLOW: Color = Color::Yellow; // Warning/reloading (Phase 2: Rgb(234,179,8))
-pub const STATUS_BLUE: Color = Color::Blue; // Info (Phase 2: Rgb(56,189,248))
-pub const STATUS_INDIGO: Color = Color::Magenta; // Flutter messages (Phase 2: Rgb(129,140,248))
+pub const STATUS_GREEN: Color = Color::Rgb(16, 185, 129); // Running/success
+pub const STATUS_RED: Color = Color::Rgb(244, 63, 94); // Error/stopped
+pub const STATUS_YELLOW: Color = Color::Rgb(234, 179, 8); // Warning/reloading
+pub const STATUS_BLUE: Color = Color::Rgb(56, 189, 248); // Info
+pub const STATUS_INDIGO: Color = Color::Rgb(129, 140, 248); // Flutter messages
 
 // --- Effects ---
-pub const SHADOW: Color = Color::Black; // Shadow color (Phase 2: Rgb(5,6,8))
-pub const CONTRAST_FG: Color = Color::Black; // High contrast foreground on accent bg (Phase 2: Rgb(0,0,0))
+pub const SHADOW: Color = Color::Rgb(5, 6, 8); // Shadow color
+pub const CONTRAST_FG: Color = Color::Rgb(0, 0, 0); // High contrast foreground on accent bg
 
-// --- Gradients (approximate) ---
-// Kept for future gradient button styles in Phase 2+
+// --- Gradients ---
 #[allow(dead_code)]
-pub const GRADIENT_BLUE: Color = Color::Blue; // Button gradient start (Phase 2: Rgb(37,99,235))
+pub const GRADIENT_BLUE: Color = Color::Rgb(37, 99, 235); // Button gradient start
 #[allow(dead_code)]
-pub const GRADIENT_INDIGO: Color = Color::Magenta; // Button gradient end (Phase 2: Rgb(99,102,241))
+pub const GRADIENT_INDIGO: Color = Color::Rgb(99, 102, 241); // Button gradient end
 
 // --- Log level colors ---
-pub const LOG_ERROR: Color = Color::Red;
-pub const LOG_ERROR_MSG: Color = Color::LightRed;
-pub const LOG_WARNING: Color = Color::Yellow;
-pub const LOG_WARNING_MSG: Color = Color::Yellow;
-pub const LOG_INFO: Color = Color::Green;
-pub const LOG_INFO_MSG: Color = Color::White;
-pub const LOG_DEBUG: Color = Color::DarkGray;
-pub const LOG_DEBUG_MSG: Color = Color::DarkGray;
+pub const LOG_ERROR: Color = Color::Rgb(244, 63, 94);
+pub const LOG_ERROR_MSG: Color = Color::Rgb(251, 113, 133);
+pub const LOG_WARNING: Color = Color::Rgb(234, 179, 8);
+pub const LOG_WARNING_MSG: Color = Color::Rgb(250, 204, 21);
+pub const LOG_INFO: Color = Color::Rgb(16, 185, 129);
+pub const LOG_INFO_MSG: Color = Color::Rgb(201, 209, 217);
+pub const LOG_DEBUG: Color = Color::Rgb(72, 79, 88);
+pub const LOG_DEBUG_MSG: Color = Color::Rgb(100, 116, 139);
 
 // --- Log source colors ---
 pub const SOURCE_APP: Color = STATUS_GREEN; // App logs use green
@@ -67,30 +63,23 @@ pub const SOURCE_FLUTTER_ERROR: Color = STATUS_RED; // Flutter error logs use re
 pub const SOURCE_WATCHER: Color = STATUS_BLUE; // Watcher logs use blue
 
 // --- Search highlight ---
-pub const SEARCH_HIGHLIGHT_FG: Color = Color::Black;
-pub const SEARCH_HIGHLIGHT_BG: Color = Color::Yellow;
-pub const SEARCH_CURRENT_FG: Color = Color::Black;
-pub const SEARCH_CURRENT_BG: Color = Color::LightYellow;
+pub const SEARCH_HIGHLIGHT_FG: Color = Color::Rgb(0, 0, 0);
+pub const SEARCH_HIGHLIGHT_BG: Color = Color::Rgb(234, 179, 8);
+pub const SEARCH_CURRENT_FG: Color = Color::Rgb(0, 0, 0);
+pub const SEARCH_CURRENT_BG: Color = Color::Rgb(250, 204, 21);
 
 // --- Stack trace ---
-pub const STACK_FRAME_NUMBER: Color = Color::DarkGray;
-pub const STACK_FUNCTION_PROJECT: Color = Color::White;
-pub const STACK_FUNCTION_PACKAGE: Color = Color::DarkGray;
-pub const STACK_FILE_PROJECT: Color = Color::Blue;
-pub const STACK_FILE_PACKAGE: Color = Color::DarkGray;
-pub const STACK_LOCATION_PROJECT: Color = Color::Cyan;
-pub const STACK_LOCATION_PACKAGE: Color = Color::DarkGray;
-pub const STACK_ASYNC_GAP: Color = Color::DarkGray;
-pub const STACK_PUNCTUATION: Color = Color::DarkGray;
+pub const STACK_FRAME_NUMBER: Color = Color::Rgb(72, 79, 88);
+pub const STACK_FUNCTION_PROJECT: Color = Color::Rgb(201, 209, 217);
+pub const STACK_FUNCTION_PACKAGE: Color = Color::Rgb(72, 79, 88);
+pub const STACK_FILE_PROJECT: Color = Color::Rgb(56, 189, 248);
+pub const STACK_FILE_PACKAGE: Color = Color::Rgb(72, 79, 88);
+pub const STACK_LOCATION_PROJECT: Color = Color::Rgb(88, 166, 255);
+pub const STACK_LOCATION_PACKAGE: Color = Color::Rgb(72, 79, 88);
+pub const STACK_ASYNC_GAP: Color = Color::Rgb(72, 79, 88);
+pub const STACK_PUNCTUATION: Color = Color::Rgb(72, 79, 88);
 
-// --- Modal backgrounds (existing Rgb values preserved) ---
-pub const MODAL_FUZZY_BG: Color = Color::Rgb(40, 40, 50);
-pub const MODAL_FUZZY_QUERY_BG: Color = Color::Rgb(60, 60, 70);
-pub const MODAL_DART_DEFINES_BG: Color = Color::Rgb(30, 30, 40);
-pub const MODAL_DART_DEFINES_INPUT_ACTIVE_BG: Color = Color::Rgb(60, 60, 80);
-pub const MODAL_DART_DEFINES_INPUT_INACTIVE_BG: Color = Color::Rgb(40, 40, 50);
-pub const MODAL_DART_DEFINES_BUTTON_INACTIVE_BG: Color = Color::Rgb(50, 50, 60);
-pub const MODAL_DART_DEFINES_CLEAR_BG: Color = Color::Rgb(20, 20, 30);
+// --- Legacy modal backgrounds (kept for backward compat) ---
 pub const LINK_BAR_BG: Color = Color::Rgb(30, 30, 30);
 
 #[cfg(test)]
@@ -128,15 +117,32 @@ mod tests {
     }
 
     #[test]
-    fn test_modal_backgrounds_are_rgb() {
-        // Modal backgrounds should preserve existing RGB values
-        match MODAL_FUZZY_BG {
-            Color::Rgb(_, _, _) => {}
-            _ => panic!("MODAL_FUZZY_BG should be RGB"),
+    fn test_popup_bg_is_rgb() {
+        // Popup background should be RGB
+        match POPUP_BG {
+            Color::Rgb(28, 33, 43) => {}
+            _ => panic!("POPUP_BG should be Rgb(28, 33, 43)"),
         }
-        match MODAL_FUZZY_QUERY_BG {
-            Color::Rgb(_, _, _) => {}
-            _ => panic!("MODAL_FUZZY_QUERY_BG should be RGB"),
+    }
+
+    #[test]
+    fn test_design_tokens_are_rgb() {
+        // Verify representative constants use Color::Rgb variant
+        match DEEPEST_BG {
+            Color::Rgb(10, 12, 16) => {}
+            _ => panic!("DEEPEST_BG should be Rgb(10, 12, 16)"),
+        }
+        match ACCENT {
+            Color::Rgb(88, 166, 255) => {}
+            _ => panic!("ACCENT should be Rgb(88, 166, 255)"),
+        }
+        match TEXT_PRIMARY {
+            Color::Rgb(201, 209, 217) => {}
+            _ => panic!("TEXT_PRIMARY should be Rgb(201, 209, 217)"),
+        }
+        match STATUS_GREEN {
+            Color::Rgb(16, 185, 129) => {}
+            _ => panic!("STATUS_GREEN should be Rgb(16, 185, 129)"),
         }
     }
 }

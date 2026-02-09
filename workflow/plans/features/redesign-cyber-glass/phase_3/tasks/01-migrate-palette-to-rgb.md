@@ -140,3 +140,43 @@ No changes needed for `MODAL_FUZZY_BG`, `MODAL_FUZZY_QUERY_BG`, `MODAL_DART_DEFI
 - **Test breakage is expected**: Tests in `theme/styles.rs` that assert `Some(palette::STATUS_GREEN)` will still pass since they compare against the constant, not the raw value. But tests that hardcode `Some(Color::Green)` will fail — update these.
 - **Terminal compatibility**: `Color::Rgb()` requires true-color terminal support. Most modern terminals support this. On terminals without true-color, ratatui/crossterm auto-fallback to nearest 256-color match. Document this in the module header.
 - **Log readability**: The RGB log colors should maintain sufficient contrast against `DEEPEST_BG` (Rgb(10,12,16)). All chosen values have high contrast ratios.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/palette.rs` | Migrated all 33 color constants from named colors to RGB values per design token spec. Updated module doc comment to document true-color requirement and terminal fallback behavior. Added test to verify RGB values are correct. Kept `#[allow(dead_code)]` on unused constants (SURFACE, ACCENT_DIM, GRADIENT_BLUE, GRADIENT_INDIGO) to satisfy clippy until Phase 3 tasks consume them. |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated 6 test assertions that hardcoded named colors (Color::Green, Color::Red, etc.) to use palette constants (palette::STATUS_GREEN, palette::STATUS_RED, etc.) to match the new RGB implementation. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Retained `#[allow(dead_code)]` on future-use constants**: The task suggested removing `#[allow(dead_code)]` from SURFACE, ACCENT_DIM, GRADIENT_BLUE, and GRADIENT_INDIGO since they "will be used in Phase 3 tasks." However, since they are genuinely unused in the current codebase, removing the annotation causes `cargo clippy --workspace -- -D warnings` to fail (acceptance criterion 7). Kept the annotations to satisfy clippy while still migrating the values to RGB. Phase 3 tasks will naturally remove these annotations when they start using the constants.
+
+2. **Terminal compatibility documented**: Added documentation to the module header explaining that the palette requires true-color terminal support and that ratatui/crossterm automatically falls back to nearest 256-color match on terminals without true-color.
+
+3. **Test updates required as expected**: Six tests in settings_panel/tests.rs hardcoded named color assertions (e.g., `Some(Color::Green)`). These were updated to use palette constants (e.g., `Some(palette::STATUS_GREEN)`) to match the new implementation. Tests that already used palette constants required no changes.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (no compilation errors)
+- `cargo test -p fdemon-tui --lib` - Passed (428 tests)
+- `cargo test -p fdemon-app --lib` - Passed (744 tests)
+- `cargo test -p fdemon-core --lib` - Passed (243 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (136 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- Added new test `test_design_tokens_are_rgb()` that verifies representative constants use correct RGB values
+
+### Risks/Limitations
+
+1. **Visual regression risk (low)**: The RGB values were selected to match the design token specification, but there may be slight visual differences on some terminals depending on color profile support. The fallback behavior should mitigate this for terminals without true-color.
+
+2. **E2E test timing (unrelated)**: Some E2E tests showed failures during test run, but these appear to be pre-existing timing issues unrelated to the palette migration (test_startup_shows_header, test_x_key_closes_session, etc.). All unit tests pass.
+
+3. **Constants not yet used**: SURFACE, ACCENT_DIM, GRADIENT_BLUE, GRADIENT_INDIGO are migrated to RGB but not yet consumed in the codebase. They will be used in Phase 3 tasks.

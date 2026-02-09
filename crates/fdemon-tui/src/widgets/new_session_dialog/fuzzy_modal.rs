@@ -4,13 +4,12 @@ use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
-    symbols,
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget},
 };
 
 use super::state::FuzzyModalState;
-use crate::theme::palette;
+use crate::theme::{palette, styles};
 
 /// Fuzzy search modal widget
 pub struct FuzzyModal<'a> {
@@ -80,7 +79,7 @@ impl<'a> FuzzyModal<'a> {
                 query_display,
                 Style::default()
                     .fg(palette::TEXT_PRIMARY)
-                    .bg(palette::MODAL_FUZZY_QUERY_BG),
+                    .bg(palette::SURFACE),
             ),
         ]);
 
@@ -181,8 +180,9 @@ impl Widget for FuzzyModal<'_> {
 
         let block = Block::default()
             .borders(Borders::ALL)
-            .border_set(symbols::border::ROUNDED)
-            .style(Style::default().bg(palette::MODAL_FUZZY_BG));
+            .border_type(BorderType::Rounded)
+            .border_style(styles::border_inactive())
+            .style(Style::default().bg(palette::POPUP_BG));
 
         let inner = block.inner(modal_area);
         block.render(modal_area, buf);
@@ -206,26 +206,6 @@ impl Widget for FuzzyModal<'_> {
 
         self.render_list(chunks[2], buf);
         self.render_hints(chunks[3], buf);
-    }
-}
-
-/// Render a dimmed overlay on the given area
-pub fn render_dim_overlay(area: Rect, buf: &mut Buffer) {
-    // Use saturating arithmetic to prevent overflow when area.y + area.height > u16::MAX
-    let y_end = area.y.saturating_add(area.height);
-    let x_end = area.x.saturating_add(area.width);
-
-    for y in area.y..y_end {
-        for x in area.x..x_end {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                // Dim the existing content
-                cell.set_style(
-                    Style::default()
-                        .fg(palette::TEXT_MUTED)
-                        .bg(palette::DEEPEST_BG),
-                );
-            }
-        }
     }
 }
 
@@ -396,10 +376,10 @@ mod widget_tests {
         let para = Paragraph::new("Hello World");
         term.render_widget(para, area);
 
-        // Then apply dim overlay
+        // Then apply dim overlay using modal_overlay::dim_background
         term.terminal
             .draw(|frame| {
-                render_dim_overlay(area, frame.buffer_mut());
+                crate::widgets::modal_overlay::dim_background(frame.buffer_mut(), area);
             })
             .expect("Failed to draw");
 

@@ -54,14 +54,14 @@ Transform the New Session modal to match the Cyber-Glass design with a glass ove
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-migrate-palette-to-rgb](tasks/01-migrate-palette-to-rgb.md) | Not Started | - | `theme/palette.rs` |
-| 2 | [02-redesign-modal-overlay](tasks/02-redesign-modal-overlay.md) | Not Started | 1 | `widgets/modal_overlay.rs`, `render/mod.rs` |
-| 3 | [03-redesign-modal-frame](tasks/03-redesign-modal-frame.md) | Not Started | 1 | `widgets/new_session_dialog/mod.rs` |
-| 4 | [04-redesign-target-selector](tasks/04-redesign-target-selector.md) | Not Started | 2, 3 | `widgets/new_session_dialog/target_selector.rs`, `tab_bar.rs`, `device_list.rs` |
-| 5 | [05-redesign-launch-context](tasks/05-redesign-launch-context.md) | Not Started | 2, 3 | `widgets/new_session_dialog/launch_context.rs` |
-| 6 | [06-redesign-modal-footer](tasks/06-redesign-modal-footer.md) | Not Started | 4, 5 | `widgets/new_session_dialog/mod.rs` |
-| 7 | [07-migrate-nested-modals](tasks/07-migrate-nested-modals.md) | Not Started | 1, 2 | `widgets/new_session_dialog/fuzzy_modal.rs`, `dart_defines_modal.rs` |
-| 8 | [08-update-tests](tasks/08-update-tests.md) | Not Started | 3, 4, 5, 6, 7 | All test modules |
+| 1 | [01-migrate-palette-to-rgb](tasks/01-migrate-palette-to-rgb.md) | Done | - | `theme/palette.rs` |
+| 2 | [02-redesign-modal-overlay](tasks/02-redesign-modal-overlay.md) | Done | 1 | `widgets/modal_overlay.rs`, `render/mod.rs` |
+| 3 | [03-redesign-modal-frame](tasks/03-redesign-modal-frame.md) | Done | 1 | `widgets/new_session_dialog/mod.rs` |
+| 4 | [04-redesign-target-selector](tasks/04-redesign-target-selector.md) | Done | 2, 3 | `widgets/new_session_dialog/target_selector.rs`, `tab_bar.rs`, `device_list.rs` |
+| 5 | [05-redesign-launch-context](tasks/05-redesign-launch-context.md) | Done | 2, 3 | `widgets/new_session_dialog/launch_context.rs` |
+| 6 | [06-redesign-modal-footer](tasks/06-redesign-modal-footer.md) | Done | 4, 5 | `widgets/new_session_dialog/mod.rs` |
+| 7 | [07-migrate-nested-modals](tasks/07-migrate-nested-modals.md) | Done | 1, 2 | `widgets/new_session_dialog/fuzzy_modal.rs`, `dart_defines_modal.rs` |
+| 8 | [08-update-tests](tasks/08-update-tests.md) | Done | 3, 4, 5, 6, 7 | All test modules |
 
 ## Execution Strategy
 

@@ -63,28 +63,14 @@ impl Widget for TargetSelector<'_> {
 impl TargetSelector<'_> {
     /// Render full (horizontal layout) mode
     fn render_full(&self, area: Rect, buf: &mut Buffer) {
-        // Main block
-        let border_color = if self.is_focused {
-            palette::BORDER_ACTIVE
-        } else {
-            palette::BORDER_DIM
-        };
-
-        let block = Block::default()
-            .title(" Target Selector ")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
-
-        let inner = block.inner(area);
-        block.render(area, buf);
-
+        // No separate border - this pane is part of the modal
         // Layout: tab bar + content + footer
         let chunks = Layout::vertical([
             Constraint::Length(3), // Tab bar
             Constraint::Min(5),    // Content (device list)
             Constraint::Length(1), // Footer hints
         ])
-        .split(inner);
+        .split(area);
 
         // Render tab bar
         let tab_bar = TabBar::new(self.state.active_tab, self.is_focused);
@@ -190,23 +176,19 @@ impl TargetSelector<'_> {
         let connected_active = self.state.active_tab == TargetTab::Connected;
         let bootable_active = self.state.active_tab == TargetTab::Bootable;
 
-        let style_active = if self.is_focused {
-            Style::default()
-                .fg(palette::ACCENT)
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-                .fg(palette::TEXT_SECONDARY)
-                .add_modifier(Modifier::BOLD)
-        };
+        // Both focused and unfocused use same style for active tab in compact mode
+        let style_active = Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD);
         let style_inactive = Style::default().fg(palette::TEXT_MUTED);
 
+        // Pill-style compact: use brackets for active tab
         let tabs = vec![
             Span::styled(
                 if connected_active {
-                    "[1]Connected"
+                    "[1 Connected]"
                 } else {
-                    " 1 Connected"
+                    "1 Connected"
                 },
                 if connected_active {
                     style_active
@@ -217,9 +199,9 @@ impl TargetSelector<'_> {
             Span::raw("  "),
             Span::styled(
                 if bootable_active {
-                    "[2]Bootable"
+                    "[2 Bootable]"
                 } else {
-                    " 2 Bootable"
+                    "2 Bootable"
                 },
                 if bootable_active {
                     style_active
@@ -445,7 +427,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
-        assert!(content.contains("Target Selector"));
+        // New design uses tab bar instead of title
         assert!(content.contains("Connected"));
         assert!(content.contains("iPhone 15"));
     }
@@ -556,8 +538,8 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
-        // Should still render, just with different border color
-        assert!(content.contains("Target Selector"));
+        // Should still render, just with different styling (new design uses tab bar)
+        assert!(content.contains("Connected"));
     }
 
     #[test]

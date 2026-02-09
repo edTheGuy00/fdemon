@@ -326,23 +326,23 @@ fn test_render_launch_tab_with_configs() {
 
 #[test]
 fn test_value_style_bool_true() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::Bool(true), false);
-    assert_eq!(style.fg, Some(Color::Green));
+    assert_eq!(style.fg, Some(palette::STATUS_GREEN));
 }
 
 #[test]
 fn test_value_style_bool_false() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::Bool(false), false);
-    assert_eq!(style.fg, Some(Color::Red));
+    assert_eq!(style.fg, Some(palette::STATUS_RED));
 }
 
 #[test]
 fn test_value_style_number() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::Number(42), false);
-    assert_eq!(style.fg, Some(Color::Cyan));
+    assert_eq!(style.fg, Some(palette::ACCENT));
 }
 
 #[test]
@@ -354,14 +354,14 @@ fn test_value_style_string_empty() {
 
 #[test]
 fn test_value_style_string_non_empty() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::String("test".to_string()), false);
-    assert_eq!(style.fg, Some(Color::White));
+    assert_eq!(style.fg, Some(palette::TEXT_PRIMARY));
 }
 
 #[test]
 fn test_value_style_enum() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(
         &SettingValue::Enum {
             value: "option".to_string(),
@@ -369,14 +369,14 @@ fn test_value_style_enum() {
         },
         false,
     );
-    assert_eq!(style.fg, Some(Color::Magenta));
+    assert_eq!(style.fg, Some(palette::STATUS_INDIGO));
 }
 
 #[test]
 fn test_value_style_list() {
-    use ratatui::style::Color;
+    use crate::theme::palette;
     let style = styles::value_style(&SettingValue::List(vec!["item".to_string()]), false);
-    assert_eq!(style.fg, Some(Color::Blue));
+    assert_eq!(style.fg, Some(palette::STATUS_BLUE));
 }
 
 #[test]

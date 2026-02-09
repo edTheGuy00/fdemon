@@ -130,20 +130,16 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             })
             .section("UI"),
         SettingItem::new("ui.icons", "Icon Style")
-            .description("Icon rendering: unicode (all terminals) or nerd_fonts (requires Nerd Font)")
+            .description(
+                "Icon rendering: unicode (all terminals) or nerd_fonts (requires Nerd Font)",
+            )
             .value(SettingValue::Enum {
                 value: settings.ui.icons.to_string(),
-                options: vec![
-                    "unicode".to_string(),
-                    "nerd_fonts".to_string(),
-                ],
+                options: vec!["unicode".to_string(), "nerd_fonts".to_string()],
             })
             .default(SettingValue::Enum {
                 value: "nerd_fonts".to_string(),
-                options: vec![
-                    "unicode".to_string(),
-                    "nerd_fonts".to_string(),
-                ],
+                options: vec!["unicode".to_string(), "nerd_fonts".to_string()],
             })
             .section("UI"),
         SettingItem::new("ui.stack_trace_collapsed", "Collapse Stack Traces")

@@ -143,9 +143,21 @@ pub fn phase_indicator(phase: &AppPhase, icons: &IconSet) -> (&'static str, &'st
                 .fg(palette::STATUS_YELLOW)
                 .add_modifier(Modifier::BOLD),
         ),
-        AppPhase::Initializing => (icons.circle(), "Starting", Style::default().fg(palette::TEXT_MUTED)),
-        AppPhase::Stopped => (icons.circle(), "Stopped", Style::default().fg(palette::TEXT_MUTED)),
-        AppPhase::Quitting => (icons.close(), "Stopping", Style::default().fg(palette::STATUS_RED)),
+        AppPhase::Initializing => (
+            icons.circle(),
+            "Starting",
+            Style::default().fg(palette::TEXT_MUTED),
+        ),
+        AppPhase::Stopped => (
+            icons.circle(),
+            "Stopped",
+            Style::default().fg(palette::TEXT_MUTED),
+        ),
+        AppPhase::Quitting => (
+            icons.close(),
+            "Stopping",
+            Style::default().fg(palette::STATUS_RED),
+        ),
     }
 }
 
