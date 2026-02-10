@@ -53,3 +53,33 @@ pub fn min_height() -> u16 {
 - This task MUST be done after Task 01, since adding DartDefines changes the total height.
 - The `min_height()` value is used by the parent dialog to determine if compact mode should be used. An incorrect value can cause the button to be clipped in horizontal mode or prevent compact mode from triggering when it should.
 - Verify where `min_height()` is called to understand the impact of changing this value.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `/Users/ed/Dev/zabin/flutter-demon/crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Updated `min_height()` return value from 26 to 29 and corrected comment to show explicit arithmetic with all spacers listed |
+
+### Notable Decisions/Tradeoffs
+
+1. **Updated arithmetic comment**: Changed from abbreviated comment to explicit arithmetic showing each component with its height value (e.g., `spacer(1)` instead of just `spacer`) for clarity
+2. **Added comprehensive test**: Created `test_min_height_arithmetic()` that verifies the return value matches the sum of all individual layout components, preventing future regressions
+3. **Updated existing tests**: Modified two existing tests (`test_min_height` and `test_min_height_updated_for_entry_point`) to expect the correct value of 29
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib -- test_min_height` - Passed (3/3 tests)
+- `cargo test -p fdemon-tui --lib` - Passed (430/430 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Parent dialog dependency**: The `min_height()` value is used by the parent dialog to determine compact mode triggers. Any components using this value will now receive 29 instead of 26, which is correct but changes behavior.
+2. **Layout consistency**: The fix assumes the layout from Task 01 (DartDefines field) is stable. Any future changes to the layout structure will require updating this value and the arithmetic test.

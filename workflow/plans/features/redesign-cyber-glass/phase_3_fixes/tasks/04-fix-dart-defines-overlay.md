@@ -75,3 +75,32 @@ This ensures:
 
 - `dim_background()` is defined in `crates/fdemon-tui/src/widgets/modal_overlay.rs:99-113`. It sets all cells in the area to `TEXT_MUTED` fg and `DEEPEST_BG` bg.
 - The `Clear` widget from ratatui simply resets all cells to the default style, losing any rendered content underneath.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Line 412: Replaced `Clear.render(dialog_area, buf)` with `modal_overlay::dim_background(buf, dialog_area)` to match fuzzy modal pattern |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/dart_defines_modal.rs` | Line 653-655: Removed redundant `dim_background()` call from widget's render method |
+
+### Notable Decisions/Tradeoffs
+
+1. **Parent-handles-overlay pattern**: The parent component (`mod.rs`) now handles the overlay dimming for the Dart Defines modal, matching the pattern used by the Fuzzy modal. This ensures consistent behavior across all modals and follows the single responsibility principle.
+2. **Widget simplification**: The `DartDefinesModal` widget now only renders its own content without self-dimming, making it consistent with other modal widgets like `FuzzyModal`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed (0.67s)
+- `cargo test -p fdemon-tui --lib` - Passed (430 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None identified. The changes align the Dart Defines modal with the established pattern used by other modals in the codebase, fixing the visual bug where a black overlay appeared instead of dimmed dialog content.

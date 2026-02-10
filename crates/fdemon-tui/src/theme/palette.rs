@@ -11,7 +11,6 @@ use ratatui::style::Color;
 pub const DEEPEST_BG: Color = Color::Rgb(10, 12, 16); // Terminal background
 pub const CARD_BG: Color = Color::Rgb(18, 21, 28); // Panel/card backgrounds
 pub const POPUP_BG: Color = Color::Rgb(28, 33, 43); // Modal/popup backgrounds
-#[allow(dead_code)]
 pub const SURFACE: Color = Color::Rgb(22, 27, 34); // Elevated surface
 
 // --- Borders ---
@@ -40,7 +39,6 @@ pub const SHADOW: Color = Color::Rgb(5, 6, 8); // Shadow color
 pub const CONTRAST_FG: Color = Color::Rgb(0, 0, 0); // High contrast foreground on accent bg
 
 // --- Gradients ---
-#[allow(dead_code)]
 pub const GRADIENT_BLUE: Color = Color::Rgb(37, 99, 235); // Button gradient start
 #[allow(dead_code)]
 pub const GRADIENT_INDIGO: Color = Color::Rgb(99, 102, 241); // Button gradient end

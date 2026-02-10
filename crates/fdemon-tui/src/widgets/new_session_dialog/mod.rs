@@ -408,8 +408,8 @@ impl<'a> NewSessionDialog<'a> {
             None => return,
         };
 
-        // Full-screen overlay (replaces main dialog)
-        Clear.render(dialog_area, buf);
+        // Dim the background (main dialog area)
+        modal_overlay::dim_background(buf, dialog_area);
 
         // Render dart defines modal widget
         let dart_defines_modal = DartDefinesModal::new(modal_state);

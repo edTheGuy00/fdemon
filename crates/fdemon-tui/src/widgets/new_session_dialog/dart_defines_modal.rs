@@ -5,7 +5,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, List, ListItem, Paragraph, Widget},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph, Widget},
 };
 
 use super::state::{DartDefinesEditField, DartDefinesModalState, DartDefinesPane};
@@ -651,10 +651,10 @@ impl<'a> DartDefinesModal<'a> {
 
 impl Widget for DartDefinesModal<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Dim the background using shared overlay utility
-        crate::widgets::modal_overlay::dim_background(buf, area);
-
         let modal_area = Self::modal_rect(area);
+
+        // Clear the modal area so dimmed content doesn't bleed through
+        Clear.render(modal_area, buf);
 
         // Outer border
         let outer_block = Block::default()

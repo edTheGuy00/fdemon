@@ -38,3 +38,31 @@
 ### Notes
 
 - These annotations were added during Task 01 (palette migration) when the constants were first introduced, before the subsequent tasks that used them.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/palette.rs` | Removed `#[allow(dead_code)]` from `SURFACE` (line 14) and `GRADIENT_BLUE` (line 42), kept annotation on `GRADIENT_INDIGO` (line 43) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Verification of usage**: Confirmed via grep that `SURFACE` is used 10+ times across new session dialog widgets (`fuzzy_modal.rs`, `mod.rs`, `launch_context.rs`, `dart_defines_modal.rs`) and `GRADIENT_BLUE` is used 2+ times in `launch_context.rs` for button styling.
+2. **GRADIENT_INDIGO retention**: Kept `#[allow(dead_code)]` on `GRADIENT_INDIGO` as it is genuinely unused and reserved for future gradient effects.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed (no dead_code warnings)
+- `cargo test -p fdemon-tui --lib` - Passed (430 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+None. This is a pure cleanup task with no functional changes.

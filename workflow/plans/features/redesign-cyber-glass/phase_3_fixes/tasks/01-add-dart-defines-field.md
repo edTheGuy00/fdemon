@@ -101,3 +101,33 @@
 - The `ActionField` widget is already fully implemented and tested (line 504 has standalone tests). This task wires it into the actual layout.
 - The button area y-coordinate calculation (line 788) references `chunks[7]` — this must be updated to `chunks[9]` to account for the new DartDefines field.
 - All three rendering paths need updating: `LaunchContext::render()`, `LaunchContextWithDevice::render_full()`, and `LaunchContextWithDevice::render_compact()`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Updated `calculate_fields_layout()` from 9 chunks to 11 chunks, added `render_dart_defines_field()` and `render_dart_defines_inline()` helper functions, updated `render_common_fields()` to call DartDefines renderer, added DartDefines to compact layout, updated button area calculation from chunks[7] to chunks[9], updated `min_height()` from 21 to 26, uncommented 4 DartDefines test assertions, updated 5 test terminal heights from 25 to 30 to accommodate new field |
+
+### Notable Decisions/Tradeoffs
+
+1. **ActionField Widget Reuse**: Used the existing `ActionField` widget (designed for action fields like DartDefines and EntryPoint) rather than creating a new widget. This maintains consistency and leverages existing styling.
+2. **Inline Compact Rendering**: Created `render_dart_defines_inline()` following the same pattern as `render_entry_inline()` to maintain visual consistency in compact mode.
+3. **Test Height Updates**: Updated test terminal heights from 25 to 30 to accommodate the new field and ensure launch button is visible. This matches the new `min_height()` of 26.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (428 tests, 0 failures)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **UI Height Requirements**: The new minimum height of 26 rows (up from 21) means the dialog requires more vertical space. This should not be an issue on standard terminals but may affect very constrained environments.
+2. **No Manual Testing**: While all unit tests pass, manual visual testing of Tab navigation through the DartDefines field was not performed in this session. The handler logic already exists and unit tests verify rendering, so the feature should work correctly.

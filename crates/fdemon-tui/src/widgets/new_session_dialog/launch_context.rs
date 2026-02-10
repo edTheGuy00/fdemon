@@ -373,14 +373,20 @@ impl<'a> LaunchButton<'a> {
 
 impl Widget for LaunchButton<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        let (bg, fg, border) = if self.is_enabled {
+        let (bg, fg, border) = if !self.is_enabled {
+            (palette::SURFACE, palette::TEXT_MUTED, palette::BORDER_DIM)
+        } else if self.is_focused {
+            (
+                palette::GRADIENT_BLUE,
+                palette::TEXT_BRIGHT,
+                palette::BORDER_ACTIVE,
+            )
+        } else {
             (
                 palette::GRADIENT_BLUE,
                 palette::TEXT_BRIGHT,
                 palette::GRADIENT_BLUE,
             )
-        } else {
-            (palette::SURFACE, palette::TEXT_MUTED, palette::BORDER_DIM)
         };
 
         let block = Block::default()
@@ -509,8 +515,7 @@ mod tests {
         let buffer = terminal.backend().buffer();
         let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
 
-        // Dart Defines field removed from normal layout (only in compact mode)
-        // assert!(content.contains("DART DEFINES"));
+        assert!(content.contains("DART DEFINES"));
         assert!(content.contains("2 defined"));
     }
 
@@ -613,6 +618,59 @@ mod tests {
         // Labels are rendered in uppercase in the new design
         assert!(content.contains("DEFINES"));
     }
+
+    #[test]
+    fn test_launch_button_focus_border() {
+        let icons = test_icons();
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        // Render focused button
+        terminal
+            .draw(|f| {
+                let button = LaunchButton::new(&icons).focused(true).enabled(true);
+                f.render_widget(button, f.area());
+            })
+            .unwrap();
+
+        let focused_buffer = terminal.backend().buffer();
+
+        // Check that border cells have BORDER_ACTIVE color when focused
+        // Border cells are at the edges of the area
+        let border_color_focused = focused_buffer.cell((0, 0)).unwrap().fg;
+        assert_eq!(
+            border_color_focused,
+            palette::BORDER_ACTIVE,
+            "Focused button should have BORDER_ACTIVE border"
+        );
+
+        // Render unfocused button
+        let backend = TestBackend::new(40, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let button = LaunchButton::new(&icons).focused(false).enabled(true);
+                f.render_widget(button, f.area());
+            })
+            .unwrap();
+
+        let unfocused_buffer = terminal.backend().buffer();
+        let border_color_unfocused = unfocused_buffer.cell((0, 0)).unwrap().fg;
+
+        // Unfocused button should have GRADIENT_BLUE border (blends with background)
+        assert_eq!(
+            border_color_unfocused,
+            palette::GRADIENT_BLUE,
+            "Unfocused button should have GRADIENT_BLUE border"
+        );
+
+        // Verify focused and unfocused borders are different
+        assert_ne!(
+            border_color_focused, border_color_unfocused,
+            "Focused and unfocused borders should be visually distinct"
+        );
+    }
 }
 
 // ============================================================================
@@ -705,24 +763,43 @@ fn render_entry_point_field(
     field.render(area, buf);
 }
 
+/// Render the dart defines field
+fn render_dart_defines_field(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &LaunchContextState,
+    is_focused: bool,
+) {
+    let is_focused_field =
+        is_focused && state.focused_field == super::state::LaunchContextField::DartDefines;
+    let is_disabled = !state.are_dart_defines_editable();
+    let display = state.dart_defines_display();
+    ActionField::new("DART DEFINES", &display)
+        .focused(is_focused_field)
+        .disabled(is_disabled)
+        .render(area, buf);
+}
+
 /// Calculate the layout for all fields (stacked label+field design)
-fn calculate_fields_layout(area: Rect) -> [Rect; 9] {
+fn calculate_fields_layout(area: Rect) -> [Rect; 11] {
     let chunks = Layout::vertical([
-        Constraint::Length(1), // Spacer
-        Constraint::Length(4), // Configuration (label + field)
-        Constraint::Length(1), // Spacer
-        Constraint::Length(4), // Mode (label + buttons)
-        Constraint::Length(1), // Spacer
-        Constraint::Length(4), // Flavor (label + field)
-        Constraint::Length(1), // Spacer
-        Constraint::Length(4), // Entry Point (label + field)
-        Constraint::Min(0),    // Rest (empty)
+        Constraint::Length(1), // Spacer          [0]
+        Constraint::Length(4), // Configuration   [1]
+        Constraint::Length(1), // Spacer          [2]
+        Constraint::Length(4), // Mode            [3]
+        Constraint::Length(1), // Spacer          [4]
+        Constraint::Length(4), // Flavor          [5]
+        Constraint::Length(1), // Spacer          [6]
+        Constraint::Length(4), // Entry Point     [7]
+        Constraint::Length(1), // Spacer          [8]
+        Constraint::Length(4), // Dart Defines    [9]
+        Constraint::Min(0),    // Rest            [10]
     ])
     .split(area);
 
     [
         chunks[0], chunks[1], chunks[2], chunks[3], chunks[4], chunks[5], chunks[6], chunks[7],
-        chunks[8],
+        chunks[8], chunks[9], chunks[10],
     ]
 }
 
@@ -732,9 +809,9 @@ fn render_background(area: Rect, buf: &mut Buffer) {
     bg_block.render(area, buf);
 }
 
-/// Render all common fields (config, mode, flavor, entry point)
+/// Render all common fields (config, mode, flavor, entry point, dart defines)
 fn render_common_fields(
-    chunks: &[Rect; 9],
+    chunks: &[Rect; 11],
     buf: &mut Buffer,
     state: &LaunchContextState,
     is_focused: bool,
@@ -743,6 +820,7 @@ fn render_common_fields(
     render_mode_field(chunks[3], buf, state, is_focused);
     render_flavor_field(chunks[5], buf, state, is_focused);
     render_entry_point_field(chunks[7], buf, state, is_focused);
+    render_dart_defines_field(chunks[9], buf, state, is_focused);
 }
 
 // ============================================================================
@@ -767,7 +845,7 @@ impl<'a> LaunchContext<'a> {
 
     /// Calculate minimum height needed
     pub fn min_height() -> u16 {
-        21 // Spacer + config(4) + spacer + mode(4) + spacer + flavor(4) + spacer + entry(4) + button(3)
+        29 // spacer(1) + config(4) + spacer(1) + mode(4) + spacer(1) + flavor(4) + spacer(1) + entry(4) + spacer(1) + dart_defines(4) + spacer(1) + button(3)
     }
 }
 
@@ -782,10 +860,10 @@ impl Widget for LaunchContext<'_> {
         // Render fields
         render_common_fields(&chunks, buf, self.state, self.is_focused);
 
-        // Calculate launch button area (after entry point field + spacer)
+        // Calculate launch button area (after dart defines field + spacer)
         let button_area = Rect {
             x: area.x + 1,
-            y: chunks[7].y + chunks[7].height + 1,
+            y: chunks[9].y + chunks[9].height + 1,
             width: area.width.saturating_sub(2),
             height: 3,
         };
@@ -861,7 +939,7 @@ impl LaunchContextWithDevice<'_> {
         // Calculate launch button area
         let button_area = Rect {
             x: area.x + 1,
-            y: chunks[7].y + chunks[7].height + 1,
+            y: chunks[9].y + chunks[9].height + 1,
             width: area.width.saturating_sub(2),
             height: 3,
         };
@@ -899,6 +977,7 @@ impl LaunchContextWithDevice<'_> {
             Constraint::Length(1), // Mode inline
             Constraint::Length(1), // Flavor field (inline)
             Constraint::Length(1), // Entry Point field (inline)
+            Constraint::Length(1), // Dart Defines field (inline)
             Constraint::Length(1), // Spacer
             Constraint::Length(3), // Launch button (glass block)
             Constraint::Min(0),    // Rest
@@ -917,13 +996,16 @@ impl LaunchContextWithDevice<'_> {
         // Render entry point field (inline for compact)
         self.render_entry_inline(chunks[3], buf);
 
+        // Render dart defines field (inline for compact)
+        self.render_dart_defines_inline(chunks[4], buf);
+
         // Render launch button with glass styling
         let launch_focused =
             self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
         let launch_button = LaunchButton::new(self.icons)
             .focused(launch_focused)
             .enabled(self.has_device_selected);
-        launch_button.render(chunks[5], buf);
+        launch_button.render(chunks[6], buf);
     }
 
     /// Render config field inline (for compact mode)
@@ -978,6 +1060,25 @@ impl LaunchContextWithDevice<'_> {
             Layout::horizontal([Constraint::Length(15), Constraint::Min(20)]).split(area);
         label.render(value_chunks[0], buf);
         Paragraph::new(format!("[ {} › ]", self.state.entry_point_display()))
+            .style(value_style)
+            .render(value_chunks[1], buf);
+    }
+
+    /// Render dart defines field inline (for compact mode)
+    fn render_dart_defines_inline(&self, area: Rect, buf: &mut Buffer) {
+        let dart_defines_focused = self.is_focused
+            && self.state.focused_field == super::state::LaunchContextField::DartDefines;
+        let value_style = if dart_defines_focused {
+            styles::focused_selected()
+        } else {
+            Style::default().fg(palette::TEXT_PRIMARY)
+        };
+        let label =
+            Paragraph::new("  Dart Defines:").style(Style::default().fg(palette::TEXT_SECONDARY));
+        let value_chunks =
+            Layout::horizontal([Constraint::Length(15), Constraint::Min(20)]).split(area);
+        label.render(value_chunks[0], buf);
+        Paragraph::new(format!("[ {} › ]", self.state.dart_defines_display()))
             .style(value_style)
             .render(value_chunks[1], buf);
     }
@@ -1088,7 +1189,7 @@ mod launch_context_tests {
         let icons = test_icons();
 
         // Use min_height to ensure button is visible
-        let backend = TestBackend::new(50, 25);
+        let backend = TestBackend::new(50, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -1106,8 +1207,7 @@ mod launch_context_tests {
         assert!(content.contains("CONFIGURATION"));
         assert!(content.contains("MODE"));
         assert!(content.contains("FLAVOR"));
-        // Dart Defines field removed from normal layout (only in compact mode)
-        // assert!(content.contains("DART DEFINES"));
+        assert!(content.contains("DART DEFINES"));
         assert!(content.contains("LAUNCH INSTANCE"));
     }
 
@@ -1128,7 +1228,7 @@ mod launch_context_tests {
         state.select_config(Some(0));
 
         // Use min_height to ensure fields are visible
-        let backend = TestBackend::new(60, 25);
+        let backend = TestBackend::new(60, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -1180,7 +1280,7 @@ mod launch_context_tests {
         let state = LaunchContextState::new(LoadedConfigs::default());
 
         // Use min_height to ensure button is visible
-        let backend = TestBackend::new(50, 25);
+        let backend = TestBackend::new(50, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -1204,7 +1304,7 @@ mod launch_context_tests {
         let state = LaunchContextState::new(LoadedConfigs::default());
 
         // Use min_height to ensure button is visible
-        let backend = TestBackend::new(50, 25);
+        let backend = TestBackend::new(50, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -1222,8 +1322,41 @@ mod launch_context_tests {
 
     #[test]
     fn test_min_height() {
-        // New design with stacked layout: spacer + config(4) + spacer + mode(4) + spacer + flavor(4) + spacer + entry(4) + button(3)
-        assert_eq!(LaunchContext::min_height(), 21);
+        // New design with stacked layout: spacer(1) + config(4) + spacer(1) + mode(4) + spacer(1) + flavor(4) + spacer(1) + entry(4) + spacer(1) + dart_defines(4) + spacer(1) + button(3)
+        assert_eq!(LaunchContext::min_height(), 29);
+    }
+
+    #[test]
+    fn test_min_height_arithmetic() {
+        // Verify that min_height matches the sum of all layout components
+        let spacer = 1_u16;
+        let config_height = 4_u16;
+        let mode_height = 4_u16;
+        let flavor_height = 4_u16;
+        let entry_point_height = 4_u16;
+        let dart_defines_height = 4_u16;
+        let button_spacer = 1_u16;
+        let button_height = 3_u16;
+
+        let expected_total = spacer
+            + config_height
+            + spacer
+            + mode_height
+            + spacer
+            + flavor_height
+            + spacer
+            + entry_point_height
+            + spacer
+            + dart_defines_height
+            + button_spacer
+            + button_height;
+
+        assert_eq!(expected_total, 29, "Sum of all components should equal 29");
+        assert_eq!(
+            LaunchContext::min_height(),
+            expected_total,
+            "min_height() should match sum of all layout components"
+        );
     }
 
     #[test]
@@ -1278,8 +1411,7 @@ mod launch_context_tests {
         assert!(content.contains("CONFIGURATION"));
         assert!(content.contains("MODE"));
         assert!(content.contains("FLAVOR"));
-        // Dart Defines field removed from normal layout (only in compact mode)
-        // assert!(content.contains("DART DEFINES"));
+        assert!(content.contains("DART DEFINES"));
     }
 
     #[test]
@@ -1716,9 +1848,9 @@ mod launch_context_tests {
 
     #[test]
     fn test_min_height_updated_for_entry_point() {
-        // Verify that min_height accounts for the entry point field
-        // New design with stacked layout includes entry point
-        assert_eq!(LaunchContext::min_height(), 21);
+        // Verify that min_height accounts for the entry point field and dart defines
+        // New design with stacked layout includes entry point and dart defines
+        assert_eq!(LaunchContext::min_height(), 29);
     }
 
     #[test]
@@ -1727,7 +1859,7 @@ mod launch_context_tests {
         let state = LaunchContextState::new(LoadedConfigs::default());
 
         // Use min_height to ensure button is visible
-        let backend = TestBackend::new(60, 25);
+        let backend = TestBackend::new(60, 30);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
@@ -1745,8 +1877,7 @@ mod launch_context_tests {
         assert!(content.contains("MODE"));
         assert!(content.contains("FLAVOR"));
         assert!(content.contains("ENTRY POINT"));
-        // Dart Defines field removed from normal layout (only in compact mode)
-        // assert!(content.contains("DART DEFINES"));
+        assert!(content.contains("DART DEFINES"));
         assert!(content.contains("LAUNCH INSTANCE"));
     }
 
@@ -1759,20 +1890,29 @@ mod launch_context_tests {
         let area = Rect::new(0, 0, 60, 30);
         let chunks = calculate_fields_layout(area);
 
-        // Verify we have 9 chunks
-        assert_eq!(chunks.len(), 9);
+        // Verify we have 11 chunks
+        assert_eq!(chunks.len(), 11);
 
         // Verify Entry Point row (index 7) has height 4 (label + field)
         assert_eq!(chunks[7].height, 4);
 
+        // Verify Dart Defines row (index 9) has height 4 (label + field)
+        assert_eq!(chunks[9].height, 4);
+
         // Verify the layout order:
         // 0: Spacer, 1: Config(4), 2: Spacer, 3: Mode(4), 4: Spacer, 5: Flavor(4)
-        // 6: Spacer, 7: Entry Point(4), 8: Remaining space
+        // 6: Spacer, 7: Entry Point(4), 8: Spacer, 9: Dart Defines(4), 10: Remaining space
 
         // Entry Point should be after Flavor (5)
         assert!(
             chunks[7].y > chunks[5].y,
             "Entry Point should be after Flavor"
+        );
+
+        // Dart Defines should be after Entry Point (7)
+        assert!(
+            chunks[9].y > chunks[7].y,
+            "Dart Defines should be after Entry Point"
         );
     }
 

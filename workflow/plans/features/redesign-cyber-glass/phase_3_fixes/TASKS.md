@@ -45,12 +45,12 @@ Wave 3 (after all):
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-add-dart-defines-field](tasks/01-add-dart-defines-field.md) | Pending | - | `launch_context.rs` |
-| 2 | [02-fix-launch-button-focus](tasks/02-fix-launch-button-focus.md) | Pending | - | `launch_context.rs` |
-| 3 | [03-remove-stale-dead-code](tasks/03-remove-stale-dead-code.md) | Pending | - | `theme/palette.rs` |
-| 4 | [04-fix-dart-defines-overlay](tasks/04-fix-dart-defines-overlay.md) | Pending | - | `new_session_dialog/mod.rs`, `dart_defines_modal.rs` |
-| 5 | [05-fix-min-height-arithmetic](tasks/05-fix-min-height-arithmetic.md) | Pending | 1 | `launch_context.rs` |
-| 6 | [06-update-tests](tasks/06-update-tests.md) | Pending | 1, 2, 3, 4, 5 | `launch_context.rs` tests |
+| 1 | [01-add-dart-defines-field](tasks/01-add-dart-defines-field.md) | Done | - | `launch_context.rs` |
+| 2 | [02-fix-launch-button-focus](tasks/02-fix-launch-button-focus.md) | Done | - | `launch_context.rs` |
+| 3 | [03-remove-stale-dead-code](tasks/03-remove-stale-dead-code.md) | Done | - | `theme/palette.rs` |
+| 4 | [04-fix-dart-defines-overlay](tasks/04-fix-dart-defines-overlay.md) | Done | - | `new_session_dialog/mod.rs`, `dart_defines_modal.rs` |
+| 5 | [05-fix-min-height-arithmetic](tasks/05-fix-min-height-arithmetic.md) | Done | 1 | `launch_context.rs` |
+| 6 | [06-update-tests](tasks/06-update-tests.md) | Done | 1, 2, 3, 4, 5 | `launch_context.rs` tests |
 
 ## Execution Strategy
 
