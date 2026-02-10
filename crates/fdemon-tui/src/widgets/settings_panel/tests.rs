@@ -207,10 +207,33 @@ fn test_setting_is_modified() {
 fn test_truncate_str() {
     use styles::truncate_str;
 
+    // No truncation needed
     assert_eq!(truncate_str("short", 10), "short");
-    assert_eq!(truncate_str("this is long", 8), "this is...");
     assert_eq!(truncate_str("ab", 2), "ab");
-    assert_eq!(truncate_str("abc", 2), "a...");
+    assert_eq!(truncate_str("a", 1), "a");
+
+    // Truncation with ellipsis
+    let result = truncate_str("this is long", 8);
+    assert_eq!(
+        result.chars().count(),
+        8,
+        "Output exceeded max_len: {}",
+        result
+    );
+    assert_eq!(result, "this is…");
+
+    let result = truncate_str("abc", 2);
+    assert_eq!(
+        result.chars().count(),
+        2,
+        "Output exceeded max_len: {}",
+        result
+    );
+    assert_eq!(result, "a…");
+
+    // Edge cases
+    assert_eq!(truncate_str("anything", 0), "");
+    assert_eq!(truncate_str("", 5), "");
 }
 
 #[test]
@@ -1071,5 +1094,229 @@ fn test_header_shows_settings_title() {
     assert!(
         content.contains("System Settings"),
         "Header should display 'System Settings' title"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Phase 4 Fixes - Info Banner Content Tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_user_prefs_info_banner_shows_content() {
+    let settings = Settings::default();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::UserPrefs;
+    let temp = tempdir().unwrap();
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+    // Verify info banner content is visible (not just empty bordered box)
+    assert!(
+        content.contains("Local Settings"),
+        "Info banner should display 'Local Settings' title"
+    );
+    assert!(
+        content.contains(".fdemon/settings.local.toml"),
+        "Info banner should display file path subtitle"
+    );
+}
+
+#[test]
+fn test_vscode_info_banner_shows_content() {
+    let settings = Settings::default();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::VSCodeConfig;
+    let temp = tempdir().unwrap();
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+    // Verify info banner content is visible (not just empty bordered box)
+    assert!(
+        content.contains("VSCode"),
+        "Info banner should display 'VSCode' in title"
+    );
+    assert!(
+        content.contains(".vscode/launch.json"),
+        "Info banner should display file path subtitle"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Empty State Alignment Tests (Phase 4 Fixes, Task 02)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_launch_empty_state_top_aligned() {
+    let settings = Settings::default();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    let temp = tempdir().unwrap();
+
+    let backend = TestBackend::new(80, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+
+    // Find the icon box (should be in the top few rows after header+tabs)
+    // Header is 3 lines, tabs are 3 lines, content starts at y=6
+    // With top alignment (start_y = area.top() + 1), icon should be at y=7
+    let mut found_icon_row = None;
+    for y in 6..15 {
+        // Search in top portion
+        for x in 0..buffer.area().width {
+            let cell = &buffer[(x, y)];
+            // Look for the icon box border (rounded corners)
+            if cell.symbol() == "╭" || cell.symbol() == "╮" {
+                found_icon_row = Some(y);
+                break;
+            }
+        }
+        if found_icon_row.is_some() {
+            break;
+        }
+    }
+
+    assert!(
+        found_icon_row.is_some(),
+        "Icon box should be found in top portion of content area"
+    );
+
+    let icon_y = found_icon_row.unwrap();
+    // Icon should be near the top (within first 8 rows of content area)
+    // Content area starts at y=6, so icon should be between y=6 and y=14
+    assert!(
+        icon_y <= 14,
+        "Icon should be top-aligned (found at y={}, expected <= 14)",
+        icon_y
+    );
+}
+
+#[test]
+fn test_vscode_empty_state_top_aligned() {
+    let settings = Settings::default();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::VSCodeConfig;
+    let temp = tempdir().unwrap();
+
+    let backend = TestBackend::new(80, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+
+    // VSCode tab shows "No .vscode/launch.json found" when no file exists
+    let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+    assert!(content.contains("No .vscode/launch.json found"));
+
+    // Find the icon box (should be in the top few rows)
+    let mut found_icon_row = None;
+    for y in 6..15 {
+        // Search in top portion
+        for x in 0..buffer.area().width {
+            let cell = &buffer[(x, y)];
+            if cell.symbol() == "╭" || cell.symbol() == "╮" {
+                found_icon_row = Some(y);
+                break;
+            }
+        }
+        if found_icon_row.is_some() {
+            break;
+        }
+    }
+
+    assert!(
+        found_icon_row.is_some(),
+        "Icon box should be found in top portion of content area"
+    );
+
+    let icon_y = found_icon_row.unwrap();
+    assert!(
+        icon_y <= 14,
+        "Icon should be top-aligned (found at y={}, expected <= 14)",
+        icon_y
+    );
+}
+
+#[test]
+fn test_empty_state_not_vertically_centered() {
+    let settings = Settings::default();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    let temp = tempdir().unwrap();
+
+    // Use a tall terminal to make vertical centering obvious
+    let backend = TestBackend::new(80, 40);
+    let mut terminal = Terminal::new(backend).unwrap();
+
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let buffer = terminal.backend().buffer();
+
+    // Find the icon box
+    let mut found_icon_row = None;
+    for y in 0..buffer.area().height {
+        for x in 0..buffer.area().width {
+            let cell = &buffer[(x, y)];
+            if cell.symbol() == "╭" || cell.symbol() == "╮" {
+                found_icon_row = Some(y);
+                break;
+            }
+        }
+        if found_icon_row.is_some() {
+            break;
+        }
+    }
+
+    assert!(found_icon_row.is_some(), "Icon box should be found");
+
+    let icon_y = found_icon_row.unwrap();
+    // If it were vertically centered in a 40-row terminal (content area ~34 rows),
+    // with total_height=7, it would be at approximately y = 6 + (34-7)/2 = 19-20
+    // With top alignment (start_y = 6 + 1 = 7), icon should be at y=7
+    // So icon_y should be much less than the midpoint
+    assert!(
+        icon_y < 15,
+        "Icon should be top-aligned, not centered (found at y={}, would be ~20 if centered)",
+        icon_y
     );
 }

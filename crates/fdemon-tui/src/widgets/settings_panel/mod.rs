@@ -18,7 +18,6 @@ use ratatui::{
 };
 
 use crate::theme::{icons::IconSet, palette};
-use fdemon_app::config::IconMode;
 
 use std::path::Path;
 
@@ -39,7 +38,6 @@ use styles::{
 /// Full-screen settings panel widget
 pub struct SettingsPanel<'a> {
     /// Reference to application settings
-    #[allow(dead_code)] // Used in future tasks for rendering tab content
     settings: &'a Settings,
 
     /// Project path for loading configurations
@@ -115,7 +113,7 @@ impl SettingsPanel<'_> {
         let title_y = inner.top();
 
         // Left: settings icon + title
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
         let icon_span = Span::styled(
             format!("{} ", icons.settings()),
             Style::default().fg(palette::ACCENT),
@@ -199,7 +197,7 @@ impl SettingsPanel<'_> {
         content_block.render(area, buf);
 
         // Create IconSet once for all renderers
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Dispatch to tab-specific renderer
         match state.active_tab {
@@ -222,7 +220,7 @@ impl SettingsPanel<'_> {
         footer_block.render(area, buf);
 
         // Create IconSet for rendering icons
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Render hints based on state
         if state.editing {
@@ -442,8 +440,10 @@ impl SettingsPanel<'_> {
 
         // Column 0: Left accent bar (1 char)
         if is_selected {
-            let bar = Span::styled("▎", styles::accent_bar_style());
-            buf.set_line(col, y, &Line::from(bar), 1);
+            if let Some(cell) = buf.cell_mut((col, y)) {
+                cell.set_symbol("▎");
+                cell.set_fg(palette::ACCENT);
+            }
         }
         col += INDICATOR_WIDTH; // 3 chars total: bar + 2 spaces
 
@@ -504,15 +504,15 @@ impl SettingsPanel<'_> {
         icons: &IconSet,
     ) {
         // Render info banner about local settings
-        let info_area = Rect::new(area.x, area.y, area.width, 3);
+        let info_area = Rect::new(area.x, area.y, area.width, 4);
         self.render_user_prefs_info(info_area, buf);
 
         // Content area below info banner
         let content_area = Rect::new(
             area.x,
-            area.y + 3,
+            area.y + 4,
             area.width,
-            area.height.saturating_sub(3),
+            area.height.saturating_sub(4),
         );
 
         let items = user_prefs_items(&state.user_prefs, self.settings);
@@ -567,7 +567,7 @@ impl SettingsPanel<'_> {
     }
 
     fn render_user_prefs_info(&self, area: Rect, buf: &mut Buffer) {
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Glass info banner: rounded border, accent-tinted bg
         let banner = Block::default()
@@ -658,7 +658,10 @@ impl SettingsPanel<'_> {
 
         // Column 0: Left accent bar + override indicator
         if is_selected {
-            buf.set_string(col, y, "▎", styles::accent_bar_style());
+            if let Some(cell) = buf.cell_mut((col, y)) {
+                cell.set_symbol("▎");
+                cell.set_fg(palette::ACCENT);
+            }
         }
         col += 1;
 
@@ -792,7 +795,7 @@ impl SettingsPanel<'_> {
     }
 
     fn render_launch_empty_state(&self, area: Rect, buf: &mut Buffer) {
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Center vertically: icon box (3 lines) + gap (1) + title (1) + gap (1) + subtitle (1) = 7 lines
         let total_height = 7u16;
@@ -814,7 +817,7 @@ impl SettingsPanel<'_> {
             return;
         }
 
-        let start_y = area.top() + area.height.saturating_sub(total_height) / 2;
+        let start_y = area.top() + 1;
 
         // Icon container: centered 9-wide box
         let icon_width = 9u16;
@@ -907,15 +910,15 @@ impl SettingsPanel<'_> {
         use fdemon_app::config::load_vscode_configs;
 
         // Info banner about read-only nature
-        let info_area = Rect::new(area.x, area.y, area.width, 3);
+        let info_area = Rect::new(area.x, area.y, area.width, 4);
         self.render_vscode_info(info_area, buf);
 
         // Content area
         let content_area = Rect::new(
             area.x,
-            area.y + 3,
+            area.y + 4,
             area.width,
-            area.height.saturating_sub(3),
+            area.height.saturating_sub(4),
         );
 
         // Load configs (Dart-only, filtered by vscode.rs)
@@ -983,7 +986,7 @@ impl SettingsPanel<'_> {
     }
 
     fn render_vscode_info(&self, area: Rect, buf: &mut Buffer) {
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Glass info banner: rounded border, accent-tinted bg (same as User tab)
         let banner = Block::default()
@@ -1029,7 +1032,7 @@ impl SettingsPanel<'_> {
     }
 
     fn render_vscode_not_found(&self, area: Rect, buf: &mut Buffer) {
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Center vertically: icon box (3 lines) + gap (1) + title (1) + gap (1) + subtitle (2) = 8 lines
         let total_height = 8u16;
@@ -1051,7 +1054,7 @@ impl SettingsPanel<'_> {
             return;
         }
 
-        let start_y = area.top() + area.height.saturating_sub(total_height) / 2;
+        let start_y = area.top() + 1;
 
         // Icon container: centered 9-wide box
         let icon_width = 9u16;
@@ -1115,7 +1118,7 @@ impl SettingsPanel<'_> {
     }
 
     fn render_vscode_empty(&self, area: Rect, buf: &mut Buffer) {
-        let icons = IconSet::new(IconMode::Unicode);
+        let icons = IconSet::new(self.settings.ui.icons);
 
         // Center vertically: icon box (3 lines) + gap (1) + title (1) + gap (1) + subtitle (2) = 8 lines
         let total_height = 8u16;
@@ -1137,7 +1140,7 @@ impl SettingsPanel<'_> {
             return;
         }
 
-        let start_y = area.top() + area.height.saturating_sub(total_height) / 2;
+        let start_y = area.top() + 1;
 
         // Icon container: centered 9-wide box
         let icon_width = 9u16;

@@ -105,3 +105,45 @@ fn test_truncate_str() {
 - This is a pre-existing bug, not introduced by Phase 4, but it impacts the Phase 4 column layout
 - The Unicode ellipsis `…` (U+2026) is a single character that renders as 1 cell wide in terminals. It is preferred over `...` because it preserves more visible text.
 - All 11 call sites in mod.rs use `truncate_str` with `format!("{:<width$}", ...)` padding — the padding fills to the width but does NOT truncate, so correct truncation is essential.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/styles.rs` | Fixed `truncate_str()` function (lines 218-228): Changed from `max_len <= 1` to `max_len == 0` for edge case handling, and replaced `"..."` (3 chars) with Unicode ellipsis `"…"` (1 char) to produce output of exactly `max_len` characters |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated `test_truncate_str()` test (lines 207-237): Expanded test coverage to verify all 7 acceptance criteria, including exact character count assertions and edge case handling |
+
+### Notable Decisions/Tradeoffs
+
+1. **Unicode Ellipsis Choice**: Used Unicode ellipsis `…` (U+2026) instead of ASCII `...` to maximize visible text while respecting `max_len`. This is a single character that renders correctly in modern terminals with true-color support (which Flutter Demon already requires).
+
+2. **Edge Case Handling**: Changed `max_len <= 1` to `max_len == 0` to properly handle the case where `max_len == 1`, allowing single-character strings to pass through unchanged as per acceptance criteria #6.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui test_truncate_str` - Passed (1 test)
+- `cargo test -p fdemon-tui` - Passed (441 tests, 0 failed)
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (0 warnings)
+
+### Acceptance Criteria Verification
+
+All 7 acceptance criteria met:
+1. ✅ `truncate_str("this is long", 8)` returns `"this is…"` (8 chars)
+2. ✅ `truncate_str("abc", 2)` returns `"a…"` (2 chars)
+3. ✅ `truncate_str("short", 10)` returns `"short"` (5 chars, unchanged)
+4. ✅ `truncate_str("ab", 2)` returns `"ab"` (2 chars, unchanged)
+5. ✅ `truncate_str("anything", 0)` returns `""` (empty string)
+6. ✅ `truncate_str("a", 1)` returns `"a"` (1 char, unchanged)
+7. ✅ Output never exceeds `max_len` (verified by character count assertions in tests)
+
+### Risks/Limitations
+
+None identified. The Unicode ellipsis character is standard and well-supported in modern terminals. Flutter Demon already requires true-color terminal support, so Unicode character rendering is guaranteed to work correctly.

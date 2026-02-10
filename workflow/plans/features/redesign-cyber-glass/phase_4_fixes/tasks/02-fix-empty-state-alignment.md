@@ -81,3 +81,35 @@ fn test_launch_empty_state_top_aligned() {
 - Keep the existing `if area.height < total_height + 2 { ... }` small-terminal fallback as-is
 - The small-terminal fallback shows only the title (no icon/subtitle) — this is fine
 - All 3 functions share nearly identical structure. A future task could extract a shared helper, but this task only fixes alignment.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Changed `start_y` calculation in 3 empty state functions from centered to top-aligned (line 817, 1054, 1140) |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Added 3 new tests for top-alignment verification (lines 1170-1322) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simple top margin**: Used `area.top() + 1` instead of `area.top() + area.height.saturating_sub(total_height) / 2` for vertical positioning. This provides a consistent 1-line top margin while maintaining horizontal centering.
+
+2. **Test approach**: Tests verify icon box position by searching for rounded corner characters (`╭` or `╮`) in the top portion of the content area, ensuring content is not vertically centered.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` - Passed (446 tests)
+  - Existing tests continue to pass
+  - New tests added:
+    - `test_launch_empty_state_top_aligned` - Verifies Launch tab empty state is top-aligned
+    - `test_vscode_empty_state_top_aligned` - Verifies VSCode tab empty state is top-aligned
+    - `test_empty_state_not_vertically_centered` - Verifies empty state is NOT centered in tall terminals
+
+### Risks/Limitations
+
+1. **None identified**: The change is a simple vertical positioning adjustment that doesn't affect layout logic, horizontal centering, or fallback behavior for small terminals.

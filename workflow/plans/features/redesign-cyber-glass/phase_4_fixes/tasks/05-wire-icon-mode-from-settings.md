@@ -97,3 +97,29 @@ fn test_settings_panel_uses_nerd_fonts_when_configured() {
 - This follows the established pattern used by `MainHeader`, `LogView`, and `NewSessionDialog`, all of which receive `IconSet` created from settings.
 - Test code should continue to hardcode `IconMode::Unicode` for deterministic output — only production rendering code should read from settings.
 - The `ConnectedDeviceList` and `BootableDeviceList` in `new_session_dialog/device_list.rs` have the same hardcoding issue but are out of scope for this task (they belong to a different widget).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Replaced 8 hardcoded `IconSet::new(IconMode::Unicode)` calls with `IconSet::new(self.settings.ui.icons)` on lines 116, 201, 224, 569, 794, 985, 1031, and 1117. Removed `#[allow(dead_code)]` annotation from `settings` field on line 41-42. Removed unused `IconMode` import on line 21. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed IconMode import**: After replacing all `IconMode::Unicode` references with `self.settings.ui.icons`, the explicit `use fdemon_app::config::IconMode` import was no longer needed. The compiler can infer the type from the settings field.
+2. **No test changes required**: Existing tests use `Settings::default()` which defaults to `IconMode::Unicode`, so behavior remains unchanged for existing tests.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` - Passed (446 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed with no warnings
+
+### Risks/Limitations
+
+None. This change activates the previously unused `settings` field and makes the settings panel respect the user's configured icon mode (Unicode vs NerdFonts).

@@ -25,12 +25,12 @@ Wave 2 (parallel — major/minor cleanup, after Wave 1)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-info-banner-height](tasks/01-fix-info-banner-height.md) | Not Started | - | `settings_panel/mod.rs`, `tests.rs` |
-| 2 | [02-fix-empty-state-alignment](tasks/02-fix-empty-state-alignment.md) | Not Started | - | `settings_panel/mod.rs`, `tests.rs` |
-| 3 | [03-fix-truncate-str](tasks/03-fix-truncate-str.md) | Not Started | - | `settings_panel/styles.rs`, `tests.rs` |
-| 4 | [04-cleanup-dead-code-annotations](tasks/04-cleanup-dead-code-annotations.md) | Not Started | - | `settings_panel/styles.rs`, `settings_panel/mod.rs` |
-| 5 | [05-wire-icon-mode-from-settings](tasks/05-wire-icon-mode-from-settings.md) | Not Started | - | `settings_panel/mod.rs`, `tests.rs` |
-| 6 | [06-fix-accent-bar-background](tasks/06-fix-accent-bar-background.md) | Not Started | - | `settings_panel/mod.rs` |
+| 1 | [01-fix-info-banner-height](tasks/01-fix-info-banner-height.md) | Done | - | `settings_panel/mod.rs`, `tests.rs` |
+| 2 | [02-fix-empty-state-alignment](tasks/02-fix-empty-state-alignment.md) | Done | - | `settings_panel/mod.rs`, `tests.rs` |
+| 3 | [03-fix-truncate-str](tasks/03-fix-truncate-str.md) | Done | - | `settings_panel/styles.rs`, `tests.rs` |
+| 4 | [04-cleanup-dead-code-annotations](tasks/04-cleanup-dead-code-annotations.md) | Done | - | `settings_panel/styles.rs`, `settings_panel/mod.rs` |
+| 5 | [05-wire-icon-mode-from-settings](tasks/05-wire-icon-mode-from-settings.md) | Done | - | `settings_panel/mod.rs`, `tests.rs` |
+| 6 | [06-fix-accent-bar-background](tasks/06-fix-accent-bar-background.md) | Done | - | `settings_panel/mod.rs` |
 
 ## Wave Execution
 

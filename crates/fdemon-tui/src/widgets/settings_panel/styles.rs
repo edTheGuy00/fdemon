@@ -7,8 +7,6 @@ use fdemon_app::config::SettingValue;
 
 /// Layout constants for setting rows
 pub const INDICATOR_WIDTH: u16 = 3;
-#[allow(dead_code)] // May be used in future override rendering
-pub const INDICATOR_WIDTH_OVERRIDE: u16 = 4; // Extra space for override marker
 pub const LABEL_WIDTH: u16 = 25;
 pub const LABEL_WIDTH_SHORT: u16 = 24;
 pub const LABEL_WIDTH_VSCODE: u16 = 20;
@@ -31,16 +29,6 @@ pub fn value_style(value: &SettingValue, is_selected: bool) -> Style {
         SettingValue::String(_) => base.fg(palette::TEXT_PRIMARY),
         SettingValue::Enum { .. } => base.fg(palette::STATUS_INDIGO),
         SettingValue::List(_) => base.fg(palette::STATUS_BLUE),
-    }
-}
-
-/// Style for selection indicator
-#[allow(dead_code)] // Used in some rendering paths
-pub fn indicator_style(is_selected: bool) -> Style {
-    if is_selected {
-        Style::default().fg(palette::ACCENT)
-    } else {
-        Style::default()
     }
 }
 
@@ -111,18 +99,6 @@ pub fn readonly_value_style() -> Style {
     Style::default().fg(palette::TEXT_MUTED)
 }
 
-/// Style for read-only indicator
-#[allow(dead_code)] // May be used in future VSCode rendering
-pub fn readonly_indicator_style() -> Style {
-    Style::default().fg(palette::TEXT_MUTED)
-}
-
-/// Style for info box borders (legacy)
-#[allow(dead_code)] // Replaced by info_banner_border_style
-pub fn info_border_style() -> Style {
-    Style::default().fg(palette::STATUS_BLUE)
-}
-
 /// Style for "Add New" option
 pub fn add_new_style(is_selected: bool) -> Style {
     if is_selected {
@@ -139,25 +115,16 @@ pub fn add_new_style(is_selected: bool) -> Style {
 // ─────────────────────────────────────────────────────────
 
 /// Style for icon glyph in group headers (e.g., ⚡ before "BEHAVIOR")
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn group_header_icon_style() -> Style {
     Style::default().fg(palette::ACCENT_DIM)
 }
 
 /// Style for selected row background
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn selected_row_bg() -> Style {
     Style::default().bg(palette::SELECTED_ROW_BG)
 }
 
-/// Style for the accent bar on selected rows (▎ left border indicator)
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
-pub fn accent_bar_style() -> Style {
-    Style::default().fg(palette::ACCENT)
-}
-
 /// Style for keyboard shortcut badges in footer (e.g., [Tab], [Esc])
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn kbd_badge_style() -> Style {
     Style::default()
         .fg(palette::TEXT_SECONDARY)
@@ -165,37 +132,31 @@ pub fn kbd_badge_style() -> Style {
 }
 
 /// Style for description text after kbd badges (e.g., "Switch tabs")
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn kbd_label_style() -> Style {
     Style::default().fg(palette::TEXT_MUTED)
 }
 
 /// Style for emphasized keyboard shortcuts (e.g., Ctrl+S)
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn kbd_accent_style() -> Style {
     Style::default().fg(palette::ACCENT)
 }
 
 /// Style for info banner background (User tab)
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn info_banner_bg() -> Style {
     Style::default().bg(palette::SELECTED_ROW_BG)
 }
 
 /// Style for info banner border
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn info_banner_border_style() -> Style {
     Style::default().fg(palette::ACCENT_DIM)
 }
 
 /// Style for large icon in empty states (Launch tab)
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn empty_state_icon_style() -> Style {
     Style::default().fg(palette::TEXT_MUTED)
 }
 
 /// Style for title text in empty states
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn empty_state_title_style() -> Style {
     Style::default()
         .fg(palette::TEXT_PRIMARY)
@@ -203,7 +164,6 @@ pub fn empty_state_title_style() -> Style {
 }
 
 /// Style for subtitle text in empty states
-#[allow(dead_code)] // Used in Phase 4 tasks 03-06
 pub fn empty_state_subtitle_style() -> Style {
     Style::default()
         .fg(palette::TEXT_MUTED)
@@ -219,10 +179,10 @@ pub fn border_inactive() -> Style {
 pub fn truncate_str(s: &str, max_len: usize) -> String {
     if s.chars().count() <= max_len {
         s.to_string()
-    } else if max_len <= 1 {
-        s.chars().take(max_len).collect()
+    } else if max_len == 0 {
+        String::new()
     } else {
         let truncated: String = s.chars().take(max_len - 1).collect();
-        format!("{}...", truncated)
+        format!("{}…", truncated)
     }
 }
