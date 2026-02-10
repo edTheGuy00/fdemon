@@ -208,4 +208,37 @@ This may require adjusting the outer block rendering in `render()` so the footer
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Increased footer height from 2 to 3 lines. Redesigned `render_footer()` with new hint system: added `render_normal_footer_hints()`, `render_editing_footer_hints()`, and `build_hint()` helper functions. Footer now displays 4 shortcut hints with icons (keyboard, chevron, save) in normal mode and 2 hints (check, close) in editing mode. Added DEEPEST_BG background and BORDER_DIM border styling. |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated `test_settings_panel_dirty_indicator` to check for "Save" and "Ctrl+S" instead of "unsaved". Updated `test_render_project_tab` to check for spaced uppercase section headers ("B E H A V I O R") instead of bracketed format ("[Behavior]") per Phase 4 Task 03 changes. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Footer height 3 lines**: Changed from 2 to 3 lines for better visual prominence and clearer hint presentation. The extra line provides breathing room for the icon + key + label layout.
+
+2. **Hint layout**: Each hint follows the pattern `icon + key + label` with appropriate styling:
+   - Non-emphasized: icon in TEXT_MUTED, key in TEXT_SECONDARY, label in TEXT_MUTED
+   - Emphasized (Ctrl+S): icon in ACCENT, key in ACCENT (kbd_accent_style), label in TEXT_MUTED
+
+3. **Dirty state indicator**: Shows "Save Changes*" with asterisk when dirty, preserving the context-sensitive behavior from the original implementation.
+
+4. **Editing mode**: Displays check icon (green) + "Enter: Confirm" and close icon (red) + "Esc: Cancel" for clear visual feedback.
+
+5. **Test updates**: Updated tests to match new footer content. The test terminal (80x24) truncates the full footer text, so tests check for key portions ("Save", "Ctrl+S") rather than the complete string.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo clippy -p fdemon-tui` - Passed (no warnings in mod.rs)
+- `cargo test -p fdemon-tui --lib` - Passed (433 tests)
+
+### Risks/Limitations
+
+1. **Footer truncation on narrow terminals**: On terminals narrower than ~80 characters, the footer hints may be truncated. The centered layout ensures the most important hints (Tab, j/k, Enter) appear first, with Ctrl+S potentially cut off on very narrow terminals.
+
+2. **Content area reduction**: The footer height increase from 2 to 3 lines reduces the content area by 1 line. Combined with header changes from Task 03 (+2 lines), the total content reduction is 3 lines. On a 24-line terminal, content area goes from ~19 to ~16 visible lines.

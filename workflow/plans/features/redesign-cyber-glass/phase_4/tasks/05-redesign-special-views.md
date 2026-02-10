@@ -277,4 +277,40 @@ Same centered pattern:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Redesigned 5 functions: `render_user_prefs_info()`, `render_launch_empty_state()`, `render_vscode_info()`, `render_vscode_not_found()`, `render_vscode_empty()` |
+| `crates/fdemon-tui/src/widgets/settings_panel/styles.rs` | Added `#[allow(dead_code)]` to unused style functions for future use |
+
+### Notable Decisions/Tradeoffs
+
+1. **Glass-style info banners**: Both User and VSCode tabs now use rounded borders with `ACCENT_DIM` color, `SELECTED_ROW_BG` background, info icon in `ACCENT`, bold title in `TEXT_BRIGHT`, and subtitle in `ACCENT_DIM`. This creates a consistent visual language across both tabs.
+
+2. **Centered empty states with icon containers**: Launch, VSCode "not found", and VSCode "empty" states all follow the same pattern: centered 9-wide rounded box containing an icon (layers/code), followed by bold title and italic subtitle. Empty states vertically center the entire layout based on total height (7-8 lines).
+
+3. **Height guards for small terminals**: All empty states include graceful degradation - if the terminal is too small to display the full layout (icon box + title + subtitle), they fall back to showing just the title centered. This prevents overlapping or broken rendering on small screens.
+
+4. **Icon choice**: Used `icons.layers()` (≡) for Launch tab empty state and `icons.code()` (<>) for VSCode empty states, both rendered in `TEXT_MUTED` color for consistency.
+
+5. **Subtitle formatting**: Empty state subtitles use `TEXT_MUTED` + italic for instructions, with accent-colored highlights for important parts (e.g., 'n' key, VSCode commands).
+
+6. **No helper extraction**: Chose not to extract shared `render_info_banner()` or `render_empty_state()` helpers at this stage. While the patterns are similar, each has slight variations (different icon, different text, different subtitle structure). If more banners/empty states are added in the future, refactoring to helpers would be warranted.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (0 warnings after cleanup)
+- `cargo clippy -p fdemon-tui` - Passed (no suggestions)
+
+### Risks/Limitations
+
+1. **Vertical centering arithmetic**: Empty states use simple `(area.height - total_height) / 2` centering. On extremely short terminals (< 7-8 lines), the height guard kicks in and shows only the title. On extremely tall terminals, the empty state will appear visually centered but may look "small" in a large space.
+
+2. **Icon container width**: The 9-wide icon container assumes the terminal is at least 9 columns wide. Most terminals are 80+ columns, so this is safe, but on extremely narrow terminals the box might not render properly.
+
+3. **Text truncation**: Long titles in empty states (e.g., "launch.json exists but has no Dart configurations") may wrap or truncate on narrow terminals. The centered alignment should handle this gracefully.
+
+4. **No visual screenshot validation**: Changes have been validated by compilation and clippy, but not visually tested in a running TUI. Manual verification recommended to ensure the glass styling and centering look correct.
