@@ -38,6 +38,11 @@ pub const STATUS_INDIGO: Color = Color::Rgb(129, 140, 248); // Flutter messages
 pub const SHADOW: Color = Color::Rgb(5, 6, 8); // Shadow color
 pub const CONTRAST_FG: Color = Color::Rgb(0, 0, 0); // High contrast foreground on accent bg
 
+// --- Selected Row ---
+/// Subtle accent-tinted background for selected rows and info banners.
+/// Approximates ACCENT at 10% opacity on CARD_BG.
+pub const SELECTED_ROW_BG: Color = Color::Rgb(17, 25, 40); // #111928
+
 // --- Gradients ---
 pub const GRADIENT_BLUE: Color = Color::Rgb(37, 99, 235); // Button gradient start
 #[allow(dead_code)]

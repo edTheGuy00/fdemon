@@ -163,6 +163,58 @@ impl IconSet {
             IconMode::Unicode => "$",
         }
     }
+
+    // --- Settings Group Icons ---
+
+    /// Lightning bolt icon for behavior/performance settings.
+    pub fn zap(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f0e7}", // nf-fa-bolt
+            IconMode::Unicode => "\u{26a1}",   // ⚡
+        }
+    }
+
+    /// Eye icon for watcher/observation settings.
+    pub fn eye(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f06e}", // nf-fa-eye
+            IconMode::Unicode => "\u{25c9}",   // ◉
+        }
+    }
+
+    /// Code brackets for editor/IDE settings.
+    pub fn code(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f121}", // nf-fa-code
+            IconMode::Unicode => "<>",
+        }
+    }
+
+    /// User icon for user/session settings.
+    pub fn user(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f007}", // nf-fa-user
+            IconMode::Unicode => "\u{25cf}",   // ●
+        }
+    }
+
+    // --- Footer Shortcut Icons ---
+
+    /// Keyboard icon for key binding hints.
+    pub fn keyboard(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f11c}", // nf-fa-keyboard_o
+            IconMode::Unicode => "\u{2328}",   // ⌨
+        }
+    }
+
+    /// Floppy disk / save icon.
+    pub fn save(&self) -> &'static str {
+        match self.mode {
+            IconMode::NerdFonts => "\u{f0c7}", // nf-fa-floppy_o
+            IconMode::Unicode => "[S]",
+        }
+    }
 }
 
 #[cfg(test)]
@@ -224,5 +276,40 @@ mod tests {
         let icons = IconSet::new(IconMode::Unicode);
         let copy = icons;
         assert_eq!(icons.terminal(), copy.terminal());
+    }
+
+    #[test]
+    fn test_settings_icons_unicode() {
+        let icons = IconSet::new(IconMode::Unicode);
+        assert!(!icons.zap().is_empty());
+        assert!(!icons.eye().is_empty());
+        assert!(!icons.code().is_empty());
+        assert!(!icons.user().is_empty());
+        assert!(!icons.keyboard().is_empty());
+        assert!(!icons.save().is_empty());
+    }
+
+    #[test]
+    fn test_settings_icons_nerdfonts() {
+        let icons = IconSet::new(IconMode::NerdFonts);
+        assert!(!icons.zap().is_empty());
+        assert!(!icons.eye().is_empty());
+        assert!(!icons.code().is_empty());
+        assert!(!icons.user().is_empty());
+        assert!(!icons.keyboard().is_empty());
+        assert!(!icons.save().is_empty());
+    }
+
+    #[test]
+    fn test_settings_icons_differ_between_modes() {
+        let unicode = IconSet::new(IconMode::Unicode);
+        let nerd = IconSet::new(IconMode::NerdFonts);
+        // NerdFonts glyphs should differ from Unicode fallbacks
+        assert_ne!(unicode.zap(), nerd.zap());
+        assert_ne!(unicode.eye(), nerd.eye());
+        assert_ne!(unicode.code(), nerd.code());
+        assert_ne!(unicode.user(), nerd.user());
+        assert_ne!(unicode.keyboard(), nerd.keyboard());
+        assert_ne!(unicode.save(), nerd.save());
     }
 }
