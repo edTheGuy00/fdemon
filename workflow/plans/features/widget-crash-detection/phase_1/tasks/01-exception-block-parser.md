@@ -400,3 +400,100 @@ mod tests {
 - The `to_log_entry()` method reuses `ParsedStackTrace::parse()` — no new parsing logic needed for the stack frames.
 - The message summary should be concise enough to be readable in the log view's single message line, with the full details available in the expanded stack trace.
 - Flutter uses `debugPrint()` which may word-wrap long lines. The parser should handle lines that are continuations of previous lines (no `#N` prefix, no `══` markers).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/exception_block.rs` | NEW - Complete exception block parser with state machine, detection functions, and 24 tests |
+| `crates/fdemon-core/src/lib.rs` | Added `exception_block` module and re-exported `ExceptionBlock`, `ExceptionBlockParser`, `FeedResult` |
+
+### Implementation Details
+
+**ExceptionBlock struct** - Fully implemented with:
+- Library name, description, widget name/location, stack trace text, line count
+- `to_log_entry()` conversion that integrates with existing `ParsedStackTrace::parse()`
+- `format_summary()` for compact display with truncation (~120 chars)
+
+**ExceptionBlockParser state machine** - Implements 3-state parser (Idle → InBody → InStackTrace):
+- `feed_line()` method strips ANSI codes and processes line-by-line
+- Detects exception headers and extracts library name
+- Accumulates description lines between header and stack trace
+- Detects and extracts widget name/location after "The relevant error-causing widget was:" marker
+- Transitions to stack trace mode on "When the exception was thrown..." or direct `#N` frame
+- Completes on footer detection (all `═` characters)
+- Force-completes at MAX_EXCEPTION_BLOCK_LINES (500) safety limit
+- Auto-resets to Idle after completion
+- `flush()` method for partial block recovery on session exit
+- `reset()` method for manual state reset
+
+**Detection functions**:
+- `extract_library_from_header()` - Extracts library name from `══╡ EXCEPTION CAUGHT BY <LIBRARY> ╞══`
+- `is_exception_footer()` - Detects all-equals footer lines (min 10 chars)
+- `is_another_exception()` - Detects and extracts "Another exception was thrown:" one-liners
+- `is_stack_trace_marker()` - Detects "When the exception was thrown, this was the stack:"
+- `is_widget_info_marker()` - Detects "The relevant error-causing widget was:"
+
+**FeedResult enum**:
+- `Buffered` - Line consumed, continue parsing
+- `NotConsumed` - Line not part of exception block, caller should handle normally
+- `Complete(ExceptionBlock)` - Block finished, contains parsed data
+- `OneLineException(String)` - "Another exception" one-liner detected
+
+### Notable Decisions/Tradeoffs
+
+1. **State machine over regex**: Used explicit state machine for better control over multi-line parsing and widget extraction. This makes the parser more maintainable and easier to debug.
+
+2. **ANSI stripping at entry**: Strip ANSI codes in `feed_line()` at the start, ensuring all detection logic works on clean text. Reuses existing `strip_ansi_codes()` infrastructure.
+
+3. **Widget name/location extraction**: Used simple heuristic - first non-empty line after marker is widget name, next line with colon is location. This handles the common case without complex parsing.
+
+4. **Direct stack frame detection**: Parser transitions to InStackTrace on either the marker line OR a line starting with `#<digit>`. This handles cases where the marker is missing.
+
+5. **Safety limit**: MAX_EXCEPTION_BLOCK_LINES = 500 prevents unbounded memory growth from malformed output. Force-completes with whatever has been accumulated.
+
+6. **Auto-reset on completion**: Parser automatically resets to Idle after returning `FeedResult::Complete`, enabling continuous parsing of multiple exception blocks.
+
+7. **Summary truncation**: `format_summary()` truncates to ~120 chars for readability in single-line log view, with full details accessible in expanded stack trace.
+
+### Testing Performed
+
+- `cargo test -p fdemon-core exception_block` - 24 tests passed
+- `cargo test -p fdemon-core` - All 267 tests passed (no regressions)
+- `cargo test --workspace --lib` - All 751 workspace tests passed
+- `cargo clippy -p fdemon-core -- -D warnings` - Clean (0 warnings)
+
+**Test coverage**:
+- Header detection with/without ANSI codes
+- Footer detection with/without ANSI codes
+- Library name extraction
+- "Another exception" one-liner detection
+- Complete block parsing with description, widget info, and stack trace
+- Widget name and location extraction
+- Multi-line descriptions
+- Direct stack frame transition (without marker)
+- Exception blocks without stack traces
+- Safety limit force-completion
+- Parser reset after completion
+- Incomplete block flushing
+- Non-exception lines pass-through
+- `to_log_entry()` conversion with stack trace parsing
+- `format_summary()` with/without widget, with truncation
+
+### Risks/Limitations
+
+1. **Widget extraction heuristic**: Simple pattern matching may not handle all edge cases (e.g., multi-line widget names, unusual formatting). Should be tested with real-world exception output.
+
+2. **No validation of library names**: Parser accepts any text between "EXCEPTION CAUGHT BY" and " ╞". Could add validation if specific library names are known.
+
+3. **Stack frame detection**: Relies on `#<digit>` pattern at start of line. May miss frames with unusual formatting.
+
+4. **Memory usage**: Buffers up to 500 lines per exception block. For extremely large stack traces, this could be significant. The limit is defensive but may need tuning based on real-world usage.
+
+5. **No backtracking**: State machine doesn't backtrack on ambiguous input. If a line looks like a stack frame but isn't, it will be treated as one. This is by design for simplicity and performance.

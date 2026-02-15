@@ -8,8 +8,6 @@ use crate::state::AppState;
 use fdemon_core::{AppPhase, DaemonMessage, LogEntry, LogLevel, LogSource, ParsedStackTrace};
 use fdemon_daemon::{parse_daemon_message, to_log_entry};
 
-use super::helpers::detect_raw_line_level;
-
 /// Handle stdout events for a specific session
 ///
 /// Parses daemon JSON messages and queues log entries for batched processing.
@@ -22,25 +20,49 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
             return;
         }
 
+        // Log exception-related events for diagnostics
+        if let DaemonMessage::AppLog(ref log) = msg {
+            if log.log.contains("EXCEPTION") || log.log.contains("══") {
+                tracing::info!(
+                    "Session {} EXCEPTION LINE: log={:?} error={} has_stack={}",
+                    session_id,
+                    &log.log[..log.log.len().min(100)],
+                    log.error,
+                    log.stack_trace.is_some(),
+                );
+            }
+        }
+
         // Convert to log entry if applicable
         if let Some(entry_info) = to_log_entry(&msg) {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                // Create log entry with parsed stack trace if present
-                let log_entry = if let Some(trace_str) = entry_info.stack_trace {
-                    let parsed_trace = ParsedStackTrace::parse(&trace_str);
-                    LogEntry::with_stack_trace(
+                if entry_info.stack_trace.is_some() {
+                    // Has dedicated stack trace — use existing path
+                    let parsed_trace =
+                        ParsedStackTrace::parse(entry_info.stack_trace.as_ref().unwrap());
+                    let log_entry = LogEntry::with_stack_trace(
                         entry_info.level,
                         entry_info.source,
                         entry_info.message,
                         parsed_trace,
-                    )
+                    );
+                    if handle.session.queue_log(log_entry) {
+                        handle.session.flush_batched_logs();
+                    }
                 } else {
-                    LogEntry::new(entry_info.level, entry_info.source, entry_info.message)
-                };
-
-                // Use batched logging for performance
-                if handle.session.queue_log(log_entry) {
-                    handle.session.flush_batched_logs();
+                    // No stack trace — route through exception parser for
+                    // multi-line exception block detection (app.log events)
+                    let entries = handle.session.process_log_line_with_fallback(
+                        &entry_info.message,
+                        entry_info.level,
+                        entry_info.source,
+                        entry_info.message.clone(),
+                    );
+                    for entry in entries {
+                        if handle.session.queue_log(entry) {
+                            handle.session.flush_batched_logs();
+                        }
+                    }
                 }
             }
         } else {
@@ -56,12 +78,14 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
         handle_session_message_state(state, session_id, &msg);
     } else if !line.trim().is_empty() {
         // Non-JSON output (build progress, etc.)
-        let (level, message) = detect_raw_line_level(line);
         if let Some(handle) = state.session_manager.get_mut(session_id) {
-            let entry = LogEntry::new(level, LogSource::Flutter, message);
-            // Use batched logging for performance
-            if handle.session.queue_log(entry) {
-                handle.session.flush_batched_logs();
+            // Process through exception detection and raw line handling
+            let entries = handle.session.process_raw_line(line);
+            for entry in entries {
+                // Use batched logging for performance
+                if handle.session.queue_log(entry) {
+                    handle.session.flush_batched_logs();
+                }
             }
         }
     }

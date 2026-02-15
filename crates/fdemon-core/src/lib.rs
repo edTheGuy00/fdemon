@@ -33,6 +33,11 @@
 //! - [`ParsedStackTrace`] - Parsed and formatted stack trace
 //! - [`StackFrame`] - Individual stack frame with file, line, column
 //!
+//! ### Exception Blocks (`exception_block`)
+//! - [`ExceptionBlock`] - Parsed Flutter framework exception block
+//! - [`ExceptionBlockParser`] - Line-by-line state machine parser for exception blocks
+//! - [`FeedResult`] - Result of feeding a line to the parser
+//!
 //! ## Prelude
 //!
 //! Import commonly used types with:
@@ -44,6 +49,7 @@ pub mod ansi;
 pub mod discovery;
 pub mod error;
 pub mod events;
+pub mod exception_block;
 pub mod logging;
 pub mod stack_trace;
 pub mod types;
@@ -65,6 +71,7 @@ pub use events::{
     AppDebugPort, AppLog, AppProgress, AppStart, AppStarted, AppStop, DaemonConnected, DaemonEvent,
     DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
+pub use exception_block::{ExceptionBlock, ExceptionBlockParser, FeedResult};
 pub use stack_trace::{
     detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame, StackTraceFormat,
 };

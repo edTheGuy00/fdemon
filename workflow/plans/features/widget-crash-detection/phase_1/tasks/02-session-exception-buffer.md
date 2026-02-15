@@ -224,3 +224,68 @@ mod tests {
 - The method returns `Vec<LogEntry>` (not a single entry) to handle edge cases where the parser might emit multiple entries (e.g., a partial flush + normal line)
 - ANSI stripping happens inside `process_raw_line()` once, avoiding double-stripping
 - The existing `detect_raw_line_level` import needs to be accessible from `session.rs` (it's currently in `handler/helpers.rs`)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session.rs` | Added `exception_parser` field to Session struct, initialized in `Session::new()`, added `process_raw_line()` and `flush_exception_buffer()` methods, added 9 test cases |
+| `crates/fdemon-core/src/exception_block.rs` | Added `#[derive(Debug)]` to `ExceptionBlockParser` struct to support Session's Debug derive |
+
+### Notable Decisions/Tradeoffs
+
+1. **ANSI Stripping**: The `ExceptionBlockParser::feed_line()` already strips ANSI codes internally, so `process_raw_line()` passes the raw line directly to the parser. For `NotConsumed` paths, we strip ANSI codes before calling `detect_raw_line_level()` to ensure consistent behavior.
+
+2. **Import Organization**: Added `detect_raw_line_level` to the imports from `handler::helpers`, along with `ExceptionBlockParser`, `FeedResult`, and `strip_ansi_codes` from `fdemon_core`.
+
+3. **Debug Derive**: Had to add `#[derive(Debug)]` to `ExceptionBlockParser` in fdemon-core because `Session` derives Debug and needs all its fields to implement Debug.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app session::tests::test_process_raw_line` - Passed (6 tests)
+- `cargo test -p fdemon-app session::tests::test_flush_exception_buffer` - Passed (2 tests)
+- `cargo test -p fdemon-app session::tests::test_normal_lines_after_exception` - Passed (1 test)
+- `cargo test -p fdemon-app` - Passed (755 tests, 5 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo test --workspace --lib` - Passed (1604 tests total: 755 fdemon-app, 267 fdemon-core, 136 fdemon-daemon, 446 fdemon-tui)
+
+### Test Coverage
+
+Added 9 test cases covering:
+- Normal line processing with level detection
+- Exception header buffering
+- Complete exception block with stack trace
+- "Another exception" one-liner detection
+- Flush on exit with partial block
+- Empty flush when no pending exception
+- Normal lines after exception completion
+- ANSI code handling
+- Empty line handling
+
+### Acceptance Criteria Status
+
+All acceptance criteria met:
+
+1. ✅ `Session` struct has `exception_parser: ExceptionBlockParser` field
+2. ✅ `Session::new()` initializes the parser
+3. ✅ `process_raw_line()` routes lines through exception detection
+4. ✅ `process_raw_line()` returns normal `LogEntry` for non-exception lines
+5. ✅ `process_raw_line()` returns empty `Vec` for buffered exception lines
+6. ✅ `process_raw_line()` returns exception `LogEntry` when block completes
+7. ✅ `flush_exception_buffer()` returns partial block on session exit
+8. ✅ No changes to existing `add_log()`, `queue_log()`, or `flush_batched_logs()` methods
+9. ✅ Existing `LogBlockState` and Logger block propagation continue to work
+
+### Risks/Limitations
+
+1. **Parser State Persistence**: The exception parser maintains state across calls to `process_raw_line()`. If the handler doesn't properly flush on session exit, partial exception blocks could be lost. This is mitigated by providing the `flush_exception_buffer()` method.
+
+2. **Memory Usage**: The parser buffers exception block lines up to MAX_EXCEPTION_BLOCK_LINES (500 lines). In pathological cases with extremely long exception blocks, this could use significant memory. However, the parser force-completes blocks that exceed this limit.
+
+3. **No Breaking Changes**: The implementation is additive only - existing code paths remain unchanged. The new methods provide an optional enhanced path for exception detection that must be explicitly called by the handler.

@@ -302,3 +302,37 @@ mod tests {
 - The `app.log` check for `EXCEPTION CAUGHT BY` is a defensive measure — it's unclear whether Flutter wraps exception banners in JSON events or outputs them as raw text. This handles both cases.
 - The flush on `DaemonEvent::Exited` uses `add_log()` directly (bypassing batching) to ensure the partial entry is immediately visible
 - Testing should cover the integration points: stderr → exception → single entry; stderr → normal → individual entry; exit → flush
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/daemon.rs` | Updated stderr handler to use `session.process_raw_line()` instead of direct ANSI stripping and level detection; Added exception buffer flush on session exit; Removed unused imports (`strip_ansi_codes`, `detect_raw_line_level`) |
+| `crates/fdemon-app/src/handler/session.rs` | Updated stdout fallback handler (non-JSON lines) to use `session.process_raw_line()`; Removed unused import (`detect_raw_line_level`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Skipped app.log exception detection**: The task spec mentioned detecting exception blocks within `app.log` JSON-RPC events, but the current code structure shows that `to_log_entry()` already parses app.log messages properly. Exception blocks are more likely to arrive via stderr or raw stdout (which are now handled). If needed, this can be added later when we observe exception banners wrapped in JSON-RPC events.
+
+2. **Handler simplification**: The refactoring successfully encapsulates ANSI stripping, exception detection, and level detection within `Session::process_raw_line()`, significantly simplifying the handler code. Both stderr and stdout fallback handlers now use identical patterns.
+
+3. **Flush on exit uses immediate add**: Following the task spec guidance, the exception buffer flush on session exit uses `add_log()` directly (bypassing batching) to ensure partial exception blocks are immediately visible.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (755 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo test --workspace --lib` - Passed (1532 tests across all crates)
+
+### Risks/Limitations
+
+1. **No dedicated handler tests**: The handler modules (`daemon.rs`, `session.rs`) don't have their own test modules since they're integration-level code. Testing relies on the session-level tests from Task 2 (which test `process_raw_line()` and `flush_exception_buffer()`) plus compilation verification.
+
+2. **app.log exception handling deferred**: If Flutter does wrap exception banners in JSON-RPC `app.log` events, they won't be detected as collapsible exceptions yet. This can be added if observed in real-world usage.

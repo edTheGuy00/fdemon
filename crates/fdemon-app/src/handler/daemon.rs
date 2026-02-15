@@ -2,9 +2,8 @@
 
 use crate::session::SessionId;
 use crate::state::AppState;
-use fdemon_core::{strip_ansi_codes, DaemonEvent, LogEntry, LogSource};
+use fdemon_core::{DaemonEvent, LogEntry, LogSource};
 
-use super::helpers::detect_raw_line_level;
 use super::session::{handle_session_exited, handle_session_message_state, handle_session_stdout};
 
 /// Handle daemon events for a specific session (multi-session mode)
@@ -40,13 +39,9 @@ pub fn handle_session_daemon_event(
         DaemonEvent::Stderr(line) => {
             if !line.trim().is_empty() {
                 if let Some(handle) = state.session_manager.get_mut(session_id) {
-                    // Strip ANSI/escape codes and detect log level from content
-                    // Logger package outputs to stderr but includes level indicators
-                    // (emojis, prefixes) that we can use for proper level detection
-                    let cleaned = strip_ansi_codes(&line);
-                    let (level, message) = detect_raw_line_level(&cleaned);
-                    if !message.is_empty() {
-                        let entry = LogEntry::new(level, LogSource::Flutter, message);
+                    // Process through exception detection and raw line handling
+                    let entries = handle.session.process_raw_line(&line);
+                    for entry in entries {
                         // Use batched logging for performance
                         if handle.session.queue_log(entry) {
                             handle.session.flush_batched_logs();
@@ -56,6 +51,12 @@ pub fn handle_session_daemon_event(
             }
         }
         DaemonEvent::Exited { code } => {
+            // Flush pending exception buffer before handling exit
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                if let Some(entry) = handle.session.flush_exception_buffer() {
+                    handle.session.add_log(entry);
+                }
+            }
             handle_session_exited(state, session_id, code);
         }
         DaemonEvent::SpawnFailed { reason } => {

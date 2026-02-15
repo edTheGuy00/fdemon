@@ -280,13 +280,22 @@ pub fn parse_flutter_log(raw: &str, is_error: bool) -> (LogLevel, String) {
     let cleaned = strip_ansi_codes(raw);
     let message = cleaned.trim();
 
-    // Check for error indicators
+    // Check for error indicators — still strip flutter prefix for consistency
     if is_error {
-        return (LogLevel::Error, message.to_string());
+        let content = message
+            .strip_prefix("flutter: ")
+            .or_else(|| message.strip_prefix("flutter:"))
+            .unwrap_or(message);
+        return (LogLevel::Error, content.to_string());
     }
 
-    // Check for common patterns - strip "flutter: " prefix
-    if let Some(content) = message.strip_prefix("flutter: ") {
+    // Check for common patterns - strip "flutter: " prefix.
+    // Also try "flutter:" without space — trim() can strip the trailing space
+    // from empty lines ("flutter: " → "flutter:"), breaking the prefix match.
+    if let Some(content) = message
+        .strip_prefix("flutter: ")
+        .or_else(|| message.strip_prefix("flutter:"))
+    {
         let level = detect_log_level(content);
         return (level, content.to_string());
     }
@@ -1091,5 +1100,95 @@ mod tests {
             detect_log_level("Caution: low memory"),
             fdemon_core::LogLevel::Warning
         );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Empty Line Prefix Handling (Bug Fix)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_flutter_log_empty_line_with_prefix() {
+        // Flutter sends empty lines as "flutter: " (prefix + space).
+        // After trim(), the space is gone: "flutter:" — must still strip prefix.
+        let (level, msg) = parse_flutter_log("flutter: ", false);
+        assert_eq!(level, fdemon_core::LogLevel::Info);
+        assert_eq!(msg, "", "Empty flutter line should produce empty message");
+    }
+
+    #[test]
+    fn test_parse_flutter_log_empty_line_no_space() {
+        // Edge case: "flutter:" with no trailing space
+        let (level, msg) = parse_flutter_log("flutter:", false);
+        assert_eq!(level, fdemon_core::LogLevel::Info);
+        assert_eq!(
+            msg, "",
+            "flutter: without content should produce empty message"
+        );
+    }
+
+    #[test]
+    fn test_parse_flutter_log_error_strips_prefix() {
+        // Error lines should also strip the flutter prefix
+        let (level, msg) = parse_flutter_log(
+            "flutter: ══╡ EXCEPTION CAUGHT BY WIDGETS LIBRARY ╞═══",
+            true,
+        );
+        assert_eq!(level, fdemon_core::LogLevel::Error);
+        assert!(
+            !msg.starts_with("flutter:"),
+            "Error lines should strip flutter prefix, got: {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_parse_flutter_log_error_empty_line() {
+        // Error empty line should also strip prefix
+        let (level, msg) = parse_flutter_log("flutter: ", true);
+        assert_eq!(level, fdemon_core::LogLevel::Error);
+        assert_eq!(msg, "", "Error empty line should produce empty message");
+    }
+
+    #[test]
+    fn test_exception_block_via_app_log_flow() {
+        // Simulate the EXACT data transformation for each line of an exception
+        // block as it flows through parse_flutter_log → exception parser
+        use fdemon_core::{ExceptionBlockParser, FeedResult};
+
+        let app_log_lines: Vec<(&str, bool)> = vec![
+            ("flutter: ══╡ EXCEPTION CAUGHT BY RENDERING LIBRARY ╞═════════════════════", false),
+            ("flutter: The following assertion was thrown during layout:", false),
+            ("flutter: A RenderFlex overflowed by 4028 pixels on the right.", false),
+            ("flutter: ", false), // Empty line — the critical case!
+            ("flutter: The relevant error-causing widget was:", false),
+            ("flutter:   Row", false),
+            ("flutter: ", false), // Another empty line
+            ("flutter: When the exception was thrown, this was the stack:", false),
+            ("flutter: #0      RenderFlex.performLayout (package:flutter/src/rendering/flex.dart:999:15)", false),
+            ("flutter: ════════════════════════════════════════════════════════════════════", false),
+        ];
+
+        let mut parser = ExceptionBlockParser::new();
+        let mut completed_block = None;
+
+        for (log_field, is_error) in &app_log_lines {
+            // Step 1: parse_flutter_log (same as to_log_entry does)
+            let (_level, message) = parse_flutter_log(log_field, *is_error);
+
+            // Step 2: feed to exception parser (same as process_log_line_with_fallback)
+            let result = parser.feed_line(&message);
+
+            if let FeedResult::Complete(block) = result {
+                completed_block = Some(block);
+                break;
+            }
+        }
+
+        let block =
+            completed_block.expect("Exception block should be detected via app.log event flow");
+        assert_eq!(block.library, "RENDERING LIBRARY");
+        assert!(block.description.contains("RenderFlex overflowed"));
+        assert_eq!(block.widget_name.as_deref(), Some("Row"));
+        assert!(block.stack_trace_text.contains("#0"));
     }
 }

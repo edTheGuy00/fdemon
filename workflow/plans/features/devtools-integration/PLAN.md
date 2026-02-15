@@ -2,7 +2,7 @@
 
 ## TL;DR
 
-Integrate Flutter DevTools capabilities directly into Flutter Demon by connecting to the Dart VM Service Protocol over WebSocket. This enables access to the Widget Inspector, Widget Tree, Layout Explorer, Performance Overlay, and Memory Usage—all consumed and displayed within the terminal UI, eliminating the need to open a separate browser-based DevTools window.
+Integrate Flutter DevTools capabilities directly into Flutter Demon by connecting to the Dart VM Service Protocol over WebSocket. **Phase 1 priority: solve the widget crash log invisibility problem** by subscribing to the VM Service Extension stream where `Flutter.Error` events actually live. This also enables hybrid logging, and future phases add Widget Inspector, Layout Explorer, Performance Overlay, and Memory Usage—all within the terminal UI.
 
 ---
 
@@ -14,6 +14,20 @@ When a Flutter app runs in debug mode, it exposes a VM Service endpoint via WebS
 2. **Flutter Service Extensions** - Flutter-specific debugging features prefixed with `ext.flutter.*`
 
 Currently, Flutter Demon captures the `ws_uri` but only uses it to open DevTools in a browser. This feature will establish a direct WebSocket connection to access these powerful debugging capabilities natively.
+
+### Critical Motivation: Widget Crash Logs Are Invisible
+
+Despite a fully implemented and tested `ExceptionBlockParser` (50+ tests, all bugs fixed), **widget crash logs remain invisible in fdemon**. Root cause analysis reveals this is NOT an fdemon bug — it's how Flutter works:
+
+**When Flutter runs in `--machine` mode, `ext.flutter.inspector.structuredErrors` defaults to enabled.** This means:
+
+1. `FlutterError.presentError` is replaced with `_reportStructuredError`
+2. Errors are posted via `developer.postEvent('Flutter.Error', errorJson)` to the **VM Service Extension stream**
+3. **Errors never reach stdout/stderr** — they are simply lost unless a VM Service client is listening
+
+The existing exception block parser is correct but receives no input — Flutter redirects errors away from the text channels fdemon monitors. The only reliable fix is connecting to the VM Service and subscribing to the Extension stream where `Flutter.Error` events actually live.
+
+**This makes Phase 1 of DevTools integration the direct solution to the crash log visibility problem.** The existing `ExceptionBlockParser` remains as a fallback for edge cases where structured errors are disabled or VM Service is unavailable.
 
 ---
 
@@ -156,14 +170,15 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 
 ## Affected Modules
 
-### VM Service & Logging (Phase 1)
+### VM Service, Structured Errors & Logging (Phase 1)
 - `src/daemon/events.rs` - Already has `AppDebugPort` with `ws_uri`
 - `src/services/state_service.rs` - Already stores `devtools_uri`
 - **NEW** `src/vmservice/mod.rs` - VM Service client module
 - **NEW** `src/vmservice/client.rs` - WebSocket client implementation
 - **NEW** `src/vmservice/protocol.rs` - VM Service JSON-RPC types
+- **NEW** `src/vmservice/errors.rs` - `Flutter.Error` Extension event parsing (crash log fix)
 - **NEW** `src/vmservice/logging.rs` - Logging stream handler & LogRecord parsing
-- `src/app/session.rs` - Integrate VM Service logs with existing log list
+- `src/app/session.rs` - Integrate VM Service logs + errors with existing log list
 - `src/core/types.rs` - Add `LogSource::VmService` variant
 
 ### Service Extensions (Phase 2)
@@ -189,9 +204,9 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 
 ## Development Phases
 
-### Phase 1: VM Service Client Foundation + Hybrid Logging
+### Phase 1: VM Service Client Foundation + Structured Errors + Hybrid Logging
 
-**Goal**: Establish WebSocket connection, basic VM Service communication, and **hybrid logging** with the `Logging` stream.
+**Goal**: Establish WebSocket connection, **solve widget crash log invisibility** by subscribing to `Flutter.Error` Extension events, and add hybrid logging via the `Logging` stream.
 
 **Duration**: 2-3 weeks
 
@@ -220,7 +235,28 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
    - Implement `stream_listen(stream)` → subscribe to events
    - Store main isolate ID for service extension calls
 
-5. **Logging Stream Integration (Hybrid Logging)**
+5. **Structured Error Subscription (CRASH LOG FIX)**
+   - Subscribe to `Extension` stream on connect (`streamListen("Extension")`)
+   - Listen for events where `extensionKind == "Flutter.Error"`
+   - Parse structured error JSON payload:
+     ```rust
+     pub struct FlutterErrorEvent {
+         pub errors_since_reload: i32,
+         pub rendered_error_text: Option<String>,  // Full text for first error
+         pub description: String,                   // Error summary
+         pub library: Option<String>,               // "widgets library", etc.
+         pub stack_trace: Option<String>,
+         // DiagnosticsNode fields for rich display
+     }
+     ```
+   - Convert `FlutterErrorEvent` to `LogEntry` with:
+     - `level: LogLevel::Error`
+     - `message`: Error description / summary
+     - `stack_trace`: Parsed via existing `ParsedStackTrace::parse()`
+   - **This is the primary fix for invisible widget crash logs** — errors that Flutter redirects away from stdout/stderr will now be captured directly from the VM Service
+   - Fallback: existing `ExceptionBlockParser` still handles edge cases where `structuredErrors` is disabled or VM Service is unavailable
+
+6. **Logging Stream Integration (Hybrid Logging)**
    - `src/vmservice/logging.rs` - Logging stream handler
    - Subscribe to `Logging` stream on connect
    - Parse `LogRecord` events:
@@ -250,20 +286,21 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
    - Add `LogSource::VmService` to distinguish from daemon logs
    - Convert `VmLogRecord` to `LogEntry` and merge with session logs
 
-6. **Unified Log Merging**
+7. **Unified Log Merging**
    - Logs from VM Service `Logging` stream: trust level, use timestamp for ordering
+   - Logs from VM Service `Extension` stream (`Flutter.Error`): always `LogLevel::Error`
    - Logs from daemon `app.log`: use existing content-based detection
-   - Merge both into single `Session.logs` list, ordered by timestamp
+   - Merge all into single `Session.logs` list, ordered by timestamp
    - Dedupe if same message appears in both (rare edge case)
 
-7. **Integration with Session**
+8. **Integration with Session**
    - Auto-connect when `app.debugPort` event received
    - Store `VmServiceClient` in session state
    - Disconnect on session stop
    - Handle connection errors gracefully
-   - Continue using daemon logs if VM Service unavailable (graceful fallback)
+   - Continue using daemon logs + `ExceptionBlockParser` if VM Service unavailable (graceful fallback)
 
-**Milestone**: Flutter Demon connects to VM Service, receives structured logs via `Logging` stream with accurate levels, and merges them with existing daemon logs.
+**Milestone**: Flutter Demon connects to VM Service, **widget crash logs are now visible** via `Flutter.Error` Extension events, structured logs arrive via `Logging` stream with accurate levels, and all sources merge with existing daemon logs.
 
 ---
 
@@ -541,11 +578,15 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 - [ ] `getVM` and `getIsolate` calls return valid data
 - [ ] Connection handles gracefully with session lifecycle
 - [ ] Reconnection works after brief disconnects
+- [ ] **Extension stream subscribed and `Flutter.Error` events captured**
+- [ ] **Widget crash logs are now visible as collapsible error entries**
+- [ ] **Structured error JSON parsed into LogEntry with stack trace**
 - [ ] **Logging stream subscribed and receiving events**
 - [ ] **VM LogRecords converted to LogEntry with correct level**
 - [ ] **VM logs merged with daemon logs in unified list**
 - [ ] **Apps using `dart:developer log()` show accurate log levels**
 - [ ] **Apps using Logger/Talker still work via daemon fallback**
+- [ ] **Graceful fallback to ExceptionBlockParser when VM Service unavailable**
 
 ### Phase 2 Complete When:
 - [ ] All debug overlay toggles work from Flutter Demon
@@ -575,6 +616,15 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 
 ---
 
+## Relationship to Widget Crash Detection Feature
+
+The existing `ExceptionBlockParser` (in `fdemon-core/src/exception_block.rs`) is fully implemented with 50+ tests. It correctly parses multi-line Flutter exception blocks from text output. However, it receives no input in practice because Flutter's `structuredErrors` extension redirects errors away from stdout/stderr.
+
+**After Phase 1 is complete:**
+- **Primary path**: `Flutter.Error` Extension events from VM Service (structured JSON)
+- **Fallback path**: `ExceptionBlockParser` for text-based exceptions (when VM Service unavailable, or `structuredErrors` disabled)
+- The widget-crash-detection feature plan can be considered **superseded** by this plan's Phase 1
+
 ## Future Enhancements
 
 After core DevTools integration is complete, consider:
@@ -585,7 +635,7 @@ After core DevTools integration is complete, consider:
 4. **Network Inspector** - View HTTP requests (requires additional hooks)
 5. **Advanced Log Filtering** - Filter logs by logger name (from VM Service), widget hierarchy
 6. **Log Source Indicators** - Show which logs came from VM Service vs daemon in UI
-7. **Structured Error Display** - Use `ext.flutter.inspector.structuredErrors` for rich error formatting
+7. **Rich DiagnosticsNode Display** - Parse full `DiagnosticsNode` tree from `Flutter.Error` events for interactive error exploration
 
 ---
 

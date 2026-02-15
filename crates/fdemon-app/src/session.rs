@@ -7,10 +7,13 @@ use std::time::{Duration, Instant};
 use chrono::{DateTime, Local};
 
 use crate::config::LaunchConfig;
-use crate::handler::helpers::{is_block_end, is_block_start};
+use crate::handler::helpers::{detect_raw_line_level, is_block_end, is_block_start};
 use crate::hyperlinks::LinkHighlightState;
 use crate::log_view_state::LogViewState;
-use fdemon_core::{AppPhase, FilterState, LogEntry, LogLevel, LogSource, SearchState};
+use fdemon_core::{
+    strip_ansi_codes, AppPhase, ExceptionBlockParser, FeedResult, FilterState, LogEntry, LogLevel,
+    LogSource, SearchState,
+};
 use fdemon_daemon::{CommandSender, FlutterProcess, RequestTracker};
 
 // ─────────────────────────────────────────────────────────
@@ -229,6 +232,9 @@ pub struct Session {
     /// Block state for Logger package block level propagation
     block_state: LogBlockState,
 
+    /// Exception block parser for multi-line Flutter exception detection
+    exception_parser: ExceptionBlockParser,
+
     // ─────────────────────────────────────────────────────────
     // Device & App Tracking
     // ─────────────────────────────────────────────────────────
@@ -298,6 +304,7 @@ impl Session {
             collapse_state: CollapseState::new(),
             link_highlight_state: LinkHighlightState::new(),
             block_state: LogBlockState::default(),
+            exception_parser: ExceptionBlockParser::new(),
             device_id,
             device_name,
             platform,
@@ -489,6 +496,79 @@ impl Session {
     /// Useful for event loop timing to know when to check for pending logs.
     pub fn time_until_batch_flush(&self) -> Duration {
         self.log_batcher.time_until_flush()
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Exception Block Processing (Phase 1 Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    /// Process a raw line (from stderr or non-JSON stdout) through exception detection.
+    ///
+    /// Returns zero or more LogEntry items to be queued:
+    /// - If the line is part of an exception block: returns empty (buffered)
+    /// - If the line completes an exception block: returns the exception LogEntry
+    /// - If the line is not part of an exception: returns a normal LogEntry
+    /// - If the line is a "Another exception was thrown:" one-liner: returns an Error entry
+    pub fn process_raw_line(&mut self, line: &str) -> Vec<LogEntry> {
+        match self.exception_parser.feed_line(line) {
+            FeedResult::Buffered => {
+                // Line consumed by exception parser, nothing to emit yet
+                vec![]
+            }
+            FeedResult::Complete(block) => {
+                // Exception block complete — convert to LogEntry with stack trace
+                vec![block.to_log_entry()]
+            }
+            FeedResult::OneLineException(message) => {
+                // "Another exception was thrown: ..." one-liner
+                vec![LogEntry::error(LogSource::Flutter, message)]
+            }
+            FeedResult::NotConsumed => {
+                // Normal line — use existing level detection
+                let cleaned = strip_ansi_codes(line);
+                let (level, message) = detect_raw_line_level(&cleaned);
+                if message.is_empty() {
+                    vec![]
+                } else {
+                    vec![LogEntry::new(level, LogSource::Flutter, message)]
+                }
+            }
+        }
+    }
+
+    /// Process a log line through exception detection, using provided fallback
+    /// for non-exception lines. Used for app.log events that already have
+    /// level/source from the daemon protocol.
+    pub fn process_log_line_with_fallback(
+        &mut self,
+        line: &str,
+        fallback_level: LogLevel,
+        fallback_source: LogSource,
+        fallback_message: String,
+    ) -> Vec<LogEntry> {
+        match self.exception_parser.feed_line(line) {
+            FeedResult::Buffered => vec![],
+            FeedResult::Complete(block) => vec![block.to_log_entry()],
+            FeedResult::OneLineException(msg) => {
+                vec![LogEntry::error(LogSource::Flutter, msg)]
+            }
+            FeedResult::NotConsumed => {
+                vec![LogEntry::new(
+                    fallback_level,
+                    fallback_source,
+                    fallback_message,
+                )]
+            }
+        }
+    }
+
+    /// Flush any pending exception buffer (e.g., on session exit).
+    ///
+    /// Returns a LogEntry if there was a partial exception block being accumulated.
+    pub fn flush_exception_buffer(&mut self) -> Option<LogEntry> {
+        self.exception_parser
+            .flush()
+            .map(|block| block.to_log_entry())
     }
 
     // ─────────────────────────────────────────────────────────
@@ -2192,5 +2272,130 @@ mod tests {
         let range: Vec<_> = session.get_logs_range(0, 10).collect();
 
         assert_eq!(range.len(), 10);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Exception Block Processing Tests (Phase 1 Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    fn create_test_session() -> Session {
+        Session::new(
+            "device-test".to_string(),
+            "Test Device".to_string(),
+            "ios".to_string(),
+            false,
+        )
+    }
+
+    #[test]
+    fn test_process_raw_line_normal() {
+        let mut session = create_test_session();
+
+        let entries = session.process_raw_line("flutter: Hello World");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, LogLevel::Info);
+        assert_eq!(entries[0].message, "Hello World"); // "flutter: " stripped
+    }
+
+    #[test]
+    fn test_process_raw_line_exception_buffered() {
+        let mut session = create_test_session();
+
+        let entries =
+            session.process_raw_line("══╡ EXCEPTION CAUGHT BY WIDGETS LIBRARY ╞═══════════");
+        assert!(entries.is_empty()); // buffered, not emitted yet
+    }
+
+    #[test]
+    fn test_process_raw_line_exception_complete() {
+        let mut session = create_test_session();
+
+        // Feed exception block
+        assert!(session
+            .process_raw_line("══╡ EXCEPTION CAUGHT BY WIDGETS LIBRARY ╞═══════════")
+            .is_empty());
+        assert!(session.process_raw_line("Error description").is_empty());
+        assert!(session
+            .process_raw_line("#0      main (package:app/main.dart:15:3)")
+            .is_empty());
+
+        // Footer completes the block
+        let entries =
+            session.process_raw_line("════════════════════════════════════════════════════════");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, LogLevel::Error);
+        assert!(entries[0].stack_trace.is_some());
+    }
+
+    #[test]
+    fn test_process_raw_line_another_exception() {
+        let mut session = create_test_session();
+
+        let entries = session
+            .process_raw_line("Another exception was thrown: RangeError (index): Invalid value");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_flush_exception_buffer_on_exit() {
+        let mut session = create_test_session();
+
+        // Start an exception block but don't finish it
+        session.process_raw_line("══╡ EXCEPTION CAUGHT BY WIDGETS LIBRARY ╞═══════════");
+        session.process_raw_line("Error description");
+
+        // Flush should return partial block
+        let entry = session.flush_exception_buffer();
+        assert!(entry.is_some());
+        assert_eq!(entry.unwrap().level, LogLevel::Error);
+    }
+
+    #[test]
+    fn test_flush_exception_buffer_empty() {
+        let mut session = create_test_session();
+
+        // No pending exception
+        let entry = session.flush_exception_buffer();
+        assert!(entry.is_none());
+    }
+
+    #[test]
+    fn test_normal_lines_after_exception() {
+        let mut session = create_test_session();
+
+        // Complete an exception block
+        session.process_raw_line("══╡ EXCEPTION CAUGHT BY WIDGETS LIBRARY ╞═══════════");
+        session.process_raw_line("Error");
+        session.process_raw_line("════════════════════════════════════════════════════════");
+
+        // Normal lines should work after
+        let entries = session.process_raw_line("Normal log message");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].level, LogLevel::Info);
+    }
+
+    #[test]
+    fn test_process_raw_line_with_ansi_codes() {
+        let mut session = create_test_session();
+
+        // ANSI codes should be stripped before processing
+        let entries = session.process_raw_line("\x1b[38;5;244mflutter: Test message\x1b[0m");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].message, "Test message");
+        assert!(!entries[0].message.contains('\x1b')); // No ANSI codes in message
+    }
+
+    #[test]
+    fn test_process_raw_line_empty_after_strip() {
+        let mut session = create_test_session();
+
+        // Empty lines should return empty vec
+        let entries = session.process_raw_line("");
+        assert!(entries.is_empty());
+
+        // Whitespace-only lines
+        let entries = session.process_raw_line("   ");
+        assert!(entries.is_empty());
     }
 }
