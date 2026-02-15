@@ -13,7 +13,7 @@ When a Flutter app runs in debug mode, it exposes a VM Service endpoint via WebS
 1. **VM Service Protocol** (v4.x) - Core Dart VM introspection
 2. **Flutter Service Extensions** - Flutter-specific debugging features prefixed with `ext.flutter.*`
 
-Currently, Flutter Demon captures the `ws_uri` but only uses it to open DevTools in a browser. This feature will establish a direct WebSocket connection to access these powerful debugging capabilities natively.
+Currently, Flutter Demon receives the `ws_uri` via the `app.debugPort` event but **discards it** — only logging the port number as an info message. The `Session` struct has no field for it, and `SharedState.devtools_uri` is hardcoded to `None`. This feature will capture the `ws_uri`, establish a direct WebSocket connection, and access these powerful debugging capabilities natively.
 
 ### Critical Motivation: Widget Crash Logs Are Invisible
 
@@ -168,17 +168,87 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 
 ---
 
+## UX Design
+
+### WebSocket Connection (Invisible — Phase 1)
+
+The VM Service WebSocket connection is **automatic and invisible** to the user:
+
+1. Flutter app starts → emits `app.debugPort` with `ws_uri`
+2. fdemon auto-connects to `ws_uri` immediately (no user action)
+3. Subscribes to `Extension` stream (crash logs) and `Logging` stream (enhanced logs)
+4. Enhanced logs and crash logs flow into the existing unified log view
+5. Connection status shown as a subtle indicator in the status bar (e.g., `[VM]` badge)
+
+**Current gap (must fix in Phase 1):** The `ws_uri` from `app.debugPort` is currently **discarded** — only the port number is logged as an info message. The `Session` struct has no `ws_uri` field, and `SharedState.devtools_uri` is hardcoded to `None`. The handler in `handler/session.rs` only processes `AppStart`/`AppStop`, ignoring `AppDebugPort` entirely.
+
+### Key Binding Strategy
+
+| Phase | `d` Key | `+` Key | Rationale |
+|-------|---------|---------|-----------|
+| **Phase 1–3** | NewSessionDialog (no change) | NewSessionDialog | No TUI panels exist yet; no reason to reassign |
+| **Phase 4** | **Enter DevTools mode** | NewSessionDialog (sole binding) | `+` retains new-session functionality; `d` gets its implied "Debug" purpose |
+
+**Current state of `d`:**
+- `d` and `+` both open NewSessionDialog (identical behavior)
+- Header displays `[d] Debug` — misleading label since it opens a session dialog, not debug tools
+- Phase 4 makes the label accurate by reassigning `d` to DevTools
+
+**Available single-letter keys (Normal mode):** `a`, `b`, `i`, `m`, `o`, `p`, `t`, `u`, `v`, `w`, `y`, `z`
+
+### DevTools Mode Layout (Phase 4)
+
+DevTools mode **replaces the log view area** (not a split or overlay). `Esc` returns to normal log view.
+
+```
+┌──────────────────────────────────────────────────────┐
+│ Header: [project name]   [r] Run  [R] Restart  ...  │
+├──────────────────────────────────────────────────────┤
+│ Tabs: [1: iPhone 15]  [2: Pixel 8]                  │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  DevTools Sub-tabs: [i] Inspector [l] Layout [p] Perf│
+│  ┌──────────────────────────────────────────────────┐│
+│  │                                                  ││
+│  │   Widget Tree / Layout Explorer / Perf Graph     ││
+│  │                                                  ││
+│  │                                                  ││
+│  └──────────────────────────────────────────────────┘│
+│                                                      │
+├──────────────────────────────────────────────────────┤
+│ Status: [Esc] Logs  [b] Browser  [i/l/p] Panels     │
+└──────────────────────────────────────────────────────┘
+```
+
+**Navigation:**
+- `d` (from Normal mode) → Enter DevTools mode (Inspector sub-panel by default)
+- `Esc` → Return to normal log view
+- `i` / `l` / `p` → Switch between Inspector, Layout, Performance sub-panels
+- `b` → Open DevTools in system browser (fallback/complement)
+
+### Browser DevTools (From DevTools Mode Only)
+
+Browser-based DevTools is accessible **only from within DevTools mode** (not from Normal mode):
+- Enter DevTools mode with `d` → press `b` to open in browser
+- URL constructed from `ws_uri`: `https://devtools.flutter.dev/?uri={encoded_ws_uri}`
+- Respects `config.devtools.browser` setting for browser choice
+- Cross-platform: `open` (macOS), `xdg-open` (Linux), `start` (Windows)
+
+---
+
 ## Affected Modules
 
 ### VM Service, Structured Errors & Logging (Phase 1)
 - `src/daemon/events.rs` - Already has `AppDebugPort` with `ws_uri`
-- `src/services/state_service.rs` - Already stores `devtools_uri`
+- `src/services/state_service.rs` - Already stores `devtools_uri` (currently hardcoded `None`)
+- `src/app/session.rs` - **Add `ws_uri: Option<String>` field** (currently missing)
+- `src/app/handler/session.rs` - **Add `AppDebugPort` handler** (currently ignored)
+- `src/app/engine.rs` - **Sync `ws_uri` to SharedState** (replace hardcoded `None`)
 - **NEW** `src/vmservice/mod.rs` - VM Service client module
 - **NEW** `src/vmservice/client.rs` - WebSocket client implementation
 - **NEW** `src/vmservice/protocol.rs` - VM Service JSON-RPC types
 - **NEW** `src/vmservice/errors.rs` - `Flutter.Error` Extension event parsing (crash log fix)
 - **NEW** `src/vmservice/logging.rs` - Logging stream handler & LogRecord parsing
-- `src/app/session.rs` - Integrate VM Service logs + errors with existing log list
 - `src/core/types.rs` - Add `LogSource::VmService` variant
 
 ### Service Extensions (Phase 2)
@@ -188,14 +258,16 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 ### Performance & Memory (Phase 3)
 - **NEW** `src/core/performance.rs` - Performance/memory data models
 
-### TUI Panels (Phase 4)
+### TUI DevTools Mode & Panels (Phase 4)
+- `src/app/handler/keys.rs` - **Reassign `d` key**: NewSessionDialog → DevTools mode
+- `src/app/state.rs` - Add `UiMode::DevTools` variant, `DevToolsPanel` enum
+- `src/app/message.rs` - Add `EnterDevToolsMode`, `SwitchDevToolsPanel`, `OpenBrowserDevTools` messages
 - **NEW** `src/tui/widgets/widget_inspector.rs` - Widget inspector TUI widget
 - **NEW** `src/tui/widgets/layout_explorer.rs` - Layout explorer TUI widget
 - **NEW** `src/tui/widgets/performance_panel.rs` - Performance panel TUI widget
-- `src/app/state.rs` - Add DevTools panel state
-- `src/app/message.rs` - Add DevTools-related messages
-- `src/tui/render.rs` - Add DevTools panel rendering
-- `src/tui/actions.rs` - Add DevTools keyboard actions
+- `src/tui/render.rs` - Add DevTools panel rendering (replaces log view when active)
+- `src/tui/widgets/header.rs` - Update contextual key hints for DevTools mode
+- `docs/KEYBINDINGS.md` - Update keybinding documentation
 
 ### Configuration
 - `Cargo.toml` - Add WebSocket dependencies
@@ -206,7 +278,7 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 
 ### Phase 1: VM Service Client Foundation + Structured Errors + Hybrid Logging
 
-**Goal**: Establish WebSocket connection, **solve widget crash log invisibility** by subscribing to `Flutter.Error` Extension events, and add hybrid logging via the `Logging` stream.
+**Goal**: Establish **automatic** WebSocket connection on `app.debugPort`, **solve widget crash log invisibility** by subscribing to `Flutter.Error` Extension events, and add hybrid logging via the `Logging` stream. **No keybinding changes in this phase** — the connection is invisible to the user.
 
 **Duration**: 2-3 weeks
 
@@ -216,26 +288,33 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
    - Add `tokio-tungstenite` and `futures-util` to Cargo.toml
    - Verify async WebSocket works with tokio runtime
 
-2. **Create VM Service Client Module**
+2. **Fix ws_uri Capture (Currently Broken)**
+   - Add `ws_uri: Option<String>` field to `Session` struct (`session.rs`)
+   - Add `AppDebugPort` case to `handle_session_message_state()` in `handler/session.rs` (currently only handles `AppStart`/`AppStop`)
+   - Store `ws_uri` in session when `app.debugPort` event arrives
+   - Sync `ws_uri` to `SharedState.devtools_uri` in `engine.rs` (replace hardcoded `None`)
+   - **This is a prerequisite for all VM Service work** — currently the URI is discarded after logging
+
+3. **Create VM Service Client Module**
    - `src/vmservice/mod.rs` - Module exports
    - `src/vmservice/client.rs` - `VmServiceClient` struct
    - Implement `connect(ws_uri)` async method
    - Implement `disconnect()` with graceful shutdown
    - Handle reconnection on connection loss
 
-3. **Implement JSON-RPC Protocol**
+4. **Implement JSON-RPC Protocol**
    - `src/vmservice/protocol.rs` - Request/Response types
    - Implement request ID tracking (like daemon protocol)
    - Create typed response parsing
    - Handle streaming events
 
-4. **Basic VM Introspection**
+5. **Basic VM Introspection**
    - Implement `get_vm()` → `VmInfo`
    - Implement `get_isolate(id)` → `IsolateInfo`
    - Implement `stream_listen(stream)` → subscribe to events
    - Store main isolate ID for service extension calls
 
-5. **Structured Error Subscription (CRASH LOG FIX)**
+6. **Structured Error Subscription (CRASH LOG FIX)**
    - Subscribe to `Extension` stream on connect (`streamListen("Extension")`)
    - Listen for events where `extensionKind == "Flutter.Error"`
    - Parse structured error JSON payload:
@@ -256,7 +335,7 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
    - **This is the primary fix for invisible widget crash logs** — errors that Flutter redirects away from stdout/stderr will now be captured directly from the VM Service
    - Fallback: existing `ExceptionBlockParser` still handles edge cases where `structuredErrors` is disabled or VM Service is unavailable
 
-6. **Logging Stream Integration (Hybrid Logging)**
+7. **Logging Stream Integration (Hybrid Logging)**
    - `src/vmservice/logging.rs` - Logging stream handler
    - Subscribe to `Logging` stream on connect
    - Parse `LogRecord` events:
@@ -286,21 +365,22 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
    - Add `LogSource::VmService` to distinguish from daemon logs
    - Convert `VmLogRecord` to `LogEntry` and merge with session logs
 
-7. **Unified Log Merging**
+8. **Unified Log Merging**
    - Logs from VM Service `Logging` stream: trust level, use timestamp for ordering
    - Logs from VM Service `Extension` stream (`Flutter.Error`): always `LogLevel::Error`
    - Logs from daemon `app.log`: use existing content-based detection
    - Merge all into single `Session.logs` list, ordered by timestamp
    - Dedupe if same message appears in both (rare edge case)
 
-8. **Integration with Session**
-   - Auto-connect when `app.debugPort` event received
-   - Store `VmServiceClient` in session state
-   - Disconnect on session stop
-   - Handle connection errors gracefully
+9. **Integration with Session (Auto-Connect)**
+   - **Auto-connect** when `app.debugPort` event received — no user interaction needed
+   - Store `VmServiceClient` in `SessionHandle` (alongside `FlutterProcess`)
+   - Disconnect on session stop or exit
+   - Handle connection errors gracefully (log warning, continue without VM Service)
    - Continue using daemon logs + `ExceptionBlockParser` if VM Service unavailable (graceful fallback)
+   - Show subtle `[VM]` indicator in status bar when connected (connection status visibility)
 
-**Milestone**: Flutter Demon connects to VM Service, **widget crash logs are now visible** via `Flutter.Error` Extension events, structured logs arrive via `Logging` stream with accurate levels, and all sources merge with existing daemon logs.
+**Milestone**: Flutter Demon **automatically** connects to VM Service on app start, **widget crash logs are now visible** via `Flutter.Error` Extension events, structured logs arrive via `Logging` stream with accurate levels, and all sources merge with existing daemon logs. **No keybinding changes** — the enhanced logging is seamless.
 
 ---
 
@@ -383,54 +463,78 @@ Since popular packages like Logger and Talker use `print()` internally, we must 
 
 ---
 
-### Phase 4: TUI Widget Inspector Panel
+### Phase 4: TUI DevTools Mode & Panels
 
-**Goal**: Display widget tree and layout info in terminal UI.
+**Goal**: Display widget tree, layout info, and performance data in terminal UI. Reassign `d` key from NewSessionDialog to DevTools mode entry.
 
 **Duration**: 2-3 weeks
 
 #### Steps
 
-1. **Widget Inspector Panel**
+1. **Reassign `d` Key to DevTools Mode**
+   - Remove `d` → `Message::OpenNewSessionDialog` mapping in `handler/keys.rs`
+   - Add `d` → `Message::EnterDevToolsMode` mapping in Normal mode
+   - `+` remains the sole keybinding for NewSessionDialog
+   - Update header hints: `[d] Debug` label now accurately describes DevTools entry
+   - Update `docs/KEYBINDINGS.md` to reflect the change
+
+2. **DevTools Mode Architecture**
+   - Add `UiMode::DevTools` variant to `UiMode` enum
+   - Add `DevToolsPanel` enum: `Inspector`, `Layout`, `Performance`
+   - Add `devtools_panel: DevToolsPanel` field to `AppState`
+   - DevTools mode **replaces the log view area** (not split/overlay)
+   - `Esc` → Return to `UiMode::Normal` (log view)
+
+3. **Widget Inspector Panel**
    - `src/tui/widgets/widget_inspector.rs`
    - Tree view widget using ratatui's `List` or custom tree
    - Expand/collapse tree nodes with Enter or arrow keys
    - Display widget type, key, and essential properties
    - Highlight selected widget
 
-2. **Widget Details View**
+4. **Widget Details View**
    - Side panel or expandable section for widget details
    - Show all diagnostic properties
    - Show render object info
    - Show constraints and size
 
-3. **Layout Explorer Panel**
+5. **Layout Explorer Panel**
    - `src/tui/widgets/layout_explorer.rs`
    - ASCII visualization of flex layouts
    - Show main axis, cross axis directions
    - Show flex factors and alignment
    - Visual representation of constraints
 
-4. **Performance Panel**
+6. **Performance Panel**
    - `src/tui/widgets/performance_panel.rs`
    - FPS sparkline graph (ASCII art)
    - Memory usage bar/gauge
    - Frame timing histogram
    - Jank indicator with threshold
 
-5. **UI Mode & Navigation**
-   - Add `UiMode::DevTools` with sub-modes (Inspector, Layout, Performance)
-   - Keyboard shortcuts: `i` Inspector, `l` Layout, `p` Performance
-   - Tab switching between DevTools panels
-   - `Escape` to return to normal mode
+7. **DevTools Mode Navigation**
+   - `d` (from Normal mode) → Enter DevTools mode (default: Inspector sub-panel)
+   - `Esc` → Return to Normal mode (log view)
+   - `i` → Inspector sub-panel
+   - `l` → Layout Explorer sub-panel
+   - `p` → Performance sub-panel
+   - `b` → Open DevTools in system browser (URL from `ws_uri`)
+   - Show contextual status bar with available keys
 
-6. **Keyboard Shortcuts for Debug Overlays**
+8. **Browser DevTools Opening**
+   - `b` key (within DevTools mode only) opens Flutter DevTools in browser
+   - Construct URL: `https://devtools.flutter.dev/?uri={url_encoded_ws_uri}`
+   - Use platform-specific command: `open` (macOS), `xdg-open` (Linux), `start` (Windows)
+   - Respect `config.devtools.browser` setting for custom browser choice
+   - Show toast/status message: "Opened DevTools in browser"
+
+9. **Keyboard Shortcuts for Debug Overlays**
    - `Ctrl+r` - Toggle repaint rainbow
    - `Ctrl+p` - Toggle performance overlay on device
    - `Ctrl+d` - Toggle debug paint
    - Show current overlay state in status bar
 
-**Milestone**: Full DevTools functionality accessible from terminal UI.
+**Milestone**: Full DevTools functionality accessible from terminal UI. `d` key enters DevTools mode with Inspector/Layout/Performance sub-panels. Browser fallback available via `b`.
 
 ---
 
@@ -574,10 +678,13 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 ## Success Criteria
 
 ### Phase 1 Complete When:
-- [ ] WebSocket connection established to VM service
+- [ ] `ws_uri` captured from `app.debugPort` and stored in `Session`
+- [ ] `SharedState.devtools_uri` populated (no longer hardcoded `None`)
+- [ ] WebSocket connection **auto-established** on `app.debugPort` (no user action)
 - [ ] `getVM` and `getIsolate` calls return valid data
 - [ ] Connection handles gracefully with session lifecycle
 - [ ] Reconnection works after brief disconnects
+- [ ] Status bar shows `[VM]` indicator when connected
 - [ ] **Extension stream subscribed and `Flutter.Error` events captured**
 - [ ] **Widget crash logs are now visible as collapsible error entries**
 - [ ] **Structured error JSON parsed into LogEntry with stack trace**
@@ -601,11 +708,18 @@ reqwest = { version = "0.12", features = ["json"], optional = true }
 - [ ] Data collection doesn't impact TUI performance
 
 ### Phase 4 Complete When:
+- [ ] `d` key reassigned from NewSessionDialog to DevTools mode entry
+- [ ] `+` remains sole keybinding for NewSessionDialog
+- [ ] `UiMode::DevTools` replaces log view area with DevTools panels
+- [ ] `Esc` returns to Normal mode (log view)
 - [ ] Widget inspector tree renders in terminal
 - [ ] Widget details shown for selected widget
 - [ ] Layout explorer visualizes flex layouts
 - [ ] Performance panel shows graphs/gauges
+- [ ] `i`/`l`/`p` switch between sub-panels
+- [ ] `b` opens DevTools in system browser from DevTools mode
 - [ ] All keyboard shortcuts functional
+- [ ] `docs/KEYBINDINGS.md` updated
 
 ### Phase 5 Complete When:
 - [ ] Connection is resilient to network issues

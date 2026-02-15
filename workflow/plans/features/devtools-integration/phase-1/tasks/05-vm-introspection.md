@@ -1,0 +1,166 @@
+## Task: Implement Basic VM Introspection Methods
+
+**Objective**: Add high-level methods to `VmServiceClient` for VM introspection: `get_vm()`, `get_isolate()`, `stream_listen()`, and main isolate tracking. These are the building blocks that Tasks 06 and 07 use.
+
+**Depends on**: 04-vm-client
+
+**Estimated Time**: 3-4 hours
+
+### Scope
+
+- `crates/fdemon-daemon/src/vm_service/client.rs` — Add introspection methods
+- `crates/fdemon-daemon/src/vm_service/mod.rs` — Export new types
+
+### Details
+
+#### 1. High-Level Request Methods
+
+Add convenience methods to `VmServiceClient`:
+
+```rust
+impl VmServiceClient {
+    /// Call `getVM` — returns VM info with isolate list
+    pub async fn get_vm(&self) -> Result<VmInfo> {
+        let result = self.request("getVM", None).await?;
+        serde_json::from_value(result).map_err(|e| Error::vm_service(format!("parse getVM: {e}")))
+    }
+
+    /// Call `getIsolate` — returns full isolate details
+    pub async fn get_isolate(&self, isolate_id: &str) -> Result<IsolateInfo> {
+        let params = serde_json::json!({ "isolateId": isolate_id });
+        let result = self.request("getIsolate", Some(params)).await?;
+        serde_json::from_value(result).map_err(|e| Error::vm_service(format!("parse getIsolate: {e}")))
+    }
+
+    /// Call `streamListen` — subscribe to a VM Service stream
+    pub async fn stream_listen(&self, stream_id: &str) -> Result<()> {
+        let params = serde_json::json!({ "streamId": stream_id });
+        self.request("streamListen", Some(params)).await?;
+        Ok(())
+    }
+
+    /// Call `streamCancel` — unsubscribe from a VM Service stream
+    pub async fn stream_cancel(&self, stream_id: &str) -> Result<()> {
+        let params = serde_json::json!({ "streamId": stream_id });
+        self.request("streamCancel", Some(params)).await?;
+        Ok(())
+    }
+}
+```
+
+#### 2. Main Isolate Discovery
+
+After connecting, the client needs to find the main UI isolate:
+
+```rust
+impl VmServiceClient {
+    /// Discover the main Flutter UI isolate.
+    /// Calls getVM, finds the non-system isolate, returns its ID.
+    pub async fn discover_main_isolate(&self) -> Result<IsolateRef> {
+        let vm = self.get_vm().await?;
+
+        // Find the main isolate (non-system, usually named "main")
+        let main_isolate = vm.isolates.iter()
+            .find(|iso| !iso.is_system_isolate.unwrap_or(false))
+            .ok_or_else(|| Error::vm_service("no non-system isolate found"))?;
+
+        Ok(main_isolate.clone())
+    }
+}
+```
+
+#### 3. Stream Subscription Helper
+
+Subscribe to the streams needed for Phase 1:
+
+```rust
+impl VmServiceClient {
+    /// Subscribe to all streams needed for Phase 1.
+    /// Returns error details for any failed subscriptions (non-fatal).
+    pub async fn subscribe_phase1_streams(&self) -> Vec<String> {
+        let mut errors = Vec::new();
+
+        // Extension stream: Flutter.Error events (crash logs)
+        if let Err(e) = self.stream_listen("Extension").await {
+            errors.push(format!("Extension stream: {e}"));
+        }
+
+        // Logging stream: structured log records
+        if let Err(e) = self.stream_listen("Logging").await {
+            errors.push(format!("Logging stream: {e}"));
+        }
+
+        errors
+    }
+}
+```
+
+#### 4. Error Variant
+
+Add a `VmService` variant to the project's `Error` enum if it doesn't exist:
+
+In `crates/fdemon-core/src/error.rs`:
+```rust
+/// VM Service communication error
+VmService(String),
+```
+
+With helper constructor:
+```rust
+pub fn vm_service(msg: impl Into<String>) -> Self {
+    Error::VmService(msg.into())
+}
+```
+
+### Acceptance Criteria
+
+1. `get_vm()` returns parsed `VmInfo` with isolate list
+2. `get_isolate()` returns parsed `IsolateInfo` for a given isolate ID
+3. `stream_listen()` subscribes to a named stream (Extension, Logging)
+4. `stream_cancel()` unsubscribes from a named stream
+5. `discover_main_isolate()` finds the main Flutter isolate
+6. `subscribe_phase1_streams()` subscribes to Extension + Logging
+7. Error cases return proper `Error::VmService` variants (no panics)
+8. All methods have unit tests
+
+### Testing
+
+```rust
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_discover_main_isolate_skips_system_isolates() {
+        // Create VmInfo with system + non-system isolates
+        // Assert discover returns the non-system one
+    }
+
+    #[test]
+    fn test_discover_main_isolate_returns_error_when_none() {
+        // Create VmInfo with only system isolates
+        // Assert returns Error::VmService
+    }
+
+    #[test]
+    fn test_get_vm_request_format() {
+        // Verify the JSON-RPC request format for getVM
+    }
+
+    #[test]
+    fn test_stream_listen_request_format() {
+        // Verify streamListen sends correct streamId param
+    }
+}
+```
+
+### Notes
+
+- The `discover_main_isolate` logic may need refinement if Flutter apps spawn multiple non-system isolates (rare but possible with `Isolate.spawn`)
+- Stream subscription failures should be logged as warnings, not errors — the app should still work without them
+- After reconnection (from Task 04), these streams need to be re-subscribed — consider storing the list of subscribed streams
+- The `extension_rpcs` field in `IsolateInfo` can be used in Phase 2 to check which Flutter extensions are available
+
+---
+
+## Completion Summary
+
+**Status:** Not Started
