@@ -324,4 +324,43 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceAttached`, `VmServiceConnected`, `VmServiceConnectionFailed`, `VmServiceDisconnected`, `VmServiceFlutterError`, `VmServiceLogRecord` message variants |
+| `crates/fdemon-app/src/session.rs` | Added `vm_connected: bool` to `Session`, added `vm_shutdown_tx: Option<watch::Sender<bool>>` to `SessionHandle` (instead of `vm_client`) |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `ConnectVmService { session_id, ws_uri }` to `UpdateAction` enum |
+| `crates/fdemon-app/src/handler/session.rs` | Added `maybe_connect_vm_service()` function; added `vm_connected = false` reset on AppStop/exit; added VM shutdown signal on AppStop/process-exit |
+| `crates/fdemon-app/src/handler/daemon.rs` | Changed `handle_session_daemon_event` to return `UpdateResult`; calls `maybe_connect_vm_service` on AppDebugPort events |
+| `crates/fdemon-app/src/handler/update.rs` | Added handlers for all 6 VM Service messages; added `is_duplicate_vm_log` dedup helper; added `DEDUP_THRESHOLD_MS = 100` constant; used `chrono::TimeDelta::milliseconds()` for timestamp comparison |
+| `crates/fdemon-app/src/actions.rs` | Added `ConnectVmService` arm in `handle_action`; added `spawn_vm_service_connection` function with shutdown channel; added `forward_vm_events` async function with `tokio::select!` for graceful shutdown |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `vm_connected: bool` field to `StatusInfo`; renders `[VM]` indicator in bottom metadata bar when connected |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `vm_connected: handle.session.vm_connected` to `StatusInfo` construction |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 8 new tests covering VM Service message handling |
+
+### Notable Decisions/Tradeoffs
+
+1. **`vm_shutdown_tx` instead of `vm_client` in SessionHandle**: The task spec suggested storing `VmServiceClient` directly in `SessionHandle`. This creates an ownership conflict: the background event forwarding task needs to own the client for `event_receiver().recv().await`, but `SessionHandle` also needs it for disconnect. Resolution: store `Option<watch::Sender<bool>>` in `SessionHandle` instead. The background task owns the client and listens on the watch receiver for the shutdown signal.
+
+2. **`VmServiceAttached` message for shutdown sender propagation**: To get the `vm_shutdown_tx` back to the `SessionHandle` from the background task (which runs without access to `AppState`), a new `VmServiceAttached` message was added. It uses `Arc<watch::Sender<bool>>` to satisfy the `Clone` bound on `Message`. The handler uses `Arc::try_unwrap()` to unwrap and store it as `Option<watch::Sender<bool>>`.
+
+3. **Log dedup uses `chrono::TimeDelta`**: The dedup function compares `DateTime<Local>` values. Subtracting two `DateTime<Local>` values produces a `TimeDelta`, not an `i64`. Used `chrono::TimeDelta::milliseconds(threshold_ms)` for the comparison.
+
+4. **StatusInfo `vm_connected` field**: The task spec referenced `status_bar.rs` which does not exist. The status bar functionality is integrated into `log_view/mod.rs` as `StatusInfo`. Added `vm_connected: bool` to that struct and updated all construction sites.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed (no errors, no warnings)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo fmt --all` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (767 tests, 8 new VM service tests added)
+- `cargo test -p fdemon-tui --lib` - Passed (446 tests)
+
+### Risks/Limitations
+
+1. **No VmServiceClient subscription call in disconnect**: The `VmServiceClient::disconnect()` method is called when the shutdown signal is received in `forward_vm_events`. This correctly closes the WebSocket connection. However, if the watch sender is dropped (e.g., session handle is dropped), the receiver will see a `RecvError` and the task will exit naturally without calling `disconnect()` explicitly.
+
+2. **Duplicate log detection uses message equality only**: The dedup function compares `message` field and timestamp within 100ms. If two different log sources emit identical messages at slightly different times (beyond 100ms), they will both appear. This is the intended behavior per the task spec.

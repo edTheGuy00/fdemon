@@ -606,4 +606,45 @@ pub enum Message {
     EntryPointsDiscovered {
         entry_points: Vec<std::path::PathBuf>,
     },
+
+    // ─────────────────────────────────────────────────────────
+    // VM Service Messages (Phase 1 DevTools Integration)
+    // ─────────────────────────────────────────────────────────
+    /// VM Service task ready — attaches shutdown sender to the session handle.
+    ///
+    /// Sent by the `spawn_vm_service_connection` background task immediately
+    /// after the WebSocket connects, before `VmServiceConnected`.
+    /// The TEA update handler stores the sender so that AppStop / process-exit
+    /// can signal the forwarding task to stop gracefully.
+    VmServiceAttached {
+        session_id: SessionId,
+        /// Sender half of the `watch::channel(false)` used to signal shutdown.
+        /// Wrapped in `Arc` to satisfy `Clone` bound on `Message`.
+        /// Sending `true` stops the forwarding task and triggers disconnect.
+        vm_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    },
+
+    /// VM Service WebSocket connected for a session
+    VmServiceConnected { session_id: SessionId },
+
+    /// VM Service connection failed
+    VmServiceConnectionFailed {
+        session_id: SessionId,
+        error: String,
+    },
+
+    /// VM Service disconnected (unexpected or graceful)
+    VmServiceDisconnected { session_id: SessionId },
+
+    /// VM Service received a Flutter.Error event (crash log)
+    VmServiceFlutterError {
+        session_id: SessionId,
+        log_entry: fdemon_core::LogEntry,
+    },
+
+    /// VM Service received a log record from Logging stream
+    VmServiceLogRecord {
+        session_id: SessionId,
+        log_entry: fdemon_core::LogEntry,
+    },
 }

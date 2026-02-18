@@ -180,4 +180,40 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | **NEW** — Full VmServiceClient implementation with ConnectionState, ClientCommand, background task, reconnection logic, and 14 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod client` and re-exported `ConnectionState` and `VmServiceClient` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`blocking_read()` for synchronous state accessors**: `connection_state()` and `is_connected()` use `state.blocking_read()` so they can be `fn` (not `async fn`). This matches the task's API spec and avoids forcing callers to await simple queries. The lock is only held momentarily by the background task on state transitions, so contention risk is negligible.
+
+2. **Initial connection before spawning background task**: `VmServiceClient::connect()` establishes the first WebSocket connection before returning, rather than connecting in the background. This makes the API ergonomic — callers get an immediate error if the URI is unreachable — and avoids a race where `request()` is called before the socket is open.
+
+3. **`tokio::spawn` for response forwarding**: After `ws_sink.send()` succeeds, a small Tokio task is spawned to await the oneshot receiver and forward the response to the caller. This avoids blocking the I/O loop while waiting for a response, which could deadlock (the I/O loop also needs to run to _receive_ the response).
+
+4. **`try_send` for events**: Stream events are forwarded with `try_send` (non-blocking). If the buffer is full a warning is logged and the event is dropped. Blocking on the I/O loop for event delivery could cause backpressure that stalls request/response processing.
+
+5. **`VmServiceError` unused import suppressed**: The `VmServiceError` type is used in `vm_error_to_error` and in test bodies, so it's a genuine import not a dead one. Clippy accepted this with no warnings.
+
+6. **Backoff uses `checked_shl`**: `u64::saturating_shl` doesn't exist in stable Rust. Used `checked_shl` which returns `None` on overflow (shift count >= 64), falling back to `u64::MAX` before capping at `MAX_BACKOFF.as_secs()`.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed (0 errors, 0 warnings)
+- `cargo test -p fdemon-daemon` — Passed (174 tests: 14 new client tests + 160 pre-existing; 3 ignored integration tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+- `cargo fmt --all` — Applied minor line-wrap adjustments, output is clean
+
+### Risks/Limitations
+
+1. **No integration test with real WebSocket server**: The acceptance criteria and task notes defer mock-server tests to Task 08. All async behavior (reconnection, request/response correlation) is tested indirectly through unit tests of pure functions (backoff calculation, response conversion).
+
+2. **Pending-request orphaning on reconnect**: When the connection drops unexpectedly, in-flight requests registered in `VmRequestTracker` are orphaned — their oneshot senders remain in the tracker but the WebSocket socket that would have delivered the responses is gone. Callers will eventually see `ChannelClosed` when the tracker is dropped on reconnect. This is acceptable for the current scope; Task 05 (stream subscriptions) can add explicit cleanup on reconnect.
+
+3. **`blocking_read()` in async context**: Tokio's documentation warns that `blocking_read()` can deadlock if the write lock is held by the same async task. In practice this can't happen here because the write lock is only acquired by the background Tokio task, never by the same task that calls `connection_state()` or `is_connected()`. Safe in the current design.

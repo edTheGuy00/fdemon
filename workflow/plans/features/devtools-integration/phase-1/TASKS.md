@@ -58,14 +58,14 @@ Establish automatic WebSocket connection to the Dart VM Service on `app.debugPor
 
 | # | Task | Status | Depends On | Est. Hours | Crate | Key Modules |
 |---|------|--------|------------|------------|-------|-------------|
-| 1 | [01-websocket-deps](tasks/01-websocket-deps.md) | Not Started | - | 1h | workspace, fdemon-daemon | `Cargo.toml` |
-| 2 | [02-capture-ws-uri](tasks/02-capture-ws-uri.md) | Not Started | - | 2-3h | fdemon-core, fdemon-app | `session.rs`, `handler/session.rs`, `engine.rs`, `types.rs` |
-| 3 | [03-vm-protocol](tasks/03-vm-protocol.md) | Not Started | 01 | 4-5h | fdemon-daemon | `vm_service/protocol.rs` |
-| 4 | [04-vm-client](tasks/04-vm-client.md) | Not Started | 01, 03 | 5-7h | fdemon-daemon | `vm_service/client.rs` |
-| 5 | [05-vm-introspection](tasks/05-vm-introspection.md) | Not Started | 04 | 3-4h | fdemon-daemon | `vm_service/client.rs` |
-| 6 | [06-structured-errors](tasks/06-structured-errors.md) | Not Started | 02, 05 | 4-5h | fdemon-daemon | `vm_service/errors.rs` |
-| 7 | [07-logging-stream](tasks/07-logging-stream.md) | Not Started | 02, 05 | 3-4h | fdemon-daemon | `vm_service/logging.rs` |
-| 8 | [08-session-integration](tasks/08-session-integration.md) | Not Started | 06, 07 | 6-8h | fdemon-app, fdemon-tui | `session.rs`, `engine.rs`, `message.rs`, `status_bar.rs` |
+| 1 | [01-websocket-deps](tasks/01-websocket-deps.md) | Done | - | 1h | workspace, fdemon-daemon | `Cargo.toml` |
+| 2 | [02-capture-ws-uri](tasks/02-capture-ws-uri.md) | Done | - | 2-3h | fdemon-core, fdemon-app | `session.rs`, `handler/session.rs`, `engine.rs`, `types.rs` |
+| 3 | [03-vm-protocol](tasks/03-vm-protocol.md) | Done | 01 | 4-5h | fdemon-daemon | `vm_service/protocol.rs` |
+| 4 | [04-vm-client](tasks/04-vm-client.md) | Done | 01, 03 | 5-7h | fdemon-daemon | `vm_service/client.rs` |
+| 5 | [05-vm-introspection](tasks/05-vm-introspection.md) | Done | 04 | 3-4h | fdemon-daemon | `vm_service/client.rs` |
+| 6 | [06-structured-errors](tasks/06-structured-errors.md) | Done | 02, 05 | 4-5h | fdemon-daemon | `vm_service/errors.rs` |
+| 7 | [07-logging-stream](tasks/07-logging-stream.md) | Done | 02, 05 | 3-4h | fdemon-daemon | `vm_service/logging.rs` |
+| 8 | [08-session-integration](tasks/08-session-integration.md) | Done | 06, 07 | 6-8h | fdemon-app, fdemon-tui | `session.rs`, `engine.rs`, `message.rs`, `status_bar.rs` |
 
 ## Success Criteria
 

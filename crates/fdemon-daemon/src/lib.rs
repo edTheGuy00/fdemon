@@ -41,6 +41,7 @@ pub mod simulators;
 #[cfg(any(test, feature = "test-helpers"))]
 pub mod test_utils;
 pub mod tool_availability;
+pub mod vm_service;
 
 // Public API re-exports
 pub use avds::{

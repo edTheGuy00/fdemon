@@ -238,6 +238,8 @@ pub enum LogSource {
     FlutterError,
     /// File watcher
     Watcher,
+    /// VM Service / DevTools messages (structured logs, errors)
+    VmService,
 }
 
 impl LogSource {
@@ -248,6 +250,7 @@ impl LogSource {
             LogSource::Flutter => "flutter",
             LogSource::FlutterError => "flutter",
             LogSource::Watcher => "watch",
+            LogSource::VmService => "vm",
         }
     }
 }
@@ -287,7 +290,10 @@ impl LogSourceFilter {
             LogSourceFilter::App => *source == LogSource::App,
             LogSourceFilter::Daemon => *source == LogSource::Daemon,
             LogSourceFilter::Flutter => {
-                matches!(source, LogSource::Flutter | LogSource::FlutterError)
+                matches!(
+                    source,
+                    LogSource::Flutter | LogSource::FlutterError | LogSource::VmService
+                )
             }
             LogSourceFilter::Watcher => *source == LogSource::Watcher,
         }
@@ -1053,6 +1059,7 @@ mod tests {
         assert!(filter.matches(&LogSource::Daemon));
         assert!(filter.matches(&LogSource::Flutter));
         assert!(filter.matches(&LogSource::FlutterError));
+        assert!(filter.matches(&LogSource::VmService));
         assert!(filter.matches(&LogSource::Watcher));
     }
 
@@ -1077,12 +1084,13 @@ mod tests {
     }
 
     #[test]
-    fn test_source_filter_flutter_includes_flutter_error() {
+    fn test_source_filter_flutter_includes_flutter_error_and_vm_service() {
         let filter = LogSourceFilter::Flutter;
         assert!(!filter.matches(&LogSource::App));
         assert!(!filter.matches(&LogSource::Daemon));
         assert!(filter.matches(&LogSource::Flutter));
         assert!(filter.matches(&LogSource::FlutterError));
+        assert!(filter.matches(&LogSource::VmService));
         assert!(!filter.matches(&LogSource::Watcher));
     }
 

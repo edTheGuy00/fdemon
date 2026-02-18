@@ -104,6 +104,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 .and_then(|cfg| cfg.flavor.as_deref()),
             duration,
             error_count: handle.session.error_count(),
+            vm_connected: handle.session.vm_connected,
         };
         log_view = log_view.with_status(status_info);
 

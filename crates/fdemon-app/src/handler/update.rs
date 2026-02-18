@@ -50,8 +50,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::SessionDaemon { session_id, event } => {
-            handle_session_daemon_event(state, session_id, event);
-            UpdateResult::none()
+            handle_session_daemon_event(state, session_id, event)
         }
 
         // ─────────────────────────────────────────────────────────
@@ -1116,6 +1115,78 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
+        // VM Service Messages (Phase 1 DevTools Integration)
+        // ─────────────────────────────────────────────────────────
+
+        // Store the shutdown sender in the session handle.
+        // This message arrives before VmServiceConnected to ensure the session
+        // can signal shutdown at any time after the channel is created.
+        Message::VmServiceAttached {
+            session_id,
+            vm_shutdown_tx,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.vm_shutdown_tx = Some(vm_shutdown_tx);
+                tracing::debug!(
+                    "VM Service shutdown channel attached for session {}",
+                    session_id
+                );
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServiceConnected { session_id } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.vm_connected = true;
+                handle.session.add_log(fdemon_core::LogEntry::info(
+                    LogSource::App,
+                    "VM Service connected — enhanced logging active",
+                ));
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServiceConnectionFailed { session_id, error } => {
+            // Don't show error to user — daemon logs still work as fallback
+            warn!(
+                "VM Service connection failed for session {}: {}",
+                session_id, error
+            );
+            UpdateResult::none()
+        }
+
+        Message::VmServiceDisconnected { session_id } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.vm_connected = false;
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServiceFlutterError {
+            session_id,
+            log_entry,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, DEDUP_THRESHOLD_MS) {
+                    handle.session.add_log(log_entry);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServiceLogRecord {
+            session_id,
+            log_entry,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, DEDUP_THRESHOLD_MS) {
+                    handle.session.add_log(log_entry);
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
         // Entry Point Discovery Messages (Phase 3, Task 09)
         // ─────────────────────────────────────────────────────────
         Message::EntryPointsDiscovered { entry_points } => {
@@ -1150,6 +1221,33 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
     }
+}
+
+/// Deduplication threshold for VM Service logs (milliseconds).
+///
+/// Matches `dedupe_threshold_ms` config default. Logs with the same message
+/// arriving within this window are considered duplicates (both VM Service and
+/// daemon can emit the same event).
+const DEDUP_THRESHOLD_MS: i64 = 100;
+
+/// Number of recent log entries to scan for deduplication.
+const DEDUP_SCAN_DEPTH: usize = 10;
+
+/// Check if a log entry is a duplicate of a recent VM Service entry.
+///
+/// Scans the last [`DEDUP_SCAN_DEPTH`] entries in the log buffer and returns
+/// `true` if an entry with the same message was added within `threshold_ms`
+/// milliseconds.
+fn is_duplicate_vm_log(
+    logs: &std::collections::VecDeque<fdemon_core::LogEntry>,
+    entry: &fdemon_core::LogEntry,
+    threshold_ms: i64,
+) -> bool {
+    let threshold = chrono::TimeDelta::milliseconds(threshold_ms);
+    logs.iter().rev().take(DEDUP_SCAN_DEPTH).any(|existing| {
+        existing.message == entry.message
+            && (existing.timestamp - entry.timestamp).abs() < threshold
+    })
 }
 
 /// Scroll the log view to show a specific log entry

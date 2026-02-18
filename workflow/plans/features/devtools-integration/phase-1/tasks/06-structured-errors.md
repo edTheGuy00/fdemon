@@ -180,4 +180,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/errors.rs` | New file: `FlutterErrorEvent`, `parse_flutter_error()`, `flutter_error_to_log_entry()`, 22 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod errors;` and re-exports for `FlutterErrorEvent`, `parse_flutter_error`, `flutter_error_to_log_entry` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Empty `extensionData` guard**: `parse_flutter_error` returns `None` when `extensionData` is absent entirely (the outer field is missing from the flattened `data` Value). This is the expected behavior for malformed events.
+
+2. **Empty string filter for optional fields**: `rendered_error_text`, `library`, and `stack_trace` are filtered with `.filter(|s| !s.is_empty())` so that empty JSON strings (`""`) are coerced to `None`. This avoids downstream code having to handle empty-string optionals.
+
+3. **Stack trace filtering**: `flutter_error_to_log_entry` filters out `ParsedStackTrace` instances that have zero frames after parsing. This means truly unparseable stack trace strings result in no `stack_trace` field on the `LogEntry`, keeping it clean. `LogEntry::with_stack_trace` is only called when frames exist.
+
+4. **`description` defaults to empty string**: When `description` is absent from `extensionData`, it defaults to `""` rather than returning `None`. This matches the task spec (description is the key field, malformed events are handled gracefully without panics).
+
+5. **Timestamp propagation**: The `timestamp` field comes from the top-level `StreamEvent.timestamp`, not from `extensionData`, matching the VM Service protocol structure.
+
+### Testing Performed
+
+- `cargo check --workspace` — PASS
+- `cargo test -p fdemon-daemon` — PASS (202 tests, 0 failures, 3 ignored integration tests)
+  - 22 new tests in `vm_service::errors::tests`
+- `cargo clippy --workspace -- -D warnings` — PASS (no warnings)
+
+### Risks/Limitations
+
+1. **Stack trace format variance**: The stack trace in `extensionData.stackTrace` from VM Service may differ slightly from stdout format. The existing `ParsedStackTrace::parse()` handles both Dart VM and friendly formats, and gracefully returns zero frames for unrecognized formats.
+
+2. **Future diagnostics field**: The `diagnostics` field in `extensionData` contains a `DiagnosticsNode` tree for rich error display; it is intentionally not parsed in this task (deferred to future enhancement per task Notes).

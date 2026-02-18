@@ -76,6 +76,12 @@ pub enum Error {
     ChannelClosed,
 
     // ─────────────────────────────────────────────────────────────
+    // VM Service Errors
+    // ─────────────────────────────────────────────────────────────
+    #[error("VM Service error: {0}")]
+    VmService(String),
+
+    // ─────────────────────────────────────────────────────────────
     // Discovery Errors
     // ─────────────────────────────────────────────────────────────
     #[error("No runnable Flutter projects found in: {searched_path}")]
@@ -138,6 +144,11 @@ impl Error {
         }
     }
 
+    /// Create a [`Error::VmService`] error with a message.
+    pub fn vm_service(msg: impl Into<String>) -> Self {
+        Self::VmService(msg.into())
+    }
+
     pub fn no_runnable_projects(path: impl Into<PathBuf>) -> Self {
         Self::NoRunnableProjects {
             searched_path: path.into(),
@@ -169,6 +180,7 @@ impl Error {
             Error::Daemon { .. }
                 | Error::Protocol { .. }
                 | Error::ChannelSend { .. }
+                | Error::VmService(_)
                 | Error::SelectionCancelled // User chose to cancel
         )
     }
@@ -256,6 +268,7 @@ mod tests {
     fn test_error_is_recoverable() {
         assert!(Error::daemon("test").is_recoverable());
         assert!(Error::protocol("parse error").is_recoverable());
+        assert!(Error::vm_service("connection lost").is_recoverable());
         assert!(!Error::FlutterNotFound.is_recoverable());
     }
 

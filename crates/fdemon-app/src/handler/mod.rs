@@ -112,6 +112,12 @@ pub enum UpdateAction {
 
     /// Discover entry points in background (Phase 3, Task 09)
     DiscoverEntryPoints { project_path: std::path::PathBuf },
+
+    /// Connect to the VM Service WebSocket for a session
+    ConnectVmService {
+        session_id: SessionId,
+        ws_uri: String,
+    },
 }
 
 /// Background tasks to spawn

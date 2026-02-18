@@ -253,6 +253,12 @@ pub struct Session {
     /// Current app ID (from daemon's app.start event)
     pub app_id: Option<String>,
 
+    /// VM Service WebSocket URI (from app.debugPort event)
+    pub ws_uri: Option<String>,
+
+    /// Whether the VM Service WebSocket is currently connected
+    pub vm_connected: bool,
+
     /// Launch configuration used
     pub launch_config: Option<LaunchConfig>,
 
@@ -310,6 +316,8 @@ impl Session {
             platform,
             is_emulator,
             app_id: None,
+            ws_uri: None,
+            vm_connected: false,
             launch_config: None,
             created_at: Local::now(),
             started_at: None,
@@ -873,6 +881,12 @@ pub struct SessionHandle {
 
     /// Request tracker for response matching
     pub request_tracker: Arc<RequestTracker>,
+
+    /// Shutdown sender for the VM Service event forwarding task.
+    ///
+    /// Sending `true` signals the forwarding task to disconnect and stop.
+    /// Stored as `Arc` because the `Message` enum requires `Clone`.
+    pub vm_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -881,6 +895,7 @@ impl std::fmt::Debug for SessionHandle {
             .field("session", &self.session)
             .field("has_process", &self.process.is_some())
             .field("has_cmd_sender", &self.cmd_sender.is_some())
+            .field("has_vm_shutdown", &self.vm_shutdown_tx.is_some())
             .finish()
     }
 }
@@ -893,6 +908,7 @@ impl SessionHandle {
             process: None,
             cmd_sender: None,
             request_tracker: Arc::new(RequestTracker::default()),
+            vm_shutdown_tx: None,
         }
     }
 

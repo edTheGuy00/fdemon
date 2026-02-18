@@ -163,4 +163,34 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/error.rs` | Added `Error::VmService(String)` variant and `Error::vm_service()` constructor |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `get_vm()`, `get_isolate()`, `stream_listen()`, `stream_cancel()`, `discover_main_isolate()`, `subscribe_phase1_streams()` methods; added corresponding unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Error::VmService` placed in VM Service section**: Added a clearly labelled section in `error.rs` to group VM Service errors, following the existing sectioning convention. The variant is a simple tuple `VmService(String)` matching the task spec.
+
+2. **Tests are synchronous and do not require a real VM Service**: The introspection methods are async and depend on a live WebSocket connection. All tests exercise the logic synchronously by directly testing the discovery predicate (`is_system_isolate.unwrap_or(false)`) and request serialization, without spinning up a real client. This is consistent with the existing test approach in `client.rs`.
+
+3. **Additional test coverage beyond spec**: Added `test_discover_main_isolate_treats_missing_flag_as_non_system` (covers `None` value for `is_system_isolate`) and `test_stream_cancel_request_format` / `test_get_isolate_request_format` to fully cover all new methods.
+
+4. **Import added to `client.rs`**: `IsolateInfo`, `IsolateRef`, and `VmInfo` were added to the `use super::protocol::` import so the new methods could reference them without full paths.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon` - Passed (182 passed, 3 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (minor whitespace reformatting of test helper functions)
+
+### Risks/Limitations
+
+1. **`discover_main_isolate` returns the first non-system isolate**: If a Flutter app spawns multiple user isolates via `Isolate.spawn`, this may not return the UI isolate. The task notes acknowledge this; refinement is deferred to a later task.
+
+2. **`subscribe_phase1_streams` errors are non-fatal**: Subscription failures are returned as `Vec<String>` rather than `Result`, so callers must explicitly log/handle them — consistent with the task spec and the note that stream failures should be warnings, not errors.

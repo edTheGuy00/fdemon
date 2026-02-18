@@ -39,6 +39,8 @@ fs2 = "0.4"
 trait-variant = "0.1"
 notify = "7"
 notify-debouncer-full = "0.4"
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
 
 # CLI
 clap = { version = "4", features = ["derive"] }

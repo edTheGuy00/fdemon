@@ -40,6 +40,8 @@ pub struct StatusInfo<'a> {
     pub flavor: Option<&'a str>,
     pub duration: Option<Duration>,
     pub error_count: usize,
+    /// Whether the VM Service WebSocket is connected (shows [VM] badge)
+    pub vm_connected: bool,
 }
 
 /// Log view widget with rich formatting
@@ -196,6 +198,7 @@ impl<'a> LogView<'a> {
             LogSource::Flutter => Style::default().fg(palette::SOURCE_FLUTTER),
             LogSource::FlutterError => Style::default().fg(palette::SOURCE_FLUTTER_ERROR),
             LogSource::Watcher => Style::default().fg(palette::SOURCE_WATCHER),
+            LogSource::VmService => Style::default().fg(palette::ACCENT),
         }
     }
 
@@ -765,6 +768,15 @@ impl<'a> LogView<'a> {
                         theme_styles::text_secondary(),
                     ));
                 }
+            }
+
+            // VM Service connection indicator
+            if status.vm_connected {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    "[VM]",
+                    Style::default().fg(palette::STATUS_GREEN),
+                ));
             }
         }
 

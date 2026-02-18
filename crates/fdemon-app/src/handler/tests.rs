@@ -3145,3 +3145,270 @@ fn test_bootable_cache_persists_across_dialog_reopens() {
             .bootable_loading
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// VM Service Message Tests (Phase 1 DevTools Integration)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_service_connected_sets_flag() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceConnected should produce no action"
+    );
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.session.vm_connected,
+        "vm_connected should be true after VmServiceConnected"
+    );
+}
+
+#[test]
+fn test_vm_service_connected_ignores_unknown_session() {
+    let mut state = AppState::new();
+
+    // Should not panic when session doesn't exist
+    let result = update(&mut state, Message::VmServiceConnected { session_id: 9999 });
+
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_vm_service_disconnected_clears_flag() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // First connect
+    update(&mut state, Message::VmServiceConnected { session_id });
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(handle.session.vm_connected, "Should be connected first");
+    }
+
+    // Then disconnect
+    let result = update(&mut state, Message::VmServiceDisconnected { session_id });
+
+    assert!(result.action.is_none());
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.vm_connected,
+        "vm_connected should be false after VmServiceDisconnected"
+    );
+}
+
+#[test]
+fn test_vm_service_flutter_error_adds_log() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    let initial_log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    let log_entry = fdemon_core::LogEntry::error(
+        fdemon_core::LogSource::VmService,
+        "Test Flutter error".to_string(),
+    );
+
+    let result = update(
+        &mut state,
+        Message::VmServiceFlutterError {
+            session_id,
+            log_entry,
+        },
+    );
+
+    assert!(result.action.is_none());
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.logs.len(),
+        initial_log_count + 1,
+        "Log should be added for VmServiceFlutterError"
+    );
+    assert_eq!(
+        handle.session.logs.back().unwrap().message,
+        "Test Flutter error"
+    );
+}
+
+#[test]
+fn test_vm_service_log_record_adds_log() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    let initial_log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    let log_entry = fdemon_core::LogEntry::new(
+        fdemon_core::LogLevel::Warning,
+        fdemon_core::LogSource::VmService,
+        "Test log record".to_string(),
+    );
+
+    let result = update(
+        &mut state,
+        Message::VmServiceLogRecord {
+            session_id,
+            log_entry,
+        },
+    );
+
+    assert!(result.action.is_none());
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.logs.len(),
+        initial_log_count + 1,
+        "Log should be added for VmServiceLogRecord"
+    );
+    assert_eq!(
+        handle.session.logs.back().unwrap().message,
+        "Test log record"
+    );
+    assert_eq!(
+        handle.session.logs.back().unwrap().level,
+        fdemon_core::LogLevel::Warning
+    );
+}
+
+#[test]
+fn test_duplicate_log_detection_filters_vm_error() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Create a log entry — both sends use clone() so same timestamp triggers dedup
+    let log_entry = fdemon_core::LogEntry::error(
+        fdemon_core::LogSource::VmService,
+        "Duplicate error message".to_string(),
+    );
+
+    // First entry — should be added
+    update(
+        &mut state,
+        Message::VmServiceFlutterError {
+            session_id,
+            log_entry: log_entry.clone(),
+        },
+    );
+
+    let count_after_first = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    // Second entry with identical message and same timestamp — should be deduped
+    update(
+        &mut state,
+        Message::VmServiceFlutterError {
+            session_id,
+            log_entry: log_entry.clone(),
+        },
+    );
+
+    let count_after_second = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        count_after_first, count_after_second,
+        "Duplicate log within 100ms threshold should be filtered"
+    );
+}
+
+#[test]
+fn test_connection_failure_does_not_crash() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    let initial_log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    // Should not panic and should not modify session state
+    let result = update(
+        &mut state,
+        Message::VmServiceConnectionFailed {
+            session_id,
+            error: "Connection refused".to_string(),
+        },
+    );
+
+    assert!(result.action.is_none());
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.vm_connected,
+        "vm_connected should remain false on failure"
+    );
+    assert_eq!(
+        handle.session.logs.len(),
+        initial_log_count,
+        "Connection failure should not add logs to session"
+    );
+}
+
+#[test]
+fn test_vm_service_attached_stores_shutdown_tx() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Verify no shutdown tx initially
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_shutdown_tx
+            .is_none(),
+        "vm_shutdown_tx should be None initially"
+    );
+
+    // Create a watch channel and send VmServiceAttached
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    let vm_shutdown_tx = std::sync::Arc::new(tx);
+
+    let result = update(
+        &mut state,
+        Message::VmServiceAttached {
+            session_id,
+            vm_shutdown_tx,
+        },
+    );
+
+    assert!(result.action.is_none());
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .vm_shutdown_tx
+            .is_some(),
+        "vm_shutdown_tx should be stored after VmServiceAttached"
+    );
+}

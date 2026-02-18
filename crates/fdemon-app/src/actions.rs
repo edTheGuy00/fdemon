@@ -14,6 +14,10 @@ use crate::session::SessionId;
 use crate::UpdateAction;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
+    vm_service::{
+        flutter_error_to_log_entry, parse_flutter_error, parse_log_record, vm_log_to_log_entry,
+        VmServiceClient,
+    },
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
 
@@ -149,6 +153,11 @@ pub fn handle_action(
 
         UpdateAction::DiscoverEntryPoints { project_path } => {
             spawn::spawn_entry_point_discovery(msg_tx, project_path);
+        }
+
+        UpdateAction::ConnectVmService { session_id, ws_uri } => {
+            let handle = spawn_vm_service_connection(session_id, ws_uri, msg_tx);
+            session_tasks.lock().unwrap().insert(session_id, handle);
         }
     }
 }
@@ -439,4 +448,147 @@ pub async fn execute_task(
             }
         }
     }
+}
+
+/// Spawn a task that connects to the VM Service and forwards events as Messages.
+fn spawn_vm_service_connection(
+    session_id: SessionId,
+    ws_uri: String,
+    msg_tx: mpsc::Sender<Message>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let connect_result = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            VmServiceClient::connect(&ws_uri),
+        )
+        .await;
+
+        let connect_result = match connect_result {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    "VM Service: connection timed out for session {} ({})",
+                    session_id, ws_uri
+                );
+                let _ = msg_tx
+                    .send(Message::VmServiceConnectionFailed {
+                        session_id,
+                        error: "Connection timed out".to_string(),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        match connect_result {
+            Ok(client) => {
+                // Subscribe to Extension and Logging streams
+                let stream_errors = client.subscribe_flutter_streams().await;
+                for err in &stream_errors {
+                    warn!(
+                        "VM Service: stream subscription failed for session {}: {}",
+                        session_id, err
+                    );
+                }
+
+                // Create shutdown channel — sender goes to the session handle,
+                // receiver lets the forwarding loop exit cleanly on AppStop.
+                let (vm_shutdown_tx, vm_shutdown_rx) = tokio::sync::watch::channel(false);
+                let vm_shutdown_tx = std::sync::Arc::new(vm_shutdown_tx);
+
+                // Attach shutdown sender to the session handle BEFORE notifying
+                // about connection so the session can signal shutdown at any time.
+                let _ = msg_tx
+                    .send(Message::VmServiceAttached {
+                        session_id,
+                        vm_shutdown_tx,
+                    })
+                    .await;
+
+                // Notify TEA that the VM Service is connected
+                let _ = msg_tx
+                    .send(Message::VmServiceConnected { session_id })
+                    .await;
+
+                // Forward events from the VM Service to the TEA message loop
+                forward_vm_events(client, session_id, msg_tx, vm_shutdown_rx).await;
+            }
+            Err(e) => {
+                warn!(
+                    "VM Service: connection failed for session {}: {}",
+                    session_id, e
+                );
+                let _ = msg_tx
+                    .send(Message::VmServiceConnectionFailed {
+                        session_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    })
+}
+
+/// Receive VM Service stream events and translate them into TEA Messages.
+///
+/// Runs until:
+/// - The event receiver closes (client disconnects or is dropped), OR
+/// - The shutdown watch channel receives `true` (session stopped/closed)
+///
+/// Sends `VmServiceDisconnected` when the loop exits.
+async fn forward_vm_events(
+    mut client: VmServiceClient,
+    session_id: SessionId,
+    msg_tx: mpsc::Sender<Message>,
+    mut vm_shutdown_rx: tokio::sync::watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            event = client.event_receiver().recv() => {
+                match event {
+                    Some(event) => {
+                        // Try parsing as Flutter.Error (Extension stream)
+                        if let Some(flutter_error) = parse_flutter_error(&event.params.event) {
+                            let log_entry = flutter_error_to_log_entry(&flutter_error);
+                            let _ = msg_tx
+                                .send(Message::VmServiceFlutterError {
+                                    session_id,
+                                    log_entry,
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        // Try parsing as a structured LogRecord (Logging stream)
+                        if let Some(log_record) = parse_log_record(&event.params.event) {
+                            let log_entry = vm_log_to_log_entry(&log_record);
+                            let _ = msg_tx
+                                .send(Message::VmServiceLogRecord {
+                                    session_id,
+                                    log_entry,
+                                })
+                                .await;
+                        }
+                        // Other event kinds (GC, Isolate, etc.) are intentionally ignored
+                    }
+                    None => {
+                        // Event receiver closed — client disconnected
+                        info!("VM Service event stream ended for session {}", session_id);
+                        break;
+                    }
+                }
+            }
+            _ = vm_shutdown_rx.changed() => {
+                if *vm_shutdown_rx.borrow() {
+                    info!("VM Service shutdown signal received for session {}", session_id);
+                    client.disconnect().await;
+                    break;
+                }
+            }
+        }
+    }
+
+    let _ = msg_tx
+        .send(Message::VmServiceDisconnected { session_id })
+        .await;
 }

@@ -236,4 +236,39 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/logging.rs` | Created new module with `VmLogRecord`, `vm_level_to_log_level`, `parse_log_record`, `extract_value_as_string`, `vm_log_to_log_entry`, `millis_to_datetime`, and 25 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod logging;` and re-exports for `VmLogRecord`, `parse_log_record`, `vm_level_to_log_level`, `vm_log_to_log_entry`; also updated module doc to mention logging and errors modules |
+| `crates/fdemon-daemon/Cargo.toml` | Added `chrono.workspace = true` to support `DateTime<Local>` timestamp conversion |
+
+### Notable Decisions/Tradeoffs
+
+1. **Level mapping boundary at 799**: The task spec showed `..=499`, `500..=699`, `700..=799` all mapping to Debug — simplified to a single `..=799 => Debug` arm which is semantically equivalent and matches the intent.
+
+2. **`chrono` dependency added to fdemon-daemon**: The `vm_log_to_log_entry` function converts `record.time` (milliseconds since epoch) into a `DateTime<Local>` so the log entry gets the correct VM timestamp rather than `Local::now()`. This required adding `chrono` to the daemon crate's dependencies.
+
+3. **Timestamp conversion fallback**: If `millis_to_datetime` receives an invalid or zero milliseconds value, it falls back to `Local::now()` rather than panicking or returning an error, satisfying the "handle malformed events gracefully" requirement.
+
+4. **`extract_value_as_string` is private**: The function is an implementation detail for parsing `InstanceRef` objects — it is not exported from the module or crate, consistent with the task specification (`fn`, not `pub fn`).
+
+5. **Raw string delimiter level**: The test `test_parse_log_record_with_error_and_stack_trace` uses `r##"..."##` instead of `r#"..."#` to avoid the Rust parser treating `"#0` inside the JSON as the end of the raw string delimiter.
+
+6. **mod.rs concurrent edit**: The task warned another agent may be editing `mod.rs`. Re-read the file before editing and found `pub mod errors;` already added — preserved it and appended only the logging additions.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-daemon` — Passed (233 tests: 233 passed, 0 failed, 3 ignored)
+  - All 25 new `vm_service::logging::tests::*` tests passed
+- `cargo clippy --workspace -- -D warnings` — Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **No integration test against a real VM Service**: All tests use synthetic JSON. Real VM Service events may differ slightly (e.g., extra fields, different nesting), but the `#[serde(flatten)]` on `StreamEvent.data` provides forward-compatibility.
+
+2. **Level field is an integer in the test data**: The task's JSON example shows `"level": 800` (plain integer), not `"level": {"valueAsString": "800"}`. This implementation parses `level` as a plain integer, which matches the actual VM Service protocol — the integer value is used directly, not wrapped in an `InstanceRef`.

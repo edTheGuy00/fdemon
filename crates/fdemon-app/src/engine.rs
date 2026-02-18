@@ -300,7 +300,7 @@ impl Engine {
                 app_state.device_id = Some(session.device_id.clone());
                 app_state.device_name = Some(session.device_name.clone());
                 app_state.platform = Some(session.platform.clone());
-                app_state.devtools_uri = None; // Not tracked in Session yet
+                app_state.devtools_uri = session.ws_uri.clone();
                 app_state.started_at = session.started_at;
                 app_state.last_reload_at = session.last_reload_time;
             }

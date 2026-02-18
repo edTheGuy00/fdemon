@@ -222,4 +222,31 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/protocol.rs` | New file: all JSON-RPC types (`VmServiceRequest`, `VmServiceResponse`, `VmServiceError`, `VmServiceEvent`, `StreamEventParams`, `StreamEvent`, `VmInfo`, `IsolateRef`, `IsolateInfo`, `LibraryRef`, `IsolateGroupRef`), `VmRequestTracker`, `parse_vm_message()`, and 18 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | New file: module header with usage example, re-exports all public types from `protocol` |
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod vm_service;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmRequestTracker` uses `&mut self` (not `Arc<RwLock<_>>`)**: The existing `RequestTracker` in `commands.rs` uses async `Arc<RwLock<>>` because it is shared across concurrent tasks. The task spec shows `VmRequestTracker` with `&mut self` — connection logic (Task 04) will own the tracker and drive the send/receive loop in one task, so plain `&mut self` is correct and simpler. No lock contention.
+2. **`parse_vm_message` null-id handling**: A JSON message with `"id": null` is treated the same as having no id (falls through to the method check), matching real VM Service behaviour where `null` id appears on some notifications.
+3. **`#[serde(flatten)]` on `StreamEvent::data`**: Captures all kind-specific fields (e.g. `extensionKind`, `logRecord`, etc.) into an untyped `Value` for forward compatibility — strict typing can be added in a later task once all event shapes are known.
+4. **Global `AtomicU64` counter for IDs**: Same pattern as `commands.rs`. IDs are stringified integers which matches what real Dart VM Service clients send.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon` - Passed (159 tests: 133 pre-existing + 26 new vm_service tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (fixed one `map_or` → `is_none_or` suggestion)
+- `cargo test -p fdemon-core -p fdemon-daemon -p fdemon-app -p fdemon-tui` - All library crates pass
+
+### Risks/Limitations
+
+1. **e2e tests in binary crate are pre-existing failures**: The `--test e2e` suite (settings page, TUI interaction) fails independently of this task — confirmed by the fact they test unrelated UI functionality.
+2. **`VmRequestTracker` is not thread-safe by design**: Intentional (see decision #1 above). Task 04 (connection logic) must ensure the tracker is accessed from a single async task.

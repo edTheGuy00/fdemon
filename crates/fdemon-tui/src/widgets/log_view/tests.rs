@@ -986,6 +986,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         flavor: None,
         duration: Some(Duration::from_secs(5)),
         error_count: 0,
+        vm_connected: false,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);

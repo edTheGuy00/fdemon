@@ -3,6 +3,7 @@
 //! Uses log batching to coalesce rapid log arrivals during high-volume
 //! output (hot reload, verbose debugging, etc.).
 
+use crate::handler::UpdateAction;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{AppPhase, DaemonMessage, LogEntry, LogLevel, LogSource, ParsedStackTrace};
@@ -110,6 +111,16 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
             .session
             .add_log(LogEntry::new(level, LogSource::App, message));
         handle.session.phase = AppPhase::Stopped;
+        handle.session.vm_connected = false;
+
+        // Signal VM Service forwarding task to stop (if running)
+        if let Some(shutdown_tx) = handle.vm_shutdown_tx.take() {
+            let _ = shutdown_tx.send(true);
+            tracing::info!(
+                "Sent VM Service shutdown signal on process exit for session {}",
+                session_id
+            );
+        }
 
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
@@ -139,13 +150,169 @@ pub fn handle_session_message_state(
         if let Some(handle) = state.session_manager.get_mut(session_id) {
             if handle.session.app_id.as_ref() == Some(&app_stop.app_id) {
                 handle.session.app_id = None;
+                handle.session.ws_uri = None;
+                handle.session.vm_connected = false;
                 handle.session.phase = AppPhase::Initializing;
                 tracing::info!(
                     "Session {} app stopped: app_id={}",
                     session_id,
                     app_stop.app_id
                 );
+                // Signal the VM Service forwarding task to disconnect
+                if let Some(shutdown_tx) = handle.vm_shutdown_tx.take() {
+                    let _ = shutdown_tx.send(true);
+                    tracing::info!("Sent VM Service shutdown signal for session {}", session_id);
+                }
             }
         }
+    }
+
+    // Handle app.debugPort event — capture VM Service URI
+    if let DaemonMessage::AppDebugPort(debug_port) = msg {
+        if let Some(handle) = state.session_manager.get_mut(session_id) {
+            if handle.session.app_id.as_ref() == Some(&debug_port.app_id) {
+                handle.session.ws_uri = Some(debug_port.ws_uri.clone());
+                tracing::info!(
+                    "Session {} VM Service ready: ws_uri={}",
+                    session_id,
+                    debug_port.ws_uri
+                );
+            }
+        }
+    }
+}
+
+/// Check if an AppDebugPort message should trigger a VM Service connection.
+///
+/// Returns `Some(ConnectVmService)` when the message is an AppDebugPort for the
+/// session's current app_id, otherwise returns `None`.
+pub fn maybe_connect_vm_service(
+    state: &AppState,
+    session_id: SessionId,
+    msg: &DaemonMessage,
+) -> Option<UpdateAction> {
+    if let DaemonMessage::AppDebugPort(debug_port) = msg {
+        if let Some(handle) = state.session_manager.get(session_id) {
+            if handle.session.app_id.as_ref() == Some(&debug_port.app_id)
+                && !handle.session.vm_connected
+                && handle.vm_shutdown_tx.is_none()
+            {
+                return Some(UpdateAction::ConnectVmService {
+                    session_id,
+                    ws_uri: debug_port.ws_uri.clone(),
+                });
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::state::AppState;
+    use fdemon_core::{AppDebugPort, AppStart, AppStop, DaemonMessage, LogSource};
+
+    /// Helper to create a test Device
+    fn test_device(id: &str) -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: id.to_string(),
+            name: format!("Device {}", id),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Helper to create a state with a session that has a given app_id
+    fn state_with_session(app_id: &str) -> (AppState, SessionId) {
+        let mut state = AppState::new();
+        let device = test_device("test-device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Mark session as started with given app_id
+        let msg = DaemonMessage::AppStart(AppStart {
+            app_id: app_id.to_string(),
+            device_id: "test-device".to_string(),
+            directory: "/tmp/app".to_string(),
+            launch_mode: None,
+            supports_restart: true,
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        (state, session_id)
+    }
+
+    #[test]
+    fn test_handle_app_debug_port_stores_ws_uri() {
+        let (mut state, session_id) = state_with_session("test-app");
+
+        let msg = DaemonMessage::AppDebugPort(AppDebugPort {
+            app_id: "test-app".to_string(),
+            port: 8080,
+            ws_uri: "ws://127.0.0.1:8080/ws".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.ws_uri,
+            Some("ws://127.0.0.1:8080/ws".to_string())
+        );
+    }
+
+    #[test]
+    fn test_handle_app_debug_port_ignores_wrong_app_id() {
+        let (mut state, session_id) = state_with_session("test-app");
+
+        let msg = DaemonMessage::AppDebugPort(AppDebugPort {
+            app_id: "other-app".to_string(),
+            port: 8080,
+            ws_uri: "ws://127.0.0.1:8080/ws".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.session.ws_uri, None);
+    }
+
+    #[test]
+    fn test_ws_uri_cleared_on_app_stop() {
+        let (mut state, session_id) = state_with_session("test-app");
+
+        // First set the ws_uri
+        let debug_port_msg = DaemonMessage::AppDebugPort(AppDebugPort {
+            app_id: "test-app".to_string(),
+            port: 8080,
+            ws_uri: "ws://127.0.0.1:8080/ws".to_string(),
+        });
+        handle_session_message_state(&mut state, session_id, &debug_port_msg);
+
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert!(handle.session.ws_uri.is_some(), "ws_uri should be set");
+        }
+
+        // Now stop the app
+        let stop_msg = DaemonMessage::AppStop(AppStop {
+            app_id: "test-app".to_string(),
+            error: None,
+        });
+        handle_session_message_state(&mut state, session_id, &stop_msg);
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.session.ws_uri, None,
+            "ws_uri should be cleared on stop"
+        );
+        assert_eq!(handle.session.app_id, None, "app_id should also be cleared");
+    }
+
+    #[test]
+    fn test_log_source_vm_service_prefix() {
+        assert_eq!(LogSource::VmService.prefix(), "vm");
     }
 }
