@@ -61,12 +61,12 @@ Address all issues identified in the Phase 3 code review (NEEDS WORK verdict). F
 
 | # | Task | Status | Depends On | Est. Hours | Crate | Key Files |
 |---|------|--------|------------|------------|-------|-----------|
-| 1 | [01-perf-polling-lifecycle](tasks/01-perf-polling-lifecycle.md) | Not Started | - | 2-3h | `fdemon-app` | `handler/session_lifecycle.rs`, `handler/session.rs`, `actions.rs`, `session.rs` |
-| 2 | [02-isolate-cache-invalidation](tasks/02-isolate-cache-invalidation.md) | Not Started | - | 1-2h | `fdemon-daemon`, `fdemon-app` | `vm_service/client.rs`, `handler/update.rs` |
-| 3 | [03-stats-computation-fixes](tasks/03-stats-computation-fixes.md) | Not Started | - | 2-3h | `fdemon-app`, `fdemon-core` | `session.rs`, `performance.rs` |
-| 4 | [04-import-path-fixes](tasks/04-import-path-fixes.md) | Not Started | - | 0.5h | `fdemon-app` | `actions.rs` |
-| 5 | [05-session-module-split](tasks/05-session-module-split.md) | Not Started | 1, 2, 3, 4 | 3-4h | `fdemon-app` | `session.rs` → `session/` directory |
-| 6 | [06-gc-event-filtering](tasks/06-gc-event-filtering.md) | Not Started | 5 | 1-2h | `fdemon-app` | `session/performance.rs`, `handler/update.rs` |
+| 1 | [01-perf-polling-lifecycle](tasks/01-perf-polling-lifecycle.md) | [x] Done | - | 2-3h | `fdemon-app` | `handler/session_lifecycle.rs`, `handler/session.rs`, `actions.rs`, `session.rs` |
+| 2 | [02-isolate-cache-invalidation](tasks/02-isolate-cache-invalidation.md) | [x] Done | - | 1-2h | `fdemon-daemon`, `fdemon-app` | `vm_service/client.rs`, `handler/update.rs` |
+| 3 | [03-stats-computation-fixes](tasks/03-stats-computation-fixes.md) | [x] Done | - | 2-3h | `fdemon-app`, `fdemon-core` | `session.rs`, `performance.rs` |
+| 4 | [04-import-path-fixes](tasks/04-import-path-fixes.md) | [x] Done | - | 0.5h | `fdemon-app` | `actions.rs` |
+| 5 | [05-session-module-split](tasks/05-session-module-split.md) | [x] Done | 1, 2, 3, 4 | 3-4h | `fdemon-app` | `session.rs` → `session/` directory |
+| 6 | [06-gc-event-filtering](tasks/06-gc-event-filtering.md) | [x] Done | 5 | 1-2h | `fdemon-app` | `session/performance.rs`, `handler/update.rs` |
 
 ## Success Criteria
 

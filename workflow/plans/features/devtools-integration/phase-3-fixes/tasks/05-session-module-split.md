@@ -167,3 +167,44 @@ cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo cl
 - The `session/session.rs` file at ~680 lines exceeds the 500-line soft limit but is acceptable as a single cohesive unit. Further splitting would create artificial boundaries.
 - Tests at ~1,624 lines are large but are a single `mod tests` block. Consider splitting in a future task if they grow further.
 - `pub(crate) STATS_RECOMPUTE_INTERVAL` must remain accessible from `handler/update.rs` — the re-export from `mod.rs` preserves this
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session.rs` | DELETED — replaced by session/ directory |
+| `crates/fdemon-app/src/session/mod.rs` | NEW — re-exports all public types, defines SessionId + next_session_id |
+| `crates/fdemon-app/src/session/session.rs` | NEW — Session struct + impl (~704 lines) |
+| `crates/fdemon-app/src/session/handle.rs` | NEW — SessionHandle struct + impl |
+| `crates/fdemon-app/src/session/log_batcher.rs` | NEW — LogBatcher + BATCH_FLUSH_INTERVAL, BATCH_MAX_SIZE |
+| `crates/fdemon-app/src/session/block_state.rs` | NEW — LogBlockState |
+| `crates/fdemon-app/src/session/collapse.rs` | NEW — CollapseState |
+| `crates/fdemon-app/src/session/performance.rs` | NEW — PerformanceState + STATS_RECOMPUTE_INTERVAL + DEFAULT_* constants |
+| `crates/fdemon-app/src/session/tests.rs` | NEW — all session tests (~1707 lines) |
+
+### Notable Decisions/Tradeoffs
+
+1. **STATS_RECOMPUTE_INTERVAL visibility**: The constant is `pub(crate)` in `performance.rs` and re-exported from `mod.rs` as `pub(crate) use`. This preserves the original `crate::session::STATS_RECOMPUTE_INTERVAL` access pattern from `handler/update.rs`.
+
+2. **`#[allow(clippy::module_inception)]`**: Added to the `mod session` declaration in `mod.rs` because having `session/session.rs` triggers clippy's module-inception lint. This is intentional structure per the task design.
+
+3. **Constants visibility**: `DEFAULT_MEMORY_HISTORY_SIZE`, `DEFAULT_GC_HISTORY_SIZE`, `DEFAULT_FRAME_HISTORY_SIZE` in `performance.rs` and `BATCH_FLUSH_INTERVAL`, `BATCH_MAX_SIZE` in `log_batcher.rs` were made `pub(crate)` to allow test access via `crate::session::performance::` and `crate::session::log_batcher::` paths.
+
+4. **session.rs at 704 lines**: Slightly above the 700-line acceptance criterion due to `cargo fmt` whitespace. The task notes this file is an acceptable deviation as a single cohesive unit.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (1898 tests: 801 fdemon-app, 314 fdemon-daemon, 337 fdemon-core, 446 fdemon-tui)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Module name collision**: `session/session.rs` triggers clippy's `module_inception` lint. Suppressed with `#[allow(clippy::module_inception)]` on the mod declaration in mod.rs. This is a known acceptable pattern when a module contains its primary type of the same name.

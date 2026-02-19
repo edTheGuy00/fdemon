@@ -115,3 +115,45 @@ fn test_app_stop_signals_perf_shutdown() {
 - The `VmServiceDisconnected` handler at `update.rs:1189-1192` is the canonical reference — replicate its exact 3-step pattern (signal tx, set to None, set monitoring_active = false)
 - `handle_close_current_session` is the highest priority since it's the most common user-triggered path
 - The `handle_session_exited` and `AppStop` paths may fire when the Flutter process crashes — important for preventing zombie polling tasks
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session.rs` | Added `perf_task_handle: Option<tokio::task::JoinHandle<()>>` to `SessionHandle`; updated `Debug` impl and `new()` constructor |
+| `crates/fdemon-app/src/message.rs` | Added `perf_task_handle: Arc<Mutex<Option<JoinHandle<()>>>>` field to `VmServicePerformanceMonitoringStarted` |
+| `crates/fdemon-app/src/actions.rs` | Refactored `spawn_performance_polling` to create the shutdown channel outside the task; added Arc<Mutex<Option<JoinHandle<>>>> slot for rendezvous pattern; changed return type to `()` |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `VmServiceDisconnected` handler to abort `perf_task_handle` before signaling shutdown; updated `VmServicePerformanceMonitoringStarted` handler already had `perf_task_handle` storage (pre-existing partial impl) |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Added perf task abort + `perf_shutdown_tx` signal + `monitoring_active = false` in `handle_close_current_session` |
+| `crates/fdemon-app/src/handler/session.rs` | Added perf task abort + `perf_shutdown_tx` signal + `monitoring_active = false` in `handle_session_exited` and `handle_session_message_state` (AppStop branch) |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 new tests: `test_close_session_signals_perf_shutdown`, `test_session_exited_signals_perf_shutdown`, `test_app_stop_signals_perf_shutdown`; existing `test_performance_monitoring_started_stores_shutdown_tx` was already updated for new message shape |
+
+### Notable Decisions/Tradeoffs
+
+1. **Arc<Mutex<Option<JoinHandle<>>>> rendezvous**: The `VmServicePerformanceMonitoringStarted` message is sent as the first `.await` inside the spawned task. To include the `JoinHandle` in the message, a shared slot (`Arc<Mutex<Option<>>>`) is pre-created before `tokio::spawn`, filled synchronously after spawn returns (before the runtime schedules the task), and sent via the message. The TEA handler extracts the handle with `.take()`. This matches the task's suggested approach exactly.
+
+2. **`spawn_performance_polling` returns `()`**: The return type was changed from `JoinHandle<()>` to `()` because the handle is now tracked via `SessionHandle.perf_task_handle`. Callers already discarded the return value.
+
+3. **Abort before signal on all paths**: Each close path now calls `.abort()` on the task handle before sending `true` on the shutdown channel. This provides belt-and-suspenders cleanup: the abort is immediate, the signal is graceful. This matches the pattern established in `VmServiceDisconnected`.
+
+4. **`monitoring_active = false` on all paths**: Set explicitly on all three close paths, consistent with the canonical `VmServiceDisconnected` handler.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (801 tests: 798 pre-existing + 3 new)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied (no changes needed)
+- `cargo check --workspace` - Passed (all crates)
+
+### Risks/Limitations
+
+1. **Tokio scheduling assumption**: The rendezvous pattern relies on the spawned task not running until the current thread yields to the runtime after `tokio::spawn`. This is guaranteed by Tokio's cooperative scheduling — the task is only polled when the current thread reaches an `.await` point. The slot fill happens synchronously between `tokio::spawn` and the next `.await`, so the guarantee holds.
+
+2. **Double-signal harmless**: If both `.abort()` and `tx.send(true)` fire, the abort wins. The polling loop's `perf_shutdown_rx.changed()` branch may never execute, but that is safe — `abort()` cancels the future at the next `.await` point.

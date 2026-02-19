@@ -129,3 +129,44 @@ fn test_is_major_gc() {
 - The `gc_type` field comes from the Dart VM Service event; values are `"Scavenge"`, `"MarkSweep"`, `"MarkCompact"`
 - If Phase 4 needs minor GC frequency data, upgrade to Option B (separate buffers) at that time
 - Consider logging filtered Scavenge events at `trace!` level for debugging
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/performance.rs` | Added `is_major_gc()` method to `GcEvent` impl; added 4 unit tests for the method |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `VmServiceGcEvent` handler to filter Scavenge events via `gc_event.is_major_gc()`; added `trace!` log for filtered events |
+| `crates/fdemon-app/src/session/performance.rs` | Reduced `DEFAULT_GC_HISTORY_SIZE` from 100 to 50; updated doc comment |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `test_gc_event_handler` to use MarkSweep (not Scavenge); added `test_scavenge_gc_events_filtered`, `test_major_gc_events_stored` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (filter-only) chosen**: Simplest approach — Scavenge events are silently dropped in the handler. If Phase 4 needs minor GC frequency data (e.g., for allocation rate estimation), upgrade to Option B (dual ring buffers) at that time.
+2. **Unknown GC types treated as major**: `is_major_gc()` returns `true` for any `gc_type != "Scavenge"`, so future VM GC types that aren't Scavenge are preserved without code changes.
+3. **`trace!` logging for filtered events**: Scavenge events log at `trace!` level rather than being silently dropped, making it easy to observe the filter in action during debugging without polluting normal log output.
+4. **Buffer reduced from 100 to 50**: Since only major GCs are stored and they are much rarer, 50 slots provides ample history (Dart MarkSweep typically occurs every few seconds under pressure, so 50 events covers several minutes of history).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (1,904 tests across all crates; 0 failures)
+  - `test_gc_event_handler` - Passed (updated to use MarkSweep)
+  - `test_scavenge_gc_events_filtered` - Passed (new)
+  - `test_major_gc_events_stored` - Passed (new, covers both MarkSweep and MarkCompact)
+  - `test_is_major_gc_scavenge_returns_false` - Passed (new, in fdemon-core)
+  - `test_is_major_gc_mark_sweep_returns_true` - Passed (new, in fdemon-core)
+  - `test_is_major_gc_mark_compact_returns_true` - Passed (new, in fdemon-core)
+  - `test_is_major_gc_unknown_type_returns_true` - Passed (new, in fdemon-core)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Minor GC frequency data is lost**: Scavenge events are discarded, so allocation rate estimation from minor GC frequency is not available. This is acceptable for Phase 3; upgrade to Option B if needed in Phase 4.
+2. **`gc_type` is a stringly-typed field**: The filter relies on the string `"Scavenge"` matching the Dart VM Service protocol value. This is stable per the Dart VM Service protocol specification, but a future Dart SDK change could rename it (very unlikely).

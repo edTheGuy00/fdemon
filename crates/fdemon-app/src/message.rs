@@ -679,14 +679,21 @@ pub enum Message {
 
     /// Performance monitoring task started for a session.
     ///
-    /// Carries the shutdown sender so the TEA layer can store it in the
-    /// session handle and signal the polling task to stop when needed.
+    /// Carries the shutdown sender and the task's JoinHandle so the TEA layer
+    /// can store them in the session handle, signal the polling task to stop
+    /// when needed, and abort it if signalling is not sufficient.
     VmServicePerformanceMonitoringStarted {
         session_id: SessionId,
         /// Shutdown sender for the performance polling task.
         /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
         /// Sending `true` stops the polling loop cleanly.
         perf_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// JoinHandle for the performance polling task.
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out of the `Option` when
+        /// storing it on `SessionHandle`, leaving `None` for any subsequent
+        /// (unexpected) clone.
+        perf_task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     },
 
     // ─────────────────────────────────────────────────────────

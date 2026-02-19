@@ -16,8 +16,8 @@ use crate::UpdateAction;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
     vm_service::{
-        flutter_error_to_log_entry, parse_flutter_error, parse_frame_timing, parse_gc_event,
-        parse_log_record, vm_log_to_log_entry, VmRequestHandle, VmServiceClient,
+        enable_frame_tracking, flutter_error_to_log_entry, parse_flutter_error, parse_frame_timing,
+        parse_gc_event, parse_log_record, vm_log_to_log_entry, VmRequestHandle, VmServiceClient,
     },
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
@@ -470,9 +470,13 @@ pub async fn execute_task(
 
 /// Spawn the periodic memory-usage polling task for a session.
 ///
-/// Creates a `watch::channel(false)` shutdown channel and immediately sends a
-/// `VmServicePerformanceMonitoringStarted` message so that the TEA layer can
-/// store the sender in the `SessionHandle`. The polling loop then runs until:
+/// Creates a `watch::channel(false)` shutdown channel outside the spawned task
+/// so that both the sender and the `JoinHandle` are available to package into
+/// `VmServicePerformanceMonitoringStarted`. The TEA layer can then:
+/// - Signal the task to stop by sending `true` on the shutdown channel, and
+/// - Abort the task directly via the `JoinHandle` if needed.
+///
+/// The polling loop runs until:
 /// - The shutdown channel receives `true` (VM disconnected / session stopped), or
 /// - The `msg_tx` channel is closed (engine shutting down).
 ///
@@ -482,18 +486,32 @@ fn spawn_performance_polling(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
-) -> tokio::task::JoinHandle<()> {
-    tokio::spawn(async move {
-        // Create a shutdown channel — sender goes to the session handle so the
-        // TEA layer can stop this task when the VM disconnects or app stops.
-        let (perf_shutdown_tx, mut perf_shutdown_rx) = tokio::sync::watch::channel(false);
-        let perf_shutdown_tx = std::sync::Arc::new(perf_shutdown_tx);
+) {
+    // Create the shutdown channel outside the task so both ends are available
+    // before the task starts running.
+    let (perf_shutdown_tx, mut perf_shutdown_rx) = tokio::sync::watch::channel(false);
+    let perf_shutdown_tx = std::sync::Arc::new(perf_shutdown_tx);
 
-        // Notify TEA that monitoring has started; stores the shutdown sender.
+    // The JoinHandle from `tokio::spawn` is only available after the call, but
+    // the task will send it in `VmServicePerformanceMonitoringStarted` as the
+    // first async operation. We use `Arc<Mutex<Option<>>>` as a rendezvous:
+    // - We fill the slot after spawn returns (synchronously, before any await).
+    // - The task reads from the slot when it sends the "started" message.
+    // Because tokio tasks don't run until the current thread yields (or the
+    // runtime schedules them), the slot is guaranteed to be filled before the
+    // task's first `.await` point.
+    let task_handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let task_handle_slot_for_msg = task_handle_slot.clone();
+
+    let join_handle = tokio::spawn(async move {
+        // Notify TEA that monitoring has started. The slot is populated
+        // synchronously by the caller before this first `.await` runs.
         if msg_tx
             .send(Message::VmServicePerformanceMonitoringStarted {
                 session_id,
                 perf_shutdown_tx,
+                perf_task_handle: task_handle_slot_for_msg,
             })
             .await
             .is_err()
@@ -558,7 +576,14 @@ fn spawn_performance_polling(
                 }
             }
         }
-    })
+    });
+
+    // Synchronously store the JoinHandle in the slot. The task hasn't run yet
+    // (tokio tasks don't run until the current thread yields to the runtime),
+    // so the slot is populated before the first `.await` inside the task.
+    if let Ok(mut slot) = task_handle_slot.lock() {
+        *slot = Some(join_handle);
+    };
 }
 
 /// Spawn a task that connects to the VM Service and forwards events as Messages.
@@ -607,11 +632,7 @@ fn spawn_vm_service_connection(
                 // this attempts to also enable `profileWidgetBuilds` for build
                 // timing detail. Errors are silently ignored (profile mode, etc.).
                 if let Ok(isolate_id) = client.main_isolate_id().await {
-                    let _ = fdemon_daemon::vm_service::timeline::enable_frame_tracking(
-                        &client.request_handle(),
-                        &isolate_id,
-                    )
-                    .await;
+                    let _ = enable_frame_tracking(&client.request_handle(), &isolate_id).await;
                 }
 
                 // Extract the request handle BEFORE entering the forwarding loop.

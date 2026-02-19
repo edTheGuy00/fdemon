@@ -1037,6 +1037,107 @@ fn test_auto_reload_logs_to_each_session() {
     }
 }
 
+// ─────────────────────────────────────────────────────────
+// Isolate cache invalidation tests (Phase 3, Task 02)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_restart_completed_invalidates_isolate_cache() {
+    let mut state = AppState::new();
+
+    let device = test_device("device-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Attach a vm_request_handle with a pre-populated cache.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.mark_started("app-1".to_string());
+        handle.session.start_reload(); // session must be reloading before complete_reload()
+        handle.vm_request_handle = Some(fdemon_daemon::vm_service::VmRequestHandle::new_for_test(
+            Some("isolates/12345".to_string()),
+        ));
+    }
+
+    // Confirm cache is populated before the message.
+    {
+        let h = state.session_manager.get(session_id).unwrap();
+        let cached = h.vm_request_handle.as_ref().unwrap().cached_isolate_id();
+        assert_eq!(
+            cached,
+            Some("isolates/12345".to_string()),
+            "cache should be populated before restart"
+        );
+    }
+
+    // Process SessionRestartCompleted.
+    update(&mut state, Message::SessionRestartCompleted { session_id });
+
+    // Cache should now be cleared.
+    let h = state.session_manager.get(session_id).unwrap();
+    let cached_after = h.vm_request_handle.as_ref().unwrap().cached_isolate_id();
+    assert!(
+        cached_after.is_none(),
+        "isolate cache should be cleared after SessionRestartCompleted"
+    );
+}
+
+#[test]
+fn test_restart_completed_without_vm_handle_does_not_panic() {
+    // SessionRestartCompleted must succeed even when vm_request_handle is None.
+    let mut state = AppState::new();
+
+    let device = test_device("device-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.mark_started("app-1".to_string());
+        handle.session.start_reload();
+        // vm_request_handle intentionally left as None
+    }
+
+    // Should not panic.
+    let result = update(&mut state, Message::SessionRestartCompleted { session_id });
+    assert!(result.action.is_none());
+
+    // Session should have completed the reload.
+    let h = state.session_manager.get(session_id).unwrap();
+    assert_eq!(h.session.phase, AppPhase::Running);
+}
+
+#[test]
+fn test_reload_completed_does_not_invalidate_isolate_cache() {
+    // Hot reload does NOT create a new isolate, so the cache must be preserved.
+    let mut state = AppState::new();
+
+    let device = test_device("device-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        handle.session.mark_started("app-1".to_string());
+        handle.session.start_reload();
+        handle.vm_request_handle = Some(fdemon_daemon::vm_service::VmRequestHandle::new_for_test(
+            Some("isolates/99".to_string()),
+        ));
+    }
+
+    // Process SessionReloadCompleted (not restart).
+    update(
+        &mut state,
+        Message::SessionReloadCompleted {
+            session_id,
+            time_ms: 250,
+        },
+    );
+
+    // Cache should still be populated — reload keeps the same isolate.
+    let h = state.session_manager.get(session_id).unwrap();
+    let cached_after = h.vm_request_handle.as_ref().unwrap().cached_isolate_id();
+    assert_eq!(
+        cached_after,
+        Some("isolates/99".to_string()),
+        "isolate cache should NOT be cleared after hot reload"
+    );
+}
+
 #[test]
 fn test_auto_reload_single_session_logs_to_session() {
     let mut state = AppState::new();
@@ -3473,8 +3574,9 @@ fn test_gc_event_handler() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
+    // MarkSweep is a major GC event and should be stored.
     let gc = GcEvent {
-        gc_type: "Scavenge".into(),
+        gc_type: "MarkSweep".into(),
         reason: Some("allocation".into()),
         isolate_id: None,
         timestamp: chrono::Local::now(),
@@ -3498,7 +3600,80 @@ fn test_gc_event_handler() {
         .session
         .performance;
     assert_eq!(perf.gc_history.len(), 1);
-    assert_eq!(perf.gc_history.latest().unwrap().gc_type, "Scavenge");
+    assert_eq!(perf.gc_history.latest().unwrap().gc_type, "MarkSweep");
+}
+
+#[test]
+fn test_scavenge_gc_events_filtered() {
+    use fdemon_core::performance::GcEvent;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Scavenge is a minor GC event and should be filtered out.
+    let msg = Message::VmServiceGcEvent {
+        session_id,
+        gc_event: GcEvent {
+            gc_type: "Scavenge".into(),
+            reason: Some("allocation".into()),
+            isolate_id: None,
+            timestamp: chrono::Local::now(),
+        },
+    };
+    let result = update(&mut state, msg);
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceGcEvent should have no action"
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.gc_history.len(),
+        0,
+        "Scavenge events should be filtered out of gc_history"
+    );
+}
+
+#[test]
+fn test_major_gc_events_stored() {
+    use fdemon_core::performance::GcEvent;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Send a MarkSweep and a MarkCompact event — both should be stored.
+    for gc_type in ["MarkSweep", "MarkCompact"] {
+        let msg = Message::VmServiceGcEvent {
+            session_id,
+            gc_event: GcEvent {
+                gc_type: gc_type.into(),
+                reason: None,
+                isolate_id: None,
+                timestamp: chrono::Local::now(),
+            },
+        };
+        update(&mut state, msg);
+    }
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.gc_history.len(),
+        2,
+        "Both MarkSweep and MarkCompact events should be stored in gc_history"
+    );
 }
 
 #[test]
@@ -3611,6 +3786,7 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
         Message::VmServicePerformanceMonitoringStarted {
             session_id,
             perf_shutdown_tx,
+            perf_task_handle: std::sync::Arc::new(std::sync::Mutex::new(None)),
         },
     );
 
@@ -3741,7 +3917,7 @@ fn test_frame_timing_stats_recomputed_every_interval() {
         .session
         .performance;
     assert_eq!(
-        perf.stats.total_frames, 0,
+        perf.stats.buffered_frames, 0,
         "stats should not be recomputed yet"
     );
 
@@ -3767,7 +3943,7 @@ fn test_frame_timing_stats_recomputed_every_interval() {
         .session
         .performance;
     assert_eq!(
-        perf.stats.total_frames, 10,
+        perf.stats.buffered_frames, 10,
         "stats should be recomputed after 10 frames"
     );
 }
@@ -3825,7 +4001,7 @@ fn test_memory_snapshot_triggers_stats_recompute() {
             .unwrap()
             .session
             .performance;
-        assert_eq!(perf.stats.total_frames, 0);
+        assert_eq!(perf.stats.buffered_frames, 0);
     }
 
     // Send a memory snapshot — this should trigger recompute
@@ -3849,7 +4025,123 @@ fn test_memory_snapshot_triggers_stats_recompute() {
         .session
         .performance;
     assert_eq!(
-        perf.stats.total_frames, 5,
+        perf.stats.buffered_frames, 5,
         "memory snapshot should trigger stats recompute"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Perf Polling Lifecycle Tests (Phase 3 Fixes, Task 01)
+// ─────────────────────────────────────────────────────────
+
+/// Helper: attach a perf_shutdown_tx to a session handle.
+/// Returns the watch receiver so the test can verify the signal.
+fn attach_perf_shutdown(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = state.session_manager.get_mut(session_id).unwrap();
+    handle.perf_shutdown_tx = Some(std::sync::Arc::new(tx));
+    rx
+}
+
+#[test]
+fn test_close_session_signals_perf_shutdown() {
+    // Setup: two sessions so close doesn't quit, one with perf_shutdown_tx
+    let device1 = test_device("dev-1", "Device 1");
+    let device2 = test_device("dev-2", "Device 2");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device1).unwrap();
+    state.session_manager.create_session(&device2).unwrap();
+
+    // Make session_id the selected one
+    state.session_manager.select_by_id(session_id);
+
+    let mut perf_rx = attach_perf_shutdown(&mut state, session_id);
+
+    // Action: process CloseCurrentSession message
+    super::session_lifecycle::handle_close_current_session(&mut state);
+
+    // Assert: perf_shutdown_tx receiver sees true
+    assert!(
+        *perf_rx.borrow_and_update(),
+        "perf_shutdown_tx should be signaled on CloseCurrentSession"
+    );
+}
+
+#[test]
+fn test_session_exited_signals_perf_shutdown() {
+    // Setup: create session with perf_shutdown_tx set
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let mut perf_rx = attach_perf_shutdown(&mut state, session_id);
+
+    // Action: process SessionExited (via handle_session_exited)
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+
+    // Assert: perf_shutdown_tx receiver sees true
+    assert!(
+        *perf_rx.borrow_and_update(),
+        "perf_shutdown_tx should be signaled on handle_session_exited"
+    );
+
+    // Assert: monitoring_active is false
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.performance.monitoring_active,
+        "monitoring_active should be false after process exit"
+    );
+    assert!(
+        handle.perf_shutdown_tx.is_none(),
+        "perf_shutdown_tx should be cleared after process exit"
+    );
+}
+
+#[test]
+fn test_app_stop_signals_perf_shutdown() {
+    use fdemon_core::{AppStart, AppStop, DaemonMessage};
+
+    // Setup: create session with perf_shutdown_tx and app_id
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark session as started with a known app_id
+    let start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "dev-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &start_msg);
+
+    let mut perf_rx = attach_perf_shutdown(&mut state, session_id);
+
+    // Action: process Daemon(AppStop) via handle_session_message_state
+    let stop_msg = DaemonMessage::AppStop(AppStop {
+        app_id: "test-app".to_string(),
+        error: None,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &stop_msg);
+
+    // Assert: perf_shutdown_tx receiver sees true
+    assert!(
+        *perf_rx.borrow_and_update(),
+        "perf_shutdown_tx should be signaled on AppStop"
+    );
+
+    // Assert: monitoring_active is false
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.performance.monitoring_active,
+        "monitoring_active should be false after AppStop"
+    );
+    assert!(
+        handle.perf_shutdown_tx.is_none(),
+        "perf_shutdown_tx should be cleared after AppStop"
     );
 }

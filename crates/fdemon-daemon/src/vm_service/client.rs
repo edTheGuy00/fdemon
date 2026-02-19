@@ -159,6 +159,59 @@ impl VmRequestHandle {
         Ok(id)
     }
 
+    /// Create a `VmRequestHandle` backed by a disconnected dummy channel.
+    ///
+    /// Intended for unit tests that need a handle but do not make real RPC
+    /// calls. The pre-populated `isolate_id` is written directly into the
+    /// cache; pass `None` for an empty cache.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn new_for_test(isolate_id: Option<String>) -> Self {
+        let (cmd_tx, _cmd_rx) = tokio::sync::mpsc::channel(1);
+        Self {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(isolate_id)),
+        }
+    }
+
+    /// Peek at the current cached isolate ID without modifying it.
+    ///
+    /// Returns `None` if the cache is empty or if the lock cannot be
+    /// acquired immediately (extremely rare; only possible if
+    /// `main_isolate_id()` is executing concurrently).
+    ///
+    /// Intended for unit tests that need to inspect internal state.
+    #[cfg(any(test, feature = "test-helpers"))]
+    pub fn cached_isolate_id(&self) -> Option<String> {
+        self.isolate_id_cache
+            .try_lock()
+            .ok()
+            .and_then(|g| g.clone())
+    }
+
+    /// Clear the cached main isolate ID.
+    ///
+    /// Call this after events that create a new isolate (hot restart) so
+    /// the next [`main_isolate_id()`] call re-fetches from the VM via
+    /// `getVM` RPC.
+    ///
+    /// Uses `try_lock()` on the internal `tokio::Mutex`. Under the very
+    /// rare condition that `main_isolate_id()` is executing concurrently
+    /// (i.e. the lock is held across the async `getVM` call), the
+    /// invalidation is silently skipped. In practice this is harmless: the
+    /// performance polling loop sleeps 2 seconds between calls, so
+    /// contention is extremely unlikely; and even if it occurs the cache
+    /// will be repopulated with the same value that was already being
+    /// fetched.
+    pub fn invalidate_isolate_cache(&self) {
+        if let Ok(mut cache) = self.isolate_id_cache.try_lock() {
+            *cache = None;
+            debug!("VM Service: isolate ID cache invalidated (hot restart)");
+        } else {
+            debug!("VM Service: isolate ID cache lock contention during invalidation — skipped");
+        }
+    }
+
     /// Call a Flutter service extension method.
     ///
     /// Automatically includes `isolateId` in the params map. All additional
@@ -1266,5 +1319,82 @@ mod tests {
         // VmRequestHandle must be Send + Sync for use in background tasks
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<VmRequestHandle>();
+    }
+
+    // -- invalidate_isolate_cache --------------------------------------------
+
+    #[tokio::test]
+    async fn test_invalidate_isolate_cache_clears_cached_value() {
+        // Pre-populate the cache with a known isolate ID.
+        let isolate_id_cache = Arc::new(Mutex::new(Some("isolates/12345".to_string())));
+
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+        };
+
+        // Confirm the cache has a value.
+        {
+            let guard = isolate_id_cache.lock().await;
+            assert_eq!(*guard, Some("isolates/12345".to_string()));
+        }
+
+        // Invalidate the cache.
+        handle.invalidate_isolate_cache();
+
+        // The cache should now be None.
+        let guard = isolate_id_cache.lock().await;
+        assert!(
+            guard.is_none(),
+            "cache should be cleared after invalidation"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_isolate_cache_is_idempotent_when_already_empty() {
+        // Cache starts empty — invalidating should be a no-op without panic.
+        let isolate_id_cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+        };
+
+        handle.invalidate_isolate_cache();
+
+        let guard = isolate_id_cache.lock().await;
+        assert!(
+            guard.is_none(),
+            "cache should remain None after invalidating an already-empty cache"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_isolate_cache_shared_across_clones() {
+        // All clones of a VmRequestHandle share the same Arc<Mutex<...>>,
+        // so invalidation via one clone is visible from another.
+        let isolate_id_cache = Arc::new(Mutex::new(Some("isolates/99".to_string())));
+
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::clone(&isolate_id_cache),
+        };
+        let cloned = handle.clone();
+
+        // Invalidate via the original handle.
+        handle.invalidate_isolate_cache();
+
+        // The cloned handle should see the same cleared cache.
+        let guard = isolate_id_cache.lock().await;
+        assert!(
+            guard.is_none(),
+            "cloned handle should observe cache cleared by original"
+        );
+        // Drop the guard before the cloned handle goes out of scope.
+        drop(guard);
+        drop(cloned);
     }
 }

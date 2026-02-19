@@ -122,6 +122,19 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
             );
         }
 
+        // Abort and signal the performance polling task to stop.
+        if let Some(h) = handle.perf_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.perf_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent perf shutdown signal on process exit for session {}",
+                session_id
+            );
+        }
+        handle.session.performance.monitoring_active = false;
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -163,6 +176,16 @@ pub fn handle_session_message_state(
                     let _ = shutdown_tx.send(true);
                     tracing::info!("Sent VM Service shutdown signal for session {}", session_id);
                 }
+
+                // Abort and signal the performance polling task to stop.
+                if let Some(h) = handle.perf_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.perf_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                    tracing::info!("Sent perf shutdown signal for session {}", session_id);
+                }
+                handle.session.performance.monitoring_active = false;
             }
         }
     }

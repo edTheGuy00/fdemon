@@ -86,3 +86,31 @@ No new tests needed — this is a pure import path change with no behavioral imp
 
 - This is a quick fix that can be done first to warm up
 - The import style should match the existing pattern in `actions.rs` where all vm_service items are imported from the flat re-export surface
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `enable_frame_tracking` to the `vm_service` use block (line 19); changed call site from `fdemon_daemon::vm_service::timeline::enable_frame_tracking(...)` to bare `enable_frame_tracking(...)` (line 610) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (preferred) implemented**: Added `enable_frame_tracking` to the existing `use fdemon_daemon::vm_service::{...}` block at the top of the file, consistent with how all other `vm_service` functions are imported. This makes the call site a clean single-line call matching the surrounding code style.
+
+2. **No broken doc comments found**: The grep search `grep -rn '^\s*/ [A-Z]' crates/ --include='*.rs' | grep -v '///'` returned no results, confirming Fix 2 is a non-issue on this branch.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo fmt -p fdemon-app -- --check` - Only pre-existing formatting issue in `session.rs` (unrelated to this task); `actions.rs` itself is properly formatted
+
+### Risks/Limitations
+
+1. **None**: This is a pure import path refactor with zero behavioral impact. The re-export at `fdemon_daemon::vm_service::enable_frame_tracking` was already in place in `vm_service/mod.rs` lines 86-89.

@@ -71,6 +71,22 @@ pub struct GcEvent {
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
 
+impl GcEvent {
+    /// Returns `true` if this is a major GC event (MarkSweep, MarkCompact).
+    ///
+    /// The Dart VM emits two categories of GC events:
+    /// - **Minor GC** (`Scavenge`): Young-generation collection. Very frequent at high
+    ///   allocation rates (multiple per second) but low pause time.
+    /// - **Major GC** (`MarkSweep`, `MarkCompact`): Old-generation collection. Rare but
+    ///   has significant pause times and indicates real memory pressure.
+    ///
+    /// Only major GC events are stored in `gc_history` to prevent Scavenge events from
+    /// filling the ring buffer and pushing out the more informative major GC entries.
+    pub fn is_major_gc(&self) -> bool {
+        self.gc_type != "Scavenge"
+    }
+}
+
 // ── ClassHeapStats ───────────────────────────────────────────────────────────
 
 /// Heap allocation statistics for a single class.
@@ -186,8 +202,8 @@ pub struct PerformanceStats {
     pub p95_frame_ms: Option<f64>,
     /// Worst (max) frame time in milliseconds.
     pub max_frame_ms: Option<f64>,
-    /// Total frames observed.
-    pub total_frames: u64,
+    /// Number of frame timing samples currently in the ring buffer.
+    pub buffered_frames: u64,
 }
 
 impl PerformanceStats {
@@ -269,6 +285,55 @@ impl<T> RingBuffer<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── GcEvent ─────────────────────────────────────
+    #[test]
+    fn test_is_major_gc_scavenge_returns_false() {
+        let gc = GcEvent {
+            gc_type: "Scavenge".into(),
+            reason: None,
+            isolate_id: None,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(!gc.is_major_gc(), "Scavenge should not be a major GC");
+    }
+
+    #[test]
+    fn test_is_major_gc_mark_sweep_returns_true() {
+        let gc = GcEvent {
+            gc_type: "MarkSweep".into(),
+            reason: None,
+            isolate_id: None,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(gc.is_major_gc(), "MarkSweep should be a major GC");
+    }
+
+    #[test]
+    fn test_is_major_gc_mark_compact_returns_true() {
+        let gc = GcEvent {
+            gc_type: "MarkCompact".into(),
+            reason: None,
+            isolate_id: None,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(gc.is_major_gc(), "MarkCompact should be a major GC");
+    }
+
+    #[test]
+    fn test_is_major_gc_unknown_type_returns_true() {
+        // Unknown GC types are treated as major to err on the side of preserving data.
+        let gc = GcEvent {
+            gc_type: "UnknownGcType".into(),
+            reason: None,
+            isolate_id: None,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(
+            gc.is_major_gc(),
+            "Unknown GC types should be treated as major"
+        );
+    }
 
     // ── MemoryUsage ─────────────────────────────────
     #[test]

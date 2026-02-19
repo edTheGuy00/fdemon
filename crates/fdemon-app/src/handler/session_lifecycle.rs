@@ -113,8 +113,8 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
                 .map(|app_id| (app_id, h.cmd_sender.clone()))
         });
 
-        // Signal VM Service shutdown BEFORE removing the session, matching
-        // the pattern in handle_session_exited and handle_session_message_state(AppStop).
+        // Signal VM Service and performance monitoring shutdown BEFORE removing
+        // the session, mirroring the pattern in VmServiceDisconnected handler.
         if let Some(handle) = state.session_manager.get_mut(current_session_id) {
             if let Some(shutdown_tx) = handle.vm_shutdown_tx.take() {
                 let _ = shutdown_tx.send(true);
@@ -123,6 +123,18 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
                     current_session_id
                 );
             }
+            // Abort and signal the performance polling task to stop.
+            if let Some(h) = handle.perf_task_handle.take() {
+                h.abort();
+            }
+            if let Some(tx) = handle.perf_shutdown_tx.take() {
+                let _ = tx.send(true);
+                tracing::info!(
+                    "Sent perf shutdown signal on session close for session {}",
+                    current_session_id
+                );
+            }
+            handle.session.performance.monitoring_active = false;
         }
 
         if let Some((app_id, cmd_sender_opt)) = session_info {

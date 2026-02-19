@@ -120,3 +120,40 @@ fn test_restart_completed_invalidates_isolate_cache() {
 - The `run_client_task()` reconnection path (`client.rs:588-594`) already clears the cache — this fix adds a second invalidation trigger for hot restart
 - The performance polling task at `actions.rs:509-513` calls `main_isolate_id()` every 2 seconds, so after invalidation the cache is repopulated within 2 seconds automatically
 - `enable_frame_tracking()` at `actions.rs:609-614` is called only once at startup, so a stale cache there would require re-calling it after restart — out of scope for this fix, but worth noting
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `invalidate_isolate_cache()` method using `try_lock()` on `VmRequestHandle`; added `new_for_test()` and `cached_isolate_id()` test helpers under `#[cfg(any(test, feature = "test-helpers"))]`; added 3 new unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added cache invalidation call in `SessionRestartCompleted` handler after `complete_reload()` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 new handler tests: `test_restart_completed_invalidates_isolate_cache`, `test_restart_completed_without_vm_handle_does_not_panic`, `test_reload_completed_does_not_invalidate_isolate_cache` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`try_lock()` over `std::sync::Mutex`**: Used option (b) from the task — `try_lock()` on the existing `tokio::Mutex`. The task correctly identifies that `main_isolate_id()` holds the lock across an await point (the `getVM` RPC call), making `std::sync::Mutex` unsafe. The `try_lock()` approach is safe and handles the edge case by logging a debug message and silently skipping — contention is essentially impossible given the 2-second polling interval.
+
+2. **Test helpers behind `#[cfg(any(test, feature = "test-helpers"))]`**: Added `new_for_test()` and `cached_isolate_id()` to `VmRequestHandle` matching the established pattern from `CommandSender::new_for_test()`. The `fdemon-app` dev-dependencies already declare `fdemon-daemon` with `features = ["test-helpers"]`, so these are immediately usable in handler tests.
+
+3. **Hot reload does NOT invalidate cache**: The `SessionReloadCompleted` handler is intentionally left unchanged — hot reload preserves the Dart isolate (same ID), so invalidating there would cause an unnecessary `getVM` RPC on the next poll. A test (`test_reload_completed_does_not_invalidate_isolate_cache`) asserts this behavior explicitly.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-daemon -p fdemon-app` — Passed (340 + 803 tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+- New `fdemon-daemon` tests (3): `test_invalidate_isolate_cache_clears_cached_value`, `test_invalidate_isolate_cache_is_idempotent_when_already_empty`, `test_invalidate_isolate_cache_shared_across_clones` — all passed
+- New `fdemon-app` handler tests (3): `test_restart_completed_invalidates_isolate_cache`, `test_restart_completed_without_vm_handle_does_not_panic`, `test_reload_completed_does_not_invalidate_isolate_cache` — all passed
+
+### Risks/Limitations
+
+1. **`try_lock()` miss under extreme contention**: If `main_isolate_id()` happens to be executing exactly when `invalidate_isolate_cache()` is called, the invalidation is silently skipped. The probability is negligible (polling sleeps 2 seconds; invalidation is synchronous and instantaneous), and even if it occurred, the cache would be repopulated with a new valid ID anyway since `getVM` would have been called.
+
+2. **`enable_frame_tracking()` not re-called after restart**: The frame tracking extension registration (`ext.dart.developer.timeline.enable`) is set up once at startup. After hot restart, the new isolate needs it re-enabled. This is noted as out of scope per the task description.

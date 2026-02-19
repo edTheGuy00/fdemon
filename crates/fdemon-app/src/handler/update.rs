@@ -206,6 +206,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     "Restarted".to_string(),
                 ));
+                // Invalidate the isolate ID cache — hot restart creates a new
+                // Dart isolate with a different ID. The next call to
+                // `main_isolate_id()` will re-fetch via `getVM` RPC so that
+                // performance RPCs target the live isolate, not the dead one.
+                if let Some(ref vm_handle) = handle.vm_request_handle {
+                    vm_handle.invalidate_isolate_cache();
+                }
             }
             UpdateResult::none()
         }
@@ -1185,7 +1192,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Making this explicit signals intent even though the handle itself
                 // would return Error::ChannelClosed on any subsequent call.
                 handle.vm_request_handle = None;
-                // Signal the performance polling task to stop cleanly.
+                // Abort the performance polling task and signal it to stop cleanly.
+                if let Some(h) = handle.perf_task_handle.take() {
+                    h.abort();
+                }
                 if let Some(ref tx) = handle.perf_shutdown_tx {
                     let _ = tx.send(true);
                 }
@@ -1238,7 +1248,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             gc_event,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.performance.gc_history.push(gc_event);
+                // Only store major GC events (MarkSweep, MarkCompact) to prevent
+                // frequent Scavenge events from filling the ring buffer and pushing
+                // out the more informative major GC entries.
+                if gc_event.is_major_gc() {
+                    handle.session.performance.gc_history.push(gc_event);
+                } else {
+                    tracing::trace!(
+                        "Filtered Scavenge GC event for session {} (minor GC)",
+                        session_id
+                    );
+                }
             }
             UpdateResult::none()
         }
@@ -1263,9 +1283,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::VmServicePerformanceMonitoringStarted {
             session_id,
             perf_shutdown_tx,
+            perf_task_handle,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.perf_shutdown_tx = Some(perf_shutdown_tx);
+                // Take the JoinHandle out of the Arc<Mutex<Option<>>> so it is
+                // owned by the SessionHandle and can be awaited/aborted on close.
+                handle.perf_task_handle = perf_task_handle.lock().ok().and_then(|mut g| g.take());
             }
             UpdateResult::none()
         }

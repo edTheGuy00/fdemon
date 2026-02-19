@@ -1,1112 +1,20 @@
-//! Per-instance session state for a running Flutter app
-
-use std::collections::{HashSet, VecDeque};
-use std::sync::Arc;
-use std::time::{Duration, Instant};
-
-use chrono::{DateTime, Local};
-
-use crate::config::LaunchConfig;
-use crate::handler::helpers::{detect_raw_line_level, is_block_end, is_block_start};
-use crate::hyperlinks::LinkHighlightState;
-use crate::log_view_state::LogViewState;
-use fdemon_core::{
-    performance::{FrameTiming, GcEvent, MemoryUsage, PerformanceStats, RingBuffer},
-    strip_ansi_codes, AppPhase, ExceptionBlockParser, FeedResult, FilterState, LogEntry, LogLevel,
-    LogSource, SearchState,
-};
-use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, RequestTracker};
-
-// ─────────────────────────────────────────────────────────
-// Log Batching for Performance (Task 04)
-// ─────────────────────────────────────────────────────────
-
-/// Default batch flush interval (~60fps)
-const BATCH_FLUSH_INTERVAL: Duration = Duration::from_millis(16);
-
-/// Maximum batch size before forced flush
-const BATCH_MAX_SIZE: usize = 100;
-
-/// Batches rapid log arrivals to reduce processing overhead
-///
-/// During high-volume logging (hot reload, verbose debugging, etc.),
-/// each log line would normally trigger processing and potentially
-/// a UI re-render. This struct batches logs and flushes them
-/// at a controlled rate (~60fps) or when a size threshold is reached.
-#[derive(Debug)]
-pub struct LogBatcher {
-    /// Pending log entries awaiting flush
-    pending: Vec<LogEntry>,
-    /// Timestamp of last flush
-    last_flush: Instant,
-}
-
-impl Default for LogBatcher {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl LogBatcher {
-    /// Create a new log batcher
-    pub fn new() -> Self {
-        Self {
-            pending: Vec::with_capacity(BATCH_MAX_SIZE),
-            last_flush: Instant::now(),
-        }
-    }
-
-    /// Add a log entry to the batch
-    ///
-    /// Returns true if the batch should be flushed (size or time threshold reached)
-    pub fn add(&mut self, entry: LogEntry) -> bool {
-        self.pending.push(entry);
-        self.should_flush()
-    }
-
-    /// Check if batch should be flushed
-    ///
-    /// Returns true if:
-    /// - Batch has reached max size (100 entries), OR
-    /// - Time since last flush has exceeded interval (16ms)
-    pub fn should_flush(&self) -> bool {
-        self.pending.len() >= BATCH_MAX_SIZE
-            || (!self.pending.is_empty() && self.last_flush.elapsed() >= BATCH_FLUSH_INTERVAL)
-    }
-
-    /// Flush and return pending entries
-    ///
-    /// Resets the flush timer and returns all pending entries.
-    pub fn flush(&mut self) -> Vec<LogEntry> {
-        self.last_flush = Instant::now();
-        std::mem::take(&mut self.pending)
-    }
-
-    /// Check if there are pending entries
-    pub fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
-    /// Get count of pending entries
-    pub fn pending_count(&self) -> usize {
-        self.pending.len()
-    }
-
-    /// Time until next scheduled flush (for event loop timing)
-    pub fn time_until_flush(&self) -> Duration {
-        BATCH_FLUSH_INTERVAL.saturating_sub(self.last_flush.elapsed())
-    }
-}
-
-// ─────────────────────────────────────────────────────────
-// Stateful Block Tracking for Logger Package Blocks
-// ─────────────────────────────────────────────────────────
-
-/// Tracks state for Logger package block detection
-///
-/// Instead of backward-scanning on every block end (O(N*M)), this struct
-/// tracks block state incrementally as lines arrive (O(1) per line).
-#[derive(Debug, Clone)]
-pub struct LogBlockState {
-    /// Index where current block started (if any)
-    block_start: Option<usize>,
-    /// Highest severity seen in current block
-    block_max_level: LogLevel,
-}
-
-impl Default for LogBlockState {
-    fn default() -> Self {
-        Self {
-            block_start: None,
-            block_max_level: LogLevel::Info,
-        }
-    }
-}
-
-// ─────────────────────────────────────────────────────────
-// Collapse State for Stack Traces (Phase 2 Task 6)
-// ─────────────────────────────────────────────────────────
-
-/// Tracks which log entries have expanded/collapsed stack traces
-#[derive(Debug, Clone, Default)]
-pub struct CollapseState {
-    /// Set of log entry IDs that are currently expanded
-    /// (by default, entries are collapsed based on config)
-    expanded_entries: HashSet<u64>,
-
-    /// Set of log entry IDs that are explicitly collapsed
-    /// (overrides default when default is expanded)
-    collapsed_entries: HashSet<u64>,
-}
-
-impl CollapseState {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Check if an entry's stack trace should be shown expanded
-    pub fn is_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
-        if default_collapsed {
-            // Default is collapsed, check if user expanded it
-            self.expanded_entries.contains(&entry_id)
-        } else {
-            // Default is expanded, check if user collapsed it
-            !self.collapsed_entries.contains(&entry_id)
-        }
-    }
-
-    /// Toggle the collapse state of an entry
-    pub fn toggle(&mut self, entry_id: u64, default_collapsed: bool) {
-        if default_collapsed {
-            if self.expanded_entries.contains(&entry_id) {
-                self.expanded_entries.remove(&entry_id);
-            } else {
-                self.expanded_entries.insert(entry_id);
-            }
-        } else if self.collapsed_entries.contains(&entry_id) {
-            self.collapsed_entries.remove(&entry_id);
-        } else {
-            self.collapsed_entries.insert(entry_id);
-        }
-    }
-
-    /// Collapse all stack traces
-    pub fn collapse_all(&mut self) {
-        self.expanded_entries.clear();
-        self.collapsed_entries.clear(); // Let default take over
-    }
-
-    /// Expand all stack traces for the given entry IDs
-    pub fn expand_all(&mut self, entry_ids: impl Iterator<Item = u64>) {
-        self.collapsed_entries.clear();
-        self.expanded_entries.extend(entry_ids);
-    }
-}
-
-// ─────────────────────────────────────────────────────────
-// Performance Monitoring State (Phase 3, Task 05)
-// ─────────────────────────────────────────────────────────
-
-/// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
-const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
-/// Default number of GC events to keep.
-const DEFAULT_GC_HISTORY_SIZE: usize = 100;
-/// Default number of frame timings to keep.
-const DEFAULT_FRAME_HISTORY_SIZE: usize = 300;
-
-/// Performance monitoring state for a session.
-///
-/// Holds rolling ring-buffer history for memory snapshots, GC events, and
-/// frame timings, plus aggregated statistics for display.
-#[derive(Debug, Clone)]
-pub struct PerformanceState {
-    /// Rolling history of memory snapshots.
-    pub memory_history: RingBuffer<MemoryUsage>,
-    /// Rolling history of GC events.
-    pub gc_history: RingBuffer<GcEvent>,
-    /// Rolling history of frame timings (populated by Task 06).
-    pub frame_history: RingBuffer<FrameTiming>,
-    /// Aggregated performance statistics (updated periodically).
-    pub stats: PerformanceStats,
-    /// Whether performance monitoring is active.
-    pub monitoring_active: bool,
-}
-
-impl Default for PerformanceState {
-    fn default() -> Self {
-        Self {
-            memory_history: RingBuffer::new(DEFAULT_MEMORY_HISTORY_SIZE),
-            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
-            frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
-            stats: PerformanceStats::default(),
-            monitoring_active: false,
-        }
-    }
-}
-
-/// How often to recompute aggregated stats (every N frames).
-///
-/// At 60 FPS this produces ~6 stats updates per second — fast enough for a
-/// TUI that renders at ~30 FPS. The 2-second memory poll cycle recomputes
-/// stats as a backstop for when frame events are sparse.
-pub(crate) const STATS_RECOMPUTE_INTERVAL: usize = 10;
-
-/// Time window for FPS calculation (1 second).
-const FPS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
-
-impl PerformanceState {
-    /// Recompute aggregated performance statistics from the ring buffers.
-    ///
-    /// Called every [`STATS_RECOMPUTE_INTERVAL`] frames to avoid per-frame
-    /// allocation overhead, and also from the memory-snapshot handler as a
-    /// 2-second backstop.
-    pub fn recompute_stats(&mut self) {
-        self.stats = Self::compute_stats(&self.frame_history, &self.memory_history);
-    }
-
-    /// Compute performance statistics from frame and memory history.
-    ///
-    /// Returns [`PerformanceStats::default()`] when no frames are available.
-    pub fn compute_stats(
-        frames: &RingBuffer<FrameTiming>,
-        _memory: &RingBuffer<MemoryUsage>,
-    ) -> PerformanceStats {
-        if frames.is_empty() {
-            return PerformanceStats::default();
-        }
-
-        let frame_times: Vec<f64> = frames.iter().map(|f| f.elapsed_ms()).collect();
-
-        let total_frames = frames.iter().count() as u64;
-
-        // FPS: count frames in the last 1 second
-        let fps = Self::calculate_fps(frames);
-
-        // Jank count: frames exceeding 60fps budget
-        let jank_count = frames.iter().filter(|f| f.is_janky()).count() as u32;
-
-        // Average frame time
-        let avg_frame_ms = if frame_times.is_empty() {
-            None
-        } else {
-            Some(frame_times.iter().sum::<f64>() / frame_times.len() as f64)
-        };
-
-        // P95 frame time
-        let p95_frame_ms = Self::percentile(&frame_times, 95.0);
-
-        // Max frame time
-        let max_frame_ms = frame_times.iter().copied().reduce(f64::max);
-
-        PerformanceStats {
-            fps,
-            jank_count,
-            avg_frame_ms,
-            p95_frame_ms,
-            max_frame_ms,
-            total_frames,
-        }
-    }
-
-    /// Calculate FPS from recent frame timings.
-    ///
-    /// Counts the number of frames whose timestamp falls within the last
-    /// [`FPS_WINDOW`] (1 second). Returns `None` when the app is idle or
-    /// backgrounded (no frames in the last second).
-    pub fn calculate_fps(frames: &RingBuffer<FrameTiming>) -> Option<f64> {
-        if frames.len() < 2 {
-            return None;
-        }
-
-        let now = chrono::Local::now();
-        let window_start =
-            now - chrono::Duration::from_std(FPS_WINDOW).unwrap_or(chrono::Duration::seconds(1));
-
-        let recent_count = frames
-            .iter()
-            .filter(|f| f.timestamp >= window_start)
-            .count();
-
-        if recent_count == 0 {
-            // No frames in the last second — app is idle or backgrounded.
-            return None;
-        }
-
-        Some(recent_count as f64)
-    }
-
-    /// Calculate the Nth percentile from a slice of values.
-    ///
-    /// Creates a sorted copy of the input — acceptable for ring buffer sizes
-    /// (~300 items). Returns `None` for empty input.
-    pub fn percentile(values: &[f64], pct: f64) -> Option<f64> {
-        if values.is_empty() {
-            return None;
-        }
-        let mut sorted = values.to_vec();
-        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let index = ((pct / 100.0) * (sorted.len() - 1) as f64).round() as usize;
-        Some(sorted[index.min(sorted.len() - 1)])
-    }
-}
-
-/// Unique identifier for a session
-pub type SessionId = u64;
-
-/// Generate a new unique session ID
-static SESSION_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-pub fn next_session_id() -> SessionId {
-    SESSION_ID_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
-}
-
-/// A single Flutter app session
-#[derive(Debug)]
-pub struct Session {
-    /// Unique session identifier
-    pub id: SessionId,
-
-    /// Display name for this session (device name or config name)
-    pub name: String,
-
-    /// Current phase of this session
-    pub phase: AppPhase,
-
-    /// Log buffer for this session
-    /// Log entries stored in a ring buffer for bounded memory usage
-    pub logs: VecDeque<LogEntry>,
-
-    /// Log view scroll state
-    pub log_view_state: LogViewState,
-
-    /// Maximum log buffer size
-    pub max_logs: usize,
-
-    // ─────────────────────────────────────────────────────────
-    // Filter & Search State
-    // ─────────────────────────────────────────────────────────
-    /// Log filter state for this session
-    pub filter_state: FilterState,
-
-    /// Search state for this session
-    pub search_state: SearchState,
-
-    /// Collapse state for stack traces
-    pub collapse_state: CollapseState,
-
-    /// Link highlight mode state (Phase 3.1)
-    pub link_highlight_state: LinkHighlightState,
-
-    /// Block state for Logger package block level propagation
-    block_state: LogBlockState,
-
-    /// Exception block parser for multi-line Flutter exception detection
-    exception_parser: ExceptionBlockParser,
-
-    // ─────────────────────────────────────────────────────────
-    // Device & App Tracking
-    // ─────────────────────────────────────────────────────────
-    /// Device ID this session is running on
-    pub device_id: String,
-
-    /// Device display name
-    pub device_name: String,
-
-    /// Platform (e.g., "ios", "android", "macos")
-    pub platform: String,
-
-    /// Whether device is emulator/simulator
-    pub is_emulator: bool,
-
-    /// Current app ID (from daemon's app.start event)
-    pub app_id: Option<String>,
-
-    /// VM Service WebSocket URI (from app.debugPort event)
-    pub ws_uri: Option<String>,
-
-    /// Whether the VM Service WebSocket is currently connected
-    pub vm_connected: bool,
-
-    /// Launch configuration used
-    pub launch_config: Option<LaunchConfig>,
-
-    // ─────────────────────────────────────────────────────────
-    // Timing
-    // ─────────────────────────────────────────────────────────
-    /// When this session was created
-    pub created_at: DateTime<Local>,
-
-    /// When the Flutter app started running
-    pub started_at: Option<DateTime<Local>>,
-
-    /// When the current reload started (for timing)
-    pub reload_start_time: Option<Instant>,
-
-    /// Last successful reload time
-    pub last_reload_time: Option<DateTime<Local>>,
-
-    /// Total reload count this session
-    pub reload_count: u32,
-
-    /// Cached count of error-level log entries (for status bar display)
-    error_count: usize,
-
-    // ─────────────────────────────────────────────────────────
-    // Log Batching (Task 04)
-    // ─────────────────────────────────────────────────────────
-    /// Log batcher for coalescing rapid log arrivals
-    log_batcher: LogBatcher,
-
-    // ─────────────────────────────────────────────────────────
-    // Performance Monitoring (Phase 3, Task 05)
-    // ─────────────────────────────────────────────────────────
-    /// Performance monitoring state (memory, GC, frames).
-    pub performance: PerformanceState,
-}
-
-impl Session {
-    /// Create a new session for a device
-    pub fn new(
-        device_id: String,
-        device_name: String,
-        platform: String,
-        is_emulator: bool,
-    ) -> Self {
-        Self {
-            id: next_session_id(),
-            name: device_name.clone(),
-            phase: AppPhase::Initializing,
-            logs: VecDeque::with_capacity(10_000),
-            log_view_state: LogViewState::new(),
-            max_logs: 10_000,
-            filter_state: FilterState::default(),
-            search_state: SearchState::default(),
-            collapse_state: CollapseState::new(),
-            link_highlight_state: LinkHighlightState::new(),
-            block_state: LogBlockState::default(),
-            exception_parser: ExceptionBlockParser::new(),
-            device_id,
-            device_name,
-            platform,
-            is_emulator,
-            app_id: None,
-            ws_uri: None,
-            vm_connected: false,
-            launch_config: None,
-            created_at: Local::now(),
-            started_at: None,
-            reload_start_time: None,
-            last_reload_time: None,
-            reload_count: 0,
-            error_count: 0,
-            log_batcher: LogBatcher::new(),
-            performance: PerformanceState::default(),
-        }
-    }
-
-    /// Create session with a launch configuration
-    pub fn with_config(mut self, config: LaunchConfig) -> Self {
-        self.name = config.name.clone();
-        self.launch_config = Some(config);
-        self
-    }
-
-    /// Add a log entry
-    ///
-    /// Automatically detects Logger package blocks (from ┌ to └) and propagates
-    /// the highest severity level found in the block to all lines within it.
-    ///
-    /// Uses incremental state tracking (O(1) per line) instead of backward
-    /// scanning (O(N*M)) for block level propagation.
-    pub fn add_log(&mut self, entry: LogEntry) {
-        let idx = self.logs.len();
-
-        // Check for block boundaries BEFORE pushing
-        let is_start = is_block_start(&entry.message);
-        let is_end = is_block_end(&entry.message);
-
-        // Track block state as we go
-        if is_start {
-            // New block starting - record position and initialize max level
-            self.block_state.block_start = Some(idx);
-            self.block_state.block_max_level = entry.level;
-        } else if self.block_state.block_start.is_some() {
-            // Inside a block - update max level if this entry is more severe
-            self.block_state.block_max_level =
-                self.block_state.block_max_level.max_severity(entry.level);
-        }
-
-        // Track error count before adding
-        if entry.is_error() {
-            self.error_count += 1;
-        }
-
-        // Push the entry to the back of the ring buffer
-        self.logs.push_back(entry);
-
-        // Block ended - apply max level to all block lines
-        if is_end && self.block_state.block_start.is_some() {
-            let start = self.block_state.block_start.take().unwrap();
-            let max_level = self.block_state.block_max_level;
-
-            // Only propagate if we found something more severe than Info
-            if max_level.is_more_severe_than(&LogLevel::Info) {
-                // Track error count changes
-                let mut error_delta: i32 = 0;
-
-                for i in start..=idx {
-                    let old_level = self.logs[i].level;
-                    if old_level != max_level {
-                        // Update error counts
-                        if old_level == LogLevel::Error {
-                            error_delta -= 1;
-                        }
-                        if max_level == LogLevel::Error {
-                            error_delta += 1;
-                        }
-                        self.logs[i].level = max_level;
-                    }
-                }
-
-                // Apply error count delta
-                if error_delta > 0 {
-                    self.error_count += error_delta as usize;
-                } else if error_delta < 0 {
-                    self.error_count = self.error_count.saturating_sub((-error_delta) as usize);
-                }
-            }
-
-            // Reset block state for next block
-            self.block_state = LogBlockState::default();
-        }
-
-        // Trim oldest entries if over max size (ring buffer behavior)
-        while self.logs.len() > self.max_logs {
-            if let Some(evicted) = self.logs.pop_front() {
-                // Update error count if evicting an error
-                if evicted.is_error() {
-                    self.error_count = self.error_count.saturating_sub(1);
-                }
-            }
-
-            // Adjust block_start index since we removed from front
-            if let Some(start) = self.block_state.block_start {
-                if start == 0 {
-                    // Block start is being evicted - cancel block tracking
-                    self.block_state = LogBlockState::default();
-                } else {
-                    // Shift block start index down
-                    self.block_state.block_start = Some(start - 1);
-                }
-            }
-
-            // Adjust scroll offset
-            self.log_view_state.offset = self.log_view_state.offset.saturating_sub(1);
-        }
-    }
-
-    /// Add an info log
-    pub fn log_info(&mut self, source: LogSource, message: impl Into<String>) {
-        self.add_log(LogEntry::info(source, message));
-    }
-
-    /// Add an error log
-    pub fn log_error(&mut self, source: LogSource, message: impl Into<String>) {
-        self.add_log(LogEntry::error(source, message));
-    }
-
-    /// Clear all logs and reset error count
-    pub fn clear_logs(&mut self) {
-        self.logs.clear();
-        self.log_view_state.offset = 0;
-        self.error_count = 0;
-        // Clear search matches since logs are gone
-        self.search_state.matches.clear();
-        self.search_state.current_match = None;
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Log Batching Methods (Task 04)
-    // ─────────────────────────────────────────────────────────
-
-    /// Queue a log entry for batched processing
-    ///
-    /// Instead of immediately processing the log, this adds it to a batch
-    /// that will be flushed when the time or size threshold is reached.
-    /// Returns true if the batch should be flushed now.
-    ///
-    /// Use `flush_batched_logs()` to process the pending batch.
-    pub fn queue_log(&mut self, entry: LogEntry) -> bool {
-        self.log_batcher.add(entry)
-    }
-
-    /// Check if there are pending batched logs
-    pub fn has_pending_logs(&self) -> bool {
-        self.log_batcher.has_pending()
-    }
-
-    /// Check if batched logs should be flushed
-    pub fn should_flush_logs(&self) -> bool {
-        self.log_batcher.should_flush()
-    }
-
-    /// Flush pending batched logs
-    ///
-    /// Processes all pending log entries through the normal add_log path,
-    /// which handles block-level propagation and ring buffer management.
-    /// Returns the number of logs that were flushed.
-    pub fn flush_batched_logs(&mut self) -> usize {
-        let entries = self.log_batcher.flush();
-        let count = entries.len();
-        for entry in entries {
-            self.add_log(entry);
-        }
-        count
-    }
-
-    /// Add multiple log entries at once (batch insertion)
-    ///
-    /// Each entry is processed through add_log to ensure proper
-    /// block-level propagation and ring buffer management.
-    pub fn add_logs_batch(&mut self, entries: Vec<LogEntry>) {
-        for entry in entries {
-            self.add_log(entry);
-        }
-    }
-
-    /// Get time until next scheduled batch flush
-    ///
-    /// Useful for event loop timing to know when to check for pending logs.
-    pub fn time_until_batch_flush(&self) -> Duration {
-        self.log_batcher.time_until_flush()
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Exception Block Processing (Phase 1 Task 02)
-    // ─────────────────────────────────────────────────────────
-
-    /// Process a raw line (from stderr or non-JSON stdout) through exception detection.
-    ///
-    /// Returns zero or more LogEntry items to be queued:
-    /// - If the line is part of an exception block: returns empty (buffered)
-    /// - If the line completes an exception block: returns the exception LogEntry
-    /// - If the line is not part of an exception: returns a normal LogEntry
-    /// - If the line is a "Another exception was thrown:" one-liner: returns an Error entry
-    pub fn process_raw_line(&mut self, line: &str) -> Vec<LogEntry> {
-        match self.exception_parser.feed_line(line) {
-            FeedResult::Buffered => {
-                // Line consumed by exception parser, nothing to emit yet
-                vec![]
-            }
-            FeedResult::Complete(block) => {
-                // Exception block complete — convert to LogEntry with stack trace
-                vec![block.to_log_entry()]
-            }
-            FeedResult::OneLineException(message) => {
-                // "Another exception was thrown: ..." one-liner
-                vec![LogEntry::error(LogSource::Flutter, message)]
-            }
-            FeedResult::NotConsumed => {
-                // Normal line — use existing level detection
-                let cleaned = strip_ansi_codes(line);
-                let (level, message) = detect_raw_line_level(&cleaned);
-                if message.is_empty() {
-                    vec![]
-                } else {
-                    vec![LogEntry::new(level, LogSource::Flutter, message)]
-                }
-            }
-        }
-    }
-
-    /// Process a log line through exception detection, using provided fallback
-    /// for non-exception lines. Used for app.log events that already have
-    /// level/source from the daemon protocol.
-    pub fn process_log_line_with_fallback(
-        &mut self,
-        line: &str,
-        fallback_level: LogLevel,
-        fallback_source: LogSource,
-        fallback_message: String,
-    ) -> Vec<LogEntry> {
-        match self.exception_parser.feed_line(line) {
-            FeedResult::Buffered => vec![],
-            FeedResult::Complete(block) => vec![block.to_log_entry()],
-            FeedResult::OneLineException(msg) => {
-                vec![LogEntry::error(LogSource::Flutter, msg)]
-            }
-            FeedResult::NotConsumed => {
-                vec![LogEntry::new(
-                    fallback_level,
-                    fallback_source,
-                    fallback_message,
-                )]
-            }
-        }
-    }
-
-    /// Flush any pending exception buffer (e.g., on session exit).
-    ///
-    /// Returns a LogEntry if there was a partial exception block being accumulated.
-    pub fn flush_exception_buffer(&mut self) -> Option<LogEntry> {
-        self.exception_parser
-            .flush()
-            .map(|block| block.to_log_entry())
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Virtualized Log Access (Task 05)
-    // ─────────────────────────────────────────────────────────
-
-    /// Get logs in a specific range for virtualized rendering
-    ///
-    /// Returns an iterator over log entries in the specified range.
-    /// Bounds are clamped to the valid range [0, len).
-    pub fn get_logs_range(&self, start: usize, end: usize) -> impl Iterator<Item = &LogEntry> + '_ {
-        let end = end.min(self.logs.len());
-        let start = start.min(end);
-        self.logs.range(start..end)
-    }
-
-    /// Get total number of log entries
-    pub fn log_count(&self) -> usize {
-        self.logs.len()
-    }
-
-    /// Mark session as started
-    pub fn mark_started(&mut self, app_id: String) {
-        self.app_id = Some(app_id);
-        self.started_at = Some(Local::now());
-        self.phase = AppPhase::Running;
-    }
-
-    /// Mark session as stopped
-    pub fn mark_stopped(&mut self) {
-        self.phase = AppPhase::Stopped;
-    }
-
-    /// Called when a reload starts
-    pub fn start_reload(&mut self) {
-        self.reload_start_time = Some(Instant::now());
-        self.phase = AppPhase::Reloading;
-    }
-
-    /// Called when a reload completes successfully
-    pub fn complete_reload(&mut self) {
-        self.reload_count += 1;
-        self.last_reload_time = Some(Local::now());
-        self.reload_start_time = None;
-        self.phase = AppPhase::Running;
-    }
-
-    /// Get elapsed time since reload started
-    pub fn reload_elapsed(&self) -> Option<std::time::Duration> {
-        self.reload_start_time.map(|start| start.elapsed())
-    }
-
-    /// Calculate session duration from start time
-    pub fn session_duration(&self) -> Option<chrono::Duration> {
-        self.started_at.map(|start| Local::now() - start)
-    }
-
-    /// Format session duration as HH:MM:SS
-    pub fn session_duration_display(&self) -> Option<String> {
-        self.session_duration().map(|d| {
-            let total_secs = d.num_seconds().max(0);
-            let hours = total_secs / 3600;
-            let minutes = (total_secs % 3600) / 60;
-            let seconds = total_secs % 60;
-            format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
-        })
-    }
-
-    /// Alias for status bar widget compatibility
-    pub fn duration_display(&self) -> Option<String> {
-        self.session_duration_display()
-    }
-
-    /// Format last reload time for display
-    pub fn last_reload_display(&self) -> Option<String> {
-        self.last_reload_time
-            .map(|t| t.format("%H:%M:%S").to_string())
-    }
-
-    /// Check if session is running
-    pub fn is_running(&self) -> bool {
-        matches!(self.phase, AppPhase::Running | AppPhase::Reloading)
-    }
-
-    /// Check if session is in a busy state (reload/restart in progress)
-    pub fn is_busy(&self) -> bool {
-        matches!(self.phase, AppPhase::Reloading)
-    }
-
-    /// Get status indicator character
-    pub fn status_icon(&self) -> &'static str {
-        match self.phase {
-            AppPhase::Initializing => "○",
-            AppPhase::Running => "●",
-            AppPhase::Reloading => "↻",
-            AppPhase::Stopped => "○",
-            AppPhase::Quitting => "×",
-        }
-    }
-
-    /// Get a short display title for tabs
-    pub fn tab_title(&self) -> String {
-        let icon = self.status_icon();
-        let name = if self.name.len() > 15 {
-            format!("{}…", &self.name[..14])
-        } else {
-            self.name.clone()
-        };
-        format!("{} {}", icon, name)
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Filter Methods
-    // ─────────────────────────────────────────────────────────
-
-    /// Cycle the log level filter
-    pub fn cycle_level_filter(&mut self) {
-        self.filter_state.level_filter = self.filter_state.level_filter.cycle();
-    }
-
-    /// Cycle the log source filter
-    pub fn cycle_source_filter(&mut self) {
-        self.filter_state.source_filter = self.filter_state.source_filter.cycle();
-    }
-
-    /// Reset all filters to default
-    pub fn reset_filters(&mut self) {
-        self.filter_state.reset();
-    }
-
-    /// Get filtered logs (returns indices of matching entries)
-    pub fn filtered_log_indices(&self) -> Vec<usize> {
-        self.logs
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| self.filter_state.matches(entry))
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Check if any filter is active
-    pub fn has_active_filter(&self) -> bool {
-        self.filter_state.is_active()
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Search Methods
-    // ─────────────────────────────────────────────────────────
-
-    /// Start search mode
-    pub fn start_search(&mut self) {
-        self.search_state.activate();
-    }
-
-    /// Cancel search mode
-    pub fn cancel_search(&mut self) {
-        self.search_state.deactivate();
-    }
-
-    /// Clear search completely
-    pub fn clear_search(&mut self) {
-        self.search_state.clear();
-    }
-
-    /// Update search query
-    pub fn set_search_query(&mut self, query: &str) {
-        self.search_state.set_query(query);
-    }
-
-    /// Check if search mode is active
-    pub fn is_searching(&self) -> bool {
-        self.search_state.is_active
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Error Navigation Methods
-    // ─────────────────────────────────────────────────────────
-
-    /// Get indices of all error log entries
-    pub fn error_indices(&self) -> Vec<usize> {
-        self.logs
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.is_error())
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Get indices of errors that pass the current filter
-    pub fn filtered_error_indices(&self) -> Vec<usize> {
-        self.logs
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| entry.is_error() && self.filter_state.matches(entry))
-            .map(|(i, _)| i)
-            .collect()
-    }
-
-    /// Get the current error count (cached for performance)
-    pub fn error_count(&self) -> usize {
-        self.error_count
-    }
-
-    /// Recalculate error count from logs (for consistency/debugging)
-    pub fn recalculate_error_count(&mut self) {
-        self.error_count = self.logs.iter().filter(|e| e.is_error()).count();
-    }
-
-    /// Find next error after current scroll position
-    /// Returns the log entry index of the next error
-    pub fn find_next_error(&self) -> Option<usize> {
-        let errors = self.filtered_error_indices();
-        if errors.is_empty() {
-            return None;
-        }
-
-        let current_pos = self.current_log_position();
-
-        // Find first error after current position
-        for &error_idx in &errors {
-            if error_idx > current_pos {
-                return Some(error_idx);
-            }
-        }
-
-        // Wrap around to first error
-        Some(errors[0])
-    }
-
-    /// Find previous error before current scroll position
-    /// Returns the log entry index of the previous error
-    pub fn find_prev_error(&self) -> Option<usize> {
-        let errors = self.filtered_error_indices();
-        if errors.is_empty() {
-            return None;
-        }
-
-        let current_pos = self.current_log_position();
-
-        // Find last error before current position
-        for &error_idx in errors.iter().rev() {
-            if error_idx < current_pos {
-                return Some(error_idx);
-            }
-        }
-
-        // Wrap around to last error
-        errors.last().copied()
-    }
-
-    /// Get the current log position based on scroll offset
-    /// Accounts for filtering
-    fn current_log_position(&self) -> usize {
-        if self.filter_state.is_active() {
-            // Map filtered offset to original index
-            let filtered = self.filtered_log_indices();
-            filtered
-                .get(self.log_view_state.offset)
-                .copied()
-                .unwrap_or(0)
-        } else {
-            self.log_view_state.offset
-        }
-    }
-
-    // ─────────────────────────────────────────────────────────
-    // Stack Trace Collapse Methods (Phase 2 Task 6)
-    // ─────────────────────────────────────────────────────────
-
-    /// Get the currently focused log entry (at scroll position)
-    pub fn focused_entry(&self) -> Option<&LogEntry> {
-        let pos = self.current_log_position();
-        self.logs.get(pos)
-    }
-
-    /// Get the focused entry's ID
-    pub fn focused_entry_id(&self) -> Option<u64> {
-        self.focused_entry().map(|e| e.id)
-    }
-
-    /// Toggle stack trace collapse for a specific entry
-    pub fn toggle_stack_trace(&mut self, entry_id: u64, default_collapsed: bool) {
-        self.collapse_state.toggle(entry_id, default_collapsed);
-    }
-
-    /// Check if a specific entry's stack trace should be shown expanded
-    pub fn is_stack_trace_expanded(&self, entry_id: u64, default_collapsed: bool) -> bool {
-        self.collapse_state.is_expanded(entry_id, default_collapsed)
-    }
-}
-
-/// Handle for controlling a session's Flutter process
-pub struct SessionHandle {
-    /// The session state
-    pub session: Session,
-
-    /// The Flutter process (if running)
-    pub process: Option<FlutterProcess>,
-
-    /// Command sender for this session
-    pub cmd_sender: Option<CommandSender>,
-
-    /// Request tracker for response matching
-    pub request_tracker: Arc<RequestTracker>,
-
-    /// Shutdown sender for the VM Service event forwarding task.
-    ///
-    /// Sending `true` signals the forwarding task to disconnect and stop.
-    /// Stored as `Arc` because the `Message` enum requires `Clone`.
-    pub vm_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
-
-    /// VM Service request handle for on-demand RPC calls.
-    ///
-    /// Set when the VM Service connects (via `VmServiceHandleReady` message),
-    /// cleared on disconnect. Use this to issue JSON-RPC requests from outside
-    /// the event forwarding loop (e.g. periodic memory polling).
-    pub vm_request_handle: Option<VmRequestHandle>,
-
-    /// Shutdown sender for the performance monitoring polling task.
-    ///
-    /// Sending `true` stops the polling loop cleanly. Stored as `Arc` because
-    /// the `Message` enum (which carries the initial sender) requires `Clone`.
-    /// Set by `VmServicePerformanceMonitoringStarted`, cleared on disconnect.
-    pub perf_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
-}
-
-impl std::fmt::Debug for SessionHandle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SessionHandle")
-            .field("session", &self.session)
-            .field("has_process", &self.process.is_some())
-            .field("has_cmd_sender", &self.cmd_sender.is_some())
-            .field("has_vm_shutdown", &self.vm_shutdown_tx.is_some())
-            .field("vm_request_handle", &self.vm_request_handle)
-            .field("has_perf_shutdown", &self.perf_shutdown_tx.is_some())
-            .finish()
-    }
-}
-
-impl SessionHandle {
-    /// Create a new session handle
-    pub fn new(session: Session) -> Self {
-        Self {
-            session,
-            process: None,
-            cmd_sender: None,
-            request_tracker: Arc::new(RequestTracker::default()),
-            vm_shutdown_tx: None,
-            vm_request_handle: None,
-            perf_shutdown_tx: None,
-        }
-    }
-
-    /// Attach a Flutter process to this session
-    pub fn attach_process(&mut self, process: FlutterProcess) {
-        let sender = process.command_sender(self.request_tracker.clone());
-        self.cmd_sender = Some(sender);
-        self.process = Some(process);
-        self.session.phase = AppPhase::Initializing;
-    }
-
-    /// Check if process is running
-    pub fn has_process(&self) -> bool {
-        self.process.is_some()
-    }
-
-    /// Get the app_id if available
-    pub fn app_id(&self) -> Option<&str> {
-        self.session.app_id.as_deref()
-    }
-}
+//! Tests for the session module.
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use fdemon_core::{performance::MemoryUsage, AppPhase, LogEntry, LogLevel, LogSource};
+
+    use crate::config::LaunchConfig;
+    use crate::session::{
+        CollapseState, LogBatcher, PerformanceState, Session, SessionHandle,
+        STATS_RECOMPUTE_INTERVAL,
+    };
+
+    // Import constants used in tests — access via the submodule paths
+    use crate::session::log_batcher::{BATCH_FLUSH_INTERVAL, BATCH_MAX_SIZE};
+    use crate::session::performance::DEFAULT_FRAME_HISTORY_SIZE;
+
+    use fdemon_core::performance::{FrameTiming, RingBuffer};
 
     #[test]
     fn test_session_creation() {
@@ -2610,6 +1518,7 @@ mod tests {
 
     #[test]
     fn test_performance_state_memory_ring_buffer_capacity() {
+        use crate::session::performance::{DEFAULT_GC_HISTORY_SIZE, DEFAULT_MEMORY_HISTORY_SIZE};
         let state = PerformanceState::default();
         assert_eq!(state.memory_history.capacity(), DEFAULT_MEMORY_HISTORY_SIZE);
         assert_eq!(state.gc_history.capacity(), DEFAULT_GC_HISTORY_SIZE);
@@ -2632,7 +1541,7 @@ mod tests {
 
     #[test]
     fn test_stats_computation_empty() {
-        let stats = PerformanceState::compute_stats(&RingBuffer::new(10), &RingBuffer::new(10));
+        let stats = PerformanceState::compute_stats(&RingBuffer::new(10));
         assert!(stats.fps.is_none());
         assert!(stats.avg_frame_ms.is_none());
         assert_eq!(stats.jank_count, 0);
@@ -2649,9 +1558,9 @@ mod tests {
             frames.push(make_frame(i, 25_000)); // 25ms = janky
         }
 
-        let stats = PerformanceState::compute_stats(&frames, &RingBuffer::new(10));
+        let stats = PerformanceState::compute_stats(&frames);
         assert_eq!(stats.jank_count, 5);
-        assert_eq!(stats.total_frames, 65);
+        assert_eq!(stats.buffered_frames, 65);
         // Average: (60*10 + 5*25) / 65 ≈ 11.15ms
         let avg = stats.avg_frame_ms.unwrap();
         assert!(avg > 11.0 && avg < 12.0);
@@ -2710,13 +1619,14 @@ mod tests {
         perf.frame_history.push(make_frame(5, 20_000)); // janky
 
         perf.recompute_stats();
-        assert_eq!(perf.stats.total_frames, 6);
+        assert_eq!(perf.stats.buffered_frames, 6);
         assert_eq!(perf.stats.jank_count, 1);
         assert!(perf.stats.avg_frame_ms.is_some());
     }
 
     #[test]
     fn test_performance_stats_is_stale() {
+        use fdemon_core::performance::PerformanceStats;
         let mut stats = PerformanceStats::default();
         assert!(stats.is_stale(), "default stats (no fps) should be stale");
 
@@ -2727,5 +1637,71 @@ mod tests {
     #[test]
     fn test_stats_recompute_interval_constant() {
         assert_eq!(STATS_RECOMPUTE_INTERVAL, 10);
+    }
+
+    /// Verify that `calculate_fps` returns an actual rate (frames/sec), not a
+    /// raw count. We push frames with known timestamps spaced ~1/60s apart and
+    /// assert the result is close to 60 FPS.
+    #[test]
+    fn test_calculate_fps_returns_rate_not_count() {
+        let mut frames = RingBuffer::new(300);
+        let base = chrono::Local::now();
+        // 61 frames spanning 1 second → 60 intervals → ~60 FPS
+        for i in 0..61i64 {
+            let ts = base + chrono::Duration::milliseconds(i * 1000 / 60);
+            frames.push(FrameTiming {
+                number: i as u64,
+                build_micros: 5_000,
+                raster_micros: 5_000,
+                elapsed_micros: 16_667,
+                timestamp: ts,
+            });
+        }
+        let fps = PerformanceState::calculate_fps(&frames);
+        assert!(fps.is_some(), "should return Some fps for many frames");
+        let fps_val = fps.unwrap();
+        // 60 intervals / (60 * ~16.667ms / 1000) ≈ 60.0 FPS
+        assert!(
+            fps_val > 55.0 && fps_val < 65.0,
+            "expected ~60 fps, got {fps_val}"
+        );
+    }
+
+    /// Verify `compute_stats` works with only the frames parameter (no memory).
+    #[test]
+    fn test_compute_stats_no_memory_param() {
+        let mut frames = RingBuffer::new(10);
+        for i in 0..5 {
+            frames.push(make_frame(i, 10_000)); // 10ms each
+        }
+        let stats = PerformanceState::compute_stats(&frames);
+        assert_eq!(stats.buffered_frames, 5);
+        assert!(stats.avg_frame_ms.is_some());
+        let avg = stats.avg_frame_ms.unwrap();
+        assert!((avg - 10.0).abs() < 0.001, "expected avg ~10ms, got {avg}");
+    }
+
+    /// Verify `buffered_frames` reflects the actual ring buffer size, not a
+    /// lifetime count. It is capped at the buffer capacity.
+    #[test]
+    fn test_buffered_frames_reflects_buffer_size() {
+        // 10 frames → buffered_frames == 10
+        let mut frames = RingBuffer::new(300);
+        for i in 0..10 {
+            frames.push(make_frame(i, 8_000));
+        }
+        let stats = PerformanceState::compute_stats(&frames);
+        assert_eq!(stats.buffered_frames, 10);
+
+        // Push 300+ frames — buffer is capped at DEFAULT_FRAME_HISTORY_SIZE (300)
+        let mut frames_full = RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE);
+        for i in 0..(DEFAULT_FRAME_HISTORY_SIZE + 50) {
+            frames_full.push(make_frame(i as u64, 8_000));
+        }
+        let stats_full = PerformanceState::compute_stats(&frames_full);
+        assert_eq!(
+            stats_full.buffered_frames, DEFAULT_FRAME_HISTORY_SIZE as u64,
+            "buffered_frames should be capped at ring buffer capacity"
+        );
     }
 }
