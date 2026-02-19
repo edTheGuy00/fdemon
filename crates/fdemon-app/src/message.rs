@@ -4,11 +4,29 @@ use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::SessionId;
-use fdemon_core::{BootableDevice, DaemonEvent};
+use crate::state::DevToolsPanel;
+use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
     IosSimulator, ToolAvailability,
 };
+
+/// The three debug overlay types that can be toggled from DevTools mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugOverlayKind {
+    RepaintRainbow,
+    DebugPaint,
+    PerformanceOverlay,
+}
+
+/// Navigation commands for the widget inspector tree view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorNav {
+    Up,
+    Down,
+    Expand,
+    Collapse,
+}
 
 /// Type of device discovery (Connected or Bootable)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -708,4 +726,62 @@ pub enum Message {
         session_id: SessionId,
         timing: fdemon_core::performance::FrameTiming,
     },
+
+    // ── DevTools Mode (Phase 4) ──────────────────────────────────────────────
+    /// Enter DevTools mode (from Normal mode via 'd' key).
+    EnterDevToolsMode,
+
+    /// Exit DevTools mode (return to Normal mode via Esc).
+    ExitDevToolsMode,
+
+    /// Switch to a specific DevTools sub-panel.
+    SwitchDevToolsPanel(DevToolsPanel),
+
+    /// Open Flutter DevTools in the system browser.
+    OpenBrowserDevTools,
+
+    /// Request a widget tree refresh from the VM Service.
+    RequestWidgetTree { session_id: SessionId },
+
+    /// Widget tree data received from VM Service RPC.
+    WidgetTreeFetched {
+        session_id: SessionId,
+        root: Box<DiagnosticsNode>,
+    },
+
+    /// Widget tree fetch failed.
+    WidgetTreeFetchFailed {
+        session_id: SessionId,
+        error: String,
+    },
+
+    /// Request layout data for a specific widget node.
+    RequestLayoutData {
+        session_id: SessionId,
+        node_id: String,
+    },
+
+    /// Layout data received from VM Service RPC.
+    LayoutDataFetched {
+        session_id: SessionId,
+        layout: Box<LayoutInfo>,
+    },
+
+    /// Layout data fetch failed.
+    LayoutDataFetchFailed {
+        session_id: SessionId,
+        error: String,
+    },
+
+    /// Toggle a debug overlay extension (repaint rainbow, debug paint, perf overlay).
+    ToggleDebugOverlay { extension: DebugOverlayKind },
+
+    /// Debug overlay toggle result.
+    DebugOverlayToggled {
+        extension: DebugOverlayKind,
+        enabled: bool,
+    },
+
+    /// Navigate within the widget inspector tree.
+    DevToolsInspectorNavigate(InspectorNav),
 }

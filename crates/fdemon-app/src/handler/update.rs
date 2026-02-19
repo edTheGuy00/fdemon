@@ -13,7 +13,7 @@ use fdemon_core::{AppPhase, LogSource};
 use tracing::warn;
 
 use super::{
-    daemon::handle_session_daemon_event, keys::handle_key, log_view, new_session, scroll,
+    daemon::handle_session_daemon_event, devtools, keys::handle_key, log_view, new_session, scroll,
     session_lifecycle, settings_handlers, Task, UpdateAction, UpdateResult,
 };
 
@@ -1177,11 +1177,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::VmServiceConnectionFailed { session_id, error } => {
-            // Don't show error to user — daemon logs still work as fallback
             warn!(
                 "VM Service connection failed for session {}: {}",
                 session_id, error
             );
+            // Show in session logs so the user knows DevTools features are unavailable
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(fdemon_core::LogEntry::new(
+                    fdemon_core::LogLevel::Warning,
+                    LogSource::App,
+                    format!(
+                        "VM Service connection failed: {error} — DevTools features unavailable"
+                    ),
+                ));
+            }
             UpdateResult::none()
         }
 
@@ -1293,6 +1302,72 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────
+        // DevTools Mode Messages (Phase 4, Task 02)
+        // ─────────────────────────────────────────────────────────
+        Message::EnterDevToolsMode => devtools::handle_enter_devtools_mode(state),
+
+        Message::ExitDevToolsMode => devtools::handle_exit_devtools_mode(state),
+
+        Message::SwitchDevToolsPanel(panel) => devtools::handle_switch_panel(state, panel),
+
+        Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
+
+        Message::RequestWidgetTree { session_id } => {
+            state.devtools_view_state.inspector.loading = true;
+            UpdateResult::action(UpdateAction::FetchWidgetTree {
+                session_id,
+                vm_handle: None, // hydrated by process.rs
+            })
+        }
+
+        Message::WidgetTreeFetched { session_id, root } => {
+            devtools::handle_widget_tree_fetched(state, session_id, root)
+        }
+
+        Message::WidgetTreeFetchFailed { session_id, error } => {
+            devtools::handle_widget_tree_fetch_failed(state, session_id, error)
+        }
+
+        Message::RequestLayoutData {
+            session_id,
+            node_id,
+        } => {
+            state.devtools_view_state.layout_explorer.loading = true;
+            UpdateResult::action(UpdateAction::FetchLayoutData {
+                session_id,
+                node_id,
+                vm_handle: None, // hydrated by process.rs
+            })
+        }
+
+        Message::LayoutDataFetched { session_id, layout } => {
+            devtools::handle_layout_data_fetched(state, session_id, *layout)
+        }
+
+        Message::LayoutDataFetchFailed { session_id, error } => {
+            devtools::handle_layout_data_fetch_failed(state, session_id, error)
+        }
+
+        Message::ToggleDebugOverlay { extension } => {
+            // Find active session_id for the toggle action
+            if let Some(handle) = state.session_manager.selected() {
+                let session_id = handle.session.id;
+                return UpdateResult::action(UpdateAction::ToggleOverlay {
+                    session_id,
+                    extension,
+                    vm_handle: None, // hydrated by process.rs
+                });
+            }
+            UpdateResult::none()
+        }
+
+        Message::DebugOverlayToggled { extension, enabled } => {
+            devtools::handle_debug_overlay_toggled(state, extension, enabled)
+        }
+
+        Message::DevToolsInspectorNavigate(nav) => devtools::handle_inspector_navigate(state, nav),
 
         // ─────────────────────────────────────────────────────────
         // Entry Point Discovery Messages (Phase 3, Task 09)

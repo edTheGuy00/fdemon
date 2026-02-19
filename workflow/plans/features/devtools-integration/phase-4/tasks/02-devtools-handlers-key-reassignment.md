@@ -608,3 +608,52 @@ mod tests {
 - **`open_url_in_browser` is fire-and-forget**: Uses `Command::spawn()` (non-blocking), same pattern as `editor.rs:232-249`. The browser process runs independently.
 - **Overlay toggle is async**: The VM Service call returns the new state (enabled/disabled). The `DebugOverlayToggled` message updates `DevToolsViewState` overlay flags.
 - **Existing tests in `keys.rs`**: There are already tests for `d` key behavior (lines 740-760). These must be updated to reflect the new DevTools behavior.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `InspectorNav` enum and `DevToolsInspectorNavigate(InspectorNav)` message variant |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `pub(crate) mod devtools;`; updated `FetchWidgetTree` and `ToggleOverlay` variants to carry `vm_handle: Option<VmRequestHandle>` |
+| `crates/fdemon-app/src/handler/devtools.rs` | **New file** — all DevTools handler functions with full test coverage |
+| `crates/fdemon-app/src/handler/keys.rs` | Reassigned `d` key (VM-connected guard); replaced `UiMode::DevTools => None` stub; added `handle_key_devtools()`; updated key tests |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced stub DevTools match arms with real `devtools::*` handler calls; added `DevToolsInspectorNavigate` arm |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_fetch_widget_tree()` and `hydrate_toggle_overlay()` hydration functions; chained them in dispatch loop |
+| `crates/fdemon-app/src/actions.rs` | Replaced `FetchWidgetTree` and `ToggleOverlay` stubs with real async implementations (`spawn_fetch_widget_tree`, `spawn_toggle_overlay`); added `DebugOverlayKind`, `ext`, `parse_bool_extension_response`, `parse_diagnostics_node_response` imports |
+
+### Notable Decisions/Tradeoffs
+
+1. **`SessionId = u64`**: Task spec referenced `uuid::Uuid` but the actual type is `u64`. All handler functions use the correct type.
+
+2. **`session_manager.selected()` not `active_session()`**: Task spec referenced a non-existent `active_session()` method. Corrected to `selected()` throughout.
+
+3. **Hydration pattern for `vm_handle`**: `FetchWidgetTree` and `ToggleOverlay` follow the same hydration pattern as `StartPerformanceMonitoring` — handlers return `vm_handle: None` and `process.rs` populates it from `AppState.session_manager` before dispatch. If the handle is unavailable (VM not connected), the action is silently discarded.
+
+4. **Inline overlay flip using `VmRequestHandle`**: The overlay flip functions (`flip_overlay`, `toggle_bool_extension`) in `fdemon_daemon` take `&VmServiceClient`, but `handle_action` only receives `VmRequestHandle`. The flip was implemented inline using `VmRequestHandle.call_extension()` + `parse_bool_extension_response()` directly, avoiding the `VmServiceClient` dependency.
+
+5. **`get_root_widget_tree` inline in `actions.rs`**: Similarly, `get_root_widget_tree` takes `&VmServiceClient`. The widget tree fetch was inlined in `spawn_fetch_widget_tree()` using `VmRequestHandle.call_extension()` with the same fallback logic (getRootWidgetTree → getRootWidgetSummaryTree).
+
+6. **Inline URL encoding**: No `urlencoding` crate in the workspace. Implemented `percent_encode_uri()` inline following RFC 3986 unreserved characters, placed in `devtools.rs`.
+
+7. **`l` key conflict resolution**: When `active_panel == Inspector`, `l` means expand-right (vim navigation). When not in Inspector, `l` switches to Layout panel. Implemented via Rust match guards (`if in_inspector` / `if !in_inspector`).
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed (0 warnings)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+- `cargo test --workspace` — 1941 unit tests passed across all 4 crates (fdemon-app: 823, fdemon-daemon: 337, fdemon-tui: 463, fdemon-core: 318); e2e PTY tests have pre-existing failures unrelated to this change
+
+### Risks/Limitations
+
+1. **`FetchLayoutData` remains a stub**: Per task spec, full implementation belongs to Task 05 (layout explorer). The match arm logs a debug trace and no-ops.
+
+2. **Object group lifecycle**: `spawn_fetch_widget_tree` uses a fixed group name `"fdemon-inspector-1"`. A persistent `ObjectGroupManager` per session would be needed for multi-fetch workflows (refresh, subtree fetch). This is sufficient for the initial inspector view and will be addressed in follow-up tasks.
+
+3. **Pre-existing e2e test failures**: 24 e2e tests in `flutter-demon` binary crate fail due to PTY/process timeout issues (settings_page and tui_interaction). These are pre-existing and unrelated to this task.

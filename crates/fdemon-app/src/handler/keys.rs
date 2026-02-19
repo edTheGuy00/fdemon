@@ -1,8 +1,8 @@
 //! Key event handlers for different UI modes
 
 use crate::input_key::InputKey;
-use crate::message::Message;
-use crate::state::{AppState, UiMode};
+use crate::message::{InspectorNav, Message};
+use crate::state::{AppState, DevToolsPanel, UiMode};
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
@@ -15,6 +15,7 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
         UiMode::Normal => handle_key_normal(state, key),
         UiMode::LinkHighlight => handle_key_link_highlight(key),
         UiMode::Settings => handle_key_settings(state, key),
+        UiMode::DevTools => handle_key_devtools(state, key),
     }
 }
 
@@ -157,14 +158,13 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
             }
         }
 
-        // 'd' for adding device/session (alternative to '+')
-        // Always opens NewSessionDialog, regardless of existing sessions
-        // Don't show dialogs while loading (auto-launch in progress)
+        // 'd' for DevTools mode — available when any session exists.
+        // Individual panels handle disconnected VM gracefully.
         InputKey::Char('d') => {
-            if state.ui_mode == UiMode::Loading {
-                None
+            if state.session_manager.selected().is_some() {
+                Some(Message::EnterDevToolsMode)
             } else {
-                Some(Message::OpenNewSessionDialog)
+                None
             }
         }
 
@@ -285,6 +285,85 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 
         // Letter keys a-z select links 10-35 (excluding j, k which are for scrolling)
         InputKey::Char(c @ 'a'..='z') => Some(Message::SelectLink(c)),
+
+        _ => None,
+    }
+}
+
+/// Handle key events in DevTools mode (Phase 4, Task 02).
+///
+/// Key bindings:
+/// - `Esc` — exit DevTools mode
+/// - `i` — switch to Inspector panel
+/// - `l` — switch to Layout panel (unless Inspector panel is active, where it navigates right)
+/// - `p` — switch to Performance panel
+/// - `b` — open Flutter DevTools in system browser
+/// - `Ctrl+r` — toggle repaint rainbow overlay
+/// - `Ctrl+p` — toggle performance overlay
+/// - `Ctrl+d` — toggle debug paint overlay
+/// - `j`/Down — scroll/navigate down (in Inspector: move selection down)
+/// - `k`/Up — scroll/navigate up (in Inspector: move selection up)
+/// - `h`/Left — in Inspector: collapse node
+/// - `l`/Right/Enter — in Inspector: expand node (overrides panel-switch `l`)
+/// - `r` — in Inspector: refresh widget tree
+/// - `q` — request quit
+fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
+    let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
+    let active_id = state.session_manager.selected().map(|h| h.session.id);
+
+    match key {
+        // ── Exit DevTools ─────────────────────────────────────────────────────
+        InputKey::Esc => Some(Message::ExitDevToolsMode),
+
+        // ── Sub-panel switching ───────────────────────────────────────────────
+        InputKey::Char('i') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector)),
+
+        // 'p' always switches to Performance panel.
+        InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+
+        // 'l' switches to Layout unless we're already in the Inspector panel,
+        // where it is used for expand-right (vim-style navigation).
+        InputKey::Char('l') if !in_inspector => {
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Layout))
+        }
+
+        // ── Browser DevTools ──────────────────────────────────────────────────
+        InputKey::Char('b') => Some(Message::OpenBrowserDevTools),
+
+        // ── Debug overlay toggles ─────────────────────────────────────────────
+        InputKey::CharCtrl('r') => Some(Message::ToggleDebugOverlay {
+            extension: crate::message::DebugOverlayKind::RepaintRainbow,
+        }),
+        InputKey::CharCtrl('p') => Some(Message::ToggleDebugOverlay {
+            extension: crate::message::DebugOverlayKind::PerformanceOverlay,
+        }),
+        InputKey::CharCtrl('d') => Some(Message::ToggleDebugOverlay {
+            extension: crate::message::DebugOverlayKind::DebugPaint,
+        }),
+
+        // ── Inspector navigation (only active in Inspector panel) ─────────────
+        InputKey::Up | InputKey::Char('k') if in_inspector => {
+            Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
+        }
+        InputKey::Down | InputKey::Char('j') if in_inspector => {
+            Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
+        }
+        InputKey::Enter | InputKey::Right | InputKey::Char('l') if in_inspector => {
+            Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
+        }
+        InputKey::Left | InputKey::Char('h') if in_inspector => {
+            Some(Message::DevToolsInspectorNavigate(InspectorNav::Collapse))
+        }
+        // 'r' in Inspector panel refreshes the widget tree.
+        InputKey::Char('r') if in_inspector => {
+            active_id.map(|session_id| Message::RequestWidgetTree { session_id })
+        }
+
+        // ── Quit still works from DevTools mode ───────────────────────────────
+        InputKey::Char('q') => Some(Message::RequestQuit),
+
+        // Force quit
+        InputKey::CharCtrl('c') => Some(Message::Quit),
 
         _ => None,
     }
@@ -614,31 +693,24 @@ mod device_selector_key_tests {
     }
 
     #[test]
-    fn test_d_key_with_running_sessions() {
-        use fdemon_core::AppPhase;
-
+    fn test_d_key_with_session_emits_enter_devtools() {
         let mut state = AppState::new();
-        // Simulate running session
         let device = test_device();
-        let session_id = state.session_manager.create_session(&device).unwrap();
-        // Mark session as running (newly created sessions aren't in Running phase)
-        if let Some(handle) = state.session_manager.get_mut(session_id) {
-            handle.session.phase = AppPhase::Running;
-        }
+        let _session_id = state.session_manager.create_session(&device).unwrap();
 
         let msg = handle_key_normal(&state, InputKey::Char('d'));
 
-        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
+        assert!(matches!(msg, Some(Message::EnterDevToolsMode)));
     }
 
     #[test]
-    fn test_d_key_without_sessions() {
+    fn test_d_key_without_sessions_returns_none() {
         let state = AppState::new();
-        // No running sessions
+        // No sessions at all
 
         let msg = handle_key_normal(&state, InputKey::Char('d'));
 
-        assert!(matches!(msg, Some(Message::OpenNewSessionDialog)));
+        assert!(msg.is_none());
     }
 
     #[test]

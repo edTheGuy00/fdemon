@@ -29,7 +29,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// The JSON fields use camelCase (Flutter convention); serde handles mapping to
 /// Rust's snake_case fields via `#[serde(rename_all = "camelCase")]`.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DiagnosticsNode {
     /// Widget/object description (e.g., "Container", "Text('Hello')")

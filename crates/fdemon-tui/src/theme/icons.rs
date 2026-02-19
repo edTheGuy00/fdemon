@@ -15,6 +15,14 @@ pub struct IconSet {
     mode: IconMode,
 }
 
+impl Default for IconSet {
+    fn default() -> Self {
+        Self {
+            mode: IconMode::Unicode,
+        }
+    }
+}
+
 impl IconSet {
     pub fn new(mode: IconMode) -> Self {
         Self { mode }

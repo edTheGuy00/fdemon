@@ -482,3 +482,49 @@ mod tests {
 - **Object group management**: The Phase 2 `ObjectGroupManager` handles reference counting for VM objects. When fetching widget trees, use a named group like `"devtools-inspector"`. Dispose the group when leaving DevTools mode to prevent VM memory leaks.
 - **Large trees**: Real Flutter apps can have thousands of widgets. The tree should NOT expand all nodes by default — only the root is auto-expanded on initial fetch. Lazy expansion keeps rendering fast.
 - **Properties rendering**: `DiagnosticsNode.properties` is a `Vec<DiagnosticsNode>` where each child represents a property. Use `.name` for the property name and `.description` for the value.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector.rs` | **NEW** — Full `WidgetInspector` widget with tree view, details panel, loading/error/empty states, viewport scrolling |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `pub mod inspector;` and `pub use inspector::WidgetInspector;` |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `WidgetInspector` to devtools re-export |
+| `crates/fdemon-core/src/widget_tree.rs` | Added `Default` derive to `DiagnosticsNode` (required for tests using `..Default::default()` struct update syntax) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`short_path()` as module-private function**: The task references `loc.short_path()` but `CreationLocation` has no such method. Implemented as a standalone `fn short_path(file: &str) -> &str` helper in the inspector module, reusing `DiagnosticsNode::source_path()` logic. This avoids adding public API to `fdemon-core` for a TUI-only concern.
+
+2. **Selected-row highlighting via background rect**: Instead of using `buf.set_string` with a `bg` style (which only colours occupied cells), the selected row fills the full row width first then overlays the text. This ensures the highlight spans the full tree panel width, not just the text width.
+
+3. **`DiagnosticsNode::Default`**: `DiagnosticsNode` did not derive `Default`. Added the derive since all fields are `Option`, `Vec`, `bool`, or `String` — all have trivial defaults. This is backwards-compatible and required for the task's test suite `..Default::default()` usage.
+
+4. **Tree panel title via `Span::styled`**: Block `.title()` accepts `Into<Line>`, not `Paragraph`. Used `Span::styled(...)` to set the title with the `ACCENT_DIM` colour, consistent with the performance panel.
+
+5. **Viewport scrolling**: Implemented `visible_viewport_range()` as a public method so tests can assert on scroll behaviour. The algorithm keeps the selected item centred (±half viewport) while clamping to valid bounds.
+
+6. **Scroll indicator**: Added a simple single-cell `█` scroll thumb on the right edge of the tree panel. Keeps things minimal — a full scrollbar widget would consume a column.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (no formatting changes needed)
+- `cargo check --workspace` — Passed (0 errors)
+- `cargo test --lib --workspace` — Passed (1968 unit tests: 823 fdemon-app, 318 fdemon-core, 337 fdemon-daemon, 490 fdemon-tui)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+New tests added in `inspector.rs`: 22 tests covering all acceptance criteria including rendering states, expand icons, viewport scrolling, helper functions, and content verification.
+
+### Risks/Limitations
+
+1. **No scrollbar widget**: The scroll indicator is a minimal single-cell thumb. A full ratatui `Scrollbar` widget would be more polished but adds complexity. Can be enhanced in a future task.
+
+2. **No keyboard hint footer**: The task ASCII diagram shows `[↑↓] Navigate [→] Expand [←] Collapse [r] Refresh` but this wasn't in the acceptance criteria or detailed spec for the widget itself (those hints would live in the DevTools mode render layer, not inside this widget). The widget is self-contained.
+
+3. **`short_path()` depth**: Always shows last 2 path components (`parent/file.dart`). Paths shallower than 2 components return the full (scheme-stripped) path. Edge case for absolute paths like `/main.dart` returns the full `/main.dart`, which is acceptable.

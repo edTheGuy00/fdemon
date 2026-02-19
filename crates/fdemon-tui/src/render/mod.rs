@@ -227,6 +227,16 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
             frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
         } // Legacy StartupDialog removed - use NewSessionDialog instead
+        UiMode::DevTools => {
+            // DevTools mode renders into the log area (below the header/tabs)
+            // so the project name and session tabs remain visible.
+            let devtools = widgets::devtools::DevToolsView::new(
+                &state.devtools_view_state,
+                state.session_manager.selected(),
+                icons,
+            );
+            frame.render_widget(devtools, areas.logs);
+        }
     }
 }
 

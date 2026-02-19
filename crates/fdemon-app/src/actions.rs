@@ -10,14 +10,16 @@ use tracing::{error, info, warn};
 
 use crate::config::LaunchConfig;
 use crate::handler::Task;
-use crate::message::Message;
+use crate::message::{DebugOverlayKind, Message};
 use crate::session::SessionId;
 use crate::UpdateAction;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
     vm_service::{
-        enable_frame_tracking, flutter_error_to_log_entry, parse_flutter_error, parse_frame_timing,
-        parse_gc_event, parse_log_record, vm_log_to_log_entry, VmRequestHandle, VmServiceClient,
+        enable_frame_tracking, ext, extract_layout_info, flutter_error_to_log_entry,
+        parse_bool_extension_response, parse_diagnostics_node_response, parse_flutter_error,
+        parse_frame_timing, parse_gc_event, parse_log_record, vm_log_to_log_entry, VmRequestHandle,
+        VmServiceClient,
     },
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
@@ -172,6 +174,56 @@ pub fn handle_action(
             } else {
                 warn!(
                     "StartPerformanceMonitoring reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // DevTools Actions (Phase 4, Task 02)
+        // ─────────────────────────────────────────────────────────
+        UpdateAction::FetchWidgetTree {
+            session_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_fetch_widget_tree(session_id, handle, msg_tx);
+            } else {
+                warn!(
+                    "FetchWidgetTree reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        UpdateAction::FetchLayoutData {
+            session_id,
+            node_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_fetch_layout_data(session_id, node_id, handle, msg_tx);
+            } else {
+                warn!(
+                    "FetchLayoutData reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        UpdateAction::ToggleOverlay {
+            session_id,
+            extension,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_toggle_overlay(session_id, extension, handle, msg_tx);
+            } else {
+                warn!(
+                    "ToggleOverlay reached handle_action with no VmRequestHandle \
                      for session {} — skipping",
                     session_id
                 );
@@ -772,4 +824,288 @@ async fn forward_vm_events(
     let _ = msg_tx
         .send(Message::VmServiceDisconnected { session_id })
         .await;
+}
+
+/// Spawn a background task that fetches the root widget tree via VM Service.
+///
+/// Uses `ext.flutter.inspector.getRootWidgetTree` (with automatic fallback to
+/// `getRootWidgetSummaryTree` for older Flutter versions). An object group
+/// named `"fdemon-inspector-1"` is created to scope the returned `valueId`
+/// references.
+///
+/// Sends `Message::WidgetTreeFetched` on success or
+/// `Message::WidgetTreeFetchFailed` on failure.
+fn spawn_fetch_widget_tree(
+    session_id: SessionId,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "FetchWidgetTree: could not get isolate ID for session {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::WidgetTreeFetchFailed {
+                        session_id,
+                        error: format!("Could not get isolate ID: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        // Use a fixed object group name for the initial tree fetch.
+        // A persistent ObjectGroupManager would be needed for multi-fetch
+        // workflows; for the initial inspector view one group is sufficient.
+        let object_group = "fdemon-inspector-1";
+
+        // Build args for the newer getRootWidgetTree API.
+        let mut newer_args = HashMap::new();
+        newer_args.insert("objectGroup".to_string(), object_group.to_string());
+        newer_args.insert("isSummaryTree".to_string(), "true".to_string());
+        newer_args.insert("withPreviews".to_string(), "false".to_string());
+
+        let result = match handle
+            .call_extension(ext::GET_ROOT_WIDGET_TREE, &isolate_id, Some(newer_args))
+            .await
+        {
+            Ok(value) => parse_diagnostics_node_response(&value),
+            Err(e) => {
+                // If the newer API is not registered, fall back to the older one.
+                if matches!(&e, fdemon_core::Error::Protocol { .. }) {
+                    tracing::debug!(
+                        "getRootWidgetTree not available for session {}, \
+                         falling back to getRootWidgetSummaryTree: {}",
+                        session_id,
+                        e
+                    );
+                    let mut older_args = HashMap::new();
+                    older_args.insert("objectGroup".to_string(), object_group.to_string());
+                    match handle
+                        .call_extension(
+                            ext::GET_ROOT_WIDGET_SUMMARY_TREE,
+                            &isolate_id,
+                            Some(older_args),
+                        )
+                        .await
+                    {
+                        Ok(value) => parse_diagnostics_node_response(&value),
+                        Err(fallback_err) => Err(fallback_err),
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        };
+
+        let msg = match result {
+            Ok(root) => Message::WidgetTreeFetched {
+                session_id,
+                root: Box::new(root),
+            },
+            Err(e) => {
+                tracing::warn!("FetchWidgetTree failed for session {}: {}", session_id, e);
+                Message::WidgetTreeFetchFailed {
+                    session_id,
+                    error: e.to_string(),
+                }
+            }
+        };
+        let _ = msg_tx.send(msg).await;
+    });
+}
+
+/// Spawn a background task that flips a debug overlay extension via VM Service.
+///
+/// Reads the current boolean state with one RPC call, then sets the opposite
+/// state with a second RPC call (matching the `flip_overlay` pattern but using
+/// `VmRequestHandle` instead of `VmServiceClient`).
+///
+/// Sends `Message::DebugOverlayToggled` on success (including profile-mode
+/// failures where the extension is not available — which are silently logged).
+fn spawn_toggle_overlay(
+    session_id: SessionId,
+    extension: DebugOverlayKind,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "ToggleOverlay: could not get isolate ID for session {}: {}",
+                    session_id,
+                    e
+                );
+                // No message sent — the overlay state is unchanged.
+                return;
+            }
+        };
+
+        let method = match extension {
+            DebugOverlayKind::RepaintRainbow => ext::REPAINT_RAINBOW,
+            DebugOverlayKind::DebugPaint => ext::DEBUG_PAINT,
+            DebugOverlayKind::PerformanceOverlay => ext::SHOW_PERFORMANCE_OVERLAY,
+        };
+
+        // Step 1: read the current state.
+        let current = match handle.call_extension(method, &isolate_id, None).await {
+            Ok(value) => match parse_bool_extension_response(&value) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "ToggleOverlay: failed to parse current state for {:?} \
+                         (session {}): {}",
+                        extension,
+                        session_id,
+                        e
+                    );
+                    return;
+                }
+            },
+            Err(e) => {
+                // Extension not available (e.g., profile/release build) — log and ignore.
+                tracing::debug!(
+                    "ToggleOverlay: extension {:?} not available for session {}: {}",
+                    extension,
+                    session_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Step 2: set the opposite state.
+        let mut args = HashMap::new();
+        args.insert("enabled".to_string(), (!current).to_string());
+        let new_state = match handle.call_extension(method, &isolate_id, Some(args)).await {
+            Ok(value) => match parse_bool_extension_response(&value) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(
+                        "ToggleOverlay: failed to parse new state for {:?} \
+                         (session {}): {}",
+                        extension,
+                        session_id,
+                        e
+                    );
+                    return;
+                }
+            },
+            Err(e) => {
+                tracing::warn!(
+                    "ToggleOverlay: failed to set state for {:?} (session {}): {}",
+                    extension,
+                    session_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        let _ = msg_tx
+            .send(Message::DebugOverlayToggled {
+                extension,
+                enabled: new_state,
+            })
+            .await;
+    });
+}
+
+/// Spawn a background task that fetches layout data for a widget node via VM Service.
+///
+/// Uses `ext.flutter.inspector.getLayoutExplorerNode` to retrieve the layout
+/// properties (constraints, size, flex factor, flex fit) for the widget
+/// identified by `node_id` (the `valueId` from a previously fetched
+/// `DiagnosticsNode`).
+///
+/// Sends `Message::LayoutDataFetched` on success or
+/// `Message::LayoutDataFetchFailed` on failure.
+fn spawn_fetch_layout_data(
+    session_id: SessionId,
+    node_id: String,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "FetchLayoutData: could not get isolate ID for session {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::LayoutDataFetchFailed {
+                        session_id,
+                        error: format!("Could not get isolate ID: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        // Use a dedicated object group for the layout explorer.
+        let mut args = HashMap::new();
+        // NOTE: Layout explorer uses "id" and "groupName", not "arg" and "objectGroup".
+        args.insert("id".to_string(), node_id.clone());
+        args.insert("groupName".to_string(), "devtools-layout".to_string());
+        args.insert("subtreeDepth".to_string(), "1".to_string());
+
+        let raw_result = match handle
+            .call_extension(ext::GET_LAYOUT_EXPLORER_NODE, &isolate_id, Some(args))
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "FetchLayoutData: extension call failed for session {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::LayoutDataFetchFailed {
+                        session_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        // Parse the DiagnosticsNode and extract LayoutInfo.
+        let node_value = raw_result.get("result").unwrap_or(&raw_result);
+        let layout =
+            match serde_json::from_value::<fdemon_core::DiagnosticsNode>(node_value.clone()) {
+                Ok(node) => extract_layout_info(&node, node_value),
+                Err(e) => {
+                    tracing::warn!(
+                        "FetchLayoutData: failed to parse layout node for session {}: {}",
+                        session_id,
+                        e
+                    );
+                    let _ = msg_tx
+                        .send(Message::LayoutDataFetchFailed {
+                            session_id,
+                            error: format!("Failed to parse layout data: {e}"),
+                        })
+                        .await;
+                    return;
+                }
+            };
+
+        let _ = msg_tx
+            .send(Message::LayoutDataFetched {
+                session_id,
+                layout: Box::new(layout),
+            })
+            .await;
+    });
 }

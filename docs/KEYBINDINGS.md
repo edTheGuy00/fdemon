@@ -26,6 +26,10 @@ This document provides a comprehensive reference of all keyboard controls availa
 - [Search Input Mode](#search-input-mode)
 - [Link Highlight Mode](#link-highlight-mode)
 - [Settings Panel Mode](#settings-panel-mode)
+- [DevTools Mode](#devtools-mode)
+  - [Panel Navigation](#panel-navigation)
+  - [Debug Overlays](#debug-overlays)
+  - [Widget Inspector Navigation](#widget-inspector-navigation)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -51,7 +55,7 @@ When Flutter Demon starts without auto-start configured, you'll see:
 - Status bar: "○ Not Connected"
 - Log area: "Press + to start a new session"
 
-Press `+` or `d` to open the Startup Dialog and configure your first session.
+Press `+` to open the Startup Dialog and configure your first session.
 
 ### Session Management
 
@@ -65,7 +69,7 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `x` | Close Session | Close the current session |
 | `Ctrl+W` | Close Session | Alternative binding to close current session |
 | `+` | Start New Session | Start a new session (shows Startup Dialog if no sessions, Device Selector if sessions exist) |
-| `d` | Start New Session | Alternative binding for starting new session |
+| `d` | DevTools Mode | Enter DevTools mode (Inspector/Layout/Performance panels) |
 
 ### App Control
 
@@ -162,11 +166,19 @@ Access the settings panel to configure Flutter Demon and manage launch configura
 
 Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for detailed controls.
 
+### DevTools
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `d` | DevTools Mode | Enter DevTools mode (Inspector/Layout/Performance panels) |
+
+Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls.
+
 ---
 
 ## New Session Dialog
 
-The New Session Dialog is the central interface for launching Flutter sessions. It appears when starting Flutter Demon (if `auto_start = false`) or when pressing `d` to add a new session.
+The New Session Dialog is the central interface for launching Flutter sessions. It appears when starting Flutter Demon (if `auto_start = false`) or when pressing `+` to add a new session.
 
 The dialog has a two-pane layout:
 - **Target Selector** (left): Choose a device or boot an emulator
@@ -371,6 +383,43 @@ The settings panel provides a tabbed interface for managing project settings, us
 | `Enter` | Add Item | Add a new item to the list (after typing) |
 | `d` | Remove Item | Remove the last item from the list |
 | `Backspace` | Delete Character | Remove the last character while typing |
+
+---
+
+## DevTools Mode
+
+Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connection).
+
+### Panel Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Exit DevTools | Return to Normal mode (log view) |
+| `i` | Inspector Panel | Switch to Widget Inspector panel |
+| `l` | Layout Panel | Switch to Layout Explorer panel |
+| `p` | Performance Panel | Switch to Performance monitoring panel |
+| `b` | Browser DevTools | Open Flutter DevTools in system browser |
+| `q` | Quit | Quit the application |
+
+### Debug Overlays
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Ctrl+r` | Repaint Rainbow | Toggle repaint rainbow overlay on device |
+| `Ctrl+p` | Performance Overlay | Toggle performance overlay on device |
+| `Ctrl+d` | Debug Paint | Toggle debug paint overlay on device |
+
+### Widget Inspector Navigation
+
+When the Inspector panel is active:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Up` / `k` | Move Up | Move selection up in widget tree |
+| `Down` / `j` | Move Down | Move selection down in widget tree |
+| `Enter` / `Right` | Expand | Expand selected tree node |
+| `Left` / `h` | Collapse | Collapse selected tree node |
+| `r` | Refresh | Refresh widget tree from VM Service |
 
 ---
 

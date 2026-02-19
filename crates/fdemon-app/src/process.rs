@@ -42,11 +42,13 @@ pub fn process_message(
             let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
 
-            // For StartPerformanceMonitoring, hydrate the action with the
-            // VmRequestHandle from the session. The handler only returns the
-            // session_id; we need the handle from the session here where we
-            // have access to AppState.
+            // Hydrate actions that carry an optional VmRequestHandle with the
+            // actual handle from the session. The handlers only return session_id;
+            // we need the handle from AppState here before dispatching.
             let action = hydrate_start_performance_monitoring(action, state);
+            let action = action.and_then(|a| hydrate_fetch_widget_tree(a, state));
+            let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
+            let action = action.and_then(|a| hydrate_toggle_overlay(a, state));
 
             if let Some(action) = action {
                 handle_action(
@@ -91,6 +93,98 @@ fn hydrate_start_performance_monitoring(
         return Some(UpdateAction::StartPerformanceMonitoring {
             session_id,
             handle: Some(vm_handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `FetchWidgetTree` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection, since there is nothing to query without one.
+/// All other action variants are returned unchanged.
+fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::FetchWidgetTree {
+        session_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            return Some(UpdateAction::FetchWidgetTree {
+                session_id,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::FetchWidgetTree {
+            session_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `FetchLayoutData` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection, since there is nothing to query without one.
+/// All other action variants are returned unchanged.
+fn hydrate_fetch_layout_data(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::FetchLayoutData {
+        session_id,
+        node_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            return Some(UpdateAction::FetchLayoutData {
+                session_id,
+                node_id,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::FetchLayoutData {
+            session_id,
+            node_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `ToggleOverlay` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_toggle_overlay(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::ToggleOverlay {
+        session_id,
+        extension,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            return Some(UpdateAction::ToggleOverlay {
+                session_id,
+                extension,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::ToggleOverlay {
+            session_id,
+            extension,
+            vm_handle: Some(handle),
         });
     }
     Some(action)

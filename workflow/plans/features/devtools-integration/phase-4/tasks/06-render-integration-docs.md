@@ -422,3 +422,44 @@ mod render_integration_tests {
 - **Snapshot tests**: Consider adding `insta::assert_snapshot!` tests for the DevTools panels in `render/tests.rs`, following the existing pattern.
 - **Theme consistency**: Use the project's existing color/style constants from `crates/fdemon-tui/src/theme.rs` or `styles.rs` if they exist, rather than hardcoding `Color::` values. Check what's available.
 - **The `DevToolsView` is non-stateful** (`Widget`, not `StatefulWidget`). All state is passed in via `&DevToolsViewState` reference. This is simpler than `SettingsPanel`'s `StatefulWidget` approach and sufficient since DevTools state is managed entirely by the TEA handler.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `DevToolsView` composite widget with sub-tab bar, panel dispatch, footer hints, overlay status indicators, and 11 unit tests |
+| `crates/fdemon-tui/src/render/mod.rs` | Replaced `UiMode::DevTools => {}` stub with actual `DevToolsView` rendering into `areas.logs` |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `DevToolsView` to re-exports |
+| `docs/KEYBINDINGS.md` | Updated `d` key entry (was "Start New Session", now "DevTools Mode"), removed `d` from startup text, added DevTools Mode section with Panel Navigation / Debug Overlays / Widget Inspector Navigation tables, updated Table of Contents |
+
+### Notable Decisions/Tradeoffs
+
+1. **Render into `areas.logs` not `area`**: DevTools renders into the logs area (below the app header), keeping the project name and session tabs visible. This follows the task recommendation and provides context about which session is active.
+
+2. **`selected_name` via `into_iter().nth()`**: The `LayoutExplorer` needs the currently selected widget name from the inspector. Used `.into_iter().nth(selected_index)` on `visible_nodes()` to avoid a `.get()` index that would require copying the Vec.
+
+3. **`LazyLock` fallback for `PerformanceState`**: Used `std::sync::LazyLock<PerformanceState>` for the zero-session fallback in the Performance panel arm, matching the task spec pattern. In practice this is never reached since `d` requires a VM-connected session.
+
+4. **Minor `Color::` usage in tab bar**: The tab bar uses `Color::Cyan` and `Color::Black` directly (as in the task spec) rather than palette constants, since there are no palette equivalents for the active-tab cyan/black style.
+
+5. **Header not modified**: The existing `[d] Debug` label in the header already accurately describes the new behavior. Option A (no change needed) was chosen per the task recommendation.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo test --lib` — Passed (517 unit tests including 11 new `DevToolsView` tests)
+- `cargo test --workspace` — 517 lib tests pass; 25 pre-existing e2e failures (timeouts in headless/integration tests, unrelated to this task)
+
+### Risks/Limitations
+
+1. **No snapshot tests added**: The task noted snapshot tests as optional ("consider adding"). The render integration test (`test_full_render_devtools_mode`) was not added since the existing `render/tests.rs` pattern requires `AppState::new()` which doesn't include sessions, and DevTools mode with an empty session manager works but just shows the Inspector panel empty state.
+
+2. **`LayoutExplorer` selected_name clone**: The `selected_name` computation clones a `String` to avoid lifetime issues. This is a tiny allocation per frame but is acceptable for TUI rendering.

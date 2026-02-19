@@ -457,3 +457,44 @@ mod tests {
 - **`get_layout_explorer_node` parameters**: Check the exact signature in `crates/fdemon-daemon/src/vm_service/extensions/layout.rs`. It may take `(client, isolate_id, node_id, group)` or similar.
 - **`BoxConstraints::parse`** already handles both raw and prefixed formats including "Infinity" (documented in `widget_tree.rs`). The rendering side just needs to check for `f64::INFINITY`.
 - **Proportional box rendering**: The ASCII box inside the Size section scales proportionally to the widget's aspect ratio, clamped to the available terminal space. This gives a visual sense of the widget's shape.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | **NEW** — Full `LayoutExplorer` widget with constraints, size box, flex properties, loading/error/no-selection states, and 16 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `pub mod layout_explorer;` and `pub use layout_explorer::LayoutExplorer;` |
+| `crates/fdemon-app/src/handler/devtools.rs` | Added `handle_layout_data_fetched` and `handle_layout_data_fetch_failed` functions; updated `handle_switch_panel` Layout arm to auto-fetch using selected widget's `object_id` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `vm_handle: Option<VmRequestHandle>` field to `FetchLayoutData` action variant |
+| `crates/fdemon-app/src/handler/update.rs` | Routed `LayoutDataFetched`/`LayoutDataFetchFailed` through devtools handler functions; added `vm_handle: None` to `RequestLayoutData` dispatch |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_fetch_layout_data` function and wired it into the action hydration chain |
+| `crates/fdemon-app/src/actions.rs` | Replaced stub with `spawn_fetch_layout_data`; added `extract_layout_info` import; updated `FetchLayoutData` arm to use `vm_handle` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`handle_layout_data_fetched` takes `LayoutInfo` not `Box<LayoutInfo>`**: Clippy flagged `Box<LayoutInfo>` as unnecessary for a small struct. The function now takes `LayoutInfo` directly and the call site in `update.rs` dereferences the box with `*layout`. This is consistent with clippy's `boxed_local` lint.
+
+2. **`vm_handle` hydration pattern for `FetchLayoutData`**: Followed the same pattern as `FetchWidgetTree` and `ToggleOverlay` — the handler returns `vm_handle: None` and `process.rs` hydrates it from the session's `vm_request_handle`. If no VM connection is active, the action is silently discarded (no error shown to user).
+
+3. **Direct `call_extension` on `VmRequestHandle`**: The `get_layout_explorer_node` function in `layout.rs` takes `&VmServiceClient`. Since `actions.rs` only has a `VmRequestHandle`, the implementation calls `handle.call_extension` directly with the layout-specific params (`id`, `groupName`, `subtreeDepth`), then parses via `extract_layout_info`. This avoids needing to reconstruct a full `VmServiceClient`.
+
+4. **Widget rendering with defensive bounds**: All rendering functions check `inner.height == 0 || inner.width == 0` before drawing to prevent panics on very small terminals. The minimum 40x10 terminal size is handled gracefully.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed (0 errors)
+- `cargo test --lib --workspace` — Passed (506 unit tests, +16 new layout explorer tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`object_id` vs `value_id`**: The auto-fetch on panel switch uses `node.object_id` from the selected `DiagnosticsNode`. If the Flutter version doesn't populate `object_id`, the fetch won't trigger. Using `value_id` (the widget's runtime object ID) would be more reliable for the layout explorer extension, but `object_id` matches what the layout.rs extension expects via the `id` parameter.
+
+2. **No dispose of object group**: The `"devtools-layout"` object group is created on each fetch but never explicitly disposed. For short-lived inspection sessions this is fine — Flutter's VM will eventually GC the group. Full lifecycle management would require a disposal call on panel switch or DevTools mode exit.

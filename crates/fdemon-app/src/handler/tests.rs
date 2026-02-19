@@ -3476,8 +3476,8 @@ fn test_connection_failure_does_not_crash() {
     );
     assert_eq!(
         handle.session.logs.len(),
-        initial_log_count,
-        "Connection failure should not add logs to session"
+        initial_log_count + 1,
+        "Connection failure should add a warning log to session"
     );
 }
 

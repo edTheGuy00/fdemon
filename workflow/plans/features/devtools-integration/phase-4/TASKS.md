@@ -54,12 +54,12 @@ Build the terminal UI for DevTools integration: a new `UiMode::DevTools` that re
 
 | # | Task | Status | Depends On | Est. Hours | Crates | Key Modules |
 |---|------|--------|------------|------------|--------|-------------|
-| 1 | [01-devtools-state-foundation](tasks/01-devtools-state-foundation.md) | Not Started | - | 3-4h | `fdemon-app` | `state.rs`, `message.rs` |
-| 2 | [02-devtools-handlers-key-reassignment](tasks/02-devtools-handlers-key-reassignment.md) | Not Started | 1 | 5-7h | `fdemon-app` | `handler/keys.rs`, `handler/update.rs`, `handler/devtools.rs` |
-| 3 | [03-performance-panel-widget](tasks/03-performance-panel-widget.md) | Not Started | 1 | 5-7h | `fdemon-tui` | `widgets/performance_panel.rs` |
-| 4 | [04-widget-inspector-panel](tasks/04-widget-inspector-panel.md) | Not Started | 1 | 6-8h | `fdemon-tui`, `fdemon-app` | `widgets/widget_inspector.rs`, `handler/devtools.rs`, `actions.rs` |
-| 5 | [05-layout-explorer-panel](tasks/05-layout-explorer-panel.md) | Not Started | 1, 4 | 5-7h | `fdemon-tui`, `fdemon-app` | `widgets/layout_explorer.rs`, `handler/devtools.rs` |
-| 6 | [06-render-integration-docs](tasks/06-render-integration-docs.md) | Not Started | 2, 3, 4, 5 | 4-6h | `fdemon-tui`, docs | `render/mod.rs`, `widgets/header.rs`, `KEYBINDINGS.md` |
+| 1 | [01-devtools-state-foundation](tasks/01-devtools-state-foundation.md) | Done | - | 3-4h | `fdemon-app` | `state.rs`, `message.rs` |
+| 2 | [02-devtools-handlers-key-reassignment](tasks/02-devtools-handlers-key-reassignment.md) | Done | 1 | 5-7h | `fdemon-app` | `handler/keys.rs`, `handler/update.rs`, `handler/devtools.rs` |
+| 3 | [03-performance-panel-widget](tasks/03-performance-panel-widget.md) | Done | 1 | 5-7h | `fdemon-tui` | `widgets/performance_panel.rs` |
+| 4 | [04-widget-inspector-panel](tasks/04-widget-inspector-panel.md) | Done | 1 | 6-8h | `fdemon-tui`, `fdemon-app` | `widgets/widget_inspector.rs`, `handler/devtools.rs`, `actions.rs` |
+| 5 | [05-layout-explorer-panel](tasks/05-layout-explorer-panel.md) | Done | 1, 4 | 5-7h | `fdemon-tui`, `fdemon-app` | `widgets/layout_explorer.rs`, `handler/devtools.rs` |
+| 6 | [06-render-integration-docs](tasks/06-render-integration-docs.md) | Done | 2, 3, 4, 5 | 4-6h | `fdemon-tui`, docs | `render/mod.rs`, `widgets/header.rs`, `KEYBINDINGS.md` |
 
 ## Success Criteria
 

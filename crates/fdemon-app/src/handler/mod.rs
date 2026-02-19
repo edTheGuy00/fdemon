@@ -14,6 +14,7 @@
 //! - `log_view`: Log view operation handlers
 
 pub(crate) mod daemon;
+pub(crate) mod devtools;
 pub(crate) mod helpers;
 pub(crate) mod keys;
 pub(crate) mod log_view;
@@ -136,6 +137,41 @@ pub enum UpdateAction {
         /// `vm_request_handle`. `handle_action` can safely `.unwrap()` this
         /// because `process.rs` discards actions where it remains `None`.
         handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Fetch the widget tree from the VM Service for the Inspector panel.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not yet connected).
+    FetchWidgetTree {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Fetch layout data for a specific widget node.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not yet connected).
+    FetchLayoutData {
+        session_id: SessionId,
+        node_id: String,
+        /// VM Service request handle used for the RPC call.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Toggle a debug overlay via VM Service extension call.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not yet connected).
+    ToggleOverlay {
+        session_id: SessionId,
+        extension: crate::message::DebugOverlayKind,
+        /// VM Service request handle used for the RPC call.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
 }
 

@@ -404,3 +404,50 @@ mod tests {
 - **Stub match arms**: When adding `UiMode::DevTools` to the key handler dispatch at `keys.rs:9-18`, add a temporary `UiMode::DevTools => None` arm. The actual handler is built in Task 02. Similarly, new `Message` variants in `update.rs` should get `=> UpdateResult::none()` stubs.
 - **`HashSet` import**: `InspectorState` uses `std::collections::HashSet` for expanded node tracking.
 - The `InspectorState::visible_nodes()` method walks the tree respecting expand/collapse state to produce a flat renderable list — this is the same approach used by tree views in VS Code and similar tools.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `UiMode::DevTools` variant, `DevToolsPanel` enum, `InspectorState` struct with `visible_nodes()`/`toggle_expanded()`/`is_expanded()`/`reset()` methods, `LayoutExplorerState` struct, `DevToolsViewState` struct, `devtools_view_state` field on `AppState`, `enter_devtools_mode()`/`exit_devtools_mode()`/`switch_devtools_panel()` helpers, `std::collections::HashSet` import, and 5 new unit tests |
+| `crates/fdemon-app/src/message.rs` | Added `DebugOverlayKind` enum, imported `DevToolsPanel`/`DiagnosticsNode`/`LayoutInfo`, added 12 new `Message` variants for DevTools mode (Enter/Exit/Switch/OpenBrowser/RequestWidgetTree/WidgetTreeFetched/WidgetTreeFetchFailed/RequestLayoutData/LayoutDataFetched/LayoutDataFetchFailed/ToggleDebugOverlay/DebugOverlayToggled) |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 3 new `UpdateAction` variants: `FetchWidgetTree`, `FetchLayoutData`, `ToggleOverlay` using `SessionId` type |
+| `crates/fdemon-app/src/handler/keys.rs` | Added stub `UiMode::DevTools => None` match arm in `handle_key()` dispatch |
+| `crates/fdemon-app/src/handler/update.rs` | Added 12 stub handler arms for all new DevTools `Message` variants with basic state mutations |
+| `crates/fdemon-app/src/actions.rs` | Added 3 stub `handle_action()` arms for `FetchWidgetTree`, `FetchLayoutData`, `ToggleOverlay` (logs at debug level) |
+| `crates/fdemon-app/src/lib.rs` | Re-exported `DebugOverlayKind`, `DevToolsPanel`, `DevToolsViewState`, `InspectorState`, `LayoutExplorerState` |
+| `crates/fdemon-tui/src/render/mod.rs` | Added stub `UiMode::DevTools => {}` match arm in render dispatch |
+
+### Notable Decisions/Tradeoffs
+
+1. **`SessionId` instead of `uuid::Uuid`**: The task spec used `uuid::Uuid` in the new Message/Action variants, but `uuid` is not in fdemon-app's Cargo.toml and the codebase already uses `SessionId = u64` universally. Using `SessionId` keeps consistency with the rest of the codebase without adding a dependency.
+
+2. **Functional stubs in `update.rs`**: The DevTools `Message` handlers in `update.rs` actually update relevant state fields (e.g., `WidgetTreeFetched` stores the root node, `DebugOverlayToggled` updates the overlay flags) rather than being pure no-ops. This makes the stubs immediately useful for testing state transitions even before Task 02-06 are implemented.
+
+3. **`std::collections::HashSet` import**: Added at the top of `state.rs` alongside the existing imports, using the fully-qualified path for `InspectorState.expanded` as specified.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --lib --workspace` - Passed (1260 unit tests across all crates: 814 fdemon-app + 446 fdemon-tui)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+New tests added (all pass):
+- `state::tests::test_enter_exit_devtools_mode`
+- `state::tests::test_switch_devtools_panel`
+- `state::tests::test_inspector_state_toggle_expanded`
+- `state::tests::test_inspector_state_reset`
+- `state::tests::test_devtools_panel_default_is_inspector`
+- `state::tests::test_devtools_view_state_default`
+
+### Risks/Limitations
+
+1. **E2e test failures are pre-existing**: 25 e2e tests fail due to TUI process spawning/timeout issues unrelated to this task. All unit tests pass.
+2. **Stubs in actions.rs log at debug level**: The `FetchWidgetTree`/`FetchLayoutData`/`ToggleOverlay` stubs in `actions.rs` only emit tracing::debug! messages. Full implementation in Tasks 03-05.

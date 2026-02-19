@@ -1,5 +1,6 @@
 //! Application state (Model in TEA pattern)
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use rand::Rng;
@@ -7,7 +8,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::new_session_dialog::NewSessionDialogState;
-use fdemon_core::AppPhase;
+use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
 use super::session_manager::SessionManager;
@@ -44,6 +45,135 @@ pub enum UiMode {
 
     /// Settings panel - full-screen settings UI
     Settings,
+
+    /// DevTools panel mode - replaces log view with Inspector/Layout/Performance panels
+    DevTools,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DevTools State (Phase 4)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Active sub-panel within DevTools mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DevToolsPanel {
+    /// Widget tree inspector with expand/collapse navigation.
+    #[default]
+    Inspector,
+
+    /// Flex layout visualization for the selected widget.
+    Layout,
+
+    /// FPS, memory usage, and frame timing display.
+    Performance,
+}
+
+/// State for the widget inspector tree view.
+#[derive(Debug, Clone, Default)]
+pub struct InspectorState {
+    /// The root widget tree node (fetched on-demand via VM Service RPC).
+    pub root: Option<DiagnosticsNode>,
+
+    /// Set of expanded node IDs (value_id). Collapsed by default.
+    pub expanded: HashSet<String>,
+
+    /// Index of the currently selected visible node (0-based flat list position).
+    pub selected_index: usize,
+
+    /// Whether a tree fetch is currently in progress.
+    pub loading: bool,
+
+    /// Error message from the last failed fetch attempt.
+    pub error: Option<String>,
+}
+
+impl InspectorState {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Toggle expand/collapse for the node at the given value_id.
+    pub fn toggle_expanded(&mut self, value_id: &str) {
+        if !self.expanded.remove(value_id) {
+            self.expanded.insert(value_id.to_string());
+        }
+    }
+
+    /// Check if a node is expanded.
+    pub fn is_expanded(&self, value_id: &str) -> bool {
+        self.expanded.contains(value_id)
+    }
+
+    /// Reset state (e.g., on session change or refresh).
+    pub fn reset(&mut self) {
+        self.root = None;
+        self.expanded.clear();
+        self.selected_index = 0;
+        self.loading = false;
+        self.error = None;
+    }
+
+    /// Build a flat list of visible nodes based on expand/collapse state.
+    /// Returns (node_ref, depth) pairs for rendering.
+    pub fn visible_nodes(&self) -> Vec<(&DiagnosticsNode, usize)> {
+        let Some(root) = &self.root else {
+            return vec![];
+        };
+        let mut result = Vec::new();
+        self.collect_visible(root, 0, &mut result);
+        result
+    }
+
+    fn collect_visible<'a>(
+        &self,
+        node: &'a DiagnosticsNode,
+        depth: usize,
+        result: &mut Vec<(&'a DiagnosticsNode, usize)>,
+    ) {
+        // Skip hidden nodes
+        if !node.is_visible() {
+            return;
+        }
+        result.push((node, depth));
+        if let Some(value_id) = &node.value_id {
+            if self.is_expanded(value_id) {
+                for child in &node.children {
+                    self.collect_visible(child, depth + 1, result);
+                }
+            }
+        }
+    }
+}
+
+/// State for the layout explorer panel.
+#[derive(Debug, Clone, Default)]
+pub struct LayoutExplorerState {
+    /// Layout info for the currently selected widget.
+    pub layout: Option<LayoutInfo>,
+
+    /// Whether a layout fetch is in progress.
+    pub loading: bool,
+
+    /// Error from the last failed fetch.
+    pub error: Option<String>,
+}
+
+/// Complete state for the DevTools mode UI.
+#[derive(Debug, Clone, Default)]
+pub struct DevToolsViewState {
+    /// Currently active sub-panel.
+    pub active_panel: DevToolsPanel,
+
+    /// Widget inspector tree state.
+    pub inspector: InspectorState,
+
+    /// Layout explorer state.
+    pub layout_explorer: LayoutExplorerState,
+
+    /// Current debug overlay states (synced from VM Service).
+    pub overlay_repaint_rainbow: bool,
+    pub overlay_debug_paint: bool,
+    pub overlay_performance: bool,
 }
 
 /// State for the settings panel view
@@ -353,6 +483,9 @@ pub struct AppState {
     /// Cached tool availability (checked at startup)
     /// Phase 4, Task 05 - Discovery Integration
     pub tool_availability: ToolAvailability,
+
+    /// DevTools mode view state (Phase 4 DevTools Integration)
+    pub devtools_view_state: DevToolsViewState,
 }
 
 impl Default for AppState {
@@ -389,6 +522,7 @@ impl AppState {
             android_avds_cache: None,
             bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
+            devtools_view_state: DevToolsViewState::default(),
         }
     }
 
@@ -406,6 +540,25 @@ impl AppState {
     /// Hide settings panel
     pub fn hide_settings(&mut self) {
         self.ui_mode = UiMode::Normal;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // DevTools Mode Helpers (Phase 4)
+    // ─────────────────────────────────────────────────────────
+
+    /// Enter DevTools mode with the default panel.
+    pub fn enter_devtools_mode(&mut self) {
+        self.ui_mode = UiMode::DevTools;
+    }
+
+    /// Exit DevTools mode, return to Normal.
+    pub fn exit_devtools_mode(&mut self) {
+        self.ui_mode = UiMode::Normal;
+    }
+
+    /// Switch the active DevTools sub-panel.
+    pub fn switch_devtools_panel(&mut self, panel: DevToolsPanel) {
+        self.devtools_view_state.active_panel = panel;
     }
 
     /// Show the new session dialog
@@ -573,6 +726,76 @@ impl AppState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ─────────────────────────────────────────────────────────
+    // DevTools State Tests (Phase 4, Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_enter_exit_devtools_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        state.enter_devtools_mode();
+        assert_eq!(state.ui_mode, UiMode::DevTools);
+        state.exit_devtools_mode();
+        assert_eq!(state.ui_mode, UiMode::Normal);
+    }
+
+    #[test]
+    fn test_switch_devtools_panel() {
+        let mut state = AppState::new();
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Inspector
+        );
+        state.switch_devtools_panel(DevToolsPanel::Performance);
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Performance
+        );
+        state.switch_devtools_panel(DevToolsPanel::Layout);
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Layout
+        );
+    }
+
+    #[test]
+    fn test_inspector_state_toggle_expanded() {
+        let mut inspector = InspectorState::new();
+        assert!(!inspector.is_expanded("widget-1"));
+        inspector.toggle_expanded("widget-1");
+        assert!(inspector.is_expanded("widget-1"));
+        inspector.toggle_expanded("widget-1");
+        assert!(!inspector.is_expanded("widget-1"));
+    }
+
+    #[test]
+    fn test_inspector_state_reset() {
+        let mut inspector = InspectorState::new();
+        inspector.selected_index = 5;
+        inspector.expanded.insert("widget-1".to_string());
+        inspector.loading = true;
+        inspector.reset();
+        assert_eq!(inspector.selected_index, 0);
+        assert!(inspector.expanded.is_empty());
+        assert!(!inspector.loading);
+        assert!(inspector.root.is_none());
+    }
+
+    #[test]
+    fn test_devtools_panel_default_is_inspector() {
+        assert_eq!(DevToolsPanel::default(), DevToolsPanel::Inspector);
+    }
+
+    #[test]
+    fn test_devtools_view_state_default() {
+        let state = DevToolsViewState::default();
+        assert_eq!(state.active_panel, DevToolsPanel::Inspector);
+        assert!(!state.overlay_repaint_rainbow);
+        assert!(!state.overlay_debug_paint);
+        assert!(!state.overlay_performance);
+    }
 
     // Helper to create a test device
     fn test_device(id: &str, name: &str) -> Device {

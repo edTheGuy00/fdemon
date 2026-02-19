@@ -357,3 +357,44 @@ mod tests {
 - **Sparkline data conversion**: `RingBuffer<FrameTiming>` provides `.iter()`. Map each `FrameTiming::elapsed_micros` to milliseconds for the sparkline. Cap at 33ms (2x 16.67ms budget) for visual scaling.
 - **Color palette**: Use the project's existing theme/styles module if one exists, otherwise use standard ratatui colors. Check `crates/fdemon-tui/src/` for a `theme.rs` or `styles.rs`.
 - **Compact mode**: If `area.width < 50`, consider a compact layout that drops the sparkline and shows only text metrics. This follows the pattern from `LogView::render_bottom_metadata` which switches to compact at `width < 60`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | NEW — DevTools widget module root with `pub mod performance;` and `pub use performance::PerformancePanel;`. Commented placeholders for Tasks 04/05. |
+| `crates/fdemon-tui/src/widgets/devtools/performance.rs` | NEW — Full `PerformancePanel` widget with FPS section (header + sparkline), memory section (gauge + details), stats section (frames/jank/GC), disconnected state, compact fallback, 16 unit tests. |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod devtools;` declaration and `pub use devtools::PerformancePanel;` re-export. |
+| `crates/fdemon-tui/src/theme/icons.rs` | Added `impl Default for IconSet` (uses `IconMode::Unicode` as safe default), required by tests using `IconSet::default()`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`IconSet::default()` via `Default` impl**: Tests in the task spec call `IconSet::default()`. No such impl existed, so I added one to `theme/icons.rs` using `IconMode::Unicode` as the default (safe fallback for all terminals). This is a small additive change to an existing file not in the task's owned-file list, but it is a prerequisite for the widget tests and follows the project's pattern where `IconMode::Unicode` is the safe default.
+
+2. **Disconnected state gate**: The widget shows the disconnected/starting message when `!vm_connected || !monitoring_active`. This means the full panel is only rendered when both conditions are true — consistent with the task spec's `render_disconnected` design.
+
+3. **Height distribution**: Remaining terminal height above the `min_required` (11 rows) is split with half going to FPS/sparkline and a quarter to memory, giving the sparkline visual breathing room.
+
+4. **Compact width threshold**: `COMPACT_WIDTH_THRESHOLD = 50` — below this width, the sparkline is skipped in the FPS section to preserve text readability. The compact summary mode (single-line) activates when total height is < 11 rows.
+
+5. **Redundant `is_stale()` guards removed**: The original task spec showed `Some(fps) if !stats.is_stale()` guards. Since `is_stale()` ≡ `fps.is_none()`, these guards are always true inside `Some(fps)` and were simplified to plain `Some(fps)` to avoid clippy warnings.
+
+### Testing Performed
+
+- `cargo fmt --all` — formatting to verify (no Bash access; implementation follows project formatting conventions)
+- All 16 unit tests in `performance.rs` cover: render without panic, FPS display, disconnected state, small terminal, zero area, FPS color coding (green/yellow/red/none), gauge color coding (green/yellow/red), number formatting, monitoring inactive state.
+- No compilation errors expected given verified ratatui 0.30 API signatures, correct import paths, and `u16` typed tuple arguments to `buf.cell()`.
+
+### Risks/Limitations
+
+1. **No Bash verification**: The CI commands (`cargo check`, `cargo test`, `cargo clippy`) were not run due to tool restrictions. The implementation is grounded in verified source files from the cargo registry and existing codebase patterns, so compilation failures are unlikely but possible.
+
+2. **Sparkline data type**: `Sparkline::data(&frame_data)` passes `&Vec<u64>` which is coerced to `&[u64]` via `IntoIterator` — verified against ratatui-widgets 0.3.0 source (`From<&u64>` impl for `SparklineBar`).
+
+3. **`IconSet::default()` scope**: The added `Default` impl is a cross-cutting concern (touches an existing file outside the stated file list), but it's additive and backward-compatible.
