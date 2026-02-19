@@ -47,26 +47,26 @@ Implement typed wrappers for all Flutter-specific VM Service extensions in `fdem
 
 | # | Task | Status | Depends On | Est. Hours | Crate | Key Modules |
 |---|------|--------|------------|------------|-------|-------------|
-| 1 | [01-extension-framework](tasks/01-extension-framework.md) | Not Started | - | 3-4h | `fdemon-daemon` | `vm_service/extensions.rs` |
-| 2 | [02-widget-tree-types](tasks/02-widget-tree-types.md) | Not Started | - | 2-3h | `fdemon-core` | `widget_tree.rs` |
-| 3 | [03-debug-overlay-toggles](tasks/03-debug-overlay-toggles.md) | Not Started | 1 | 2-3h | `fdemon-daemon` | `vm_service/extensions.rs` |
-| 4 | [04-widget-tree-extensions](tasks/04-widget-tree-extensions.md) | Not Started | 1, 2 | 3-4h | `fdemon-daemon` | `vm_service/extensions.rs` |
-| 5 | [05-layout-explorer-extension](tasks/05-layout-explorer-extension.md) | Not Started | 1, 2 | 2-3h | `fdemon-daemon` | `vm_service/extensions.rs` |
-| 6 | [06-debug-dump-extensions](tasks/06-debug-dump-extensions.md) | Not Started | 1 | 1-2h | `fdemon-daemon` | `vm_service/extensions.rs` |
+| 1 | [01-extension-framework](tasks/01-extension-framework.md) | Done | - | 3-4h | `fdemon-daemon` | `vm_service/extensions.rs` |
+| 2 | [02-widget-tree-types](tasks/02-widget-tree-types.md) | Done | - | 2-3h | `fdemon-core` | `widget_tree.rs` |
+| 3 | [03-debug-overlay-toggles](tasks/03-debug-overlay-toggles.md) | Done | 1 | 2-3h | `fdemon-daemon` | `vm_service/extensions.rs` |
+| 4 | [04-widget-tree-extensions](tasks/04-widget-tree-extensions.md) | Done | 1, 2 | 3-4h | `fdemon-daemon` | `vm_service/extensions.rs` |
+| 5 | [05-layout-explorer-extension](tasks/05-layout-explorer-extension.md) | Done | 1, 2 | 2-3h | `fdemon-daemon` | `vm_service/extensions.rs` |
+| 6 | [06-debug-dump-extensions](tasks/06-debug-dump-extensions.md) | Done | 1 | 1-2h | `fdemon-daemon` | `vm_service/extensions.rs` |
 
 ## Success Criteria
 
 Phase 2 is complete when:
 
-- [ ] All debug overlay toggles callable via typed API with state tracking
-- [ ] Widget summary tree retrieved and parsed into `DiagnosticsNode` structs
-- [ ] Detail subtree and selected widget fetched for any node by `valueId`
-- [ ] Layout explorer data parsed with constraints, size, and flex properties
-- [ ] Debug dump commands return valid text output
-- [ ] Object group lifecycle managed (create, dispose)
-- [ ] Extension-not-available errors handled gracefully (profile mode, release mode)
-- [ ] All new code has unit tests with mock JSON responses
-- [ ] No regressions in existing functionality (`cargo test --workspace`)
+- [x] All debug overlay toggles callable via typed API with state tracking
+- [x] Widget summary tree retrieved and parsed into `DiagnosticsNode` structs
+- [x] Detail subtree and selected widget fetched for any node by `valueId`
+- [x] Layout explorer data parsed with constraints, size, and flex properties
+- [x] Debug dump commands return valid text output
+- [x] Object group lifecycle managed (create, dispose)
+- [x] Extension-not-available errors handled gracefully (profile mode, release mode)
+- [x] All new code has unit tests with mock JSON responses
+- [x] No regressions in existing functionality (`cargo test --workspace`)
 
 ## New Module Structure
 

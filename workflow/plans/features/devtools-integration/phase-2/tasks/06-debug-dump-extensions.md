@@ -231,4 +231,29 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions.rs` | Added `DebugDumpKind` enum with `method()` and `available_in_profile()` methods; added `debug_dump_app()`, `debug_dump_render_tree()`, `debug_dump_layer_tree()`, and `debug_dump()` async functions; added 9 new unit tests covering all new functionality |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported `DebugDumpKind`, `debug_dump`, `debug_dump_app`, `debug_dump_render_tree`, `debug_dump_layer_tree` from the extensions module |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in extensions.rs**: The new code was inserted between the "flip overlay convenience" section and the existing "call_extension params builder" section, maintaining the logical grouping of related functionality in the file.
+2. **`debug_dump()` uses `kind.method()` directly**: The generic `debug_dump()` function calls `client.call_extension(kind.method(), ...)` rather than dispatching to the individual functions. This avoids code duplication while keeping the individual named functions available for callers who prefer explicit naming.
+3. **Tests reuse `parse_data_extension_response` directly**: Since the dump functions are async and require a live `VmServiceClient`, the unit tests exercise the shared `parse_data_extension_response` helper and the pure `DebugDumpKind` methods. This follows the existing pattern in the file (toggle functions also test the helpers, not the async wrappers).
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (270 tests, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-daemon` - Applied (no changes needed)
+
+### Risks/Limitations
+
+1. **No integration tests for async dump functions**: The `debug_dump_app()`, `debug_dump_render_tree()`, `debug_dump_layer_tree()`, and `debug_dump()` functions require a live VM Service connection and cannot be unit-tested without mocking. This matches the existing pattern for all other async extension functions (e.g., `repaint_rainbow`, `debug_paint`) in the file. Integration testing would happen in Phase 4 when TUI bindings are added.
+2. **Large output strings**: As noted in the task, dumps from complex apps can produce thousands of lines. The functions return the full string unchanged — callers are responsible for truncation or pagination.

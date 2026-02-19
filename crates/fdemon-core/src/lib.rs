@@ -53,6 +53,7 @@ pub mod exception_block;
 pub mod logging;
 pub mod stack_trace;
 pub mod types;
+pub mod widget_tree;
 
 /// Prelude for common imports used throughout all Flutter Demon crates
 pub mod prelude {
@@ -78,4 +79,7 @@ pub use stack_trace::{
 pub use types::{
     AppPhase, BootableDevice, DeviceState, FilterState, LogEntry, LogLevel, LogLevelFilter,
     LogSource, LogSourceFilter, Platform, SearchMatch, SearchState,
+};
+pub use widget_tree::{
+    BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode, LayoutInfo, WidgetSize,
 };

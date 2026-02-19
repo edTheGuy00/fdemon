@@ -359,4 +359,34 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions.rs` | Added `DiagnosticsNode` import, `parse_diagnostics_node_response()`, `parse_optional_diagnostics_node_response()`, `get_root_widget_tree()` (with fallback), `get_details_subtree()`, `get_selected_widget()`, `WidgetInspector` struct, `dispose_all()` on `ObjectGroupManager`, and 15 new unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported all new public items: `get_root_widget_tree`, `get_details_subtree`, `get_selected_widget`, `parse_diagnostics_node_response`, `parse_optional_diagnostics_node_response`, `WidgetInspector` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`dispose_all` added to `ObjectGroupManager`**: The `WidgetInspector::dispose()` method needs to dispose the active group without creating a new one. Rather than adding logic to `WidgetInspector`, the `dispose_all` method was added to `ObjectGroupManager` to keep group lifecycle logic centralized. The `_client` parameter is unused in `dispose_all` (the client is already stored on `ObjectGroupManager`) — this was kept for API symmetry with `WidgetInspector::dispose(&mut self, client)`.
+
+2. **`parse_diagnostics_node_response` tries `result` key first**: The function checks for a nested `"result"` key and falls back to the value itself. This handles both the case where `call_extension` has already unwrapped the JSON-RPC result (returns the node directly) and any future Flutter versions that might add an extra wrapper. This matches the task spec's design intent.
+
+3. **`WidgetInspector::new` takes a `VmServiceClient`**: The struct stores an `ObjectGroupManager` which requires a client clone. The task spec showed only `isolate_id` as a parameter, but an `ObjectGroupManager` needs a client reference at construction time (to call `disposeGroup`). The constructor signature was updated to include the client.
+
+4. **No `hashmap!` macro**: The codebase has no `hashmap!` convenience macro. All `HashMap` construction uses explicit insertion, consistent with existing code in `ObjectGroupManager::dispose_group()`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (284 tests: 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (0 warnings)
+- `cargo fmt --all` — Applied (minor formatting fix to `dispose_all` signature)
+
+### Risks/Limitations
+
+1. **`WidgetInspector` not tested end-to-end**: The struct requires a live VM Service connection for integration testing, which is out of scope for unit tests. The parsing and group management logic are unit-tested; the async extension calls are tested through `parse_diagnostics_node_response` and the existing `ObjectGroupManager` tests.
+
+2. **`dispose_all` ignores the client parameter**: The `VmServiceClient` passed to `WidgetInspector::dispose()` is forwarded but not used (the stored client in `ObjectGroupManager` handles the RPC call). The `_client` parameter maintains a consistent API surface for callers.

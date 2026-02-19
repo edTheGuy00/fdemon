@@ -360,4 +360,33 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | NEW — All widget tree domain types: `DiagnosticsNode`, `CreationLocation`, `LayoutInfo`, `BoxConstraints`, `WidgetSize`, `DiagnosticLevel`, with helper methods, `BoxConstraints::parse()`, and 44 unit tests |
+| `crates/fdemon-core/src/lib.rs` | Added `pub mod widget_tree` declaration and re-exports for all 6 new types |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DiagnosticLevel::parse()` instead of `from_str()`**: The task spec specified `from_str()`, but clippy `-D warnings` flags this as confusable with `std::str::FromStr::from_str`. Resolution: implemented `std::str::FromStr` as the trait (returning `Result<Self, Infallible>`) and named the plain helper `parse()`. Both are available; the behavior matches the spec exactly.
+
+2. **`visible_node_count()` uses `sum()` not `.count()`**: The task spec had a bug — `.map(...).count()` always returns the number of children, not their recursive counts. Corrected to `.map(...).sum::<usize>()` so counts properly accumulate through the tree.
+
+3. **No `#[serde(deny_unknown_fields)]`**: Intentionally omitted per spec. Flutter VM Service responses include many optional/future fields; this allows forward compatibility.
+
+4. **`CreationLocation` uses plain field names**: Not `#[serde(rename_all = "camelCase")]` because the fields already match (file, line, column, name are the same in camelCase and lowercase).
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` — Passed
+- `cargo test -p fdemon-core` — Passed (304 tests: 260 pre-existing + 44 new widget_tree tests)
+- `cargo clippy -p fdemon-core -- -D warnings` — Passed
+- `cargo fmt -p fdemon-core` — Applied (no substantive changes)
+
+### Risks/Limitations
+
+1. **`visible_node_count()` is recursive**: Stack overflow is theoretically possible for extremely deep trees, but Flutter widget trees rarely exceed ~100 levels. A depth guard can be added if needed.
+2. **`BoxConstraints::parse()` is regex-free**: Uses string splitting on the `<=w<=` and `<=h<=` patterns. Works for the documented VM Service format; unusual formats will return `None`.

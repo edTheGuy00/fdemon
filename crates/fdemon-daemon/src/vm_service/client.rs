@@ -26,12 +26,13 @@
 //! └─────────────────────────────────────────────────────────────┘
 //! ```
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -39,6 +40,7 @@ use tracing::{debug, error, info, warn};
 
 use fdemon_core::prelude::*;
 
+use super::extensions::build_extension_params;
 use super::protocol::{
     parse_vm_message, IsolateInfo, IsolateRef, VmInfo, VmRequestTracker, VmServiceError,
     VmServiceEvent, VmServiceMessage, VmServiceRequest,
@@ -132,6 +134,8 @@ pub struct VmServiceClient {
     cmd_tx: mpsc::Sender<ClientCommand>,
     event_rx: mpsc::Receiver<VmServiceEvent>,
     state: Arc<std::sync::RwLock<ConnectionState>>,
+    /// Cached main isolate ID. Cleared by the background task on reconnection.
+    isolate_id_cache: Arc<Mutex<Option<String>>>,
 }
 
 impl VmServiceClient {
@@ -147,6 +151,7 @@ impl VmServiceClient {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientCommand>(CMD_CHANNEL_CAPACITY);
         let (event_tx, event_rx) = mpsc::channel::<VmServiceEvent>(EVENT_CHANNEL_CAPACITY);
         let state = Arc::new(std::sync::RwLock::new(ConnectionState::Connecting));
+        let isolate_id_cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
         // Attempt the first connection before returning so callers know whether
         // the URI is reachable.
@@ -160,6 +165,7 @@ impl VmServiceClient {
 
         let ws_uri_owned = ws_uri.to_string();
         let state_clone = Arc::clone(&state);
+        let cache_clone = Arc::clone(&isolate_id_cache);
 
         tokio::spawn(run_client_task(
             ws_uri_owned,
@@ -167,12 +173,14 @@ impl VmServiceClient {
             cmd_rx,
             event_tx,
             state_clone,
+            cache_clone,
         ));
 
         Ok(Self {
             cmd_tx,
             event_rx,
             state,
+            isolate_id_cache,
         })
     }
 
@@ -329,6 +337,65 @@ impl VmServiceClient {
 
         errors
     }
+
+    // ── Service extension methods ─────────────────────────────────────────
+
+    /// Call a Flutter service extension method.
+    ///
+    /// Automatically includes `isolateId` in the params map. All additional
+    /// parameter values must be strings (VM Service protocol requirement).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ChannelClosed`] if the background task has exited.
+    /// - [`Error::Protocol`] if the VM Service returned a JSON-RPC error,
+    ///   including error code `-32601` when the extension is not available.
+    /// - [`Error::Daemon`] if the response arrived without a `result` field.
+    pub async fn call_extension(
+        &self,
+        method: &str,
+        isolate_id: &str,
+        args: Option<HashMap<String, String>>,
+    ) -> Result<serde_json::Value> {
+        let params = build_extension_params(isolate_id, args);
+        self.request(method, Some(params)).await
+    }
+
+    /// Get the main isolate ID, discovering it if not yet cached.
+    ///
+    /// The isolate ID is cached after the first successful discovery. The
+    /// cache is invalidated automatically when the WebSocket reconnects, so
+    /// this method will re-discover on the next call after a reconnection.
+    ///
+    /// # Returns
+    ///
+    /// The isolate ID string (e.g., `"isolates/6010531716406367"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VM Service call to `getVM` fails or no
+    /// non-system isolate is found.
+    pub async fn main_isolate_id(&self) -> Result<String> {
+        // Fast path: return from cache if available.
+        {
+            let guard = self.isolate_id_cache.lock().await;
+            if let Some(ref id) = *guard {
+                return Ok(id.clone());
+            }
+        }
+
+        // Slow path: discover the main isolate and cache the result.
+        let isolate = self.discover_main_isolate().await?;
+        let id = isolate.id;
+
+        {
+            let mut guard = self.isolate_id_cache.lock().await;
+            *guard = Some(id.clone());
+        }
+
+        debug!("VM Service: cached main isolate ID: {}", id);
+        Ok(id)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -345,6 +412,7 @@ async fn run_client_task(
     mut cmd_rx: mpsc::Receiver<ClientCommand>,
     event_tx: mpsc::Sender<VmServiceEvent>,
     state: Arc<std::sync::RwLock<ConnectionState>>,
+    isolate_id_cache: Arc<Mutex<Option<String>>>,
 ) {
     let mut tracker = VmRequestTracker::new();
 
@@ -398,6 +466,15 @@ async fn run_client_task(
                     let mut guard = state.write().unwrap();
                     *guard = ConnectionState::Connected;
                 }
+
+                // Invalidate the isolate ID cache — after a reconnection the
+                // VM may have started a new isolate with a different ID.
+                {
+                    let mut cache = isolate_id_cache.lock().await;
+                    *cache = None;
+                    debug!("VM Service: cleared isolate ID cache after reconnection");
+                }
+
                 attempt = 1; // reset on success
 
                 let reconnect =

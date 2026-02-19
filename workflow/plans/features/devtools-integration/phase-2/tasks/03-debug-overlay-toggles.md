@@ -214,4 +214,32 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions.rs` | Added `DebugOverlayState` struct, `toggle_bool_extension()` generic function, 4 typed toggle functions (`repaint_rainbow`, `debug_paint`, `performance_overlay`, `widget_inspector`), `query_all_overlays()` bulk query function, `flip_overlay()` convenience function, and 8 new tests for the new code |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported all new public items: `DebugOverlayState`, `toggle_bool_extension`, `repaint_rainbow`, `debug_paint`, `performance_overlay`, `widget_inspector`, `query_all_overlays`, `flip_overlay` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Client reference type**: The typed toggle functions take `&super::client::VmServiceClient` rather than a generic trait, matching the existing `ObjectGroupManager` pattern already in the file. This is simpler since `VmServiceClient` is the only implementation.
+
+2. **Test coverage for JSON boolean edge case**: The task spec noted that the parser should "recommend handling both string and bool for robustness" but the existing `parse_bool_extension_response` (from Task 01) uses `as_str()` which returns `None` for JSON booleans. I tested both paths and documented the behavior: JSON booleans correctly return `Err` since the VM Service protocol specifies string values. Two tests (`test_parse_bool_response_json_bool_true_returns_error` and `test_parse_bool_response_json_bool_false_returns_error`) confirm this behavior.
+
+3. **Sequential query in `query_all_overlays`**: The implementation calls each extension sequentially (per the task spec's literal code). Future optimization could use `tokio::join!` for concurrent queries, but that is not required in this task.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (261 tests pass, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-daemon` - Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **No mock for async toggle functions**: The typed toggle functions (`repaint_rainbow`, `debug_paint`, etc.) and `query_all_overlays`/`flip_overlay` require a live `VmServiceClient` to test the full call path. Unit tests cover all the synchronous parsing logic. Integration tests for the async call chain belong to a future task with a mock VM Service server.
+
+2. **`flip_overlay` makes 2 RPC calls**: As noted in the task, this is acceptable for single keybinding-driven toggles but callers should not use it in tight loops without caching.

@@ -240,4 +240,37 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions.rs` | NEW — Extension call infrastructure: `ext` constants module, `parse_bool_extension_response()`, `parse_data_extension_response()`, `is_extension_not_available()`, `ObjectGroupManager`, `build_extension_params()`, 17 unit tests |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `isolate_id_cache: Arc<Mutex<Option<String>>>` field to `VmServiceClient`; added `call_extension()` and `main_isolate_id()` methods; updated `run_client_task()` signature and logic to clear cache on reconnection; added `HashMap` and `Mutex` imports |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod extensions`; re-exported `ext`, `is_extension_not_available`, `parse_bool_extension_response`, `parse_data_extension_response`, `ObjectGroupManager`; updated module doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Isolate ID cache uses `Arc<Mutex<Option<String>>>`**: A Tokio `Mutex` is used (not `std::sync::Mutex`) because the background task holds the `Arc` and calls `.lock().await` in an async context. The `Arc` is shared between the `VmServiceClient` (public API) and `run_client_task` (background task). On reconnection, the background task clears the cache so `main_isolate_id()` will re-discover on the next call.
+
+2. **`build_extension_params` is `pub(super)` not `pub`**: It's an internal helper only needed by `client.rs` (which is in the same `vm_service` module). External callers use `call_extension()` directly. This keeps the public API surface minimal.
+
+3. **`ObjectGroupManager` owns a `VmServiceClient`**: The struct takes ownership rather than a reference or `Arc` to avoid lifetime complications. Since `VmServiceClient` is cheap to clone conceptually (it holds only channel senders and `Arc`s), this is a reasonable tradeoff for a manager that will outlive individual calls.
+
+4. **Error code 113 handling in `is_extension_not_available`**: Added for defensive coverage. The primary signal is `-32601` (JSON-RPC "Method not found"), but some VM Service versions may return code 113 ("Extension not available"). The message fallback handles `-32000` with message text.
+
+5. **`VmServiceError` is now used in `extensions.rs` but not re-exported from that module**: `is_extension_not_available` takes `&VmServiceError` which is already re-exported from `vm_service::mod` via `protocol`. No duplication needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (253 tests: 17 new extension tests + all 236 pre-existing tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (zero warnings)
+- `cargo fmt --all && cargo check --workspace` — Passed (all 5 crates compile cleanly)
+
+### Risks/Limitations
+
+1. **Isolate ID cache not invalidated on hot restart**: If the Flutter app hot-restarts the Dart VM, the isolate ID may change. The cache is only cleared on WebSocket reconnection. A future improvement could subscribe to the `Isolate` stream and invalidate on `IsolateReload` events.
+
+2. **`ObjectGroupManager` dispose errors propagate**: `dispose_group()` returns `Err` if the extension call fails. In practice this could happen if the app terminates between creating and disposing a group. Callers should treat dispose failures as non-fatal.
