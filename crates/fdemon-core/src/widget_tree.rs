@@ -108,9 +108,11 @@ impl DiagnosticsNode {
             .map(|loc| loc.file.strip_prefix("file://").unwrap_or(&loc.file))
     }
 
-    /// Count total visible nodes in this subtree (including self).
+    /// Count visible nodes in this subtree for display purposes.
     ///
-    /// Returns 0 if this node is not visible (hidden/off level).
+    /// Returns the number of nodes that would be shown in a tree view.
+    /// Hidden nodes (level = `"hidden"` or `"off"`) and their entire subtrees
+    /// are excluded — visible children of a hidden parent are NOT counted.
     ///
     /// Note: Flutter widget trees rarely exceed ~100 levels deep, so the
     /// recursive approach is safe in practice.
@@ -156,7 +158,7 @@ pub struct CreationLocation {
 /// Layout and rendering properties for a widget, from the Layout Explorer extension.
 ///
 /// Populated by calls to `ext.flutter.inspector.getLayoutExplorerNode`.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LayoutInfo {
     /// Box constraints applied to this widget
     pub constraints: Option<BoxConstraints>,
@@ -178,8 +180,15 @@ pub struct LayoutInfo {
 // BoxConstraints
 // ============================================================================
 
-/// Box constraints (min/max width and height) applied to a widget during layout.
-#[derive(Debug, Clone, PartialEq)]
+/// Box constraints describing minimum and maximum width/height.
+///
+/// # Equality
+///
+/// `PartialEq` is derived for convenience (primarily test assertions).
+/// For production comparisons involving computed values, use the
+/// epsilon-based methods ([`BoxConstraints::is_tight_width`], [`BoxConstraints::is_tight_height`]) instead
+/// of direct `==`, as floating-point arithmetic can produce imprecise results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BoxConstraints {
     /// Minimum width in logical pixels
     pub min_width: f64,
@@ -214,11 +223,8 @@ impl BoxConstraints {
         let w_part = w_part.trim();
         let h_part = h_part.trim();
 
-        let min_width = parse_constraint_part(w_part, 'w')?;
-        let (min_width, max_width) = min_width;
-
-        let min_height = parse_constraint_part(h_part, 'h')?;
-        let (min_height, max_height) = min_height;
+        let (min_width, max_width) = parse_constraint_part(w_part, 'w')?;
+        let (min_height, max_height) = parse_constraint_part(h_part, 'h')?;
 
         Some(Self {
             min_width,
@@ -274,7 +280,14 @@ fn parse_f64(s: &str) -> Option<f64> {
 // ============================================================================
 
 /// Rendered widget size in logical pixels.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// # Equality
+///
+/// `PartialEq` is derived for convenience (primarily test assertions).
+/// For production comparisons involving computed layout values, prefer
+/// epsilon-based comparisons over direct `==`, as floating-point arithmetic
+/// can produce imprecise results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WidgetSize {
     /// Width in logical pixels
     pub width: f64,

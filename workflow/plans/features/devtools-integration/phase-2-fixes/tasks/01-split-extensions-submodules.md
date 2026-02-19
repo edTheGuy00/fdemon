@@ -103,3 +103,43 @@ cargo fmt --all && cargo check --workspace && cargo test --lib && cargo clippy -
 - **Do NOT change any logic** — only move code between files and update `use` paths. Logic fixes are in tasks 02-05.
 - The `#[cfg(test)] mod tests` block can either be split per-submodule (preferred) or kept in a single `tests.rs` file. Per-submodule is cleaner because each test group only tests functions from its own submodule.
 - When moving code, pay attention to visibility: items that were `pub` in the flat file may need `pub(crate)` or `pub(super)` adjustments. Items called by other submodules must be `pub` in their submodule and re-exported from `mod.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions.rs` | DELETED — replaced by directory module |
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | NEW — re-exports, `ext` constants, shared parsing helpers, `build_extension_params`, `parse_diagnostics_node_response`, `parse_optional_diagnostics_node_response` |
+| `crates/fdemon-daemon/src/vm_service/extensions/overlays.rs` | NEW — `DebugOverlayState`, toggle functions, query/flip helpers |
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | NEW — `ObjectGroupManager`, `WidgetInspector`, widget tree RPC wrappers, diagnostics node response parsing tests |
+| `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` | NEW — layout explorer RPC wrappers, layout info parsing |
+| `crates/fdemon-daemon/src/vm_service/extensions/dumps.rs` | NEW — `DebugDumpKind`, debug dump RPC wrappers |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmServiceClient` re-export in `mod.rs`**: Added `pub(super) use super::client::VmServiceClient;` in `extensions/mod.rs` so submodules can use `super::VmServiceClient` instead of the longer `super::super::client::VmServiceClient` path.
+
+2. **Diagnostics node tests placement**: The `parse_diagnostics_node_response` and `parse_optional_diagnostics_node_response` tests are placed in `inspector.rs` (as allowed by the task: "belong with inspector semantically"). This is a semantic choice; the functions themselves live in `mod.rs`.
+
+3. **`inspector.rs` and `layout.rs` slightly exceed 500 lines**: These files are 595 and 526 lines respectively, due to test density. The task's own size estimates predicted `inspector.rs` at ~610 lines (360 prod + 250 tests). The 500-line limit is a target; all production code sections are well under 400 lines per file.
+
+4. **No logic changes**: This is a pure refactor. All function signatures, implementations, and test logic are preserved verbatim from the original `extensions.rs`.
+
+### Testing Performed
+
+- `cargo fmt --all` — PASS (clean)
+- `cargo check --workspace` — PASS (all 4 crates + binary compile cleanly)
+- `cargo test --lib --workspace` — PASS (446 tests, 0 failures, matches baseline)
+- `cargo clippy --workspace -- -D warnings` — PASS (zero warnings)
+
+### Risks/Limitations
+
+1. **`inspector.rs` and `layout.rs` over 500 lines**: Due to test density, these files are 595 and 526 lines respectively. This is consistent with the task's own estimates (inspector.rs predicted at ~610 lines). All production code is organized cleanly and well under the limit.
+
+2. **All 27 re-exports in `vm_service/mod.rs` remain unchanged**: The refactor preserves all public paths exactly as before.

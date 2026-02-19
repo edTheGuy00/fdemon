@@ -147,3 +147,34 @@ cargo fmt --all && cargo check --workspace && cargo test --lib && cargo clippy -
 - These are all low-risk, mechanical changes. They can be done quickly after task 01 establishes the new file structure.
 - The serde derive addition (Fix 3) is the most impactful — it adds serialization capability that Phase 4 may need. If any field names need `#[serde(rename = "...")]` annotations, follow the pattern used by `DiagnosticsNode` (which uses `#[serde(rename_all = "camelCase")]`). For `LayoutInfo`, `BoxConstraints`, and `WidgetSize`, snake_case field names are fine since these types are constructed locally, not deserialized from Flutter JSON.
 - Fix 2 (query_all_overlays doc) is the simplest — just changing one word. If you prefer to implement actual concurrency with `tokio::join!`, that's fine too, but it changes behavior and requires testing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | Added `EXTENSION_NOT_AVAILABLE_CODE: i32 = 113` constant; replaced magic number 113 with the constant in `is_extension_not_available` |
+| `crates/fdemon-daemon/src/vm_service/extensions/overlays.rs` | Changed `query_all_overlays` doc from "concurrently" to "sequentially" to match the actual sequential `.await` implementation |
+| `crates/fdemon-core/src/widget_tree.rs` | Added `Serialize, Deserialize` to `LayoutInfo`, `BoxConstraints`, `WidgetSize`; added PartialEq limitation doc comments to `BoxConstraints` and `WidgetSize`; simplified double binding in `BoxConstraints::parse` to single-line destructuring; clarified `visible_node_count` doc to describe hidden-parent subtree exclusion |
+
+### Notable Decisions/Tradeoffs
+
+1. **Serde field naming for `LayoutInfo`, `BoxConstraints`, `WidgetSize`**: Used default snake_case serde serialization (no `rename_all`) as the task notes specify — these types are constructed locally rather than deserialized from Flutter JSON, so camelCase mapping is not needed.
+2. **`BoxConstraints` doc links**: Used fully-qualified method paths (`BoxConstraints::is_tight_width`, `BoxConstraints::is_tight_height`) in the doc comment to produce valid rustdoc links.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed after edits)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-core --lib` - Passed (304 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (305 tests, 3 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **Serde on f64 fields**: `BoxConstraints` and `WidgetSize` now serialize `f64::INFINITY` values. The JSON specification does not support `Infinity`; serde_json will error if it encounters an infinite value during serialization. This is a known limitation for the layout explorer data path — Phase 4 should handle this if NDJSON output is needed for constrained/unconstrained widgets.

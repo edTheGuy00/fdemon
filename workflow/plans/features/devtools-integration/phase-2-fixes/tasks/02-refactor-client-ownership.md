@@ -158,3 +158,31 @@ cargo fmt --all && cargo check --workspace && cargo test --lib && cargo clippy -
 - **Zero external callers exist** — both `ObjectGroupManager::new` and `WidgetInspector::new` have no call sites outside `extensions.rs`. The refactor is isolated.
 - The `VmServiceClient` path will depend on the split done in task 01. Use whatever path convention task 01 establishes (likely a type alias or re-export in `extensions/mod.rs`).
 - This task resolves Review Issue #1 (Critical: VmServiceClient ownership) and Issue #4 (Major: unused `_client` parameter).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | Removed `client` field from `ObjectGroupManager`; changed `new` to take only `isolate_id: String`; added `client: &VmServiceClient` parameter to `create_group`, `dispose_group`, and `dispose_all`; changed `WidgetInspector::new` to take only `isolate_id: String`; updated `fetch_tree` to pass `client` to `create_group`; fixed `dispose_all` to actively use its `client` parameter (was `_client`); updated all doc comments to remove "cloned" references |
+
+### Notable Decisions/Tradeoffs
+
+1. **No changes to `extensions/mod.rs`**: The re-export `pub(super) use super::client::VmServiceClient` established by task 01 is unchanged. The `VmServiceClient` type alias is already available in `inspector.rs` via `use super::VmServiceClient`, so no additional re-export changes were needed.
+2. **`dispose_group` signature order**: The `client` parameter is placed before `group_name` to match the task spec and keep consistency with `create_group` and `dispose_all`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no changes needed)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon --lib` - Passed (305 tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: Zero external callers of `ObjectGroupManager::new` or `WidgetInspector::new` exist outside `inspector.rs`. The refactor is fully isolated to that file.

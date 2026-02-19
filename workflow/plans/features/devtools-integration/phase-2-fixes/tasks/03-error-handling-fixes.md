@@ -203,3 +203,43 @@ cargo fmt --all && cargo check --workspace && cargo test --lib && cargo clippy -
 - Fix 1 and Fix 2 are in `inspector.rs`; Fix 3 is in `layout.rs`; Fix 4 is in `mod.rs`. After the task-01 split, these are separate files with no contention.
 - If task 02 (client ownership refactor) runs concurrently, the `create_group` signature may differ. Coordinate with task 02 on the final `create_group` method signature.
 - The `matches!(&e, Error::Protocol(_))` check in Fix 1 may need adjustment based on the actual `Error` enum variants. Check `fdemon-core/src/error.rs` for the exact variant names.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | Fix 1: Narrow fallback to `Error::Protocol { .. }` only; Fix 2: Log dispose failure with `tracing::warn!` and proceed; added 3 new unit tests for ObjectGroupManager state |
+| `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` | Fix 3: Convert silent `if let Ok` to `match` with `tracing::warn!` on failure; added 2 new unit tests |
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | Fix 4: `parse_optional_diagnostics_node_response` now calls `serde_json::from_value(node_value.clone())` directly instead of re-delegating to `parse_diagnostics_node_response(value)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Error::Protocol { .. }` pattern**: `Error::Protocol` is a struct variant (not a tuple variant), so `matches!(&e, Error::Protocol(_))` is a compile error. Used `matches!(&e, Error::Protocol { .. })` as the compiler suggested. Verified against `crates/fdemon-core/src/error.rs`.
+
+2. **`create_group` dispose-failure test strategy**: Since `VmServiceClient` requires a live WebSocket and cannot be instantiated in unit tests, the state-transition test was written as a structural/documentation test verifying that `group_counter` and `active_group` assignments are unconditional after the (now non-propagating) dispose block. The behavioral change is enforced by the code structure.
+
+3. **`extract_layout_tree` warning test strategy**: The warning path fires when `serde_json::from_value::<DiagnosticsNode>(child_json)` fails in the children loop. Since serde recursively validates embedded children during root parse, having children with missing `description` would also fail the root parse (before reaching the loop). The test confirms the scenario that triggers the warning (a non-object JSON value fails DiagnosticsNode deserialization) and validates correct behavior on valid inputs.
+
+4. **Fix 4 consistency**: `parse_optional_diagnostics_node_response` previously extracted `node_value` (with `"result"` wrapper stripped) but then passed the original `value` (with wrapper) to `parse_diagnostics_node_response`, causing double extraction. Fixed to use `node_value` directly via `serde_json::from_value(node_value.clone())`, eliminating the redundant wrapper handling.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (1.32s)
+- `cargo test -p fdemon-core --lib` - Passed (304 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (310 tests, 3 new tests added)
+- `cargo test -p fdemon-app --lib` - Passed (767 tests)
+- `cargo test -p fdemon-tui --lib` - Passed (446 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Warning path coverage for `extract_layout_tree`**: The `tracing::warn!` code path is present and correct but is exercised in the test only indirectly (by confirming that the class of input that triggers it causes serde failure). Direct testing requires a scenario where children in the raw JSON array fail individually but the root still parses — which is an edge case given serde's recursive validation.
+
+2. **`create_group` integration test**: The dispose-failure graceful-proceed path (the key behavioral change in Fix 2) is not covered by an async integration test due to `VmServiceClient` requiring a real WebSocket. Any future addition of a mock client interface would enable a more direct test of this path.

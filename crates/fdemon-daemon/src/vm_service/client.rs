@@ -159,7 +159,7 @@ impl VmServiceClient {
         let ws_stream = connect_ws(ws_uri).await?;
 
         {
-            let mut guard = state.write().unwrap();
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Connected;
         }
 
@@ -224,7 +224,7 @@ impl VmServiceClient {
 
     /// Return the current connection state.
     pub fn connection_state(&self) -> ConnectionState {
-        self.state.read().unwrap().clone()
+        self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     /// Gracefully close the WebSocket connection.
@@ -240,7 +240,7 @@ impl VmServiceClient {
 
     /// Return `true` if the client is currently connected.
     pub fn is_connected(&self) -> bool {
-        *self.state.read().unwrap() == ConnectionState::Connected
+        *self.state.read().unwrap_or_else(|e| e.into_inner()) == ConnectionState::Connected
     }
 
     // ── VM introspection methods ──────────────────────────────────────────
@@ -421,7 +421,7 @@ async fn run_client_task(
 
     if !reconnect {
         // Either we received a Disconnect command or the cmd channel is closed.
-        let mut guard = state.write().unwrap();
+        let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
         *guard = ConnectionState::Disconnected;
         return;
     }
@@ -434,13 +434,13 @@ async fn run_client_task(
                 "VM Service: exceeded {} reconnection attempts, giving up",
                 MAX_RECONNECT_ATTEMPTS
             );
-            let mut guard = state.write().unwrap();
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Disconnected;
             break;
         }
 
         {
-            let mut guard = state.write().unwrap();
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Reconnecting { attempt };
         }
 
@@ -454,7 +454,7 @@ async fn run_client_task(
         // Check if the cmd channel has closed while we were sleeping — the
         // client was dropped, no point reconnecting.
         if cmd_rx.is_closed() {
-            let mut guard = state.write().unwrap();
+            let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Disconnected;
             break;
         }
@@ -463,7 +463,7 @@ async fn run_client_task(
             Ok(ws_stream) => {
                 info!("VM Service: reconnected (attempt {})", attempt);
                 {
-                    let mut guard = state.write().unwrap();
+                    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     *guard = ConnectionState::Connected;
                 }
 
@@ -480,7 +480,7 @@ async fn run_client_task(
                 let reconnect =
                     run_io_loop(ws_stream, &mut cmd_rx, &event_tx, &mut tracker, true).await;
                 if !reconnect {
-                    let mut guard = state.write().unwrap();
+                    let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     *guard = ConnectionState::Disconnected;
                     break;
                 }
