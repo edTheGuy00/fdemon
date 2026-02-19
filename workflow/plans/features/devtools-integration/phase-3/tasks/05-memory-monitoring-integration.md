@@ -429,3 +429,57 @@ mod tests {
 - **The `VmServiceConnected` handler is modified** to return `UpdateAction::StartPerformanceMonitoring`. This means the existing handler's return value changes. If it already returns an action, chain them via follow-up message.
 - **Shutdown coordination** follows the same pattern as the VM Service forwarding task (`watch::channel(false)` + `Arc` wrapper for Message clone). The `perf_shutdown_tx` is stored in `SessionHandle` alongside the existing `vm_shutdown_tx`.
 - **Transient polling errors** (e.g., during hot reload when the isolate is paused) should be logged at debug level and silently skipped. The polling loop continues and the next tick will succeed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session.rs` | Added `PerformanceState` struct with ring buffers and constants; added `performance` field to `Session`; added `perf_shutdown_tx` to `SessionHandle`; updated `Session::new()` and `SessionHandle::new()`; added 3 session-level tests |
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceMemorySnapshot`, `VmServiceGcEvent`, `VmServicePerformanceMonitoringStarted` message variants |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `StartPerformanceMonitoring { session_id, handle: Option<VmRequestHandle> }` to `UpdateAction` enum |
+| `crates/fdemon-app/src/handler/update.rs` | Modified `VmServiceConnected` handler to reset performance state and return `StartPerformanceMonitoring` action; modified `VmServiceDisconnected` to signal perf shutdown and clear state; added handlers for 3 new message variants |
+| `crates/fdemon-app/src/actions.rs` | Added `PERF_POLL_INTERVAL` constant; imported `parse_gc_event`, `VmRequestHandle`; added `spawn_performance_polling()` function; handled `StartPerformanceMonitoring` in `handle_action`; updated `forward_vm_events` to parse and forward GC events |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_start_performance_monitoring()` to extract `vm_request_handle` from session and populate the `handle` field before dispatch; wrapped `handle_action` call with `Option` handling |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `test_vm_service_connected_sets_flag` and `test_vm_service_connected_ignores_unknown_session` to expect new `StartPerformanceMonitoring` action; added 8 new performance handler tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two-phase `UpdateAction` hydration**: The `handler::update()` function cannot access `SessionHandle.vm_request_handle` because it only has `&mut AppState`. Rather than restructuring the TEA architecture, `StartPerformanceMonitoring.handle` is `Option<VmRequestHandle>` — `None` when returned from the handler, populated by `process.rs` before dispatch. This keeps the TEA handler pure and avoids leaking infrastructure concerns into the update function.
+
+2. **`VmServiceConnected` now returns an action**: The existing tests asserted `action.is_none()`. These were updated to expect `StartPerformanceMonitoring`. The action is discarded by `process.rs` if `vm_request_handle` is not yet available (race condition guard).
+
+3. **GC events in `forward_vm_events` use `continue`**: The existing `parse_log_record` branch didn't use `continue`, but to properly short-circuit the GC branch we added `continue` to the `parse_log_record` branch as well. This is consistent and avoids double-processing of events.
+
+4. **`spawn_performance_polling` returns `JoinHandle`**: Unlike the task spec (which returns `()`) we return the handle for future cleanup integration, matching the pattern of `spawn_vm_service_connection`. The handle is currently discarded at the call site.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed (0 errors)
+- `cargo test --lib --workspace` — Passed (783 fdemon-app, 446 fdemon-tui, 334 fdemon-daemon, 314 fdemon-core — all pass)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+New tests added:
+- `session::tests::test_performance_state_default`
+- `session::tests::test_session_has_performance_field`
+- `session::tests::test_performance_state_memory_ring_buffer_capacity`
+- `handler::tests::test_memory_snapshot_handler`
+- `handler::tests::test_gc_event_handler`
+- `handler::tests::test_vm_connected_starts_monitoring`
+- `handler::tests::test_vm_connected_resets_performance_state`
+- `handler::tests::test_vm_disconnected_stops_monitoring`
+- `handler::tests::test_performance_monitoring_started_stores_shutdown_tx`
+- `handler::tests::test_memory_snapshot_ignored_for_unknown_session`
+- `handler::tests::test_gc_event_ignored_for_unknown_session`
+
+### Risks/Limitations
+
+1. **Polling task not tracked in `session_tasks`**: The `spawn_performance_polling` task handle is discarded. If the engine shuts down abruptly the polling loop may run briefly past shutdown. Mitigation: the loop exits when `msg_tx` closes (detects engine shutdown), and the `perf_shutdown_tx` signal is sent by `VmServiceDisconnected` handler. A future improvement would track the handle in `session_tasks`.
+
+2. **GC stream subscription**: GC events are only received if the VM Service `GC` stream is subscribed. Current `subscribe_flutter_streams()` subscribes to Extension and Logging streams. The GC stream subscription is handled in Task 03; this task only adds the parsing in the forwarding loop for when it IS subscribed.

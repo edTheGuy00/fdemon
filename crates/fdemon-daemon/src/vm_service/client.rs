@@ -47,6 +47,141 @@ use super::protocol::{
 };
 
 // ---------------------------------------------------------------------------
+// VmRequestHandle
+// ---------------------------------------------------------------------------
+
+/// A clonable handle for making VM Service RPC requests.
+///
+/// This shares the underlying WebSocket connection with the [`VmServiceClient`]
+/// that created it. Multiple handles can make concurrent requests through
+/// the same background WebSocket task.
+///
+/// The handle becomes inoperable when the [`VmServiceClient`] (or its background
+/// task) is dropped — requests will return [`Error::ChannelClosed`].
+#[derive(Clone)]
+pub struct VmRequestHandle {
+    cmd_tx: mpsc::Sender<ClientCommand>,
+    state: Arc<std::sync::RwLock<ConnectionState>>,
+    /// Cached main isolate ID. Cleared by the background task on reconnection.
+    isolate_id_cache: Arc<Mutex<Option<String>>>,
+}
+
+impl std::fmt::Debug for VmRequestHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let state = self.state.read().unwrap_or_else(|e| e.into_inner()).clone();
+        f.debug_struct("VmRequestHandle")
+            .field("connection_state", &state)
+            .finish()
+    }
+}
+
+impl VmRequestHandle {
+    /// Send a JSON-RPC request and wait for the response.
+    ///
+    /// Blocks (awaits) until the VM Service replies or the connection is
+    /// lost.  Returns the `result` field of a successful response, or an
+    /// error for JSON-RPC errors and transport failures.
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ChannelClosed`] if the background task has exited.
+    /// - [`Error::Protocol`] if the VM Service returned a JSON-RPC error.
+    /// - [`Error::Daemon`] if the response arrived without a `result` field.
+    pub async fn request(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        self.cmd_tx
+            .send(ClientCommand::SendRequest {
+                method: method.to_string(),
+                params,
+                response_tx,
+            })
+            .await
+            .map_err(|_| Error::ChannelClosed)?;
+
+        response_rx.await.map_err(|_| Error::ChannelClosed)?
+    }
+
+    /// Return the current connection state.
+    pub fn connection_state(&self) -> ConnectionState {
+        self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// Return `true` if the client is currently connected.
+    pub fn is_connected(&self) -> bool {
+        *self.state.read().unwrap_or_else(|e| e.into_inner()) == ConnectionState::Connected
+    }
+
+    /// Get the main isolate ID, discovering it if not yet cached.
+    ///
+    /// The isolate ID is cached after the first successful discovery. The
+    /// cache is invalidated automatically when the WebSocket reconnects, so
+    /// this method will re-discover on the next call after a reconnection.
+    ///
+    /// # Returns
+    ///
+    /// The isolate ID string (e.g., `"isolates/6010531716406367"`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the VM Service call to `getVM` fails or no
+    /// non-system isolate is found.
+    pub async fn main_isolate_id(&self) -> Result<String> {
+        // Fast path: return from cache if available.
+        {
+            let guard = self.isolate_id_cache.lock().await;
+            if let Some(ref id) = *guard {
+                return Ok(id.clone());
+            }
+        }
+
+        // Slow path: call getVM and find the main isolate.
+        let result = self.request("getVM", None).await?;
+        let vm: VmInfo = serde_json::from_value(result)
+            .map_err(|e| Error::vm_service(format!("parse getVM: {e}")))?;
+        let isolate = vm
+            .isolates
+            .iter()
+            .find(|iso| !iso.is_system_isolate.unwrap_or(false))
+            .ok_or_else(|| Error::vm_service("no non-system isolate found"))?;
+        let id = isolate.id.clone();
+
+        {
+            let mut guard = self.isolate_id_cache.lock().await;
+            *guard = Some(id.clone());
+        }
+
+        debug!("VM Service: cached main isolate ID: {}", id);
+        Ok(id)
+    }
+
+    /// Call a Flutter service extension method.
+    ///
+    /// Automatically includes `isolateId` in the params map. All additional
+    /// parameter values must be strings (VM Service protocol requirement).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::ChannelClosed`] if the background task has exited.
+    /// - [`Error::Protocol`] if the VM Service returned a JSON-RPC error,
+    ///   including error code `-32601` when the extension is not available.
+    /// - [`Error::Daemon`] if the response arrived without a `result` field.
+    pub async fn call_extension(
+        &self,
+        method: &str,
+        isolate_id: &str,
+        args: Option<HashMap<String, String>>,
+    ) -> Result<serde_json::Value> {
+        let params = build_extension_params(isolate_id, args);
+        self.request(method, Some(params)).await
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
@@ -67,8 +202,8 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// Stream IDs that the background task re-subscribes to after a reconnection.
 /// A fresh VM Service connection has no active subscriptions, so these must be
-/// re-established to keep receiving Extension and Logging events.
-const RESUBSCRIBE_STREAMS: &[&str] = &["Extension", "Logging"];
+/// re-established to keep receiving Extension, Logging, and GC events.
+const RESUBSCRIBE_STREAMS: &[&str] = &["Extension", "Logging", "GC"];
 
 /// How often to run stale request cleanup in the I/O loop.
 const STALE_REQUEST_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
@@ -130,12 +265,15 @@ type WsStream = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
 /// The client spawns a background Tokio task that owns the WebSocket
 /// connection. The task cleans up automatically when `VmServiceClient` is
 /// dropped (the command channel closes, which signals the task to exit).
+///
+/// Use [`VmServiceClient::request_handle`] to extract a clonable
+/// [`VmRequestHandle`] that can be shared with background tasks for
+/// on-demand RPC calls without blocking the event-forwarding loop.
 pub struct VmServiceClient {
-    cmd_tx: mpsc::Sender<ClientCommand>,
+    /// Shared request handle — owns the cmd_tx, state, and isolate cache.
+    handle: VmRequestHandle,
+    /// Stream-event receiver (not clonable; owned exclusively by this client).
     event_rx: mpsc::Receiver<VmServiceEvent>,
-    state: Arc<std::sync::RwLock<ConnectionState>>,
-    /// Cached main isolate ID. Cleared by the background task on reconnection.
-    isolate_id_cache: Arc<Mutex<Option<String>>>,
 }
 
 impl VmServiceClient {
@@ -177,18 +315,30 @@ impl VmServiceClient {
         ));
 
         Ok(Self {
-            cmd_tx,
+            handle: VmRequestHandle {
+                cmd_tx,
+                state,
+                isolate_id_cache,
+            },
             event_rx,
-            state,
-            isolate_id_cache,
         })
+    }
+
+    /// Create a clonable request handle that shares this client's connection.
+    ///
+    /// The handle can make RPC requests independently of the event receiver.
+    /// Multiple handles can coexist; they all route through the same background
+    /// WebSocket task.
+    ///
+    /// The handle becomes inoperable (returns [`Error::ChannelClosed`]) when
+    /// this client (or the underlying background task) is dropped.
+    pub fn request_handle(&self) -> VmRequestHandle {
+        self.handle.clone()
     }
 
     /// Send a JSON-RPC request and wait for the response.
     ///
-    /// Blocks (awaits) until the VM Service replies or the connection is
-    /// lost.  Returns the `result` field of a successful response, or an
-    /// error for JSON-RPC errors and transport failures.
+    /// Delegates to the internal [`VmRequestHandle`].
     ///
     /// # Errors
     ///
@@ -200,18 +350,7 @@ impl VmServiceClient {
         method: &str,
         params: Option<serde_json::Value>,
     ) -> Result<serde_json::Value> {
-        let (response_tx, response_rx) = oneshot::channel();
-
-        self.cmd_tx
-            .send(ClientCommand::SendRequest {
-                method: method.to_string(),
-                params,
-                response_tx,
-            })
-            .await
-            .map_err(|_| Error::ChannelClosed)?;
-
-        response_rx.await.map_err(|_| Error::ChannelClosed)?
+        self.handle.request(method, params).await
     }
 
     /// Return a mutable reference to the stream-event receiver.
@@ -224,7 +363,7 @@ impl VmServiceClient {
 
     /// Return the current connection state.
     pub fn connection_state(&self) -> ConnectionState {
-        self.state.read().unwrap_or_else(|e| e.into_inner()).clone()
+        self.handle.connection_state()
     }
 
     /// Gracefully close the WebSocket connection.
@@ -235,12 +374,12 @@ impl VmServiceClient {
     pub async fn disconnect(&self) {
         // Ignore the send error — if the channel is already closed the task
         // has already exited.
-        let _ = self.cmd_tx.send(ClientCommand::Disconnect).await;
+        let _ = self.handle.cmd_tx.send(ClientCommand::Disconnect).await;
     }
 
     /// Return `true` if the client is currently connected.
     pub fn is_connected(&self) -> bool {
-        *self.state.read().unwrap_or_else(|e| e.into_inner()) == ConnectionState::Connected
+        self.handle.is_connected()
     }
 
     // ── VM introspection methods ──────────────────────────────────────────
@@ -317,7 +456,7 @@ impl VmServiceClient {
         Ok(main_isolate.clone())
     }
 
-    /// Subscribe to Flutter streams (Extension + Logging).
+    /// Subscribe to Flutter streams (Extension, Logging, and GC).
     ///
     /// Returns a list of human-readable error descriptions for any streams
     /// that could not be subscribed (non-fatal — the app continues without
@@ -335,6 +474,11 @@ impl VmServiceClient {
             errors.push(format!("Logging stream: {e}"));
         }
 
+        // GC stream: garbage collection events for memory monitoring
+        if let Err(e) = self.stream_listen("GC").await {
+            errors.push(format!("GC stream: {e}"));
+        }
+
         errors
     }
 
@@ -342,8 +486,7 @@ impl VmServiceClient {
 
     /// Call a Flutter service extension method.
     ///
-    /// Automatically includes `isolateId` in the params map. All additional
-    /// parameter values must be strings (VM Service protocol requirement).
+    /// Delegates to the internal [`VmRequestHandle`].
     ///
     /// # Errors
     ///
@@ -357,44 +500,19 @@ impl VmServiceClient {
         isolate_id: &str,
         args: Option<HashMap<String, String>>,
     ) -> Result<serde_json::Value> {
-        let params = build_extension_params(isolate_id, args);
-        self.request(method, Some(params)).await
+        self.handle.call_extension(method, isolate_id, args).await
     }
 
     /// Get the main isolate ID, discovering it if not yet cached.
     ///
-    /// The isolate ID is cached after the first successful discovery. The
-    /// cache is invalidated automatically when the WebSocket reconnects, so
-    /// this method will re-discover on the next call after a reconnection.
-    ///
-    /// # Returns
-    ///
-    /// The isolate ID string (e.g., `"isolates/6010531716406367"`).
+    /// Delegates to the internal [`VmRequestHandle`].
     ///
     /// # Errors
     ///
     /// Returns an error if the VM Service call to `getVM` fails or no
     /// non-system isolate is found.
     pub async fn main_isolate_id(&self) -> Result<String> {
-        // Fast path: return from cache if available.
-        {
-            let guard = self.isolate_id_cache.lock().await;
-            if let Some(ref id) = *guard {
-                return Ok(id.clone());
-            }
-        }
-
-        // Slow path: discover the main isolate and cache the result.
-        let isolate = self.discover_main_isolate().await?;
-        let id = isolate.id;
-
-        {
-            let mut guard = self.isolate_id_cache.lock().await;
-            *guard = Some(id.clone());
-        }
-
-        debug!("VM Service: cached main isolate ID: {}", id);
-        Ok(id)
+        self.handle.main_isolate_id().await
     }
 }
 
@@ -1075,5 +1193,78 @@ mod tests {
 
         assert_eq!(val["method"], "streamListen");
         assert_eq!(val["params"]["streamId"], "Extension");
+    }
+
+    // -- VmRequestHandle tests -----------------------------------------------
+
+    #[test]
+    fn test_request_handle_is_clone() {
+        // VmRequestHandle must be Clone for Message derive
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<VmRequestHandle>();
+    }
+
+    #[test]
+    fn test_request_handle_is_debug() {
+        // VmRequestHandle must be Debug for Message derive
+        fn assert_debug<T: std::fmt::Debug>() {}
+        assert_debug::<VmRequestHandle>();
+    }
+
+    #[tokio::test]
+    async fn test_handle_channel_closed_after_drop() {
+        // Create a mock channel and handle
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientCommand>(1);
+        let handle = VmRequestHandle {
+            cmd_tx,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+        };
+        // Drop the receiver to simulate disconnection
+        drop(cmd_rx);
+        let result = handle.request("getVM", None).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_request_handle_debug_shows_state() {
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+        };
+        let debug_str = format!("{:?}", handle);
+        assert!(debug_str.contains("VmRequestHandle"));
+        assert!(debug_str.contains("Connected"));
+    }
+
+    #[test]
+    fn test_request_handle_clone_shares_state() {
+        let state = Arc::new(std::sync::RwLock::new(ConnectionState::Connected));
+        let handle = VmRequestHandle {
+            cmd_tx: mpsc::channel::<ClientCommand>(1).0,
+            state: Arc::clone(&state),
+            isolate_id_cache: Arc::new(Mutex::new(None)),
+        };
+        let cloned = handle.clone();
+
+        // Both handles see the same state
+        assert!(handle.is_connected());
+        assert!(cloned.is_connected());
+
+        // Mutate via the Arc and both see the update
+        {
+            let mut guard = state.write().unwrap();
+            *guard = ConnectionState::Disconnected;
+        }
+        assert!(!handle.is_connected());
+        assert!(!cloned.is_connected());
+    }
+
+    #[test]
+    fn test_request_handle_is_send_sync() {
+        // VmRequestHandle must be Send + Sync for use in background tasks
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<VmRequestHandle>();
     }
 }

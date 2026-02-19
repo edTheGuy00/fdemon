@@ -1118,6 +1118,20 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // VM Service Messages (Phase 1 DevTools Integration)
         // ─────────────────────────────────────────────────────────
 
+        // Store the request handle in the session handle so that background tasks
+        // can make on-demand RPC calls through the same WebSocket connection.
+        // This message arrives before VmServiceAttached and VmServiceConnected.
+        Message::VmServiceHandleReady { session_id, handle } => {
+            if let Some(session_handle) = state.session_manager.get_mut(session_id) {
+                session_handle.vm_request_handle = Some(handle);
+                tracing::debug!(
+                    "VM Service request handle stored for session {}",
+                    session_id
+                );
+            }
+            UpdateResult::none()
+        }
+
         // Store the shutdown sender in the session handle.
         // This message arrives before VmServiceConnected to ensure the session
         // can signal shutdown at any time after the channel is created.
@@ -1142,8 +1156,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     LogSource::App,
                     "VM Service connected — enhanced logging active",
                 ));
+                // Reset performance state on (re)connection so stale data from
+                // a previous session or hot-restart is not shown in the new one.
+                handle.session.performance = crate::session::PerformanceState::default();
             }
-            UpdateResult::none()
+            // Start performance monitoring for this session.
+            // process.rs will hydrate `handle` with the VmRequestHandle from the
+            // session before dispatching the action to handle_action.
+            UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+            })
         }
 
         Message::VmServiceConnectionFailed { session_id, error } => {
@@ -1158,6 +1181,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::VmServiceDisconnected { session_id } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.vm_connected = false;
+                // Clear the request handle — the underlying channel is now closed.
+                // Making this explicit signals intent even though the handle itself
+                // would return Error::ChannelClosed on any subsequent call.
+                handle.vm_request_handle = None;
+                // Signal the performance polling task to stop cleanly.
+                if let Some(ref tx) = handle.perf_shutdown_tx {
+                    let _ = tx.send(true);
+                }
+                handle.perf_shutdown_tx = None;
+                handle.session.performance.monitoring_active = false;
             }
             UpdateResult::none()
         }
@@ -1182,6 +1215,57 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if !is_duplicate_vm_log(&handle.session.logs, &log_entry, DEDUP_THRESHOLD_MS) {
                     handle.session.add_log(log_entry);
                 }
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // VM Service Performance Messages (Phase 3, Task 05)
+        // ─────────────────────────────────────────────────────────
+        Message::VmServiceMemorySnapshot { session_id, memory } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.performance.memory_history.push(memory);
+                handle.session.performance.monitoring_active = true;
+                // Recompute stats on every memory poll cycle (2-second backstop
+                // for when frame events are sparse — e.g. idle or backgrounded).
+                handle.session.performance.recompute_stats();
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServiceGcEvent {
+            session_id,
+            gc_event,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.performance.gc_history.push(gc_event);
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // VM Service Frame Timing Messages (Phase 3, Task 06)
+        // ─────────────────────────────────────────────────────────
+        Message::VmServiceFrameTiming { session_id, timing } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.performance.frame_history.push(timing);
+                // Recompute stats every STATS_RECOMPUTE_INTERVAL frames to
+                // avoid per-frame allocation overhead. At 60 FPS this produces
+                // ~6 stats updates/second — fast enough for a ~30 FPS TUI.
+                let len = handle.session.performance.frame_history.len();
+                if len % crate::session::STATS_RECOMPUTE_INTERVAL == 0 {
+                    handle.session.performance.recompute_stats();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        Message::VmServicePerformanceMonitoringStarted {
+            session_id,
+            perf_shutdown_tx,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.perf_shutdown_tx = Some(perf_shutdown_tx);
             }
             UpdateResult::none()
         }

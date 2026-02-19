@@ -3158,9 +3158,13 @@ fn test_vm_service_connected_sets_flag() {
 
     let result = update(&mut state, Message::VmServiceConnected { session_id });
 
+    // VmServiceConnected now triggers StartPerformanceMonitoring
     assert!(
-        result.action.is_none(),
-        "VmServiceConnected should produce no action"
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceConnected should trigger StartPerformanceMonitoring"
     );
     let handle = state.session_manager.get(session_id).unwrap();
     assert!(
@@ -3173,10 +3177,14 @@ fn test_vm_service_connected_sets_flag() {
 fn test_vm_service_connected_ignores_unknown_session() {
     let mut state = AppState::new();
 
-    // Should not panic when session doesn't exist
+    // Should not panic when session doesn't exist, but still returns the action
     let result = update(&mut state, Message::VmServiceConnected { session_id: 9999 });
 
-    assert!(result.action.is_none());
+    // Action is still returned even if session not found (process.rs handles discarding)
+    assert!(matches!(
+        result.action,
+        Some(UpdateAction::StartPerformanceMonitoring { .. })
+    ));
 }
 
 #[test]
@@ -3185,7 +3193,7 @@ fn test_vm_service_disconnected_clears_flag() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    // First connect
+    // First connect (now returns StartPerformanceMonitoring action)
     update(&mut state, Message::VmServiceConnected { session_id });
     {
         let handle = state.session_manager.get(session_id).unwrap();
@@ -3410,5 +3418,438 @@ fn test_vm_service_attached_stores_shutdown_tx() {
             .vm_shutdown_tx
             .is_some(),
         "vm_shutdown_tx should be stored after VmServiceAttached"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// VM Service Performance Tests (Phase 3, Task 05)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_memory_snapshot_handler() {
+    use fdemon_core::performance::MemoryUsage;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let memory = MemoryUsage {
+        heap_usage: 50_000_000,
+        heap_capacity: 100_000_000,
+        external_usage: 10_000_000,
+        timestamp: chrono::Local::now(),
+    };
+
+    let msg = Message::VmServiceMemorySnapshot {
+        session_id,
+        memory: memory.clone(),
+    };
+    let result = update(&mut state, msg);
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceMemorySnapshot should have no action"
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(perf.memory_history.len(), 1);
+    assert_eq!(perf.memory_history.latest().unwrap().heap_usage, 50_000_000);
+    assert!(
+        perf.monitoring_active,
+        "monitoring_active should be set to true"
+    );
+}
+
+#[test]
+fn test_gc_event_handler() {
+    use fdemon_core::performance::GcEvent;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let gc = GcEvent {
+        gc_type: "Scavenge".into(),
+        reason: Some("allocation".into()),
+        isolate_id: None,
+        timestamp: chrono::Local::now(),
+    };
+
+    let msg = Message::VmServiceGcEvent {
+        session_id,
+        gc_event: gc,
+    };
+    let result = update(&mut state, msg);
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceGcEvent should have no action"
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(perf.gc_history.len(), 1);
+    assert_eq!(perf.gc_history.latest().unwrap().gc_type, "Scavenge");
+}
+
+#[test]
+fn test_vm_connected_starts_monitoring() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let msg = Message::VmServiceConnected { session_id };
+    let result = update(&mut state, msg);
+
+    // Should trigger StartPerformanceMonitoring action
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceConnected should trigger StartPerformanceMonitoring"
+    );
+}
+
+#[test]
+fn test_vm_connected_resets_performance_state() {
+    use fdemon_core::performance::MemoryUsage;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some performance data to simulate stale data from previous connection
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.performance.memory_history.push(MemoryUsage {
+            heap_usage: 1_000_000,
+            heap_capacity: 2_000_000,
+            external_usage: 0,
+            timestamp: chrono::Local::now(),
+        });
+        handle.session.performance.monitoring_active = true;
+    }
+
+    // Reconnect — should reset performance state
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert!(
+        perf.memory_history.is_empty(),
+        "memory_history should be cleared on reconnect"
+    );
+    assert!(
+        !perf.monitoring_active,
+        "monitoring_active should be reset on reconnect"
+    );
+}
+
+#[test]
+fn test_vm_disconnected_stops_monitoring() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Simulate monitoring being active
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.performance.monitoring_active = true;
+    }
+
+    let msg = Message::VmServiceDisconnected { session_id };
+    update(&mut state, msg);
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.performance.monitoring_active,
+        "monitoring_active should be false after VmServiceDisconnected"
+    );
+    assert!(
+        handle.perf_shutdown_tx.is_none(),
+        "perf_shutdown_tx should be cleared after VmServiceDisconnected"
+    );
+}
+
+#[test]
+fn test_performance_monitoring_started_stores_shutdown_tx() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Verify no perf_shutdown_tx initially
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .perf_shutdown_tx
+            .is_none(),
+        "perf_shutdown_tx should be None initially"
+    );
+
+    // Create a watch channel and send VmServicePerformanceMonitoringStarted
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    let perf_shutdown_tx = std::sync::Arc::new(tx);
+
+    let result = update(
+        &mut state,
+        Message::VmServicePerformanceMonitoringStarted {
+            session_id,
+            perf_shutdown_tx,
+        },
+    );
+
+    assert!(result.action.is_none());
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .perf_shutdown_tx
+            .is_some(),
+        "perf_shutdown_tx should be stored after VmServicePerformanceMonitoringStarted"
+    );
+}
+
+#[test]
+fn test_memory_snapshot_ignored_for_unknown_session() {
+    use fdemon_core::performance::MemoryUsage;
+
+    let mut state = AppState::new();
+
+    // Should not panic for unknown session
+    let result = update(
+        &mut state,
+        Message::VmServiceMemorySnapshot {
+            session_id: 9999,
+            memory: MemoryUsage {
+                heap_usage: 1000,
+                heap_capacity: 2000,
+                external_usage: 0,
+                timestamp: chrono::Local::now(),
+            },
+        },
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_gc_event_ignored_for_unknown_session() {
+    use fdemon_core::performance::GcEvent;
+
+    let mut state = AppState::new();
+
+    // Should not panic for unknown session
+    let result = update(
+        &mut state,
+        Message::VmServiceGcEvent {
+            session_id: 9999,
+            gc_event: GcEvent {
+                gc_type: "Scavenge".into(),
+                reason: None,
+                isolate_id: None,
+                timestamp: chrono::Local::now(),
+            },
+        },
+    );
+    assert!(result.action.is_none());
+}
+
+// ─────────────────────────────────────────────────────────
+// VM Service Frame Timing Tests (Phase 3, Task 06)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_frame_timing_handler() {
+    use fdemon_core::performance::FrameTiming;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let timing = FrameTiming {
+        number: 1,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+    };
+
+    let msg = Message::VmServiceFrameTiming { session_id, timing };
+    let result = update(&mut state, msg);
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceFrameTiming should have no action"
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(perf.frame_history.len(), 1);
+    assert_eq!(perf.frame_history.latest().unwrap().elapsed_micros, 10_000);
+}
+
+#[test]
+fn test_frame_timing_stats_recomputed_every_interval() {
+    use fdemon_core::performance::FrameTiming;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Push STATS_RECOMPUTE_INTERVAL - 1 frames: stats should still be default
+    for i in 0..9 {
+        update(
+            &mut state,
+            Message::VmServiceFrameTiming {
+                session_id,
+                timing: FrameTiming {
+                    number: i,
+                    build_micros: 5_000,
+                    raster_micros: 5_000,
+                    elapsed_micros: 10_000,
+                    timestamp: chrono::Local::now(),
+                },
+            },
+        );
+    }
+
+    // Stats not yet recomputed (interval is 10)
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.stats.total_frames, 0,
+        "stats should not be recomputed yet"
+    );
+
+    // Push the 10th frame — triggers recomputation
+    update(
+        &mut state,
+        Message::VmServiceFrameTiming {
+            session_id,
+            timing: FrameTiming {
+                number: 9,
+                build_micros: 5_000,
+                raster_micros: 5_000,
+                elapsed_micros: 10_000,
+                timestamp: chrono::Local::now(),
+            },
+        },
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.stats.total_frames, 10,
+        "stats should be recomputed after 10 frames"
+    );
+}
+
+#[test]
+fn test_frame_timing_ignored_for_unknown_session() {
+    use fdemon_core::performance::FrameTiming;
+
+    let mut state = AppState::new();
+
+    // Should not panic for unknown session
+    let result = update(
+        &mut state,
+        Message::VmServiceFrameTiming {
+            session_id: 9999,
+            timing: FrameTiming {
+                number: 1,
+                build_micros: 5_000,
+                raster_micros: 5_000,
+                elapsed_micros: 10_000,
+                timestamp: chrono::Local::now(),
+            },
+        },
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_memory_snapshot_triggers_stats_recompute() {
+    use fdemon_core::performance::{FrameTiming, MemoryUsage};
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Add some frames directly (without triggering interval recompute)
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        for i in 0..5 {
+            handle.session.performance.frame_history.push(FrameTiming {
+                number: i,
+                build_micros: 5_000,
+                raster_micros: 5_000,
+                elapsed_micros: 10_000,
+                timestamp: chrono::Local::now(),
+            });
+        }
+    }
+
+    // Stats are still default at this point (no recompute triggered yet)
+    {
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(perf.stats.total_frames, 0);
+    }
+
+    // Send a memory snapshot — this should trigger recompute
+    update(
+        &mut state,
+        Message::VmServiceMemorySnapshot {
+            session_id,
+            memory: MemoryUsage {
+                heap_usage: 50_000_000,
+                heap_capacity: 100_000_000,
+                external_usage: 0,
+                timestamp: chrono::Local::now(),
+            },
+        },
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.stats.total_frames, 5,
+        "memory snapshot should trigger stats recompute"
     );
 }

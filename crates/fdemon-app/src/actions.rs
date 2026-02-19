@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
 use tracing::{error, info, warn};
@@ -15,11 +16,14 @@ use crate::UpdateAction;
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{
     vm_service::{
-        flutter_error_to_log_entry, parse_flutter_error, parse_log_record, vm_log_to_log_entry,
-        VmServiceClient,
+        flutter_error_to_log_entry, parse_flutter_error, parse_frame_timing, parse_gc_event,
+        parse_log_record, vm_log_to_log_entry, VmRequestHandle, VmServiceClient,
     },
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
+
+/// Default polling interval for memory usage (2 seconds).
+const PERF_POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 use super::spawn;
 
@@ -158,6 +162,20 @@ pub fn handle_action(
         UpdateAction::ConnectVmService { session_id, ws_uri } => {
             let handle = spawn_vm_service_connection(session_id, ws_uri, msg_tx);
             session_tasks.lock().unwrap().insert(session_id, handle);
+        }
+
+        UpdateAction::StartPerformanceMonitoring { session_id, handle } => {
+            // `handle` is guaranteed to be Some here because process.rs
+            // discards actions where it couldn't hydrate the handle.
+            if let Some(vm_handle) = handle {
+                spawn_performance_polling(session_id, vm_handle, msg_tx);
+            } else {
+                warn!(
+                    "StartPerformanceMonitoring reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
         }
     }
 }
@@ -450,6 +468,99 @@ pub async fn execute_task(
     }
 }
 
+/// Spawn the periodic memory-usage polling task for a session.
+///
+/// Creates a `watch::channel(false)` shutdown channel and immediately sends a
+/// `VmServicePerformanceMonitoringStarted` message so that the TEA layer can
+/// store the sender in the `SessionHandle`. The polling loop then runs until:
+/// - The shutdown channel receives `true` (VM disconnected / session stopped), or
+/// - The `msg_tx` channel is closed (engine shutting down).
+///
+/// Transient errors from `getMemoryUsage` (e.g., isolate paused during hot
+/// reload) are logged at debug level and skipped — the next tick will retry.
+fn spawn_performance_polling(
+    session_id: SessionId,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        // Create a shutdown channel — sender goes to the session handle so the
+        // TEA layer can stop this task when the VM disconnects or app stops.
+        let (perf_shutdown_tx, mut perf_shutdown_rx) = tokio::sync::watch::channel(false);
+        let perf_shutdown_tx = std::sync::Arc::new(perf_shutdown_tx);
+
+        // Notify TEA that monitoring has started; stores the shutdown sender.
+        if msg_tx
+            .send(Message::VmServicePerformanceMonitoringStarted {
+                session_id,
+                perf_shutdown_tx,
+            })
+            .await
+            .is_err()
+        {
+            // Channel closed — engine is shutting down.
+            return;
+        }
+
+        let mut interval = tokio::time::interval(PERF_POLL_INTERVAL);
+
+        loop {
+            tokio::select! {
+                _ = interval.tick() => {
+                    // Fetch the main isolate ID (cached after first call).
+                    match handle.main_isolate_id().await {
+                        Ok(isolate_id) => {
+                            match fdemon_daemon::vm_service::get_memory_usage(
+                                &handle,
+                                &isolate_id,
+                            )
+                            .await
+                            {
+                                Ok(memory) => {
+                                    if msg_tx
+                                        .send(Message::VmServiceMemorySnapshot {
+                                            session_id,
+                                            memory,
+                                        })
+                                        .await
+                                        .is_err()
+                                    {
+                                        // Engine shutting down.
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    // Transient errors are expected during hot reload when
+                                    // the isolate is paused. Log at debug and continue.
+                                    tracing::debug!(
+                                        "Memory poll failed for session {}: {}",
+                                        session_id, e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not get isolate ID for perf polling (session {}): {}",
+                                session_id, e
+                            );
+                        }
+                    }
+                }
+                _ = perf_shutdown_rx.changed() => {
+                    if *perf_shutdown_rx.borrow() {
+                        info!(
+                            "Performance monitoring stopped for session {}",
+                            session_id
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// Spawn a task that connects to the VM Service and forwards events as Messages.
 fn spawn_vm_service_connection(
     session_id: SessionId,
@@ -490,6 +601,27 @@ fn spawn_vm_service_connection(
                         session_id, err
                     );
                 }
+
+                // Best-effort: enable Flutter frame timing event emission.
+                // `Flutter.Frame` events may already arrive without this call;
+                // this attempts to also enable `profileWidgetBuilds` for build
+                // timing detail. Errors are silently ignored (profile mode, etc.).
+                if let Ok(isolate_id) = client.main_isolate_id().await {
+                    let _ = fdemon_daemon::vm_service::timeline::enable_frame_tracking(
+                        &client.request_handle(),
+                        &isolate_id,
+                    )
+                    .await;
+                }
+
+                // Extract the request handle BEFORE entering the forwarding loop.
+                // This allows the TEA handler and background tasks to make on-demand
+                // RPC calls through the same WebSocket connection without going through
+                // the event-forwarding loop.
+                let handle = client.request_handle();
+                let _ = msg_tx
+                    .send(Message::VmServiceHandleReady { session_id, handle })
+                    .await;
 
                 // Create shutdown channel — sender goes to the session handle,
                 // receiver lets the forwarding loop exit cleanly on AppStop.
@@ -547,7 +679,7 @@ async fn forward_vm_events(
             event = client.event_receiver().recv() => {
                 match event {
                     Some(event) => {
-                        // Try parsing as Flutter.Error (Extension stream)
+                        // Try parsing as Flutter.Error (Extension stream) — most critical.
                         if let Some(flutter_error) = parse_flutter_error(&event.params.event) {
                             let log_entry = flutter_error_to_log_entry(&flutter_error);
                             let _ = msg_tx
@@ -559,7 +691,33 @@ async fn forward_vm_events(
                             continue;
                         }
 
-                        // Try parsing as a structured LogRecord (Logging stream)
+                        // Try parsing as a Flutter.Frame event (frame timing).
+                        // Checked after Flutter.Error because Flutter.Frame events share
+                        // the Extension stream and are less critical than crash logs.
+                        if let Some(timing) =
+                            parse_frame_timing(&event.params.event)
+                        {
+                            let _ = msg_tx
+                                .send(Message::VmServiceFrameTiming {
+                                    session_id,
+                                    timing,
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        // Try parsing as a GC event (GC stream).
+                        if let Some(gc_event) = parse_gc_event(&event.params.event) {
+                            let _ = msg_tx
+                                .send(Message::VmServiceGcEvent {
+                                    session_id,
+                                    gc_event,
+                                })
+                                .await;
+                            continue;
+                        }
+
+                        // Try parsing as a structured LogRecord (Logging stream).
                         if let Some(log_record) = parse_log_record(&event.params.event) {
                             let log_entry = vm_log_to_log_entry(&log_record);
                             let _ = msg_tx
@@ -568,8 +726,10 @@ async fn forward_vm_events(
                                     log_entry,
                                 })
                                 .await;
+                            continue;
                         }
-                        // Other event kinds (GC, Isolate, etc.) are intentionally ignored
+
+                        // Other event kinds (Isolate, Timeline, etc.) are intentionally ignored
                     }
                     None => {
                         // Event receiver closed — client disconnected

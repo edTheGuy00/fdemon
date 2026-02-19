@@ -328,3 +328,34 @@ mod tests {
 - **This approach is simpler than raw Timeline parsing.** Flutter DevTools' performance view uses the raw Timeline stream for microsecond-precision trace events, but `Flutter.Frame` events provide the same build/raster breakdown at the frame level, which is sufficient for a TUI tool.
 - **Frame events may not be emitted during app idle.** Task 06 must handle gaps in frame data gracefully (e.g., show "no frames" or stale FPS).
 - **`enable_frame_tracking()` is best-effort.** `ext.flutter.profileWidgetBuilds` is a debug-only extension. In profile mode it may not be available, but `Flutter.Frame` events are still emitted. The function should not fail if the extension is unavailable.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | NEW — `parse_frame_timing()`, `flutter_extension_kind()`, `is_frame_event()`, `parse_str_u64()`, `enable_frame_tracking()` with inline tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod timeline;` declaration and re-exports of all 5 public items |
+
+### Notable Decisions/Tradeoffs
+
+1. **`parse_str_u64` visibility**: Made `pub` (not `pub(crate)`) so it is accessible from the `mod.rs` re-export and can be used by downstream crates (e.g. Task 06 aggregation). The task file specifies it in re-exports.
+2. **`enable_frame_tracking` error handling**: Always returns `Ok(())` — errors from `call_extension` are logged at `debug` level and then discarded, matching the best-effort semantics described in the task.
+3. **`chrono::Local::now()`** used for `FrameTiming::timestamp` (not derived from the event's `startTime` field) — consistent with how `FrameTiming` is defined in `fdemon-core` and matching the task code exactly. The `startTime` field is present in `extensionData` but not extracted; Task 06 can use the `timestamp` field for ordering.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (formatter made minor whitespace cleanup)
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (327 unit tests: 0 failed, 3 ignored; 11 new timeline tests all pass)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **No `startTime` extraction**: The `extensionData.startTime` field is present in the Flutter event but not captured in `FrameTiming`. If precise wall-clock frame start times are needed later, the parsing will need to be extended.
+2. **`enable_frame_tracking` not tested end-to-end**: The function requires a live VM Service connection and cannot be unit-tested in isolation. It is covered structurally (the async function signature matches the task spec) but there are no integration tests for it here.

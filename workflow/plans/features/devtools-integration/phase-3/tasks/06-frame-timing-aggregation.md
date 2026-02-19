@@ -342,3 +342,44 @@ mod tests {
 - **Frame events share the Extension stream** with `Flutter.Error` events. The parse order in `forward_vm_events` must check `Flutter.Error` first (crash logs are more critical than timing data).
 - **This task depends on Task 05** because it builds on the `PerformanceState` and handlers established there. The frame timing data flows into the same `PerformanceState` and benefits from the same shutdown coordination.
 - **Phase 4 (TUI)** will consume `PerformanceStats` and the ring buffers directly for rendering sparklines, gauges, and tables. This task ensures all the data is available and pre-aggregated.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/performance.rs` | Added `is_stale()` method to `PerformanceStats` impl block |
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceFrameTiming { session_id, timing }` variant |
+| `crates/fdemon-app/src/session.rs` | Added `STATS_RECOMPUTE_INTERVAL`, `FPS_WINDOW` constants; added `recompute_stats()`, `compute_stats()`, `calculate_fps()`, `percentile()` methods to `PerformanceState`; added 9 unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added `VmServiceFrameTiming` handler with interval-based stats recompute; added `recompute_stats()` call to `VmServiceMemorySnapshot` handler |
+| `crates/fdemon-app/src/actions.rs` | Added `parse_frame_timing` import; added `Flutter.Frame` parsing in `forward_vm_events` (after `Flutter.Error`, before GC); added `enable_frame_tracking` best-effort call in `spawn_vm_service_connection` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 handler tests for frame timing: handler basic, interval recompute, unknown session, memory snapshot triggering recompute |
+
+### Notable Decisions/Tradeoffs
+
+1. **Event ordering in `forward_vm_events`**: `Flutter.Frame` is checked after `Flutter.Error` (crash logs are more critical) but before `GC` and `LogRecord`. The GC stream and Logging stream events are non-Extension events so they wouldn't match the `Flutter.Frame` extension check anyway — the ordering between GC and LogRecord was preserved from Task 05 to avoid any risk of regression.
+
+2. **`STATS_RECOMPUTE_INTERVAL` is `pub(crate)`**: The handler in `update.rs` references `crate::session::STATS_RECOMPUTE_INTERVAL` to perform the modulo check, so it needs to be visible at crate scope. Making it `pub(crate)` is the minimal visibility needed.
+
+3. **`FPS_WINDOW` uses `chrono::Duration::from_std`**: Converting `std::time::Duration` to `chrono::Duration` requires `from_std()`, which can fail if the duration exceeds `i64::MAX` nanoseconds. The fallback to `chrono::Duration::seconds(1)` handles this edge case gracefully.
+
+4. **`enable_frame_tracking` placement**: Called after `subscribe_flutter_streams()` but before extracting the request handle for the forwarding loop. This is fine because the best-effort call completes (or silently fails) before the loop starts.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --lib --workspace` - Passed (446 unit tests in fdemon-tui, 792 in fdemon-app, 314 in fdemon-core, all passing)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- E2E tests have pre-existing failures unrelated to this task (settings/TUI interaction timeouts)
+
+### Risks/Limitations
+
+1. **FPS window relies on `chrono::Local::now()`**: In tests, all frames are created with `chrono::Local::now()` timestamps, meaning they all fall within the 1-second window. In production, idle/backgrounded apps will have no recent frames and correctly return `None` for FPS.
+
+2. **`percentile()` allocates a sorted copy**: For ~300-item ring buffers this is negligible. Larger datasets would benefit from a streaming percentile algorithm, but this is called only every 10 frames or on memory poll, not per-frame.

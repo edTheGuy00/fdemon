@@ -51,6 +51,7 @@ pub mod error;
 pub mod events;
 pub mod exception_block;
 pub mod logging;
+pub mod performance;
 pub mod stack_trace;
 pub mod types;
 pub mod widget_tree;
@@ -73,6 +74,10 @@ pub use events::{
     DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use exception_block::{ExceptionBlock, ExceptionBlockParser, FeedResult};
+pub use performance::{
+    AllocationProfile, ClassHeapStats, FrameTiming, GcEvent, MemoryUsage, PerformanceStats,
+    RingBuffer, FRAME_BUDGET_120FPS_MICROS, FRAME_BUDGET_60FPS_MICROS,
+};
 pub use stack_trace::{
     detect_format, is_package_path, is_project_path, ParsedStackTrace, StackFrame, StackTraceFormat,
 };

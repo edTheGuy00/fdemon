@@ -42,21 +42,58 @@ pub fn process_message(
             let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
 
-            handle_action(
-                action,
-                msg_tx.clone(),
-                session_cmd_sender,
-                session_senders,
-                session_tasks.clone(),
-                shutdown_rx.clone(),
-                project_path,
-                state.tool_availability.clone(),
-            );
+            // For StartPerformanceMonitoring, hydrate the action with the
+            // VmRequestHandle from the session. The handler only returns the
+            // session_id; we need the handle from the session here where we
+            // have access to AppState.
+            let action = hydrate_start_performance_monitoring(action, state);
+
+            if let Some(action) = action {
+                handle_action(
+                    action,
+                    msg_tx.clone(),
+                    session_cmd_sender,
+                    session_senders,
+                    session_tasks.clone(),
+                    shutdown_rx.clone(),
+                    project_path,
+                    state.tool_availability.clone(),
+                );
+            }
         }
 
         // Continue with follow-up message
         msg = result.message;
     }
+}
+
+/// Hydrate `StartPerformanceMonitoring` with the `VmRequestHandle` from the
+/// session, returning `None` if the handle is unavailable (e.g. the VM has not
+/// yet connected or has already disconnected) — in that case the action is
+/// silently discarded.
+///
+/// All other action variants are returned unchanged.
+fn hydrate_start_performance_monitoring(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::StartPerformanceMonitoring { session_id, handle } = action {
+        if handle.is_some() {
+            // Already hydrated (shouldn't happen in normal flow, but safe).
+            return Some(UpdateAction::StartPerformanceMonitoring { session_id, handle });
+        }
+        // Extract the VM request handle from the session. If unavailable,
+        // discard the action — there is nothing to poll yet.
+        let vm_handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::StartPerformanceMonitoring {
+            session_id,
+            handle: Some(vm_handle),
+        });
+    }
+    Some(action)
 }
 
 /// Route JSON-RPC responses for multi-session daemon events

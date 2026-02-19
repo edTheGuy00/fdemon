@@ -1,23 +1,17 @@
-## Task: Performance & Memory Data Models
+//! # Performance & Memory Domain Types
+//!
+//! Domain data types for representing memory usage, GC events, frame timing,
+//! allocation profiles, and a generic ring buffer for rolling history storage.
+//!
+//! These types are the shared vocabulary between:
+//! - `fdemon-daemon` (parsing VM Service responses)
+//! - `fdemon-app` (aggregation, session state)
 
-**Objective**: Create domain data types in `fdemon-core` for representing memory usage, GC events, frame timing, allocation profiles, and a generic ring buffer for rolling history storage. These types are the shared vocabulary between the daemon (parsing VM Service responses) and app (aggregation, session state) layers.
+use std::cmp::Reverse;
+use std::collections::VecDeque;
 
-**Depends on**: None (pure data types, no dependency on other Phase 3 tasks)
+// ── MemoryUsage ──────────────────────────────────────────────────────────────
 
-**Estimated Time**: 3-4 hours
-
-### Scope
-
-- `crates/fdemon-core/src/performance.rs`: **NEW** — All performance/memory domain types
-- `crates/fdemon-core/src/lib.rs`: Add `pub mod performance` and re-exports
-
-### Details
-
-#### 1. MemoryUsage
-
-Represents the response from the `getMemoryUsage` VM Service RPC.
-
-```rust
 /// Heap memory usage snapshot from the Dart VM.
 ///
 /// Returned by `getMemoryUsage(isolateId)`. All values are in bytes.
@@ -33,11 +27,7 @@ pub struct MemoryUsage {
     /// Timestamp when this snapshot was taken.
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
-```
 
-Add helper methods:
-
-```rust
 impl MemoryUsage {
     /// Heap utilization as a percentage (0.0–1.0).
     pub fn utilization(&self) -> f64 {
@@ -65,13 +55,9 @@ impl MemoryUsage {
         }
     }
 }
-```
 
-#### 2. GcEvent
+// ── GcEvent ──────────────────────────────────────────────────────────────────
 
-Represents a GC stream event from the VM Service.
-
-```rust
 /// A garbage collection event from the VM Service GC stream.
 #[derive(Debug, Clone)]
 pub struct GcEvent {
@@ -84,21 +70,8 @@ pub struct GcEvent {
     /// Timestamp of the GC event.
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
-```
 
-#### 3. AllocationProfile
-
-Represents the response from `getAllocationProfile`.
-
-```rust
-/// Allocation profile summary from `getAllocationProfile`.
-#[derive(Debug, Clone)]
-pub struct AllocationProfile {
-    /// Allocation statistics per class.
-    pub members: Vec<ClassHeapStats>,
-    /// Timestamp of the profile snapshot.
-    pub timestamp: chrono::DateTime<chrono::Local>,
-}
+// ── ClassHeapStats ───────────────────────────────────────────────────────────
 
 /// Heap allocation statistics for a single class.
 #[derive(Debug, Clone)]
@@ -116,11 +89,7 @@ pub struct ClassHeapStats {
     /// Bytes occupied in old space.
     pub old_space_size: u64,
 }
-```
 
-Add helper:
-
-```rust
 impl ClassHeapStats {
     /// Total bytes across new + old space.
     pub fn total_size(&self) -> u64 {
@@ -133,22 +102,35 @@ impl ClassHeapStats {
     }
 }
 
+// ── AllocationProfile ────────────────────────────────────────────────────────
+
+/// Allocation profile summary from `getAllocationProfile`.
+#[derive(Debug, Clone)]
+pub struct AllocationProfile {
+    /// Allocation statistics per class.
+    pub members: Vec<ClassHeapStats>,
+    /// Timestamp of the profile snapshot.
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
 impl AllocationProfile {
     /// Return classes sorted by total size (descending).
     pub fn top_by_size(&self, limit: usize) -> Vec<&ClassHeapStats> {
         let mut sorted: Vec<_> = self.members.iter().collect();
-        sorted.sort_by(|a, b| b.total_size().cmp(&a.total_size()));
+        sorted.sort_by_key(|s| Reverse(s.total_size()));
         sorted.truncate(limit);
         sorted
     }
 }
-```
 
-#### 4. FrameTiming
+// ── FrameTiming ──────────────────────────────────────────────────────────────
 
-Represents timing data for a single UI frame.
+/// Budget for a single frame at 60 FPS (16.667ms).
+pub const FRAME_BUDGET_60FPS_MICROS: u64 = 16_667;
 
-```rust
+/// Budget for a single frame at 120 FPS (8.333ms).
+pub const FRAME_BUDGET_120FPS_MICROS: u64 = 8_333;
+
 /// Timing data for a single Flutter UI frame.
 ///
 /// Flutter posts `Flutter.Frame` events via `developer.postEvent` on the
@@ -166,16 +148,6 @@ pub struct FrameTiming {
     /// Timestamp of the frame event.
     pub timestamp: chrono::DateTime<chrono::Local>,
 }
-```
-
-Add helpers:
-
-```rust
-/// Budget for a single frame at 60 FPS (16.667ms).
-pub const FRAME_BUDGET_60FPS_MICROS: u64 = 16_667;
-
-/// Budget for a single frame at 120 FPS (8.333ms).
-pub const FRAME_BUDGET_120FPS_MICROS: u64 = 8_333;
 
 impl FrameTiming {
     /// Whether this frame exceeded the 60 FPS budget (janky).
@@ -198,13 +170,9 @@ impl FrameTiming {
         self.raster_micros as f64 / 1000.0
     }
 }
-```
 
-#### 5. PerformanceSnapshot
+// ── PerformanceStats ─────────────────────────────────────────────────────────
 
-Aggregated performance state for a session at a point in time.
-
-```rust
 /// Aggregated performance metrics for display.
 #[derive(Debug, Clone, Default)]
 pub struct PerformanceStats {
@@ -221,13 +189,20 @@ pub struct PerformanceStats {
     /// Total frames observed.
     pub total_frames: u64,
 }
-```
 
-#### 6. RingBuffer<T>
+impl PerformanceStats {
+    /// Whether the FPS data is stale (no recent frames in the last second).
+    ///
+    /// Returns `true` when `fps` is `None`, which happens when the app is idle
+    /// or backgrounded (no animation → no `Flutter.Frame` events).
+    /// Phase 4's TUI can show "idle" or "–" when this returns `true`.
+    pub fn is_stale(&self) -> bool {
+        self.fps.is_none()
+    }
+}
 
-Generic fixed-capacity circular buffer for rolling history.
+// ── RingBuffer<T> ────────────────────────────────────────────────────────────
 
-```rust
 /// A fixed-capacity circular buffer that overwrites the oldest entries
 /// when full. Used for rolling performance history.
 #[derive(Debug, Clone)]
@@ -288,28 +263,9 @@ impl<T> RingBuffer<T> {
         self.buf.clear();
     }
 }
-```
 
-Note: `VecDeque` is already imported in `types.rs` — reuse it here.
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
-### Acceptance Criteria
-
-1. `MemoryUsage` stores heap usage, capacity, external usage, and timestamp
-2. `MemoryUsage::utilization()` returns correct percentage
-3. `MemoryUsage::format_bytes()` produces human-readable strings (B, KB, MB, GB)
-4. `GcEvent` stores GC type, reason, isolate, timestamp
-5. `AllocationProfile` stores class-level heap stats with sort-by-size helper
-6. `ClassHeapStats` correctly sums new + old space
-7. `FrameTiming` stores build/raster/elapsed durations and frame number
-8. `FrameTiming::is_janky()` returns true when elapsed > 16.667ms
-9. `PerformanceStats` aggregates FPS, jank count, percentiles
-10. `RingBuffer<T>` correctly evicts oldest on overflow, iterates in order
-11. All types implement `Debug` and `Clone`
-12. Types are re-exported from `fdemon_core::performance`
-
-### Testing
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,7 +286,9 @@ mod tests {
     #[test]
     fn test_memory_utilization_zero_capacity() {
         let mem = MemoryUsage {
-            heap_usage: 0, heap_capacity: 0, external_usage: 0,
+            heap_usage: 0,
+            heap_capacity: 0,
+            external_usage: 0,
             timestamp: chrono::Local::now(),
         };
         assert!((mem.utilization() - 0.0).abs() < f64::EPSILON);
@@ -350,8 +308,10 @@ mod tests {
         let stats = ClassHeapStats {
             class_name: "String".into(),
             library_uri: Some("dart:core".into()),
-            new_space_instances: 100, new_space_size: 4000,
-            old_space_instances: 50, old_space_size: 6000,
+            new_space_instances: 100,
+            new_space_size: 4000,
+            old_space_instances: 50,
+            old_space_size: 6000,
         };
         assert_eq!(stats.total_size(), 10_000);
         assert_eq!(stats.total_instances(), 150);
@@ -361,7 +321,9 @@ mod tests {
     #[test]
     fn test_frame_timing_janky() {
         let frame = FrameTiming {
-            number: 1, build_micros: 8000, raster_micros: 10000,
+            number: 1,
+            build_micros: 8000,
+            raster_micros: 10000,
             elapsed_micros: 18000,
             timestamp: chrono::Local::now(),
         };
@@ -371,7 +333,9 @@ mod tests {
     #[test]
     fn test_frame_timing_smooth() {
         let frame = FrameTiming {
-            number: 2, build_micros: 5000, raster_micros: 5000,
+            number: 2,
+            build_micros: 5000,
+            raster_micros: 5000,
             elapsed_micros: 10000,
             timestamp: chrono::Local::now(),
         };
@@ -382,7 +346,9 @@ mod tests {
     #[test]
     fn test_ring_buffer_basic() {
         let mut buf = RingBuffer::new(3);
-        buf.push(1); buf.push(2); buf.push(3);
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.latest(), Some(&3));
         assert_eq!(buf.oldest(), Some(&1));
@@ -391,7 +357,10 @@ mod tests {
     #[test]
     fn test_ring_buffer_overflow() {
         let mut buf = RingBuffer::new(3);
-        buf.push(1); buf.push(2); buf.push(3); buf.push(4);
+        buf.push(1);
+        buf.push(2);
+        buf.push(3);
+        buf.push(4);
         assert_eq!(buf.len(), 3);
         assert_eq!(buf.oldest(), Some(&2)); // 1 was evicted
         assert_eq!(buf.latest(), Some(&4));
@@ -409,52 +378,9 @@ mod tests {
     #[test]
     fn test_ring_buffer_clear() {
         let mut buf = RingBuffer::new(3);
-        buf.push(1); buf.push(2);
+        buf.push(1);
+        buf.push(2);
         buf.clear();
         assert!(buf.is_empty());
     }
 }
-```
-
-### Notes
-
-- **Types are in `fdemon-core`** because both `fdemon-daemon` (parsing) and `fdemon-app` (state, aggregation) need them without creating circular dependencies.
-- **`RingBuffer<T>` is generic and reusable.** It serves memory snapshots, GC events, and frame timings. Could later be used for other rolling-window data.
-- **`chrono::Local` timestamps** are used consistently with the existing `LogEntry` type.
-- **`PerformanceStats` is `Default`** so it can be initialized empty before any data arrives.
-- **`AllocationProfile` is expensive to fetch** (walks the entire heap). It should be called infrequently — Task 05 handles polling strategy.
-- The `FrameTiming` type represents `Flutter.Frame` extension events, not raw Chrome Trace Format. This matches how Flutter DevTools extracts frame timing data.
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `crates/fdemon-core/src/performance.rs` | NEW file — all performance/memory domain types with inline tests |
-| `crates/fdemon-core/src/lib.rs` | Added `pub mod performance;` declaration and re-exports for all 8 public items |
-
-### Notable Decisions/Tradeoffs
-
-1. **`sort_by_key` with `Reverse` for `AllocationProfile::top_by_size`**: Clippy flagged the original `sort_by(|a, b| b.cmp(&a))` pattern as unnecessary. Replaced with idiomatic `sort_by_key(|s| Reverse(s.total_size()))` which requires importing `std::cmp::Reverse`.
-
-2. **Re-export ordering in `lib.rs`**: `cargo fmt` alphabetically reordered the two frame budget constants (`FRAME_BUDGET_120FPS_MICROS` before `FRAME_BUDGET_60FPS_MICROS`). This is purely cosmetic and functionally identical to the task spec ordering.
-
-3. **Zero new external dependencies**: All types use `chrono` (already in `Cargo.toml`) and `std::collections::VecDeque` / `std::cmp::Reverse` from the standard library. No additions to `Cargo.toml` were needed.
-
-### Testing Performed
-
-- `cargo fmt --all` - Passed (formatting applied, no violations)
-- `cargo check -p fdemon-core` - Passed (no compilation errors)
-- `cargo test -p fdemon-core` - Passed (314 tests: 304 existing + 10 new performance tests)
-- `cargo clippy -p fdemon-core -- -D warnings` - Passed (no warnings after `sort_by_key` fix)
-
-### Risks/Limitations
-
-1. **`PerformanceStats` has no validation**: Fields like `fps` and `jank_count` can represent impossible states (e.g., negative fps via `Option<f64>` set to `Some(-1.0)`). Validation is left to upstream callers in `fdemon-app` when aggregating data.
-
-2. **`RingBuffer<T>` capacity 0 edge case**: Pushing to a zero-capacity buffer causes an infinite evict loop (`len == capacity` is always true). This is an unlikely usage but worth noting for future defensive hardening.

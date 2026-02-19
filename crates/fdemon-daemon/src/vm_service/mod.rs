@@ -11,6 +11,8 @@
 //! - [`logging`] — VM Service Logging stream event parsing (`dart:developer log()`).
 //! - [`errors`] — VM Service Flutter error event parsing.
 //! - [`extensions`] — Flutter service extension call infrastructure and constants.
+//! - [`timeline`] — Flutter.Frame Extension event parsing for frame timing data.
+//! - [`performance`] — Memory/GC RPC wrappers (`getMemoryUsage`, `getAllocationProfile`) and GC event parsing.
 //!
 //! ## Quick start
 //!
@@ -56,9 +58,11 @@ pub mod client;
 pub mod errors;
 pub mod extensions;
 pub mod logging;
+pub mod performance;
 pub mod protocol;
+pub mod timeline;
 
-pub use client::{ConnectionState, VmServiceClient};
+pub use client::{ConnectionState, VmRequestHandle, VmServiceClient};
 pub use errors::{flutter_error_to_log_entry, parse_flutter_error, FlutterErrorEvent};
 pub use extensions::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, debug_paint, ext,
@@ -70,8 +74,16 @@ pub use extensions::{
     DebugOverlayState, ObjectGroupManager, WidgetInspector,
 };
 pub use logging::{parse_log_record, vm_level_to_log_level, vm_log_to_log_entry, VmLogRecord};
+pub use performance::{
+    get_allocation_profile, get_memory_usage, parse_allocation_profile, parse_gc_event,
+    parse_memory_usage,
+};
 pub use protocol::{
     parse_vm_message, IsolateGroupRef, IsolateInfo, IsolateRef, LibraryRef, StreamEvent,
     StreamEventParams, VmInfo, VmRequestTracker, VmServiceError, VmServiceEvent, VmServiceMessage,
     VmServiceRequest, VmServiceResponse,
+};
+pub use timeline::{
+    enable_frame_tracking, flutter_extension_kind, is_frame_event, parse_frame_timing,
+    parse_str_u64,
 };

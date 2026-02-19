@@ -11,10 +11,11 @@ use crate::handler::helpers::{detect_raw_line_level, is_block_end, is_block_star
 use crate::hyperlinks::LinkHighlightState;
 use crate::log_view_state::LogViewState;
 use fdemon_core::{
+    performance::{FrameTiming, GcEvent, MemoryUsage, PerformanceStats, RingBuffer},
     strip_ansi_codes, AppPhase, ExceptionBlockParser, FeedResult, FilterState, LogEntry, LogLevel,
     LogSource, SearchState,
 };
-use fdemon_daemon::{CommandSender, FlutterProcess, RequestTracker};
+use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, RequestTracker};
 
 // ─────────────────────────────────────────────────────────
 // Log Batching for Performance (Task 04)
@@ -182,6 +183,153 @@ impl CollapseState {
     }
 }
 
+// ─────────────────────────────────────────────────────────
+// Performance Monitoring State (Phase 3, Task 05)
+// ─────────────────────────────────────────────────────────
+
+/// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
+const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
+/// Default number of GC events to keep.
+const DEFAULT_GC_HISTORY_SIZE: usize = 100;
+/// Default number of frame timings to keep.
+const DEFAULT_FRAME_HISTORY_SIZE: usize = 300;
+
+/// Performance monitoring state for a session.
+///
+/// Holds rolling ring-buffer history for memory snapshots, GC events, and
+/// frame timings, plus aggregated statistics for display.
+#[derive(Debug, Clone)]
+pub struct PerformanceState {
+    /// Rolling history of memory snapshots.
+    pub memory_history: RingBuffer<MemoryUsage>,
+    /// Rolling history of GC events.
+    pub gc_history: RingBuffer<GcEvent>,
+    /// Rolling history of frame timings (populated by Task 06).
+    pub frame_history: RingBuffer<FrameTiming>,
+    /// Aggregated performance statistics (updated periodically).
+    pub stats: PerformanceStats,
+    /// Whether performance monitoring is active.
+    pub monitoring_active: bool,
+}
+
+impl Default for PerformanceState {
+    fn default() -> Self {
+        Self {
+            memory_history: RingBuffer::new(DEFAULT_MEMORY_HISTORY_SIZE),
+            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
+            frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
+            stats: PerformanceStats::default(),
+            monitoring_active: false,
+        }
+    }
+}
+
+/// How often to recompute aggregated stats (every N frames).
+///
+/// At 60 FPS this produces ~6 stats updates per second — fast enough for a
+/// TUI that renders at ~30 FPS. The 2-second memory poll cycle recomputes
+/// stats as a backstop for when frame events are sparse.
+pub(crate) const STATS_RECOMPUTE_INTERVAL: usize = 10;
+
+/// Time window for FPS calculation (1 second).
+const FPS_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+impl PerformanceState {
+    /// Recompute aggregated performance statistics from the ring buffers.
+    ///
+    /// Called every [`STATS_RECOMPUTE_INTERVAL`] frames to avoid per-frame
+    /// allocation overhead, and also from the memory-snapshot handler as a
+    /// 2-second backstop.
+    pub fn recompute_stats(&mut self) {
+        self.stats = Self::compute_stats(&self.frame_history, &self.memory_history);
+    }
+
+    /// Compute performance statistics from frame and memory history.
+    ///
+    /// Returns [`PerformanceStats::default()`] when no frames are available.
+    pub fn compute_stats(
+        frames: &RingBuffer<FrameTiming>,
+        _memory: &RingBuffer<MemoryUsage>,
+    ) -> PerformanceStats {
+        if frames.is_empty() {
+            return PerformanceStats::default();
+        }
+
+        let frame_times: Vec<f64> = frames.iter().map(|f| f.elapsed_ms()).collect();
+
+        let total_frames = frames.iter().count() as u64;
+
+        // FPS: count frames in the last 1 second
+        let fps = Self::calculate_fps(frames);
+
+        // Jank count: frames exceeding 60fps budget
+        let jank_count = frames.iter().filter(|f| f.is_janky()).count() as u32;
+
+        // Average frame time
+        let avg_frame_ms = if frame_times.is_empty() {
+            None
+        } else {
+            Some(frame_times.iter().sum::<f64>() / frame_times.len() as f64)
+        };
+
+        // P95 frame time
+        let p95_frame_ms = Self::percentile(&frame_times, 95.0);
+
+        // Max frame time
+        let max_frame_ms = frame_times.iter().copied().reduce(f64::max);
+
+        PerformanceStats {
+            fps,
+            jank_count,
+            avg_frame_ms,
+            p95_frame_ms,
+            max_frame_ms,
+            total_frames,
+        }
+    }
+
+    /// Calculate FPS from recent frame timings.
+    ///
+    /// Counts the number of frames whose timestamp falls within the last
+    /// [`FPS_WINDOW`] (1 second). Returns `None` when the app is idle or
+    /// backgrounded (no frames in the last second).
+    pub fn calculate_fps(frames: &RingBuffer<FrameTiming>) -> Option<f64> {
+        if frames.len() < 2 {
+            return None;
+        }
+
+        let now = chrono::Local::now();
+        let window_start =
+            now - chrono::Duration::from_std(FPS_WINDOW).unwrap_or(chrono::Duration::seconds(1));
+
+        let recent_count = frames
+            .iter()
+            .filter(|f| f.timestamp >= window_start)
+            .count();
+
+        if recent_count == 0 {
+            // No frames in the last second — app is idle or backgrounded.
+            return None;
+        }
+
+        Some(recent_count as f64)
+    }
+
+    /// Calculate the Nth percentile from a slice of values.
+    ///
+    /// Creates a sorted copy of the input — acceptable for ring buffer sizes
+    /// (~300 items). Returns `None` for empty input.
+    pub fn percentile(values: &[f64], pct: f64) -> Option<f64> {
+        if values.is_empty() {
+            return None;
+        }
+        let mut sorted = values.to_vec();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let index = ((pct / 100.0) * (sorted.len() - 1) as f64).round() as usize;
+        Some(sorted[index.min(sorted.len() - 1)])
+    }
+}
+
 /// Unique identifier for a session
 pub type SessionId = u64;
 
@@ -288,6 +436,12 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     /// Log batcher for coalescing rapid log arrivals
     log_batcher: LogBatcher,
+
+    // ─────────────────────────────────────────────────────────
+    // Performance Monitoring (Phase 3, Task 05)
+    // ─────────────────────────────────────────────────────────
+    /// Performance monitoring state (memory, GC, frames).
+    pub performance: PerformanceState,
 }
 
 impl Session {
@@ -326,6 +480,7 @@ impl Session {
             reload_count: 0,
             error_count: 0,
             log_batcher: LogBatcher::new(),
+            performance: PerformanceState::default(),
         }
     }
 
@@ -887,6 +1042,20 @@ pub struct SessionHandle {
     /// Sending `true` signals the forwarding task to disconnect and stop.
     /// Stored as `Arc` because the `Message` enum requires `Clone`.
     pub vm_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// VM Service request handle for on-demand RPC calls.
+    ///
+    /// Set when the VM Service connects (via `VmServiceHandleReady` message),
+    /// cleared on disconnect. Use this to issue JSON-RPC requests from outside
+    /// the event forwarding loop (e.g. periodic memory polling).
+    pub vm_request_handle: Option<VmRequestHandle>,
+
+    /// Shutdown sender for the performance monitoring polling task.
+    ///
+    /// Sending `true` stops the polling loop cleanly. Stored as `Arc` because
+    /// the `Message` enum (which carries the initial sender) requires `Clone`.
+    /// Set by `VmServicePerformanceMonitoringStarted`, cleared on disconnect.
+    pub perf_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -896,6 +1065,8 @@ impl std::fmt::Debug for SessionHandle {
             .field("has_process", &self.process.is_some())
             .field("has_cmd_sender", &self.cmd_sender.is_some())
             .field("has_vm_shutdown", &self.vm_shutdown_tx.is_some())
+            .field("vm_request_handle", &self.vm_request_handle)
+            .field("has_perf_shutdown", &self.perf_shutdown_tx.is_some())
             .finish()
     }
 }
@@ -909,6 +1080,8 @@ impl SessionHandle {
             cmd_sender: None,
             request_tracker: Arc::new(RequestTracker::default()),
             vm_shutdown_tx: None,
+            vm_request_handle: None,
+            perf_shutdown_tx: None,
         }
     }
 
@@ -2413,5 +2586,146 @@ mod tests {
         // Whitespace-only lines
         let entries = session.process_raw_line("   ");
         assert!(entries.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // PerformanceState Tests (Phase 3, Task 05)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_performance_state_default() {
+        let state = PerformanceState::default();
+        assert!(!state.monitoring_active);
+        assert!(state.memory_history.is_empty());
+        assert!(state.gc_history.is_empty());
+        assert!(state.frame_history.is_empty());
+    }
+
+    #[test]
+    fn test_session_has_performance_field() {
+        let session = Session::new("d".into(), "Device".into(), "android".into(), false);
+        assert!(!session.performance.monitoring_active);
+        assert!(session.performance.memory_history.is_empty());
+    }
+
+    #[test]
+    fn test_performance_state_memory_ring_buffer_capacity() {
+        let state = PerformanceState::default();
+        assert_eq!(state.memory_history.capacity(), DEFAULT_MEMORY_HISTORY_SIZE);
+        assert_eq!(state.gc_history.capacity(), DEFAULT_GC_HISTORY_SIZE);
+        assert_eq!(state.frame_history.capacity(), DEFAULT_FRAME_HISTORY_SIZE);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Frame Timing / Stats Computation Tests (Phase 3, Task 06)
+    // ─────────────────────────────────────────────────────────
+
+    fn make_frame(number: u64, elapsed_micros: u64) -> FrameTiming {
+        FrameTiming {
+            number,
+            build_micros: elapsed_micros / 2,
+            raster_micros: elapsed_micros / 2,
+            elapsed_micros,
+            timestamp: chrono::Local::now(),
+        }
+    }
+
+    #[test]
+    fn test_stats_computation_empty() {
+        let stats = PerformanceState::compute_stats(&RingBuffer::new(10), &RingBuffer::new(10));
+        assert!(stats.fps.is_none());
+        assert!(stats.avg_frame_ms.is_none());
+        assert_eq!(stats.jank_count, 0);
+    }
+
+    #[test]
+    fn test_stats_computation_with_frames() {
+        let mut frames = RingBuffer::new(100);
+        for i in 0..60 {
+            frames.push(make_frame(i, 10_000)); // 10ms = smooth
+        }
+        // Add 5 janky frames
+        for i in 60..65 {
+            frames.push(make_frame(i, 25_000)); // 25ms = janky
+        }
+
+        let stats = PerformanceState::compute_stats(&frames, &RingBuffer::new(10));
+        assert_eq!(stats.jank_count, 5);
+        assert_eq!(stats.total_frames, 65);
+        // Average: (60*10 + 5*25) / 65 ≈ 11.15ms
+        let avg = stats.avg_frame_ms.unwrap();
+        assert!(avg > 11.0 && avg < 12.0);
+    }
+
+    #[test]
+    fn test_percentile_calculation() {
+        let values = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let p95 = PerformanceState::percentile(&values, 95.0).unwrap();
+        // 95th of 10 values: index = round(0.95 * 9) = round(8.55) = 9 → value 10.0
+        assert!((p95 - 10.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_percentile_empty() {
+        assert!(PerformanceState::percentile(&[], 95.0).is_none());
+    }
+
+    #[test]
+    fn test_percentile_single() {
+        assert_eq!(PerformanceState::percentile(&[42.0], 95.0), Some(42.0));
+    }
+
+    #[test]
+    fn test_jank_detection() {
+        let smooth = make_frame(1, 10_000);
+        let janky = make_frame(2, 20_000);
+        assert!(!smooth.is_janky());
+        assert!(janky.is_janky());
+    }
+
+    #[test]
+    fn test_performance_state_reset_on_reconnect() {
+        let mut perf = PerformanceState::default();
+        perf.memory_history.push(MemoryUsage {
+            heap_usage: 100,
+            heap_capacity: 200,
+            external_usage: 0,
+            timestamp: chrono::Local::now(),
+        });
+        perf.monitoring_active = true;
+
+        // Simulate reset
+        perf = PerformanceState::default();
+        assert!(perf.memory_history.is_empty());
+        assert!(!perf.monitoring_active);
+    }
+
+    #[test]
+    fn test_recompute_stats_updates_state() {
+        let mut perf = PerformanceState::default();
+        // Push enough frames that the totals are non-default
+        for i in 0..5 {
+            perf.frame_history.push(make_frame(i, 8_000)); // smooth
+        }
+        perf.frame_history.push(make_frame(5, 20_000)); // janky
+
+        perf.recompute_stats();
+        assert_eq!(perf.stats.total_frames, 6);
+        assert_eq!(perf.stats.jank_count, 1);
+        assert!(perf.stats.avg_frame_ms.is_some());
+    }
+
+    #[test]
+    fn test_performance_stats_is_stale() {
+        let mut stats = PerformanceStats::default();
+        assert!(stats.is_stale(), "default stats (no fps) should be stale");
+
+        stats.fps = Some(60.0);
+        assert!(!stats.is_stale(), "stats with fps should not be stale");
+    }
+
+    #[test]
+    fn test_stats_recompute_interval_constant() {
+        assert_eq!(STATS_RECOMPUTE_INTERVAL, 10);
     }
 }

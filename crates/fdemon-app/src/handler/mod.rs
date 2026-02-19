@@ -118,6 +118,25 @@ pub enum UpdateAction {
         session_id: SessionId,
         ws_uri: String,
     },
+
+    /// Start periodic performance monitoring for a session.
+    ///
+    /// Spawns a background polling task that fetches memory usage at a
+    /// configured interval (default 2 seconds) and sends
+    /// `VmServiceMemorySnapshot` messages to the TEA loop.
+    ///
+    /// The `handle` field is `None` when returned by `handler::update()` and
+    /// hydrated by `process.rs` with the `VmRequestHandle` from the session
+    /// before the action is dispatched to `handle_action`. If the session has
+    /// no active VM connection at dispatch time the action is discarded.
+    StartPerformanceMonitoring {
+        session_id: SessionId,
+        /// VM Service request handle used by the polling task.
+        /// `None` until hydrated by `process.rs` from the session's
+        /// `vm_request_handle`. `handle_action` can safely `.unwrap()` this
+        /// because `process.rs` discards actions where it remains `None`.
+        handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
 }
 
 /// Background tasks to spawn

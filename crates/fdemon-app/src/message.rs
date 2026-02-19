@@ -6,8 +6,8 @@ use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::SessionId;
 use fdemon_core::{BootableDevice, DaemonEvent};
 use fdemon_daemon::{
-    AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult, IosSimulator,
-    ToolAvailability,
+    vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
+    IosSimulator, ToolAvailability,
 };
 
 /// Type of device discovery (Connected or Bootable)
@@ -624,6 +624,20 @@ pub enum Message {
         vm_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
+    /// VM Service request handle is ready for on-demand RPC calls.
+    ///
+    /// Sent by `spawn_vm_service_connection` immediately after the WebSocket
+    /// connects and before `VmServiceConnected`. The TEA update handler stores
+    /// the handle in the session so that background tasks (memory polling, etc.)
+    /// can issue RPC calls through the same connection.
+    ///
+    /// The handle is `Clone` (wraps an `Arc`-ed channel sender) and `Debug`
+    /// (shows connection state without exposing channel internals).
+    VmServiceHandleReady {
+        session_id: SessionId,
+        handle: VmRequestHandle,
+    },
+
     /// VM Service WebSocket connected for a session
     VmServiceConnected { session_id: SessionId },
 
@@ -646,5 +660,45 @@ pub enum Message {
     VmServiceLogRecord {
         session_id: SessionId,
         log_entry: fdemon_core::LogEntry,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // VM Service Performance Messages (Phase 3, Task 05)
+    // ─────────────────────────────────────────────────────────
+    /// Memory usage snapshot received from periodic polling.
+    VmServiceMemorySnapshot {
+        session_id: SessionId,
+        memory: fdemon_core::performance::MemoryUsage,
+    },
+
+    /// GC event received from the GC stream.
+    VmServiceGcEvent {
+        session_id: SessionId,
+        gc_event: fdemon_core::performance::GcEvent,
+    },
+
+    /// Performance monitoring task started for a session.
+    ///
+    /// Carries the shutdown sender so the TEA layer can store it in the
+    /// session handle and signal the polling task to stop when needed.
+    VmServicePerformanceMonitoringStarted {
+        session_id: SessionId,
+        /// Shutdown sender for the performance polling task.
+        /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
+        /// Sending `true` stops the polling loop cleanly.
+        perf_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // VM Service Frame Timing Messages (Phase 3, Task 06)
+    // ─────────────────────────────────────────────────────────
+    /// Frame timing data received from a `Flutter.Frame` Extension event.
+    ///
+    /// Posted by Flutter on the Extension stream (already subscribed) whenever
+    /// a frame is rendered. Carries build and raster durations for FPS/jank
+    /// calculation. Pushed into `PerformanceState::frame_history`.
+    VmServiceFrameTiming {
+        session_id: SessionId,
+        timing: fdemon_core::performance::FrameTiming,
     },
 }

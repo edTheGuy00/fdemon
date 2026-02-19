@@ -399,3 +399,35 @@ mod tests {
 - **GC stream events are high-frequency** — the Dart VM scavenges new-space very frequently (multiple times per second). Task 05's handler should batch or throttle if needed.
 - **The response format for `getAllocationProfile`** uses `bytesCurrent`/`instancesCurrent` for retained objects and `accumulatedSize`/`instancesAccumulated` for lifetime totals. We map these to old-space (retained) and new-space (churn) respectively. This is an approximation — the actual new/old space split isn't directly exposed.
 - **`parse_memory_usage` uses `u64`** rather than `i64` because the VM Service protocol specifies these as non-negative integers. The `as_u64()` serde method handles this.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/performance.rs` | NEW: `get_memory_usage()`, `parse_memory_usage()`, `get_allocation_profile()`, `parse_allocation_profile()`, `parse_class_heap_stats()`, `parse_gc_event()` + 6 inline tests |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `"GC"` to `RESUBSCRIBE_STREAMS` constant; added GC stream subscription to `subscribe_flutter_streams()` |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod performance;` declaration and `pub use performance::{...}` re-exports for all 5 public functions |
+
+### Notable Decisions/Tradeoffs
+
+1. **`IsolateRef` type annotation in `parse_gc_event`**: The formatter removed the explicit `iso: &IsolateRef` type annotation from the closure (it was redundant). The code remains correct since Rust infers it from `event.isolate`.
+2. **`mod.rs` parallel task coordination**: Task 04 (timeline) had already added `pub mod timeline` to `mod.rs` before this task ran. The `performance` module was added alongside it without conflict.
+3. **Re-export of `parse_class_heap_stats`**: This is a private helper (`fn`, not `pub fn`) — not re-exported from `mod.rs`. Only the 5 public functions are re-exported, matching the task spec.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (formatter reformatted long function signatures)
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (334 tests passed, 3 ignored, 0 failed; 6 new tests in `vm_service::performance`)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **GC event frequency**: GC stream events are high-frequency. Consumers (Task 05) must throttle/batch processing to avoid performance issues — noted in the doc comment on `parse_gc_event`.
+2. **`getAllocationProfile` approximation**: The new/old space split mapping uses accumulated-vs-current as an approximation. The real split is not exposed by the VM Service protocol — this is documented in the `parse_class_heap_stats` doc comment.

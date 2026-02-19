@@ -296,3 +296,50 @@ mod tests {
 - **Thread safety**: `VmRequestHandle` is `Send + Sync` because `mpsc::Sender` is `Send + Sync`, `Arc<RwLock<_>>` is `Send + Sync`, and `Arc<Mutex<_>>` (Tokio mutex) is `Send + Sync`.
 - **The handle does NOT own the event receiver.** Events still flow through `forward_vm_events` exclusively. The handle is purely for request/response RPC.
 - **On disconnect**: The TEA handler should set `vm_request_handle = None` when processing `VmServiceDisconnected`. The handle itself becomes inoperable (ChannelClosed) but clearing the field makes intent explicit.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `VmRequestHandle` struct with `Clone` + manual `Debug`. Refactored `VmServiceClient` to hold an internal `VmRequestHandle` field and delegate `request()`, `main_isolate_id()`, `call_extension()`, `connection_state()`, `is_connected()` to it. Added `request_handle()` factory method. Added 6 new tests for the handle. |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported `VmRequestHandle` from `pub use client::...`. |
+| `crates/fdemon-app/src/session.rs` | Added `vm_request_handle: Option<VmRequestHandle>` field to `SessionHandle`. Updated `Debug` impl and `new()` constructor. Added `fdemon_daemon::vm_service::VmRequestHandle` import. |
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceHandleReady { session_id, handle }` variant to `Message` enum. Added `VmRequestHandle` import from `fdemon_daemon::vm_service`. |
+| `crates/fdemon-app/src/actions.rs` | Extracted `client.request_handle()` and sent `VmServiceHandleReady` message before entering the forwarding loop in `spawn_vm_service_connection`. |
+| `crates/fdemon-app/src/handler/update.rs` | Added handler for `VmServiceHandleReady` that stores the handle in the session. Updated `VmServiceDisconnected` handler to also clear `vm_request_handle = None`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Delegation pattern**: `VmServiceClient` holds an internal `VmRequestHandle` field and delegates all request-making methods to it. This eliminates code duplication and ensures both the full client and the handle use the exact same request path.
+
+2. **Manual `Debug` impl**: `VmRequestHandle` uses a manual `Debug` impl that shows only the `ConnectionState`, not channel internals. This is required because `mpsc::Sender<ClientCommand>` does not implement `Debug` (and `ClientCommand` contains oneshot senders which also lack `Debug`).
+
+3. **Message ordering**: The `VmServiceHandleReady` message is sent first (before `VmServiceAttached` and `VmServiceConnected`) so the handle is stored before any other VM Service messages arrive. This ensures the handle is available for immediate use once the TEA handler processes `VmServiceConnected`.
+
+4. **Explicit `None` on disconnect**: `vm_request_handle` is set to `None` in the `VmServiceDisconnected` handler. While the handle would return `Error::ChannelClosed` anyway (since the background task exited), clearing it explicitly communicates intent and helps future code avoid making redundant calls.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo check --workspace` - Passed
+- `cargo test --lib --workspace` - Passed (1,847 tests: 772 + 314 + 319 + 446)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- New `VmRequestHandle` tests specifically: 6 tests passed
+  - `test_request_handle_is_clone`
+  - `test_request_handle_is_debug`
+  - `test_handle_channel_closed_after_drop`
+  - `test_request_handle_debug_shows_state`
+  - `test_request_handle_clone_shares_state`
+  - `test_request_handle_is_send_sync`
+
+### Risks/Limitations
+
+1. **E2e tests**: 25 e2e integration tests in the binary crate fail, but these are pre-existing failures related to TUI terminal interaction tests requiring a full terminal environment. They are not caused by this change.
+
+2. **`ClientCommand` visibility**: `ClientCommand` remains non-`pub` (private to `client.rs`). `VmRequestHandle` is in the same module so it can reference `ClientCommand` directly. This is the correct design — callers use the higher-level `request()` API, not the internal command type.

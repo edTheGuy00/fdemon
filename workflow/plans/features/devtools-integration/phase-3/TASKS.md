@@ -60,12 +60,12 @@ Add real-time performance metrics and memory usage monitoring by extending the V
 
 | # | Task | Status | Depends On | Est. Hours | Crate | Key Modules |
 |---|------|--------|------------|------------|-------|-------------|
-| 1 | [01-performance-data-models](tasks/01-performance-data-models.md) | Not Started | - | 3-4h | `fdemon-core` | `performance.rs` |
-| 2 | [02-vm-request-handle](tasks/02-vm-request-handle.md) | Not Started | - | 3-4h | `fdemon-daemon`, `fdemon-app` | `vm_service/client.rs`, `session.rs`, `actions.rs` |
-| 3 | [03-memory-gc-rpcs](tasks/03-memory-gc-rpcs.md) | Not Started | 1 | 3-4h | `fdemon-daemon` | `vm_service/client.rs`, `vm_service/performance.rs` |
-| 4 | [04-frame-timing-rpcs](tasks/04-frame-timing-rpcs.md) | Not Started | 1 | 3-4h | `fdemon-daemon` | `vm_service/timeline.rs` |
-| 5 | [05-memory-monitoring-integration](tasks/05-memory-monitoring-integration.md) | Not Started | 1, 2, 3 | 4-6h | `fdemon-app` | `session.rs`, `message.rs`, `handler/`, `actions.rs` |
-| 6 | [06-frame-timing-aggregation](tasks/06-frame-timing-aggregation.md) | Not Started | 1, 2, 4, 5 | 4-6h | `fdemon-app` | `session.rs`, `message.rs`, `handler/`, `actions.rs` |
+| 1 | [01-performance-data-models](tasks/01-performance-data-models.md) | Done | - | 3-4h | `fdemon-core` | `performance.rs` |
+| 2 | [02-vm-request-handle](tasks/02-vm-request-handle.md) | Done | - | 3-4h | `fdemon-daemon`, `fdemon-app` | `vm_service/client.rs`, `session.rs`, `actions.rs` |
+| 3 | [03-memory-gc-rpcs](tasks/03-memory-gc-rpcs.md) | Done | 1 | 3-4h | `fdemon-daemon` | `vm_service/client.rs`, `vm_service/performance.rs` |
+| 4 | [04-frame-timing-rpcs](tasks/04-frame-timing-rpcs.md) | Done | 1 | 3-4h | `fdemon-daemon` | `vm_service/timeline.rs` |
+| 5 | [05-memory-monitoring-integration](tasks/05-memory-monitoring-integration.md) | Done | 1, 2, 3 | 4-6h | `fdemon-app` | `session.rs`, `message.rs`, `handler/`, `actions.rs` |
+| 6 | [06-frame-timing-aggregation](tasks/06-frame-timing-aggregation.md) | Done | 1, 2, 4, 5 | 4-6h | `fdemon-app` | `session.rs`, `message.rs`, `handler/`, `actions.rs` |
 
 ## Success Criteria
 
