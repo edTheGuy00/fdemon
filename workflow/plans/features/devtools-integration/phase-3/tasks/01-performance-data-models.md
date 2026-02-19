@@ -1,0 +1,426 @@
+## Task: Performance & Memory Data Models
+
+**Objective**: Create domain data types in `fdemon-core` for representing memory usage, GC events, frame timing, allocation profiles, and a generic ring buffer for rolling history storage. These types are the shared vocabulary between the daemon (parsing VM Service responses) and app (aggregation, session state) layers.
+
+**Depends on**: None (pure data types, no dependency on other Phase 3 tasks)
+
+**Estimated Time**: 3-4 hours
+
+### Scope
+
+- `crates/fdemon-core/src/performance.rs`: **NEW** — All performance/memory domain types
+- `crates/fdemon-core/src/lib.rs`: Add `pub mod performance` and re-exports
+
+### Details
+
+#### 1. MemoryUsage
+
+Represents the response from the `getMemoryUsage` VM Service RPC.
+
+```rust
+/// Heap memory usage snapshot from the Dart VM.
+///
+/// Returned by `getMemoryUsage(isolateId)`. All values are in bytes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MemoryUsage {
+    /// Current heap usage in bytes (amount currently allocated).
+    pub heap_usage: u64,
+    /// Total heap capacity in bytes (amount the VM has reserved from the OS).
+    pub heap_capacity: u64,
+    /// External memory usage in bytes (e.g., images, native buffers managed
+    /// by Dart objects with C finalizers).
+    pub external_usage: u64,
+    /// Timestamp when this snapshot was taken.
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+```
+
+Add helper methods:
+
+```rust
+impl MemoryUsage {
+    /// Heap utilization as a percentage (0.0–1.0).
+    pub fn utilization(&self) -> f64 {
+        if self.heap_capacity == 0 {
+            return 0.0;
+        }
+        self.heap_usage as f64 / self.heap_capacity as f64
+    }
+
+    /// Total memory (heap + external) in bytes.
+    pub fn total(&self) -> u64 {
+        self.heap_usage + self.external_usage
+    }
+
+    /// Format bytes as human-readable string (e.g., "12.5 MB").
+    pub fn format_bytes(bytes: u64) -> String {
+        const KB: u64 = 1024;
+        const MB: u64 = 1024 * 1024;
+        const GB: u64 = 1024 * 1024 * 1024;
+        match bytes {
+            b if b >= GB => format!("{:.1} GB", b as f64 / GB as f64),
+            b if b >= MB => format!("{:.1} MB", b as f64 / MB as f64),
+            b if b >= KB => format!("{:.1} KB", b as f64 / KB as f64),
+            b => format!("{} B", b),
+        }
+    }
+}
+```
+
+#### 2. GcEvent
+
+Represents a GC stream event from the VM Service.
+
+```rust
+/// A garbage collection event from the VM Service GC stream.
+#[derive(Debug, Clone)]
+pub struct GcEvent {
+    /// Type of GC operation performed (e.g., "Scavenge", "MarkSweep", "MarkCompact").
+    pub gc_type: String,
+    /// Reason the GC was triggered.
+    pub reason: Option<String>,
+    /// Isolate that performed the GC.
+    pub isolate_id: Option<String>,
+    /// Timestamp of the GC event.
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+```
+
+#### 3. AllocationProfile
+
+Represents the response from `getAllocationProfile`.
+
+```rust
+/// Allocation profile summary from `getAllocationProfile`.
+#[derive(Debug, Clone)]
+pub struct AllocationProfile {
+    /// Allocation statistics per class.
+    pub members: Vec<ClassHeapStats>,
+    /// Timestamp of the profile snapshot.
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
+/// Heap allocation statistics for a single class.
+#[derive(Debug, Clone)]
+pub struct ClassHeapStats {
+    /// Fully qualified class name (e.g., "dart:core/String").
+    pub class_name: String,
+    /// Library URI that defines the class.
+    pub library_uri: Option<String>,
+    /// Number of instances in new space.
+    pub new_space_instances: u64,
+    /// Bytes occupied in new space.
+    pub new_space_size: u64,
+    /// Number of instances in old space.
+    pub old_space_instances: u64,
+    /// Bytes occupied in old space.
+    pub old_space_size: u64,
+}
+```
+
+Add helper:
+
+```rust
+impl ClassHeapStats {
+    /// Total bytes across new + old space.
+    pub fn total_size(&self) -> u64 {
+        self.new_space_size + self.old_space_size
+    }
+
+    /// Total instance count across new + old space.
+    pub fn total_instances(&self) -> u64 {
+        self.new_space_instances + self.old_space_instances
+    }
+}
+
+impl AllocationProfile {
+    /// Return classes sorted by total size (descending).
+    pub fn top_by_size(&self, limit: usize) -> Vec<&ClassHeapStats> {
+        let mut sorted: Vec<_> = self.members.iter().collect();
+        sorted.sort_by(|a, b| b.total_size().cmp(&a.total_size()));
+        sorted.truncate(limit);
+        sorted
+    }
+}
+```
+
+#### 4. FrameTiming
+
+Represents timing data for a single UI frame.
+
+```rust
+/// Timing data for a single Flutter UI frame.
+///
+/// Flutter posts `Flutter.Frame` events via `developer.postEvent` on the
+/// Extension stream. Each event carries the build and raster durations.
+#[derive(Debug, Clone)]
+pub struct FrameTiming {
+    /// Frame number (monotonically increasing).
+    pub number: u64,
+    /// Duration of the build phase (widget tree construction) in microseconds.
+    pub build_micros: u64,
+    /// Duration of the raster phase (GPU painting) in microseconds.
+    pub raster_micros: u64,
+    /// Total elapsed frame time in microseconds.
+    pub elapsed_micros: u64,
+    /// Timestamp of the frame event.
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+```
+
+Add helpers:
+
+```rust
+/// Budget for a single frame at 60 FPS (16.667ms).
+pub const FRAME_BUDGET_60FPS_MICROS: u64 = 16_667;
+
+/// Budget for a single frame at 120 FPS (8.333ms).
+pub const FRAME_BUDGET_120FPS_MICROS: u64 = 8_333;
+
+impl FrameTiming {
+    /// Whether this frame exceeded the 60 FPS budget (janky).
+    pub fn is_janky(&self) -> bool {
+        self.elapsed_micros > FRAME_BUDGET_60FPS_MICROS
+    }
+
+    /// Frame duration in milliseconds.
+    pub fn elapsed_ms(&self) -> f64 {
+        self.elapsed_micros as f64 / 1000.0
+    }
+
+    /// Build duration in milliseconds.
+    pub fn build_ms(&self) -> f64 {
+        self.build_micros as f64 / 1000.0
+    }
+
+    /// Raster duration in milliseconds.
+    pub fn raster_ms(&self) -> f64 {
+        self.raster_micros as f64 / 1000.0
+    }
+}
+```
+
+#### 5. PerformanceSnapshot
+
+Aggregated performance state for a session at a point in time.
+
+```rust
+/// Aggregated performance metrics for display.
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceStats {
+    /// Current FPS (frames per second), calculated from recent frame timings.
+    pub fps: Option<f64>,
+    /// Number of janky frames in the recent window.
+    pub jank_count: u32,
+    /// Average frame time in milliseconds over the recent window.
+    pub avg_frame_ms: Option<f64>,
+    /// 95th percentile frame time in milliseconds.
+    pub p95_frame_ms: Option<f64>,
+    /// Worst (max) frame time in milliseconds.
+    pub max_frame_ms: Option<f64>,
+    /// Total frames observed.
+    pub total_frames: u64,
+}
+```
+
+#### 6. RingBuffer<T>
+
+Generic fixed-capacity circular buffer for rolling history.
+
+```rust
+/// A fixed-capacity circular buffer that overwrites the oldest entries
+/// when full. Used for rolling performance history.
+#[derive(Debug, Clone)]
+pub struct RingBuffer<T> {
+    buf: VecDeque<T>,
+    capacity: usize,
+}
+
+impl<T> RingBuffer<T> {
+    /// Create a new ring buffer with the given capacity.
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(capacity),
+            capacity,
+        }
+    }
+
+    /// Push a value, evicting the oldest if at capacity.
+    pub fn push(&mut self, value: T) {
+        if self.buf.len() == self.capacity {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(value);
+    }
+
+    /// Number of items currently stored.
+    pub fn len(&self) -> usize {
+        self.buf.len()
+    }
+
+    /// Whether the buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        self.buf.is_empty()
+    }
+
+    /// Maximum capacity.
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
+    /// Iterate over items from oldest to newest.
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.buf.iter()
+    }
+
+    /// Get the most recently pushed item.
+    pub fn latest(&self) -> Option<&T> {
+        self.buf.back()
+    }
+
+    /// Get the oldest item.
+    pub fn oldest(&self) -> Option<&T> {
+        self.buf.front()
+    }
+
+    /// Clear all items.
+    pub fn clear(&mut self) {
+        self.buf.clear();
+    }
+}
+```
+
+Note: `VecDeque` is already imported in `types.rs` — reuse it here.
+
+### Acceptance Criteria
+
+1. `MemoryUsage` stores heap usage, capacity, external usage, and timestamp
+2. `MemoryUsage::utilization()` returns correct percentage
+3. `MemoryUsage::format_bytes()` produces human-readable strings (B, KB, MB, GB)
+4. `GcEvent` stores GC type, reason, isolate, timestamp
+5. `AllocationProfile` stores class-level heap stats with sort-by-size helper
+6. `ClassHeapStats` correctly sums new + old space
+7. `FrameTiming` stores build/raster/elapsed durations and frame number
+8. `FrameTiming::is_janky()` returns true when elapsed > 16.667ms
+9. `PerformanceStats` aggregates FPS, jank count, percentiles
+10. `RingBuffer<T>` correctly evicts oldest on overflow, iterates in order
+11. All types implement `Debug` and `Clone`
+12. Types are re-exported from `fdemon_core::performance`
+
+### Testing
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── MemoryUsage ─────────────────────────────────
+    #[test]
+    fn test_memory_utilization() {
+        let mem = MemoryUsage {
+            heap_usage: 50_000_000,
+            heap_capacity: 100_000_000,
+            external_usage: 10_000_000,
+            timestamp: chrono::Local::now(),
+        };
+        assert!((mem.utilization() - 0.5).abs() < f64::EPSILON);
+        assert_eq!(mem.total(), 60_000_000);
+    }
+
+    #[test]
+    fn test_memory_utilization_zero_capacity() {
+        let mem = MemoryUsage {
+            heap_usage: 0, heap_capacity: 0, external_usage: 0,
+            timestamp: chrono::Local::now(),
+        };
+        assert!((mem.utilization() - 0.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_format_bytes() {
+        assert_eq!(MemoryUsage::format_bytes(500), "500 B");
+        assert_eq!(MemoryUsage::format_bytes(1536), "1.5 KB");
+        assert_eq!(MemoryUsage::format_bytes(52_428_800), "50.0 MB");
+        assert_eq!(MemoryUsage::format_bytes(1_610_612_736), "1.5 GB");
+    }
+
+    // ── ClassHeapStats ──────────────────────────────
+    #[test]
+    fn test_class_heap_stats_totals() {
+        let stats = ClassHeapStats {
+            class_name: "String".into(),
+            library_uri: Some("dart:core".into()),
+            new_space_instances: 100, new_space_size: 4000,
+            old_space_instances: 50, old_space_size: 6000,
+        };
+        assert_eq!(stats.total_size(), 10_000);
+        assert_eq!(stats.total_instances(), 150);
+    }
+
+    // ── FrameTiming ─────────────────────────────────
+    #[test]
+    fn test_frame_timing_janky() {
+        let frame = FrameTiming {
+            number: 1, build_micros: 8000, raster_micros: 10000,
+            elapsed_micros: 18000,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(frame.is_janky()); // 18ms > 16.667ms
+    }
+
+    #[test]
+    fn test_frame_timing_smooth() {
+        let frame = FrameTiming {
+            number: 2, build_micros: 5000, raster_micros: 5000,
+            elapsed_micros: 10000,
+            timestamp: chrono::Local::now(),
+        };
+        assert!(!frame.is_janky()); // 10ms < 16.667ms
+    }
+
+    // ── RingBuffer ──────────────────────────────────
+    #[test]
+    fn test_ring_buffer_basic() {
+        let mut buf = RingBuffer::new(3);
+        buf.push(1); buf.push(2); buf.push(3);
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf.latest(), Some(&3));
+        assert_eq!(buf.oldest(), Some(&1));
+    }
+
+    #[test]
+    fn test_ring_buffer_overflow() {
+        let mut buf = RingBuffer::new(3);
+        buf.push(1); buf.push(2); buf.push(3); buf.push(4);
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf.oldest(), Some(&2)); // 1 was evicted
+        assert_eq!(buf.latest(), Some(&4));
+        let items: Vec<_> = buf.iter().copied().collect();
+        assert_eq!(items, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn test_ring_buffer_empty() {
+        let buf: RingBuffer<i32> = RingBuffer::new(5);
+        assert!(buf.is_empty());
+        assert_eq!(buf.latest(), None);
+    }
+
+    #[test]
+    fn test_ring_buffer_clear() {
+        let mut buf = RingBuffer::new(3);
+        buf.push(1); buf.push(2);
+        buf.clear();
+        assert!(buf.is_empty());
+    }
+}
+```
+
+### Notes
+
+- **Types are in `fdemon-core`** because both `fdemon-daemon` (parsing) and `fdemon-app` (state, aggregation) need them without creating circular dependencies.
+- **`RingBuffer<T>` is generic and reusable.** It serves memory snapshots, GC events, and frame timings. Could later be used for other rolling-window data.
+- **`chrono::Local` timestamps** are used consistently with the existing `LogEntry` type.
+- **`PerformanceStats` is `Default`** so it can be initialized empty before any data arrives.
+- **`AllocationProfile` is expensive to fetch** (walks the entire heap). It should be called infrequently — Task 05 handles polling strategy.
+- The `FrameTiming` type represents `Flutter.Frame` extension events, not raw Chrome Trace Format. This matches how Flutter DevTools extracts frame timing data.
