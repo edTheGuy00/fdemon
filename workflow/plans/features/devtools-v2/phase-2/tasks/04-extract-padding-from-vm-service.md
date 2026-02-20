@@ -178,4 +178,43 @@ fn test_extract_layout_info_without_padding_still_works() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` | Added `EdgeInsets` to imports; replaced `..Default::default()` in `extract_layout_info` with explicit `padding` and `margin` fields; added `extract_edge_insets` helper function; added 12 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Explicit struct fields over `..Default::default()`**: Replaced `..Default::default()` with explicit `padding` and `margin` fields in `extract_layout_info`. This makes the struct construction exhaustive and ensures the compiler catches any future `LayoutInfo` field additions that need to be handled in this function.
+
+2. **`renderObject.properties` preferred over top-level `properties`**: As specified in the task, `renderObject.properties` is checked first because it reflects actual rendered layout, while top-level `properties` may include default or inherited values. The fallback order is clearly documented in the `extract_edge_insets` doc comment.
+
+3. **`None` is the happy path**: `extract_edge_insets` returns `None` silently for missing or unparseable properties — no panics, no logging noise. Only `EdgeInsets::parse` returning a value triggers a `Some` return.
+
+4. **No public API surface added**: `extract_edge_insets` is a private helper (`fn`, not `pub fn`), matching the pattern of other helpers in this file (`parse_widget_size`).
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (348 tests, 3 ignored integration tests)
+
+New tests added (all in `vm_service::extensions::layout::tests`):
+- `test_extract_edge_insets_from_render_object`
+- `test_extract_edge_insets_from_top_level_properties`
+- `test_extract_edge_insets_missing_returns_none`
+- `test_extract_edge_insets_no_properties_field_returns_none`
+- `test_extract_edge_insets_prefers_render_object_over_top_level`
+- `test_extract_edge_insets_zero_format`
+- `test_extract_edge_insets_malformed_description_returns_none`
+- `test_extract_edge_insets_wrong_property_name_returns_none`
+- `test_extract_layout_info_with_padding` (integration)
+- `test_extract_layout_info_without_padding_still_works` (regression)
+- `test_extract_layout_info_with_margin`
+
+### Risks/Limitations
+
+1. **No `margin` in real Flutter responses**: Flutter's layout explorer generally does not emit a `margin` property in `renderObject.properties`. The margin extraction logic is correct and tested, but in practice it will almost always return `None`. This is acceptable — the field is future-compatible.
+2. **`properties` array in `DiagnosticsNode` vs raw JSON `properties`**: The raw JSON `properties` array (read by `extract_edge_insets`) is distinct from the `DiagnosticsNode.properties` field already parsed by serde. Both exist as parallel data sources; this implementation reads directly from `raw_json` (the unparsed JSON value) as specified in the task.

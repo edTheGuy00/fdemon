@@ -67,11 +67,11 @@ pub use errors::{flutter_error_to_log_entry, parse_flutter_error, FlutterErrorEv
 pub use extensions::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, debug_paint, ext,
     extract_layout_info, extract_layout_tree, fetch_layout_data, flip_overlay, get_details_subtree,
-    get_layout_explorer_node, get_root_widget_tree, get_selected_widget,
-    is_extension_not_available, parse_bool_extension_response, parse_data_extension_response,
-    parse_diagnostics_node_response, parse_optional_diagnostics_node_response, performance_overlay,
-    query_all_overlays, repaint_rainbow, toggle_bool_extension, widget_inspector, DebugDumpKind,
-    DebugOverlayState, ObjectGroupManager, WidgetInspector,
+    get_layout_node, get_root_widget_tree, get_selected_widget, is_extension_not_available,
+    parse_bool_extension_response, parse_data_extension_response, parse_diagnostics_node_response,
+    parse_optional_diagnostics_node_response, performance_overlay, query_all_overlays,
+    repaint_rainbow, toggle_bool_extension, widget_inspector, DebugDumpKind, DebugOverlayState,
+    ObjectGroupManager, WidgetInspector,
 };
 pub use logging::{parse_log_record, vm_level_to_log_level, vm_log_to_log_entry, VmLogRecord};
 pub use performance::{

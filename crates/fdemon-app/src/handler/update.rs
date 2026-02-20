@@ -1434,17 +1434,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             if vm_connected {
                 // Clear any previous error so a fresh fetch starts cleanly.
-                state.devtools_view_state.layout_explorer.error = None;
-                state.devtools_view_state.layout_explorer.loading = true;
+                state.devtools_view_state.inspector.layout_error = None;
+                state.devtools_view_state.inspector.layout_loading = true;
                 // Track which node we are fetching so we can record it on success.
-                state.devtools_view_state.layout_explorer.pending_node_id = Some(node_id.clone());
+                state.devtools_view_state.inspector.pending_node_id = Some(node_id.clone());
                 UpdateResult::action(UpdateAction::FetchLayoutData {
                     session_id,
                     node_id,
                     vm_handle: None, // hydrated by process.rs
                 })
             } else {
-                state.devtools_view_state.layout_explorer.error = Some(DevToolsError::new(
+                state.devtools_view_state.inspector.layout_error = Some(DevToolsError::new(
                     "VM Service not available",
                     "Ensure the app is running in debug mode",
                 ));

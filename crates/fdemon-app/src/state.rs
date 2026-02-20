@@ -47,7 +47,7 @@ pub enum UiMode {
     /// Settings panel - full-screen settings UI
     Settings,
 
-    /// DevTools panel mode - replaces log view with Inspector/Layout/Performance panels
+    /// DevTools panel mode - replaces log view with Inspector/Performance panels
     DevTools,
 }
 
@@ -122,9 +122,6 @@ pub enum DevToolsPanel {
     #[default]
     Inspector,
 
-    /// Flex layout visualization for the selected widget.
-    Layout,
-
     /// FPS, memory usage, and frame timing display.
     Performance,
 }
@@ -152,6 +149,9 @@ impl DevToolsError {
 }
 
 /// State for the widget inspector tree view.
+///
+/// Also holds layout data for the currently selected widget (merged into this struct
+/// in Phase 2). Layout fields use a `layout_` prefix to avoid conflicts with inspector fields.
 #[derive(Debug, Clone, Default)]
 pub struct InspectorState {
     /// The root widget tree node (fetched on-demand via VM Service RPC).
@@ -189,6 +189,52 @@ pub struct InspectorState {
     ///
     /// This prevents RPC spam when the user holds down the refresh key.
     pub last_fetch_time: Option<Instant>,
+
+    // ── Layout fields ──────────────────────────────────────────────────────────
+    /// Layout info for the currently selected widget.
+    pub layout: Option<LayoutInfo>,
+
+    /// Whether a layout fetch is in progress.
+    pub layout_loading: bool,
+
+    /// User-friendly error from the last failed layout fetch.
+    ///
+    /// `None` when no error has occurred or after a successful fetch.
+    /// Populated by [`crate::handler::devtools::map_rpc_error`].
+    pub layout_error: Option<DevToolsError>,
+
+    /// Whether the `"devtools-layout"` VM object group exists on the Flutter VM.
+    ///
+    /// Set to `true` after a successful layout fetch, `false` after disposal
+    /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
+    /// has been created yet.
+    pub has_layout_object_group: bool,
+
+    /// The `value_id` of the inspector node for which layout data was last fetched.
+    ///
+    /// Compared against the currently selected inspector node when the user
+    /// switches to the Layout panel. If the selected node has not changed,
+    /// the layout fetch is skipped to avoid redundant RPC calls.
+    ///
+    /// Reset to `None` when the state is reset (e.g., session switch).
+    pub last_fetched_node_id: Option<String>,
+
+    /// The `value_id` of the inspector node for which a fetch is currently in flight.
+    ///
+    /// Set when a `FetchLayoutData` action is dispatched and consumed in
+    /// `handle_layout_data_fetched` to populate `last_fetched_node_id` on
+    /// success. Reset to `None` on failure or reset.
+    pub pending_node_id: Option<String>,
+
+    /// Timestamp of the last layout data fetch dispatch.
+    ///
+    /// Used to enforce a 500ms cooldown on auto-fetch requests during tree
+    /// navigation (Up/Down keys). A new fetch is skipped when either:
+    /// - `layout_loading == true` (fetch already in flight), OR
+    /// - `layout_last_fetch_time` is `Some(t)` and `t.elapsed() < 500ms`.
+    ///
+    /// This prevents RPC spam during rapid scrolling through the widget tree.
+    pub layout_last_fetch_time: Option<Instant>,
 }
 
 impl InspectorState {
@@ -217,6 +263,14 @@ impl InspectorState {
         self.error = None;
         self.has_object_group = false;
         self.last_fetch_time = None;
+        // Layout fields
+        self.layout = None;
+        self.layout_loading = false;
+        self.layout_error = None;
+        self.has_layout_object_group = false;
+        self.last_fetched_node_id = None;
+        self.pending_node_id = None;
+        self.layout_last_fetch_time = None;
     }
 
     /// Returns `true` if a tree refresh request should be suppressed.
@@ -232,6 +286,24 @@ impl InspectorState {
         self.last_fetch_time
             .map(|t| t.elapsed() < COOLDOWN)
             .unwrap_or(false)
+    }
+
+    /// Returns `true` if a layout fetch should be skipped (debounced).
+    ///
+    /// A layout fetch is debounced when either:
+    /// - A fetch is already in flight (`layout_loading == true`), OR
+    /// - The last layout fetch was dispatched within the 500ms cooldown window.
+    ///
+    /// This shorter cooldown (vs the 2s tree cooldown) allows reasonable
+    /// responsiveness during tree navigation without spamming VM Service RPC calls.
+    pub fn is_layout_fetch_debounced(&self) -> bool {
+        if self.layout_loading {
+            return true;
+        }
+        match self.layout_last_fetch_time {
+            Some(t) => t.elapsed() < std::time::Duration::from_millis(500),
+            None => false,
+        }
     }
 
     /// Record that a fetch was just initiated.
@@ -321,68 +393,14 @@ impl InspectorState {
     }
 }
 
-/// State for the layout explorer panel.
-#[derive(Debug, Clone, Default)]
-pub struct LayoutExplorerState {
-    /// Layout info for the currently selected widget.
-    pub layout: Option<LayoutInfo>,
-
-    /// Whether a layout fetch is in progress.
-    pub loading: bool,
-
-    /// User-friendly error from the last failed fetch.
-    ///
-    /// `None` when no error has occurred or after a successful fetch.
-    /// Populated by [`crate::handler::devtools::map_rpc_error`].
-    pub error: Option<DevToolsError>,
-
-    /// Whether the `"devtools-layout"` VM object group exists on the Flutter VM.
-    ///
-    /// Set to `true` after a successful layout fetch, `false` after disposal
-    /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
-    /// has been created yet.
-    pub has_object_group: bool,
-
-    /// The `value_id` of the inspector node for which layout data was last fetched.
-    ///
-    /// Compared against the currently selected inspector node when the user
-    /// switches to the Layout panel. If the selected node has not changed,
-    /// the layout fetch is skipped to avoid redundant RPC calls.
-    ///
-    /// Reset to `None` when the state is reset (e.g., session switch).
-    pub last_fetched_node_id: Option<String>,
-
-    /// The `value_id` of the inspector node for which a fetch is currently in flight.
-    ///
-    /// Set when a `FetchLayoutData` action is dispatched and consumed in
-    /// `handle_layout_data_fetched` to populate `last_fetched_node_id` on
-    /// success. Reset to `None` on failure or reset.
-    pub pending_node_id: Option<String>,
-}
-
-impl LayoutExplorerState {
-    /// Reset state (e.g., on session change or refresh).
-    pub fn reset(&mut self) {
-        self.layout = None;
-        self.loading = false;
-        self.error = None;
-        self.has_object_group = false;
-        self.last_fetched_node_id = None;
-        self.pending_node_id = None;
-    }
-}
-
 /// Complete state for the DevTools mode UI.
 #[derive(Debug, Clone, Default)]
 pub struct DevToolsViewState {
     /// Currently active sub-panel.
     pub active_panel: DevToolsPanel,
 
-    /// Widget inspector tree state.
+    /// Widget inspector tree state (also contains layout explorer data).
     pub inspector: InspectorState,
-
-    /// Layout explorer state.
-    pub layout_explorer: LayoutExplorerState,
 
     /// Current debug overlay states (synced from VM Service).
     pub overlay_repaint_rainbow: bool,
@@ -423,11 +441,10 @@ impl DevToolsViewState {
     /// from the previous session is not displayed for the new session.
     ///
     /// NOTE: `active_panel` is intentionally preserved — the user's panel
-    /// choice (Inspector / Layout / Performance) persists across session
-    /// switches as it is a UI preference, not session data.
+    /// choice (Inspector / Performance) persists across session switches
+    /// as it is a UI preference, not session data.
     pub fn reset(&mut self) {
         self.inspector.reset();
-        self.layout_explorer.reset();
         self.overlay_repaint_rainbow = false;
         self.overlay_debug_paint = false;
         self.overlay_performance = false;
@@ -1036,10 +1053,10 @@ mod tests {
             state.devtools_view_state.active_panel,
             DevToolsPanel::Performance
         );
-        state.switch_devtools_panel(DevToolsPanel::Layout);
+        state.switch_devtools_panel(DevToolsPanel::Inspector);
         assert_eq!(
             state.devtools_view_state.active_panel,
-            DevToolsPanel::Layout
+            DevToolsPanel::Inspector
         );
     }
 

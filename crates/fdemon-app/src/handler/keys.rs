@@ -295,7 +295,6 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// Key bindings:
 /// - `Esc` — exit DevTools mode
 /// - `i` — switch to Inspector panel
-/// - `l` — switch to Layout panel (unless Inspector panel is active, where it navigates right)
 /// - `p` — switch to Performance panel
 /// - `b` — open Flutter DevTools in system browser
 /// - `Ctrl+r` — toggle repaint rainbow overlay
@@ -304,7 +303,7 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// - `j`/Down — scroll/navigate down (in Inspector: move selection down)
 /// - `k`/Up — scroll/navigate up (in Inspector: move selection up)
 /// - `h`/Left — in Inspector: collapse node
-/// - `l`/Right/Enter — in Inspector: expand node (overrides panel-switch `l`)
+/// - `Right`/`Enter` — in Inspector: expand node
 /// - `r` — in Inspector: refresh widget tree
 /// - `q` — request quit
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
@@ -320,9 +319,6 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // 'p' always switches to Performance panel.
         InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
-
-        // 'l' always switches to Layout panel.
-        InputKey::Char('l') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Layout)),
 
         // ── Browser DevTools ──────────────────────────────────────────────────
         InputKey::Char('b') => Some(Message::OpenBrowserDevTools),

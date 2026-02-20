@@ -155,4 +155,38 @@ All existing layout and inspector handler tests must pass. Test assertions refer
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added 6 layout fields to `InspectorState`; updated `reset()`; deleted `LayoutExplorerState` struct and `impl`; removed `layout_explorer` field from `DevToolsViewState`; removed `self.layout_explorer.reset()` call |
+| `crates/fdemon-app/src/lib.rs` | Removed `LayoutExplorerState` from re-exports |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Removed `pub mod layout;`; added layout handler re-exports from `inspector`; updated `handle_switch_panel` Layout arm to use `inspector.*` renamed fields |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Added 3 layout handler functions (`handle_layout_data_fetched`, `handle_layout_data_fetch_failed`, `handle_layout_data_fetch_timeout`); moved all layout handler tests with updated field paths |
+| `crates/fdemon-app/src/handler/devtools/layout.rs` | DELETED (contents moved to `inspector.rs`) |
+| `crates/fdemon-app/src/handler/update.rs` | Updated 4 `layout_explorer.*` references in `RequestLayoutData` handler to `inspector.*` with renamed fields |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated 5 tests that referenced `layout_explorer.*` to use new `inspector.*` field names |
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | Changed widget to accept `&InspectorState` instead of `&LayoutExplorerState`; updated all field references to `layout_loading`, `layout_error`, `layout`; updated all tests |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Changed `LayoutExplorer::new` call to pass `&self.state.inspector` instead of `&self.state.layout_explorer` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field naming with `layout_` prefix**: Layout fields added to `InspectorState` use a `layout_` prefix (e.g., `layout_loading`, `layout_error`) to distinguish them from the inspector's own `loading` and `error` fields. This avoids ambiguity and follows the task's field mapping exactly.
+
+2. **TUI widget update**: The `fdemon-tui` crate required updating `layout_explorer.rs` to accept `&InspectorState` rather than `&LayoutExplorerState`. This was not explicitly listed in the task scope but was required because the task demands all references be updated, and the TUI widget is the primary consumer of layout state.
+
+3. **`last_fetched_node_id` / `pending_node_id` lifecycle preserved**: The dedup guard logic in `handle_switch_panel` and the layout handlers is kept intact as noted in the task, so Task 06 auto-fetch logic can reuse it.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (897 tests)
+- `cargo test -p fdemon-tui` — Passed (530 tests)
+- `cargo clippy --workspace -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **No behavior change confirmed**: The Layout tab reads from `inspector.*` fields after this refactor. All layout handler and switch-panel tests continue to pass, confirming no behavioral regression.

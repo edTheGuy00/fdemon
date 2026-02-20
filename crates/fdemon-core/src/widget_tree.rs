@@ -154,6 +154,104 @@ pub struct CreationLocation {
 }
 
 // ============================================================================
+// EdgeInsets
+// ============================================================================
+
+/// Edge insets representing padding or margin on four sides.
+///
+/// Parsed from Flutter's diagnostic property format:
+/// `"EdgeInsets(8.0, 0.0, 8.0, 0.0)"` or named constructors.
+///
+/// # Equality
+///
+/// `PartialEq` is derived for convenience (primarily test assertions).
+/// For production comparisons involving computed layout values, be aware
+/// that floating-point arithmetic can produce imprecise results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EdgeInsets {
+    /// Top inset in logical pixels
+    pub top: f64,
+    /// Right inset in logical pixels
+    pub right: f64,
+    /// Bottom inset in logical pixels
+    pub bottom: f64,
+    /// Left inset in logical pixels
+    pub left: f64,
+}
+
+impl EdgeInsets {
+    /// Create an `EdgeInsets` with all sides set to zero.
+    pub fn zero() -> Self {
+        Self {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        }
+    }
+
+    /// Returns `true` when all four sides are exactly `0.0`.
+    pub fn is_zero(&self) -> bool {
+        self.top == 0.0 && self.right == 0.0 && self.bottom == 0.0 && self.left == 0.0
+    }
+
+    /// Parse from Flutter's `EdgeInsets` string format.
+    ///
+    /// Supported formats:
+    /// - `"EdgeInsets(8.0, 0.0, 8.0, 0.0)"` — (top, right, bottom, left)
+    /// - `"EdgeInsets.all(8.0)"` — uniform on all sides
+    /// - `"EdgeInsets.zero"` — all zeros
+    ///
+    /// Returns `None` if the string cannot be parsed or is in an unrecognised
+    /// format. The parser is intentionally lenient — unknown variants become
+    /// `None` rather than an error.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+
+        // Handle "EdgeInsets.zero"
+        if s == "EdgeInsets.zero" {
+            return Some(Self::zero());
+        }
+
+        // Handle "EdgeInsets.all(N)"
+        if let Some(inner) = s
+            .strip_prefix("EdgeInsets.all(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            let v = inner.trim().parse::<f64>().ok()?;
+            return Some(Self {
+                top: v,
+                right: v,
+                bottom: v,
+                left: v,
+            });
+        }
+
+        // Handle "EdgeInsets(T, R, B, L)"
+        if let Some(inner) = s
+            .strip_prefix("EdgeInsets(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            let parts: Vec<&str> = inner.split(',').collect();
+            if parts.len() == 4 {
+                let top = parts[0].trim().parse::<f64>().ok()?;
+                let right = parts[1].trim().parse::<f64>().ok()?;
+                let bottom = parts[2].trim().parse::<f64>().ok()?;
+                let left = parts[3].trim().parse::<f64>().ok()?;
+                return Some(Self {
+                    top,
+                    right,
+                    bottom,
+                    left,
+                });
+            }
+        }
+
+        None
+    }
+}
+
+// ============================================================================
 // LayoutInfo
 // ============================================================================
 
@@ -176,6 +274,12 @@ pub struct LayoutInfo {
 
     /// Widget description (e.g., "Column", "SizedBox")
     pub description: Option<String>,
+
+    /// Padding applied inside this widget's box
+    pub padding: Option<EdgeInsets>,
+
+    /// Margin applied outside this widget's box
+    pub margin: Option<EdgeInsets>,
 }
 
 // ============================================================================
@@ -707,5 +811,102 @@ mod tests {
         assert!(info.flex_factor.is_none());
         assert!(info.flex_fit.is_none());
         assert!(info.description.is_none());
+    }
+
+    // ------------------------------------------------------------------
+    // EdgeInsets tests
+    // ------------------------------------------------------------------
+
+    #[test]
+    fn test_edge_insets_parse_trbl() {
+        let ei = EdgeInsets::parse("EdgeInsets(8.0, 16.0, 8.0, 16.0)").unwrap();
+        assert_eq!(
+            ei,
+            EdgeInsets {
+                top: 8.0,
+                right: 16.0,
+                bottom: 8.0,
+                left: 16.0
+            }
+        );
+    }
+
+    #[test]
+    fn test_edge_insets_parse_all() {
+        let ei = EdgeInsets::parse("EdgeInsets.all(8.0)").unwrap();
+        assert_eq!(
+            ei,
+            EdgeInsets {
+                top: 8.0,
+                right: 8.0,
+                bottom: 8.0,
+                left: 8.0
+            }
+        );
+    }
+
+    #[test]
+    fn test_edge_insets_parse_zero() {
+        let ei = EdgeInsets::parse("EdgeInsets.zero").unwrap();
+        assert!(ei.is_zero());
+    }
+
+    #[test]
+    fn test_edge_insets_parse_invalid_returns_none() {
+        assert!(EdgeInsets::parse("not an edge insets").is_none());
+        assert!(EdgeInsets::parse("").is_none());
+    }
+
+    #[test]
+    fn test_edge_insets_parse_missing_suffix_returns_none() {
+        // Malformed: missing closing paren
+        assert!(EdgeInsets::parse("EdgeInsets(8.0, 0.0, 8.0, 0.0").is_none());
+    }
+
+    #[test]
+    fn test_edge_insets_parse_wrong_component_count_returns_none() {
+        // Only 3 components instead of 4
+        assert!(EdgeInsets::parse("EdgeInsets(8.0, 0.0, 8.0)").is_none());
+    }
+
+    #[test]
+    fn test_edge_insets_zero_constructor() {
+        let ei = EdgeInsets::zero();
+        assert!(ei.is_zero());
+        assert_eq!(ei.top, 0.0);
+        assert_eq!(ei.right, 0.0);
+        assert_eq!(ei.bottom, 0.0);
+        assert_eq!(ei.left, 0.0);
+    }
+
+    #[test]
+    fn test_edge_insets_is_zero_false_when_nonzero() {
+        let ei = EdgeInsets {
+            top: 1.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        };
+        assert!(!ei.is_zero());
+    }
+
+    #[test]
+    fn test_layout_info_default_has_no_padding_or_margin() {
+        let info = LayoutInfo::default();
+        assert!(info.padding.is_none());
+        assert!(info.margin.is_none());
+    }
+
+    #[test]
+    fn test_edge_insets_serialize_deserialize_roundtrip() {
+        let ei = EdgeInsets {
+            top: 4.0,
+            right: 8.0,
+            bottom: 4.0,
+            left: 8.0,
+        };
+        let json = serde_json::to_string(&ei).unwrap();
+        let restored: EdgeInsets = serde_json::from_str(&json).unwrap();
+        assert_eq!(ei, restored);
     }
 }

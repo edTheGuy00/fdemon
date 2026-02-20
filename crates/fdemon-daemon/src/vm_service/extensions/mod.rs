@@ -45,9 +45,7 @@ pub use inspector::{
     get_details_subtree, get_root_widget_tree, get_selected_widget, ObjectGroupManager,
     WidgetInspector,
 };
-pub use layout::{
-    extract_layout_info, extract_layout_tree, fetch_layout_data, get_layout_explorer_node,
-};
+pub use layout::{extract_layout_info, extract_layout_tree, fetch_layout_data, get_layout_node};
 pub use overlays::{
     debug_paint, flip_overlay, performance_overlay, query_all_overlays, repaint_rainbow,
     toggle_bool_extension, widget_inspector, DebugOverlayState,

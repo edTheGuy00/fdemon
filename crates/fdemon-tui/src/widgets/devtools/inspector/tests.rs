@@ -84,13 +84,32 @@ fn test_inspector_narrow_terminal_vertical_layout() {
     state.expanded.insert("widget-1".to_string());
 
     let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
-    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 24)); // < 80 cols
+    // < 100 cols triggers vertical split (threshold changed from 80 to 100 in Task 06)
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 24));
     widget.render(Rect::new(0, 0, 60, 24), &mut buf);
 
     let full = collect_buf_text(&buf, 60, 24);
     assert!(
-        full.contains("Details"),
-        "Narrow terminal should show Details panel in vertical layout, got: {full:?}"
+        full.contains("Layout Explorer"),
+        "Narrow terminal should show Layout Explorer panel in vertical layout, got: {full:?}"
+    );
+}
+
+#[test]
+fn test_inspector_wide_terminal_horizontal_layout() {
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    // >= 100 cols triggers horizontal split (50/50)
+    let mut buf = Buffer::empty(Rect::new(0, 0, 120, 24));
+    widget.render(Rect::new(0, 0, 120, 24), &mut buf);
+
+    let full = collect_buf_text(&buf, 120, 24);
+    assert!(
+        full.contains("Layout Explorer"),
+        "Wide terminal should show Layout Explorer panel in horizontal layout, got: {full:?}"
     );
 }
 

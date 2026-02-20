@@ -4232,18 +4232,18 @@ fn test_request_layout_data_without_vm_sets_error() {
     );
     // loading must not be set.
     assert!(
-        !state.devtools_view_state.layout_explorer.loading,
-        "layout_explorer.loading must remain false when VM is not connected"
+        !state.devtools_view_state.inspector.layout_loading,
+        "inspector.layout_loading must remain false when VM is not connected"
     );
     // A user-visible error message should be set.
     assert!(
-        state.devtools_view_state.layout_explorer.error.is_some(),
-        "layout_explorer.error should be set when VM is not connected"
+        state.devtools_view_state.inspector.layout_error.is_some(),
+        "inspector.layout_error should be set when VM is not connected"
     );
     let error = state
         .devtools_view_state
-        .layout_explorer
-        .error
+        .inspector
+        .layout_error
         .as_ref()
         .unwrap();
     assert!(
@@ -4273,16 +4273,16 @@ fn test_request_layout_data_with_vm_sets_loading() {
 
     // Should set loading = true and return a FetchLayoutData action.
     assert!(
-        state.devtools_view_state.layout_explorer.loading,
-        "layout_explorer.loading should be true when VM is connected"
+        state.devtools_view_state.inspector.layout_loading,
+        "inspector.layout_loading should be true when VM is connected"
     );
     assert!(
         matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
         "Should return FetchLayoutData action when VM is connected"
     );
     assert!(
-        state.devtools_view_state.layout_explorer.error.is_none(),
-        "layout_explorer.error should not be set when VM is connected"
+        state.devtools_view_state.inspector.layout_error.is_none(),
+        "inspector.layout_error should not be set when VM is connected"
     );
 }
 
@@ -4427,8 +4427,8 @@ fn test_session_switch_resets_devtools_state() {
     state.devtools_view_state.inspector.loading = true;
     state.devtools_view_state.inspector.error =
         Some(DevToolsError::new("old error", "Press [r] to retry"));
-    state.devtools_view_state.layout_explorer.loading = true;
-    state.devtools_view_state.layout_explorer.error =
+    state.devtools_view_state.inspector.layout_loading = true;
+    state.devtools_view_state.inspector.layout_error =
         Some(DevToolsError::new("layout error", "Press [r] to retry"));
     state.devtools_view_state.overlay_repaint_rainbow = true;
     state.devtools_view_state.overlay_debug_paint = true;
@@ -4453,16 +4453,16 @@ fn test_session_switch_resets_devtools_state() {
         "inspector.root should be cleared on session switch"
     );
     assert!(
-        !state.devtools_view_state.layout_explorer.loading,
-        "layout_explorer.loading should be cleared on session switch"
+        !state.devtools_view_state.inspector.layout_loading,
+        "inspector.layout_loading should be cleared on session switch"
     );
     assert!(
-        state.devtools_view_state.layout_explorer.error.is_none(),
-        "layout_explorer.error should be cleared on session switch"
+        state.devtools_view_state.inspector.layout_error.is_none(),
+        "inspector.layout_error should be cleared on session switch"
     );
     assert!(
-        state.devtools_view_state.layout_explorer.layout.is_none(),
-        "layout_explorer.layout should be cleared on session switch"
+        state.devtools_view_state.inspector.layout.is_none(),
+        "inspector.layout should be cleared on session switch"
     );
     assert!(
         !state.devtools_view_state.overlay_repaint_rainbow,
@@ -4580,7 +4580,7 @@ fn test_next_session_single_session_no_reset() {
     let _ = state.session_manager.create_session(&device);
 
     state.devtools_view_state.inspector.loading = true;
-    state.devtools_view_state.active_panel = DevToolsPanel::Layout;
+    state.devtools_view_state.active_panel = DevToolsPanel::Performance;
 
     // With a single session, NextSession is a no-op (wraps to itself)
     update(&mut state, Message::NextSession);
@@ -4592,7 +4592,7 @@ fn test_next_session_single_session_no_reset() {
     );
     assert_eq!(
         state.devtools_view_state.active_panel,
-        DevToolsPanel::Layout,
+        DevToolsPanel::Performance,
         "active_panel must not change when NextSession wraps to same session"
     );
 }
@@ -4654,18 +4654,18 @@ fn test_inspector_has_object_group_cleared_after_reset() {
 }
 
 #[test]
-fn test_layout_explorer_has_object_group_cleared_after_reset() {
+fn test_layout_object_group_cleared_after_inspector_reset() {
     let mut state = AppState::new();
 
     // Simulate an object group existing
-    state.devtools_view_state.layout_explorer.has_object_group = true;
+    state.devtools_view_state.inspector.has_layout_object_group = true;
 
     // Reset clears it
-    state.devtools_view_state.layout_explorer.reset();
+    state.devtools_view_state.inspector.reset();
 
     assert!(
-        !state.devtools_view_state.layout_explorer.has_object_group,
-        "has_object_group should be false after LayoutExplorerState::reset()"
+        !state.devtools_view_state.inspector.has_layout_object_group,
+        "has_layout_object_group should be false after InspectorState::reset()"
     );
 }
 
@@ -4756,7 +4756,7 @@ fn test_devtools_view_state_reset_clears_has_object_group_flags() {
     let mut state = AppState::new();
 
     state.devtools_view_state.inspector.has_object_group = true;
-    state.devtools_view_state.layout_explorer.has_object_group = true;
+    state.devtools_view_state.inspector.has_layout_object_group = true;
 
     state.devtools_view_state.reset();
 
@@ -4765,7 +4765,7 @@ fn test_devtools_view_state_reset_clears_has_object_group_flags() {
         "inspector.has_object_group should be false after DevToolsViewState::reset()"
     );
     assert!(
-        !state.devtools_view_state.layout_explorer.has_object_group,
-        "layout_explorer.has_object_group should be false after DevToolsViewState::reset()"
+        !state.devtools_view_state.inspector.has_layout_object_group,
+        "inspector.has_layout_object_group should be false after DevToolsViewState::reset()"
     );
 }

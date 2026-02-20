@@ -5,11 +5,9 @@
 //! dispatches to the active panel below it.
 
 pub mod inspector;
-pub mod layout_explorer;
 pub mod performance;
 
 pub use inspector::WidgetInspector;
-pub use layout_explorer::LayoutExplorer;
 pub use performance::PerformancePanel;
 
 use fdemon_app::session::{PerformanceState, SessionHandle};
@@ -28,8 +26,8 @@ use crate::theme::{icons::IconSet, palette};
 /// Top-level DevTools mode widget.
 ///
 /// Renders a sub-tab bar at the top and dispatches to the active panel below.
-/// All three panel widgets ([`WidgetInspector`], [`LayoutExplorer`],
-/// [`PerformancePanel`]) are non-stateful; state is passed in via references.
+/// Both panel widgets ([`WidgetInspector`] and [`PerformancePanel`]) are
+/// non-stateful; state is passed in via references.
 pub struct DevToolsView<'a> {
     state: &'a DevToolsViewState,
     session: Option<&'a SessionHandle>,
@@ -92,23 +90,6 @@ impl Widget for DevToolsView<'_> {
                 );
                 widget.render(chunks[1], buf);
             }
-            DevToolsPanel::Layout => {
-                // Use the targeted accessor instead of building a full Vec just
-                // to extract one element. This avoids the per-frame allocation.
-                let selected_name = self.state.inspector.selected_node_description();
-
-                let vm_connected = self
-                    .session
-                    .map(|s| s.session.vm_connected)
-                    .unwrap_or(false);
-                let widget = LayoutExplorer::new(
-                    &self.state.layout_explorer,
-                    selected_name.as_deref(),
-                    vm_connected,
-                    &self.state.connection_status,
-                );
-                widget.render(chunks[1], buf);
-            }
             DevToolsPanel::Performance => {
                 // Safety fallback for when no session is active.
                 // In practice DevTools mode is only reachable when a session exists.
@@ -155,7 +136,6 @@ impl DevToolsView<'_> {
 
         let tabs = [
             (DevToolsPanel::Inspector, "[i] Inspector"),
-            (DevToolsPanel::Layout, "[l] Layout"),
             (DevToolsPanel::Performance, "[p] Performance"),
         ];
 
@@ -289,9 +269,6 @@ impl DevToolsView<'_> {
             DevToolsPanel::Inspector => {
                 "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [r] Refresh  [b] Browser"
             }
-            DevToolsPanel::Layout => {
-                "[Esc] Logs  [i] Inspector  [b] Browser  [Ctrl+r] Rainbow  [Ctrl+d] DebugPaint"
-            }
             DevToolsPanel::Performance => {
                 "[Esc] Logs  [i] Inspector  [b] Browser  [Ctrl+p] PerfOverlay"
             }
@@ -370,17 +347,6 @@ mod tests {
     }
 
     #[test]
-    fn test_devtools_view_renders_layout_panel() {
-        let mut state = DevToolsViewState::default();
-        state.active_panel = DevToolsPanel::Layout;
-
-        let widget = DevToolsView::new(&state, None, IconSet::default());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
-        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
-        // Should not panic
-    }
-
-    #[test]
     fn test_tab_bar_highlights_active_panel() {
         let mut state = DevToolsViewState::default();
         state.active_panel = DevToolsPanel::Performance;
@@ -406,8 +372,11 @@ mod tests {
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(text.contains("Inspector"), "Expected Inspector tab");
-        assert!(text.contains("Layout"), "Expected Layout tab");
         assert!(text.contains("Performance"), "Expected Performance tab");
+        assert!(
+            !text.contains("Layout"),
+            "Layout tab should not appear; got: {text:?}"
+        );
     }
 
     #[test]

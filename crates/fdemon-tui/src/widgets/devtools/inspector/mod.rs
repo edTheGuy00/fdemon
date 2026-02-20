@@ -3,7 +3,7 @@
 //! Renders the Flutter widget tree as an expandable/collapsible tree view
 //! with the selected widget's details shown in a side panel.
 
-mod details_panel;
+mod layout_panel;
 mod tree_panel;
 
 use fdemon_app::state::{DevToolsError, InspectorState, VmConnectionStatus};
@@ -23,14 +23,14 @@ use crate::theme::palette;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
-/// Width threshold below which the details panel is hidden.
-pub(super) const WIDE_TERMINAL_THRESHOLD: u16 = 80;
+/// Width threshold below which the layout panel is shown in vertical split instead of horizontal.
+pub(super) const WIDE_TERMINAL_THRESHOLD: u16 = 100;
 
 /// Percentage of horizontal space given to the tree panel when wide.
-pub(super) const TREE_WIDTH_PCT: u16 = 60;
+pub(super) const TREE_WIDTH_PCT: u16 = 50;
 
-/// Percentage of horizontal space given to the details panel when wide.
-pub(super) const DETAILS_WIDTH_PCT: u16 = 40;
+/// Percentage of horizontal space given to the layout panel when wide.
+pub(super) const LAYOUT_WIDTH_PCT: u16 = 50;
 
 /// Number of content lines in the disconnected-state panel.
 const DISCONNECTED_CONTENT_LINES: u16 = 6;
@@ -142,19 +142,19 @@ impl WidgetInspector<'_> {
         let visible = self.inspector_state.visible_nodes();
         let selected = self.inspector_state.selected_index;
 
-        // Horizontal split: tree (60%) | details (40%) — only for wide terminals.
-        let (tree_area, details_area) = if area.width >= WIDE_TERMINAL_THRESHOLD {
+        // Wide terminals (>= 100 cols): horizontal split — tree left | layout right.
+        // Narrow terminals (< 100 cols): vertical split — tree top | layout bottom.
+        let (tree_area, layout_area) = if area.width >= WIDE_TERMINAL_THRESHOLD {
             let chunks = Layout::horizontal([
                 Constraint::Percentage(TREE_WIDTH_PCT),
-                Constraint::Percentage(DETAILS_WIDTH_PCT),
+                Constraint::Percentage(LAYOUT_WIDTH_PCT),
             ])
             .split(area);
             (chunks[0], Some(chunks[1]))
         } else {
-            // Narrow terminal: vertical split — tree on top, details on bottom.
             let chunks = Layout::vertical([
                 Constraint::Percentage(TREE_WIDTH_PCT),
-                Constraint::Percentage(DETAILS_WIDTH_PCT),
+                Constraint::Percentage(LAYOUT_WIDTH_PCT),
             ])
             .split(area);
             (chunks[0], Some(chunks[1]))
@@ -162,8 +162,8 @@ impl WidgetInspector<'_> {
 
         self.render_tree_panel(tree_area, buf, &visible, selected);
 
-        if let Some(det_area) = details_area {
-            self.render_details(det_area, buf, &visible, selected);
+        if let Some(lay_area) = layout_area {
+            self.render_layout_panel(lay_area, buf, &visible, selected);
         }
     }
 

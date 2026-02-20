@@ -133,4 +133,36 @@ Tests that construct `DevToolsPanel::Layout` or assert on Layout tab rendering w
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Removed `Layout` variant from `DevToolsPanel` enum; updated doc comments; updated test `test_switch_devtools_panel` to not use `Layout` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Updated `parse_default_panel` to map `"layout"` to `Inspector`; removed `DevToolsPanel::Layout` arm from `handle_switch_panel`; updated tests |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Removed 6 tests that called `handle_switch_panel` with `DevToolsPanel::Layout` |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `test_next_session_single_session_no_reset` to use `DevToolsPanel::Performance` instead of `Layout` |
+| `crates/fdemon-app/src/handler/keys.rs` | Removed `'l'` keybinding from `handle_key_devtools`; updated doc comment |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Removed `mod layout_explorer` and `pub use layout_explorer::LayoutExplorer`; removed `Layout` tab from tab bar array; removed `DevToolsPanel::Layout` panel dispatch arm; removed `DevToolsPanel::Layout` footer hint arm; updated tests |
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | DELETED (853 lines) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed Layout-specific switch_panel tests**: The 6 tests in `inspector.rs` that tested `handle_switch_panel(Layout)` behavior were deleted since that code path no longer exists. The layout data handler tests (`handle_layout_data_fetched`, `handle_layout_data_fetch_failed`, `handle_layout_data_fetch_timeout`) were preserved since those functions still exist.
+
+2. **Backward-compatible fallback**: `parse_default_panel("layout")` now returns `DevToolsPanel::Inspector` so users with `default_panel = "layout"` in their config won't get a panic or unexpected behavior.
+
+3. **Layout data fields preserved**: `InspectorState` still has layout data fields (`layout`, `layout_loading`, `layout_error`, etc.) since they are used by `handle_layout_data_fetched` and `FetchLayoutData` actions for future use (Task 05/06).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2113+ unit tests across 4 crates, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (clean, no warnings)
+
+### Risks/Limitations
+
+1. **E2E tests**: Several E2E tests fail but these are pre-existing flaky tests (all marked with `ignored` reasons in code) unrelated to this change. All unit tests pass cleanly.
+2. **Layout data fields orphaned**: `InspectorState` still has `layout_*` fields and `FetchLayoutData` actions still exist in the codebase. These become active when Task 05/06 adds the new Layout panel inside the Inspector view.

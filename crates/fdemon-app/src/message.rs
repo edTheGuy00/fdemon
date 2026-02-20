@@ -796,7 +796,7 @@ pub enum Message {
     /// Layout data fetch timed out (10-second deadline exceeded).
     ///
     /// Sent by `spawn_fetch_layout_data` when `tokio::time::timeout` fires.
-    /// The handler sets `layout_explorer.loading = false` and stores an error
+    /// The handler sets `inspector.layout_loading = false` and stores an error
     /// message with a retry hint.
     LayoutDataFetchTimeout { session_id: SessionId },
 

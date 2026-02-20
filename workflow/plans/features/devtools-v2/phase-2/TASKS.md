@@ -52,13 +52,13 @@ Wave 4                   ▼
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-add-edge-insets-core-types](tasks/01-add-edge-insets-core-types.md) | Not Started | - | `fdemon-core` | `widget_tree.rs` |
-| 2 | [02-merge-layout-state-into-inspector](tasks/02-merge-layout-state-into-inspector.md) | Not Started | - | `fdemon-app` | `state.rs`, `handler/devtools/{mod,inspector,layout}.rs` |
-| 3 | [03-remove-layout-panel-variant](tasks/03-remove-layout-panel-variant.md) | Not Started | 2 | `fdemon-app`, `fdemon-tui` | `state.rs`, `handler/keys.rs`, `handler/devtools/mod.rs`, `widgets/devtools/mod.rs`, `widgets/devtools/layout_explorer.rs` |
-| 4 | [04-extract-padding-from-vm-service](tasks/04-extract-padding-from-vm-service.md) | Not Started | 1 | `fdemon-daemon` | `vm_service/extensions/layout.rs` |
-| 5 | [05-create-layout-panel-widget](tasks/05-create-layout-panel-widget.md) | Not Started | 1, 2 | `fdemon-tui` | `widgets/devtools/inspector/layout_panel.rs` |
-| 6 | [06-wire-merged-inspector-layout](tasks/06-wire-merged-inspector-layout.md) | Not Started | 3, 4, 5 | `fdemon-app`, `fdemon-tui` | `widgets/devtools/inspector/{mod,details_panel}.rs`, `handler/devtools/inspector.rs`, `state.rs` |
-| 7 | [07-final-test-and-cleanup](tasks/07-final-test-and-cleanup.md) | Not Started | 6 | workspace | All devtools modules |
+| 1 | [01-add-edge-insets-core-types](tasks/01-add-edge-insets-core-types.md) | Done | - | `fdemon-core` | `widget_tree.rs` |
+| 2 | [02-merge-layout-state-into-inspector](tasks/02-merge-layout-state-into-inspector.md) | Done | - | `fdemon-app` | `state.rs`, `handler/devtools/{mod,inspector,layout}.rs` |
+| 3 | [03-remove-layout-panel-variant](tasks/03-remove-layout-panel-variant.md) | Done | 2 | `fdemon-app`, `fdemon-tui` | `state.rs`, `handler/keys.rs`, `handler/devtools/mod.rs`, `widgets/devtools/mod.rs`, `widgets/devtools/layout_explorer.rs` |
+| 4 | [04-extract-padding-from-vm-service](tasks/04-extract-padding-from-vm-service.md) | Done | 1 | `fdemon-daemon` | `vm_service/extensions/layout.rs` |
+| 5 | [05-create-layout-panel-widget](tasks/05-create-layout-panel-widget.md) | Done | 1, 2 | `fdemon-tui` | `widgets/devtools/inspector/layout_panel.rs` |
+| 6 | [06-wire-merged-inspector-layout](tasks/06-wire-merged-inspector-layout.md) | Done | 3, 4, 5 | `fdemon-app`, `fdemon-tui` | `widgets/devtools/inspector/{mod,details_panel}.rs`, `handler/devtools/inspector.rs`, `state.rs` |
+| 7 | [07-final-test-and-cleanup](tasks/07-final-test-and-cleanup.md) | Done | 6 | workspace | All devtools modules |
 
 ## Dispatch Plan
 

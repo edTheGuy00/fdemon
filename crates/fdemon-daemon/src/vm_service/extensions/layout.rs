@@ -1,22 +1,24 @@
-//! Layout explorer extensions.
+//! Layout data extensions.
 //!
-//! Provides RPC wrappers for the Flutter Layout Explorer service extension,
+//! Provides RPC wrappers for the Flutter `getLayoutExplorerNode` service extension,
 //! including layout info parsing from raw JSON responses.
 
 use std::collections::HashMap;
 
 use fdemon_core::prelude::*;
-use fdemon_core::widget_tree::{BoxConstraints, DiagnosticsNode, LayoutInfo, WidgetSize};
+use fdemon_core::widget_tree::{
+    BoxConstraints, DiagnosticsNode, EdgeInsets, LayoutInfo, WidgetSize,
+};
 
 use super::ext;
 use super::parse_diagnostics_node_response;
 use super::VmServiceClient;
 
 // ---------------------------------------------------------------------------
-// Layout Explorer extension functions
+// Layout extension functions
 // ---------------------------------------------------------------------------
 
-/// Fetch layout explorer data for a widget node.
+/// Call the Flutter `getLayoutExplorerNode` service extension for a widget node.
 ///
 /// Returns a [`DiagnosticsNode`] enriched with layout-specific properties:
 /// constraints, size, flex factor, flex fit, and child layout info.
@@ -24,7 +26,7 @@ use super::VmServiceClient;
 /// `value_id` is the `valueId` from a previously fetched [`DiagnosticsNode`].
 /// `subtree_depth` controls how many levels of children to include.
 ///
-/// **Important:** The layout explorer uses different parameter keys than other
+/// **Important:** This extension uses different parameter keys than other
 /// inspector extensions. It uses `id` (not `arg`) for the widget ID and
 /// `groupName` (not `objectGroup`) for the object group. This is a quirk of
 /// the Flutter framework that must be matched exactly.
@@ -35,7 +37,7 @@ use super::VmServiceClient;
 ///
 /// Returns an error if the extension call fails or the response cannot be
 /// parsed as a [`DiagnosticsNode`].
-pub async fn get_layout_explorer_node(
+pub async fn get_layout_node(
     client: &VmServiceClient,
     isolate_id: &str,
     value_id: &str,
@@ -43,7 +45,7 @@ pub async fn get_layout_explorer_node(
     subtree_depth: u32,
 ) -> Result<DiagnosticsNode> {
     let mut args = HashMap::new();
-    // NOTE: Layout explorer uses "id" and "groupName", NOT "arg" and "objectGroup"
+    // NOTE: This extension uses "id" and "groupName", NOT "arg" and "objectGroup"
     // like other inspector extensions. This is a real inconsistency in the Flutter
     // framework and the keys must match exactly.
     args.insert("id".to_string(), value_id.to_string());
@@ -56,11 +58,11 @@ pub async fn get_layout_explorer_node(
     parse_diagnostics_node_response(&result)
 }
 
-/// Extract layout information from a [`DiagnosticsNode`] returned by the layout explorer.
+/// Extract layout information from a [`DiagnosticsNode`] returned by the layout extension.
 ///
-/// The layout explorer returns a standard [`DiagnosticsNode`] but with additional
-/// render-specific fields (`constraints`, `size`, `flexFactor`, `flexFit`) that are
-/// not part of the base DiagnosticsNode schema.
+/// The `getLayoutExplorerNode` extension returns a standard [`DiagnosticsNode`] but with
+/// additional render-specific fields (`constraints`, `size`, `flexFactor`, `flexFit`) that
+/// are not part of the base DiagnosticsNode schema.
 ///
 /// Pass both the parsed node (for its `description`) and the raw JSON value from
 /// which the layout fields are read directly.
@@ -83,7 +85,50 @@ pub fn extract_layout_info(node: &DiagnosticsNode, raw_json: &serde_json::Value)
             .get("flexFit")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string()),
+        padding: extract_edge_insets(raw_json, "padding"),
+        margin: extract_edge_insets(raw_json, "margin"),
     }
+}
+
+/// Search for a named EdgeInsets property in the node's properties arrays.
+///
+/// Checks `renderObject.properties` first (more reliable — reflects actual rendered
+/// layout), then falls back to top-level `properties`.
+///
+/// Returns `None` if the property is not found or cannot be parsed. Most widgets
+/// do not expose padding or margin, so `None` is the common case.
+fn extract_edge_insets(raw_json: &serde_json::Value, name: &str) -> Option<EdgeInsets> {
+    // 1. Check renderObject.properties first (more reliable)
+    if let Some(props) = raw_json
+        .get("renderObject")
+        .and_then(|ro| ro.get("properties"))
+        .and_then(|p| p.as_array())
+    {
+        for prop in props {
+            if prop.get("name").and_then(|n| n.as_str()) == Some(name) {
+                if let Some(desc) = prop.get("description").and_then(|d| d.as_str()) {
+                    if let Some(ei) = EdgeInsets::parse(desc) {
+                        return Some(ei);
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback: check top-level properties
+    if let Some(props) = raw_json.get("properties").and_then(|p| p.as_array()) {
+        for prop in props {
+            if prop.get("name").and_then(|n| n.as_str()) == Some(name) {
+                if let Some(desc) = prop.get("description").and_then(|d| d.as_str()) {
+                    if let Some(ei) = EdgeInsets::parse(desc) {
+                        return Some(ei);
+                    }
+                }
+            }
+        }
+    }
+
+    None
 }
 
 /// Parse a widget size from the `"size"` field of a layout explorer JSON response.
@@ -152,9 +197,10 @@ pub fn extract_layout_tree(raw_json: &serde_json::Value) -> Result<Vec<LayoutInf
 
 /// Fetch complete layout data for a widget and its direct children.
 ///
-/// This is the high-level entry point for the Layout Explorer feature. It issues a
-/// single extension call with `subtreeDepth = 1` to retrieve both the widget tree
-/// structure and layout properties for the target widget and its direct children.
+/// This is the high-level entry point for layout data fetching. It issues a
+/// single `getLayoutExplorerNode` extension call with `subtreeDepth = 1` to retrieve
+/// both the widget tree structure and layout properties for the target widget and its
+/// direct children.
 ///
 /// Returns a tuple of:
 /// - The [`DiagnosticsNode`] tree (structure, description, `valueId` etc.)
@@ -174,7 +220,7 @@ pub async fn fetch_layout_data(
     group_name: &str,
 ) -> Result<(DiagnosticsNode, Vec<LayoutInfo>)> {
     let mut args = HashMap::new();
-    // Use the layout-explorer-specific param keys (not "arg"/"objectGroup").
+    // Use the extension-specific param keys (not "arg"/"objectGroup").
     args.insert("id".to_string(), value_id.to_string());
     args.insert("groupName".to_string(), group_name.to_string());
     args.insert("subtreeDepth".to_string(), "1".to_string());
@@ -198,7 +244,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── Layout Explorer: extract_layout_info ────────────────────────────────
+    // ── extract_layout_info ─────────────────────────────────────────────────
 
     #[test]
     fn test_extract_layout_info_full() {
@@ -550,13 +596,13 @@ mod tests {
         assert_eq!(layouts[1].description.as_deref(), Some("Child"));
     }
 
-    // ── Layout Explorer: parameter key contract ─────────────────────────────
+    // ── get_layout_node: parameter key contract ─────────────────────────────
 
     #[test]
-    fn test_layout_explorer_uses_id_not_arg() {
+    fn test_get_layout_node_uses_id_not_arg() {
         // Verify that the "id" key (not "arg") is used for the widget ID.
         // This is a contract test documenting the Flutter framework inconsistency.
-        // The layout explorer extension requires "id" and "groupName" params,
+        // The getLayoutExplorerNode extension requires "id" and "groupName" params,
         // while other inspector extensions use "arg" and "objectGroup".
         //
         // We verify this by inspecting build_extension_params output.
@@ -570,13 +616,13 @@ mod tests {
 
         assert_eq!(params["id"], "objects/42");
         assert_eq!(params["groupName"], "fdemon-inspector-1");
-        // Must NOT use "arg" or "objectGroup" for the layout explorer.
+        // Must NOT use "arg" or "objectGroup" for this extension.
         assert!(params.get("arg").is_none());
         assert!(params.get("objectGroup").is_none());
     }
 
     #[test]
-    fn test_layout_explorer_null_flex_factor_is_none() {
+    fn test_extract_layout_info_null_flex_factor_is_none() {
         // flexFactor: null is the common case for non-flex children.
         // It must be represented as None, not Some(0.0).
         let json = json!({
@@ -592,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn test_layout_explorer_zero_flex_factor_is_some_zero() {
+    fn test_extract_layout_info_zero_flex_factor_is_some_zero() {
         // flexFactor: 0 is a real flex factor value (distinct from null).
         let json = json!({
             "description": "Container",
@@ -603,5 +649,183 @@ mod tests {
         let layout = extract_layout_info(&node, &json);
 
         assert_eq!(layout.flex_factor, Some(0.0));
+    }
+
+    // ── extract_edge_insets ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_extract_edge_insets_from_render_object() {
+        let json = json!({
+            "renderObject": {
+                "properties": [
+                    { "name": "padding", "description": "EdgeInsets(8.0, 16.0, 8.0, 16.0)" }
+                ]
+            }
+        });
+        let ei = extract_edge_insets(&json, "padding").unwrap();
+        assert_eq!(ei.top, 8.0);
+        assert_eq!(ei.right, 16.0);
+        assert_eq!(ei.bottom, 8.0);
+        assert_eq!(ei.left, 16.0);
+    }
+
+    #[test]
+    fn test_extract_edge_insets_from_top_level_properties() {
+        let json = json!({
+            "properties": [
+                { "name": "padding", "description": "EdgeInsets.all(8.0)" }
+            ]
+        });
+        let ei = extract_edge_insets(&json, "padding").unwrap();
+        assert_eq!(
+            ei,
+            fdemon_core::widget_tree::EdgeInsets {
+                top: 8.0,
+                right: 8.0,
+                bottom: 8.0,
+                left: 8.0,
+            }
+        );
+    }
+
+    #[test]
+    fn test_extract_edge_insets_missing_returns_none() {
+        let json = json!({ "properties": [] });
+        assert!(extract_edge_insets(&json, "padding").is_none());
+    }
+
+    #[test]
+    fn test_extract_edge_insets_no_properties_field_returns_none() {
+        // Node with no properties array at all — should not panic
+        let json = json!({ "description": "Text", "hasChildren": false });
+        assert!(extract_edge_insets(&json, "padding").is_none());
+    }
+
+    #[test]
+    fn test_extract_edge_insets_prefers_render_object_over_top_level() {
+        // When both renderObject.properties and top-level properties have padding,
+        // renderObject.properties should be preferred (returned first).
+        let json = json!({
+            "renderObject": {
+                "properties": [
+                    { "name": "padding", "description": "EdgeInsets.all(4.0)" }
+                ]
+            },
+            "properties": [
+                { "name": "padding", "description": "EdgeInsets.all(99.0)" }
+            ]
+        });
+        let ei = extract_edge_insets(&json, "padding").unwrap();
+        // renderObject value (4.0), not top-level value (99.0)
+        assert_eq!(ei.top, 4.0);
+    }
+
+    #[test]
+    fn test_extract_edge_insets_zero_format() {
+        let json = json!({
+            "properties": [
+                { "name": "padding", "description": "EdgeInsets.zero" }
+            ]
+        });
+        let ei = extract_edge_insets(&json, "padding").unwrap();
+        assert!(ei.is_zero());
+    }
+
+    #[test]
+    fn test_extract_edge_insets_malformed_description_returns_none() {
+        // Malformed EdgeInsets string — should not panic, returns None
+        let json = json!({
+            "properties": [
+                { "name": "padding", "description": "EdgeInsets(bad, data)" }
+            ]
+        });
+        assert!(extract_edge_insets(&json, "padding").is_none());
+    }
+
+    #[test]
+    fn test_extract_edge_insets_wrong_property_name_returns_none() {
+        // Property exists but with a different name — should not match
+        let json = json!({
+            "properties": [
+                { "name": "color", "description": "EdgeInsets.all(8.0)" }
+            ]
+        });
+        assert!(extract_edge_insets(&json, "padding").is_none());
+    }
+
+    #[test]
+    fn test_extract_layout_info_with_padding() {
+        // Full integration: construct JSON with constraints, size, AND padding.
+        // Verify all fields are populated in the returned LayoutInfo.
+        let json = json!({
+            "description": "Padding",
+            "hasChildren": true,
+            "constraints": {
+                "description": "0.0<=w<=414.0, 0.0<=h<=896.0"
+            },
+            "size": { "width": "414.0", "height": "100.0" },
+            "renderObject": {
+                "properties": [
+                    { "name": "padding", "description": "EdgeInsets(8.0, 16.0, 8.0, 16.0)" }
+                ]
+            }
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let layout = extract_layout_info(&node, &json);
+
+        assert_eq!(layout.description.as_deref(), Some("Padding"));
+        assert!(layout.constraints.is_some());
+        assert!(layout.size.is_some());
+        let padding = layout.padding.unwrap();
+        assert_eq!(padding.top, 8.0);
+        assert_eq!(padding.right, 16.0);
+        assert_eq!(padding.bottom, 8.0);
+        assert_eq!(padding.left, 16.0);
+        assert!(layout.margin.is_none());
+    }
+
+    #[test]
+    fn test_extract_layout_info_without_padding_still_works() {
+        // Regression: existing JSON without padding properties still produces valid LayoutInfo.
+        // Most widgets do not have padding — None is the common case.
+        let json = json!({
+            "description": "Column",
+            "hasChildren": true,
+            "constraints": {
+                "description": "0.0<=w<=414.0, 0.0<=h<=896.0"
+            },
+            "size": { "width": "414.0", "height": "600.0" },
+            "flexFactor": null
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let layout = extract_layout_info(&node, &json);
+
+        assert_eq!(layout.description.as_deref(), Some("Column"));
+        assert!(layout.constraints.is_some());
+        assert!(layout.size.is_some());
+        // No padding/margin on a Column — both should be None
+        assert!(layout.padding.is_none());
+        assert!(layout.margin.is_none());
+    }
+
+    #[test]
+    fn test_extract_layout_info_with_margin() {
+        // Verify margin field is extracted analogously to padding.
+        let json = json!({
+            "description": "Container",
+            "hasChildren": false,
+            "properties": [
+                { "name": "margin", "description": "EdgeInsets.all(12.0)" }
+            ]
+        });
+        let node: DiagnosticsNode = serde_json::from_value(json.clone()).unwrap();
+        let layout = extract_layout_info(&node, &json);
+
+        assert!(layout.padding.is_none());
+        let margin = layout.margin.unwrap();
+        assert_eq!(margin.top, 12.0);
+        assert_eq!(margin.right, 12.0);
+        assert_eq!(margin.bottom, 12.0);
+        assert_eq!(margin.left, 12.0);
     }
 }

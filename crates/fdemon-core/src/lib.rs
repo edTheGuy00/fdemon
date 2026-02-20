@@ -86,5 +86,6 @@ pub use types::{
     LogSource, LogSourceFilter, Platform, SearchMatch, SearchState,
 };
 pub use widget_tree::{
-    BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode, LayoutInfo, WidgetSize,
+    BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode, EdgeInsets, LayoutInfo,
+    WidgetSize,
 };

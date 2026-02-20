@@ -5,18 +5,14 @@
 //! launching, and debug overlay toggling.
 //!
 //! Sub-modules:
-//! - `inspector`: Widget tree fetch handlers and inspector navigation
-//! - `layout`: Layout explorer fetch handlers
+//! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
 
 pub mod inspector;
-pub mod layout;
 
 pub use inspector::{
-    handle_inspector_navigate, handle_widget_tree_fetch_failed, handle_widget_tree_fetch_timeout,
+    handle_inspector_navigate, handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout,
+    handle_layout_data_fetched, handle_widget_tree_fetch_failed, handle_widget_tree_fetch_timeout,
     handle_widget_tree_fetched,
-};
-pub use layout::{
-    handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout, handle_layout_data_fetched,
 };
 
 use crate::handler::{UpdateAction, UpdateResult};
@@ -82,11 +78,13 @@ pub fn map_rpc_error(raw: &str) -> DevToolsError {
 }
 
 /// Map a `default_panel` config string to a [`DevToolsPanel`] variant.
+///
+/// `"layout"` is mapped to `Inspector` as a backward-compatible fallback for
+/// users who had `default_panel = "layout"` in their config file.
 pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
     match panel {
-        "layout" => DevToolsPanel::Layout,
         "performance" => DevToolsPanel::Performance,
-        _ => DevToolsPanel::Inspector,
+        _ => DevToolsPanel::Inspector, // "layout" falls through to Inspector
     }
 }
 
@@ -137,7 +135,7 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle switching DevTools sub-panel. Auto-fetches data when switching to
-/// Inspector (widget tree) or Layout (layout data for selected widget).
+/// Inspector (widget tree).
 pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> UpdateResult {
     state.switch_devtools_panel(panel);
 
@@ -157,44 +155,6 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                         });
                     }
                 }
-            }
-        }
-        DevToolsPanel::Layout => {
-            let selected_node_id = {
-                let visible = state.devtools_view_state.inspector.visible_nodes();
-                visible
-                    .get(state.devtools_view_state.inspector.selected_index)
-                    .and_then(|(node, _)| node.value_id.clone())
-            };
-
-            if let Some(node_id) = selected_node_id {
-                let already_fetched = state
-                    .devtools_view_state
-                    .layout_explorer
-                    .last_fetched_node_id
-                    .as_deref()
-                    == Some(node_id.as_str());
-
-                if already_fetched && !state.devtools_view_state.layout_explorer.loading {
-                    // Fresh — no fetch needed.
-                } else if let Some(handle) = state.session_manager.selected() {
-                    if handle.session.vm_connected {
-                        let session_id = handle.session.id;
-                        state.devtools_view_state.layout_explorer.loading = true;
-                        state.devtools_view_state.layout_explorer.pending_node_id =
-                            Some(node_id.clone());
-                        return UpdateResult::action(UpdateAction::FetchLayoutData {
-                            session_id,
-                            node_id,
-                            vm_handle: None, // hydrated by process.rs
-                        });
-                    }
-                }
-            } else {
-                state.devtools_view_state.layout_explorer.error = Some(DevToolsError::new(
-                    "No widget selected",
-                    "Select a widget in the Inspector panel first",
-                ));
             }
         }
         DevToolsPanel::Performance => {}
@@ -320,7 +280,8 @@ mod tests {
     #[test]
     fn test_default_panel_maps_to_devtools_panel_enum() {
         assert_eq!(parse_default_panel("inspector"), DevToolsPanel::Inspector);
-        assert_eq!(parse_default_panel("layout"), DevToolsPanel::Layout);
+        // "layout" falls back to Inspector for backward compatibility
+        assert_eq!(parse_default_panel("layout"), DevToolsPanel::Inspector);
         assert_eq!(
             parse_default_panel("performance"),
             DevToolsPanel::Performance
@@ -355,13 +316,14 @@ mod tests {
     }
 
     #[test]
-    fn test_handle_enter_devtools_mode_layout_panel() {
+    fn test_handle_enter_devtools_mode_layout_panel_falls_back_to_inspector() {
         let mut state = make_state();
         state.settings.devtools.default_panel = "layout".to_string();
         handle_enter_devtools_mode(&mut state);
+        // "layout" is no longer a valid panel — falls back to Inspector
         assert_eq!(
             state.devtools_view_state.active_panel,
-            DevToolsPanel::Layout,
+            DevToolsPanel::Inspector,
         );
     }
 
@@ -394,12 +356,6 @@ mod tests {
         assert_eq!(
             state.devtools_view_state.active_panel,
             DevToolsPanel::Performance
-        );
-
-        handle_switch_panel(&mut state, DevToolsPanel::Layout);
-        assert_eq!(
-            state.devtools_view_state.active_panel,
-            DevToolsPanel::Layout
         );
 
         handle_switch_panel(&mut state, DevToolsPanel::Inspector);

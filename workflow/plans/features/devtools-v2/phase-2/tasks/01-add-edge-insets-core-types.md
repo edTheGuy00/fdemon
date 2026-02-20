@@ -135,4 +135,32 @@ fn test_layout_info_default_has_no_padding() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/widget_tree.rs` | Added `EdgeInsets` struct with `zero()`, `is_zero()`, `parse()` methods; added `padding` and `margin` fields to `LayoutInfo`; added 9 new unit tests |
+| `crates/fdemon-core/src/lib.rs` | Exported `EdgeInsets` alongside existing widget tree types |
+| `crates/fdemon-daemon/src/vm_service/extensions/layout.rs` | Added `..Default::default()` to `LayoutInfo` struct literal to compile with new optional fields |
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | Added `..Default::default()` to 4 `LayoutInfo` struct literals in test helpers |
+
+### Notable Decisions/Tradeoffs
+
+1. **Struct update syntax for downstream literals**: Rather than explicitly writing `padding: None, margin: None` in every existing struct literal, used `..Default::default()` which is more maintainable as new optional fields are added in future tasks. This is consistent with Rust idiom for structs with `Default`.
+
+2. **Pre-existing `fdemon-app` failures are out-of-scope**: The workspace has pre-existing broken changes in `fdemon-app/src/handler/update.rs` that reference a removed `layout_explorer` field (from earlier phase-2 work merging `LayoutExplorerState` into `InspectorState`). These are unrelated to Task 01 and existed before this task started.
+
+3. **Parser is lenient**: `EdgeInsets::parse()` returns `None` for unrecognised formats rather than erroring, matching the task spec ("lenient") and the `BoxConstraints::parse()` pattern already in the file.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` — Passed
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-core` — Passed (331 unit tests + 5 doc tests)
+- `cargo clippy -p fdemon-core -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`fdemon-app` pre-existing errors**: The workspace does not fully compile due to pre-existing phase-2 work in progress (`handler/update.rs` still references `layout_explorer` which was removed from `DevToolsViewState` by an earlier task). This does not affect Task 01's deliverables (`fdemon-core` compiles and tests cleanly).
