@@ -167,6 +167,93 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .value(SettingValue::String(settings.devtools.browser.clone()))
             .default(SettingValue::String(String::new()))
             .section("DevTools"),
+        SettingItem::new("devtools.default_panel", "Default Panel")
+            .description("Panel shown when entering DevTools mode")
+            .value(SettingValue::Enum {
+                value: settings.devtools.default_panel.clone(),
+                options: vec![
+                    "inspector".to_string(),
+                    "layout".to_string(),
+                    "performance".to_string(),
+                ],
+            })
+            .default(SettingValue::Enum {
+                value: "inspector".to_string(),
+                options: vec![
+                    "inspector".to_string(),
+                    "layout".to_string(),
+                    "performance".to_string(),
+                ],
+            })
+            .section("DevTools"),
+        SettingItem::new("devtools.performance_refresh_ms", "Perf Refresh (ms)")
+            .description("Memory polling interval in milliseconds (min 500)")
+            .value(SettingValue::Number(
+                settings.devtools.performance_refresh_ms as i64,
+            ))
+            .default(SettingValue::Number(2000))
+            .section("DevTools"),
+        SettingItem::new("devtools.memory_history_size", "Memory History Size")
+            .description("Number of memory snapshots to retain")
+            .value(SettingValue::Number(
+                settings.devtools.memory_history_size as i64,
+            ))
+            .default(SettingValue::Number(60))
+            .section("DevTools"),
+        SettingItem::new("devtools.tree_max_depth", "Widget Tree Max Depth")
+            .description("Max fetch depth for widget tree (0 = unlimited)")
+            .value(SettingValue::Number(
+                settings.devtools.tree_max_depth as i64,
+            ))
+            .default(SettingValue::Number(0))
+            .section("DevTools"),
+        SettingItem::new("devtools.auto_repaint_rainbow", "Auto Repaint Rainbow")
+            .description("Enable repaint rainbow overlay on VM connect")
+            .value(SettingValue::Bool(settings.devtools.auto_repaint_rainbow))
+            .default(SettingValue::Bool(false))
+            .section("DevTools"),
+        SettingItem::new("devtools.auto_performance_overlay", "Auto Perf Overlay")
+            .description("Enable performance overlay on VM connect")
+            .value(SettingValue::Bool(
+                settings.devtools.auto_performance_overlay,
+            ))
+            .default(SettingValue::Bool(false))
+            .section("DevTools"),
+        // ─────────────────────────────────────────────────────────
+        // DevTools Logging Sub-Section
+        // ─────────────────────────────────────────────────────────
+        SettingItem::new("devtools.logging.hybrid_enabled", "Hybrid Logging")
+            .description("Enable hybrid logging (VM Service + daemon)")
+            .value(SettingValue::Bool(settings.devtools.logging.hybrid_enabled))
+            .default(SettingValue::Bool(true))
+            .section("DevTools Logging"),
+        SettingItem::new("devtools.logging.prefer_vm_level", "Prefer VM Log Level")
+            .description("Use VM Service log level when available")
+            .value(SettingValue::Bool(
+                settings.devtools.logging.prefer_vm_level,
+            ))
+            .default(SettingValue::Bool(true))
+            .section("DevTools Logging"),
+        SettingItem::new(
+            "devtools.logging.show_source_indicator",
+            "Show Source Indicator",
+        )
+        .description("Show [VM] / [daemon] tag on log entries")
+        .value(SettingValue::Bool(
+            settings.devtools.logging.show_source_indicator,
+        ))
+        .default(SettingValue::Bool(false))
+        .section("DevTools Logging"),
+        SettingItem::new(
+            "devtools.logging.dedupe_threshold_ms",
+            "Dedupe Threshold (ms)",
+        )
+        .description("Suppress duplicate logs within N milliseconds")
+        .value(SettingValue::Number(
+            settings.devtools.logging.dedupe_threshold_ms as i64,
+        ))
+        .default(SettingValue::Number(100))
+        .section("DevTools Logging"),
         // ─────────────────────────────────────────────────────────
         // Editor Section
         // ─────────────────────────────────────────────────────────

@@ -275,7 +275,7 @@ fn default_theme() -> String {
 }
 
 /// DevTools settings
-#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DevToolsSettings {
     /// Auto-open DevTools when app starts
     #[serde(default)]
@@ -284,6 +284,97 @@ pub struct DevToolsSettings {
     /// Browser to use (empty = system default)
     #[serde(default)]
     pub browser: String,
+
+    /// Default panel when entering DevTools mode ("inspector", "layout", "performance")
+    #[serde(default = "default_devtools_panel")]
+    pub default_panel: String,
+
+    /// Performance data refresh interval in milliseconds (minimum 500ms)
+    #[serde(default = "default_performance_refresh_ms")]
+    pub performance_refresh_ms: u64,
+
+    /// Memory history size (number of snapshots to retain)
+    #[serde(default = "default_memory_history_size")]
+    pub memory_history_size: usize,
+
+    /// Widget tree max fetch depth (0 = unlimited)
+    #[serde(default)]
+    pub tree_max_depth: u32,
+
+    /// Auto-enable repaint rainbow on VM connect
+    #[serde(default)]
+    pub auto_repaint_rainbow: bool,
+
+    /// Auto-enable performance overlay on VM connect
+    #[serde(default)]
+    pub auto_performance_overlay: bool,
+
+    /// Logging sub-settings
+    #[serde(default)]
+    pub logging: DevToolsLoggingSettings,
+}
+
+impl Default for DevToolsSettings {
+    fn default() -> Self {
+        Self {
+            auto_open: false,
+            browser: String::new(),
+            default_panel: default_devtools_panel(),
+            performance_refresh_ms: default_performance_refresh_ms(),
+            memory_history_size: default_memory_history_size(),
+            tree_max_depth: 0,
+            auto_repaint_rainbow: false,
+            auto_performance_overlay: false,
+            logging: DevToolsLoggingSettings::default(),
+        }
+    }
+}
+
+fn default_devtools_panel() -> String {
+    "inspector".to_string()
+}
+
+fn default_performance_refresh_ms() -> u64 {
+    2000
+}
+
+fn default_memory_history_size() -> usize {
+    60
+}
+
+/// Logging sub-settings for the hybrid VM Service + daemon log pipeline.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct DevToolsLoggingSettings {
+    /// Enable hybrid logging (VM Service + daemon)
+    #[serde(default = "default_true")]
+    pub hybrid_enabled: bool,
+
+    /// Prefer VM Service log level when available
+    #[serde(default = "default_true")]
+    pub prefer_vm_level: bool,
+
+    /// Show log source indicator ([VM] vs [daemon])
+    #[serde(default)]
+    pub show_source_indicator: bool,
+
+    /// Dedupe threshold: logs within N ms with same message are duplicates
+    #[serde(default = "default_dedupe_threshold_ms")]
+    pub dedupe_threshold_ms: u64,
+}
+
+impl Default for DevToolsLoggingSettings {
+    fn default() -> Self {
+        Self {
+            hybrid_enabled: true,
+            prefer_vm_level: true,
+            show_source_indicator: false,
+            dedupe_threshold_ms: default_dedupe_threshold_ms(),
+        }
+    }
+}
+
+fn default_dedupe_threshold_ms() -> u64 {
+    100
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -955,5 +1046,85 @@ theme = "default"
 "#;
         let settings: Settings = toml::from_str(toml).unwrap();
         assert_eq!(settings.ui.icons, IconMode::NerdFonts);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DevToolsSettings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_devtools_settings_default_values() {
+        let settings = DevToolsSettings::default();
+        assert!(!settings.auto_open);
+        assert!(settings.browser.is_empty());
+        assert_eq!(settings.default_panel, "inspector");
+        assert_eq!(settings.performance_refresh_ms, 2000);
+        assert_eq!(settings.memory_history_size, 60);
+        assert_eq!(settings.tree_max_depth, 0);
+        assert!(!settings.auto_repaint_rainbow);
+        assert!(!settings.auto_performance_overlay);
+    }
+
+    #[test]
+    fn test_devtools_settings_backwards_compatible_deserialization() {
+        // Old config with only auto_open and browser should still work
+        let toml = r#"
+            auto_open = true
+            browser = "firefox"
+        "#;
+        let settings: DevToolsSettings = toml::from_str(toml).unwrap();
+        assert!(settings.auto_open);
+        assert_eq!(settings.browser, "firefox");
+        // New fields should have defaults
+        assert_eq!(settings.default_panel, "inspector");
+        assert_eq!(settings.performance_refresh_ms, 2000);
+    }
+
+    #[test]
+    fn test_devtools_settings_full_deserialization() {
+        let toml = r#"
+            auto_open = false
+            browser = ""
+            default_panel = "performance"
+            performance_refresh_ms = 5000
+            memory_history_size = 120
+            tree_max_depth = 10
+            auto_repaint_rainbow = true
+            auto_performance_overlay = false
+
+            [logging]
+            hybrid_enabled = true
+            prefer_vm_level = false
+            show_source_indicator = true
+            dedupe_threshold_ms = 200
+        "#;
+        let settings: DevToolsSettings = toml::from_str(toml).unwrap();
+        assert_eq!(settings.default_panel, "performance");
+        assert_eq!(settings.performance_refresh_ms, 5000);
+        assert_eq!(settings.memory_history_size, 120);
+        assert_eq!(settings.tree_max_depth, 10);
+        assert!(settings.auto_repaint_rainbow);
+        assert!(settings.logging.show_source_indicator);
+        assert_eq!(settings.logging.dedupe_threshold_ms, 200);
+    }
+
+    #[test]
+    fn test_devtools_logging_settings_defaults() {
+        let logging = DevToolsLoggingSettings::default();
+        assert!(logging.hybrid_enabled);
+        assert!(logging.prefer_vm_level);
+        assert!(!logging.show_source_indicator);
+        assert_eq!(logging.dedupe_threshold_ms, 100);
+    }
+
+    #[test]
+    fn test_settings_devtools_section_defaults() {
+        let settings = Settings::default();
+        assert_eq!(settings.devtools.default_panel, "inspector");
+        assert_eq!(settings.devtools.performance_refresh_ms, 2000);
+        assert_eq!(settings.devtools.memory_history_size, 60);
+        assert_eq!(settings.devtools.tree_max_depth, 0);
+        assert!(!settings.devtools.auto_repaint_rainbow);
+        assert!(!settings.devtools.auto_performance_overlay);
     }
 }

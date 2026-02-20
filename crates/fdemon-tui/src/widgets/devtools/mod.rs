@@ -13,7 +13,7 @@ pub use layout_explorer::LayoutExplorer;
 pub use performance::PerformancePanel;
 
 use fdemon_app::session::{PerformanceState, SessionHandle};
-use fdemon_app::state::{DevToolsPanel, DevToolsViewState};
+use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -81,7 +81,15 @@ impl Widget for DevToolsView<'_> {
         // Render active panel
         match self.state.active_panel {
             DevToolsPanel::Inspector => {
-                let widget = WidgetInspector::new(&self.state.inspector);
+                let vm_connected = self
+                    .session
+                    .map(|s| s.session.vm_connected)
+                    .unwrap_or(false);
+                let widget = WidgetInspector::new(
+                    &self.state.inspector,
+                    vm_connected,
+                    &self.state.connection_status,
+                );
                 widget.render(chunks[1], buf);
             }
             DevToolsPanel::Layout => {
@@ -89,8 +97,16 @@ impl Widget for DevToolsView<'_> {
                 // to extract one element. This avoids the per-frame allocation.
                 let selected_name = self.state.inspector.selected_node_description();
 
-                let widget =
-                    LayoutExplorer::new(&self.state.layout_explorer, selected_name.as_deref());
+                let vm_connected = self
+                    .session
+                    .map(|s| s.session.vm_connected)
+                    .unwrap_or(false);
+                let widget = LayoutExplorer::new(
+                    &self.state.layout_explorer,
+                    selected_name.as_deref(),
+                    vm_connected,
+                    &self.state.connection_status,
+                );
                 widget.render(chunks[1], buf);
             }
             DevToolsPanel::Performance => {
@@ -104,8 +120,13 @@ impl Widget for DevToolsView<'_> {
                     .map(|s| (&s.session.performance, s.session.vm_connected))
                     .unwrap_or_else(|| (&*DEFAULT_PERF, false));
 
-                let widget = PerformancePanel::new(perf, vm_connected, self.icons)
-                    .with_connection_error(self.state.vm_connection_error.as_deref());
+                let widget = PerformancePanel::new(
+                    perf,
+                    vm_connected,
+                    self.icons,
+                    &self.state.connection_status,
+                )
+                .with_connection_error(self.state.vm_connection_error.as_deref());
                 widget.render(chunks[1], buf);
             }
         }
@@ -173,17 +194,83 @@ impl DevToolsView<'_> {
             indicators.push("PerfOverlay");
         }
 
-        if !indicators.is_empty() {
-            let indicator_text = indicators.join(" | ");
-            let text_len = indicator_text.len() as u16;
-            let right_x = inner.x + inner.width.saturating_sub(text_len + 1);
-            if right_x < inner.right() {
-                buf.set_string(
-                    right_x,
-                    inner.y,
-                    &indicator_text,
+        // Connection indicator (only shown for degraded states)
+        let mut conn_label_owned = String::new();
+        let conn_indicator: Option<(&str, Style)> =
+            self.connection_indicator_text(&mut conn_label_owned);
+
+        // Build right-side text: connection indicator first, then overlay indicators
+        // (connection state is more important for the user to see)
+        let right_parts_count = if conn_indicator.is_some() { 1 } else { 0 }
+            + if indicators.is_empty() { 0 } else { 1 };
+
+        if right_parts_count > 0 {
+            // Determine total right-side width to position correctly
+            let overlay_text = if indicators.is_empty() {
+                String::new()
+            } else {
+                indicators.join(" | ")
+            };
+
+            // Render connection indicator if present
+            if let Some((label, style)) = &conn_indicator {
+                let label_len = label.chars().count() as u16;
+                let overlay_extra = if overlay_text.is_empty() {
+                    0
+                } else {
+                    overlay_text.len() as u16 + 3 // " | " separator
+                };
+                let total_len = label_len + overlay_extra;
+                let right_x = inner.x + inner.width.saturating_sub(total_len + 1);
+                if right_x < inner.right() {
+                    buf.set_string(right_x, inner.y, label, *style);
+                }
+            }
+
+            // Render overlay indicators
+            if !overlay_text.is_empty() {
+                let text_len = overlay_text.len() as u16;
+                let right_x = inner.x + inner.width.saturating_sub(text_len + 1);
+                if right_x < inner.right() {
+                    buf.set_string(
+                        right_x,
+                        inner.y,
+                        &overlay_text,
+                        Style::default().fg(palette::STATUS_YELLOW),
+                    );
+                }
+            }
+        }
+    }
+
+    /// Return the connection indicator label and style for degraded states,
+    /// or `None` when the connection is healthy (Connected).
+    ///
+    /// `label_buf` is used as backing storage so the returned `&str` can borrow
+    /// from it without requiring a `String` return value.
+    fn connection_indicator_text<'a>(&self, label_buf: &'a mut String) -> Option<(&'a str, Style)> {
+        match &self.state.connection_status {
+            VmConnectionStatus::Connected => None,
+            VmConnectionStatus::Disconnected => {
+                *label_buf = "x Disconnected".to_string();
+                Some((label_buf.as_str(), Style::default().fg(palette::STATUS_RED)))
+            }
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts,
+            } => {
+                *label_buf = format!("~ Reconnecting ({attempt}/{max_attempts})");
+                Some((
+                    label_buf.as_str(),
                     Style::default().fg(palette::STATUS_YELLOW),
-                );
+                ))
+            }
+            VmConnectionStatus::TimedOut => {
+                *label_buf = "! Timed Out".to_string();
+                Some((
+                    label_buf.as_str(),
+                    Style::default().fg(palette::STATUS_YELLOW),
+                ))
             }
         }
     }
@@ -242,7 +329,7 @@ pub(super) fn truncate_str(s: &str, max_chars: usize) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::state::{DevToolsPanel, DevToolsViewState};
+    use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
     use ratatui::buffer::Buffer;
     use ratatui::layout::Rect;
 
@@ -401,5 +488,123 @@ mod tests {
         // The active tab should have Cyan background
         let text = collect_buf_text(&buf, 80, 3);
         assert!(text.contains("Inspector"), "Expected Inspector in tab bar");
+    }
+
+    // ── Connection indicator tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_connection_indicator_connected_shows_nothing() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Connected;
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut label = String::new();
+        let result = widget.connection_indicator_text(&mut label);
+        assert!(
+            result.is_none(),
+            "Connected state should show no indicator, got: {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_connection_indicator_disconnected() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Disconnected;
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut label = String::new();
+        let result = widget.connection_indicator_text(&mut label);
+        assert!(result.is_some(), "Disconnected should produce an indicator");
+        let (text, _style) = result.unwrap();
+        assert!(
+            text.contains("Disconnected"),
+            "Label should mention Disconnected, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_connection_indicator_reconnecting_shows_attempt_counter() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 10,
+        };
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut label = String::new();
+        let result = widget.connection_indicator_text(&mut label);
+        assert!(result.is_some(), "Reconnecting should produce an indicator");
+        let (text, _style) = result.unwrap();
+        assert!(
+            text.contains("2") && text.contains("10"),
+            "Label should include attempt counts, got: {text:?}"
+        );
+        assert!(
+            text.contains("Reconnecting"),
+            "Label should mention Reconnecting, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_connection_indicator_timed_out() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::TimedOut;
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut label = String::new();
+        let result = widget.connection_indicator_text(&mut label);
+        assert!(result.is_some(), "TimedOut should produce an indicator");
+        let (text, _style) = result.unwrap();
+        assert!(
+            text.contains("Timed") || text.contains("Out"),
+            "Label should mention Timed Out, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_shows_disconnected_indicator() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Disconnected;
+
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("Disconnected"),
+            "Tab bar should show 'Disconnected' indicator, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_shows_reconnecting_indicator() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        };
+
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            text.contains("Reconnecting"),
+            "Tab bar should show 'Reconnecting' indicator, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_no_indicator_when_connected() {
+        let mut state = DevToolsViewState::default();
+        state.connection_status = VmConnectionStatus::Connected;
+
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
+        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 3);
+        assert!(
+            !text.contains("Disconnected") && !text.contains("Reconnecting"),
+            "Tab bar should not show connection indicator when connected, got: {text:?}"
+        );
     }
 }

@@ -88,7 +88,9 @@ pub use message::{DebugOverlayKind, Message};
 pub use plugin::EnginePlugin;
 pub use session::{Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
-pub use state::{AppState, DevToolsPanel, DevToolsViewState, InspectorState, LayoutExplorerState};
+pub use state::{
+    AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState, LayoutExplorerState,
+};
 
 // Re-export action types used by TUI for startup
 pub use actions::SessionTaskMap;

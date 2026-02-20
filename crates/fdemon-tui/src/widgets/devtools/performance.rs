@@ -4,6 +4,7 @@
 //! using data from Phase 3's monitoring pipeline ([`PerformanceState`]).
 
 use fdemon_app::session::PerformanceState;
+use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::performance::MemoryUsage;
 use ratatui::{
     buffer::Buffer,
@@ -55,16 +56,25 @@ pub struct PerformancePanel<'a> {
     /// When `Some`, the disconnected state shows the specific failure reason instead
     /// of the generic "VM Service not connected" message.
     vm_connection_error: Option<&'a str>,
+    /// Rich VM connection status for displaying more detailed messages in the
+    /// disconnected/reconnecting state.
+    connection_status: &'a VmConnectionStatus,
     icons: IconSet,
 }
 
 impl<'a> PerformancePanel<'a> {
     /// Create a new performance panel widget.
-    pub fn new(performance: &'a PerformanceState, vm_connected: bool, icons: IconSet) -> Self {
+    pub fn new(
+        performance: &'a PerformanceState,
+        vm_connected: bool,
+        icons: IconSet,
+        connection_status: &'a VmConnectionStatus,
+    ) -> Self {
         Self {
             performance,
             vm_connected,
             vm_connection_error: None,
+            connection_status,
             icons,
         }
     }
@@ -133,11 +143,25 @@ impl PerformancePanel<'_> {
         // generic "not connected" message so the user sees an actionable reason.
         let error_owned: String;
         let message: &str = if !self.vm_connected {
-            if let Some(err) = self.vm_connection_error {
-                error_owned = err.to_string();
-                &error_owned
-            } else {
-                "VM Service not connected. Performance monitoring requires a debug connection."
+            match self.connection_status {
+                VmConnectionStatus::Reconnecting {
+                    attempt,
+                    max_attempts,
+                } => {
+                    error_owned = format!(
+                        "Reconnecting to VM Service... ({attempt}/{max_attempts})\n\
+                         Performance monitoring will resume when connected."
+                    );
+                    &error_owned
+                }
+                _ => {
+                    if let Some(err) = self.vm_connection_error {
+                        error_owned = err.to_string();
+                        &error_owned
+                    } else {
+                        "VM Service not connected. Performance monitoring requires a debug connection."
+                    }
+                }
             }
         } else if !self.performance.monitoring_active {
             "Performance monitoring starting..."
@@ -485,6 +509,7 @@ fn format_number(n: u64) -> String {
 mod tests {
     use super::*;
     use fdemon_app::session::PerformanceState;
+    use fdemon_app::state::VmConnectionStatus;
     use fdemon_core::performance::{FrameTiming, MemoryUsage};
 
     fn make_test_performance() -> PerformanceState {
@@ -520,7 +545,12 @@ mod tests {
     #[test]
     fn test_performance_panel_renders_without_panic() {
         let perf = make_test_performance();
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            true,
+            IconSet::default(),
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Should not panic
@@ -529,7 +559,12 @@ mod tests {
     #[test]
     fn test_performance_panel_shows_fps() {
         let perf = make_test_performance();
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            true,
+            IconSet::default(),
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Collect content from row 0
@@ -545,7 +580,12 @@ mod tests {
     #[test]
     fn test_performance_panel_disconnected_state() {
         let perf = PerformanceState::default(); // Empty, no data, monitoring_active = false
-        let widget = PerformancePanel::new(&perf, false, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            false,
+            IconSet::default(),
+            &VmConnectionStatus::Disconnected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
         // Should render disconnected message — just check it doesn't panic
@@ -569,7 +609,12 @@ mod tests {
     #[test]
     fn test_performance_panel_small_terminal() {
         let perf = make_test_performance();
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            true,
+            IconSet::default(),
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
         // Should not panic even in small terminal
@@ -578,7 +623,12 @@ mod tests {
     #[test]
     fn test_performance_panel_zero_area() {
         let perf = make_test_performance();
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            true,
+            IconSet::default(),
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
         widget.render(Rect::new(0, 0, 10, 1), &mut buf);
         // Extremely small area — should not panic
@@ -655,8 +705,13 @@ mod tests {
         // When vm_connection_error is set, render_disconnected should show the
         // specific error message rather than the generic "not connected" text.
         let perf = PerformanceState::default();
-        let widget = PerformancePanel::new(&perf, false, IconSet::default())
-            .with_connection_error(Some("Connection failed: Connection refused"));
+        let widget = PerformancePanel::new(
+            &perf,
+            false,
+            IconSet::default(),
+            &VmConnectionStatus::Disconnected,
+        )
+        .with_connection_error(Some("Connection failed: Connection refused"));
 
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
@@ -687,8 +742,13 @@ mod tests {
         // When vm_connection_error is None and vm_connected is false, the generic
         // message should be shown.
         let perf = PerformanceState::default();
-        let widget =
-            PerformancePanel::new(&perf, false, IconSet::default()).with_connection_error(None);
+        let widget = PerformancePanel::new(
+            &perf,
+            false,
+            IconSet::default(),
+            &VmConnectionStatus::Disconnected,
+        )
+        .with_connection_error(None);
 
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
@@ -716,7 +776,12 @@ mod tests {
         let mut perf = PerformanceState::default();
         perf.monitoring_active = false;
 
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
+        let widget = PerformancePanel::new(
+            &perf,
+            true,
+            IconSet::default(),
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -733,6 +798,35 @@ mod tests {
         assert!(
             full.contains("monitoring") || full.contains("Waiting"),
             "Expected 'monitoring' or 'Waiting' in buffer"
+        );
+    }
+
+    #[test]
+    fn test_performance_panel_reconnecting_shows_attempt_count() {
+        // When connection_status is Reconnecting, the disconnected view should
+        // show the attempt counter rather than the generic "not connected" text.
+        let perf = PerformanceState::default();
+        let status = VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        };
+        let widget = PerformancePanel::new(&perf, false, IconSet::default(), &status);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("Reconnecting") || full.contains("3/10"),
+            "Expected reconnecting message with attempt count, got: {full:?}"
         );
     }
 }

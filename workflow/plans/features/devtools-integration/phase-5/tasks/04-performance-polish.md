@@ -163,3 +163,43 @@ mod tests {
 - **The 500ms overlay debounce and 2s refresh cooldown** are sensible defaults. These could be made configurable later but hard-coding is fine for Phase 5.
 - **`Instant::now()` in handlers**: The TEA pattern prefers pure functions, but `Instant::now()` is a minor pragmatic exception already used elsewhere (e.g., debounce in the file watcher). It doesn't affect testability since we can set `last_*_time` directly in tests.
 - **`subtreeDepth` support**: Verify this parameter exists in the Flutter version(s) that fdemon targets. If not supported, the parameter will be silently ignored by the VM.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `last_fetch_time: Option<Instant>` to `InspectorState`; added `is_fetch_debounced()` and `record_fetch_start()` methods; updated `reset()` to clear `last_fetch_time`. Added `last_fetched_node_id: Option<String>` and `pending_node_id: Option<String>` to `LayoutExplorerState`; updated `reset()` to clear both. |
+| `crates/fdemon-app/src/handler/update.rs` | Added 2-second cooldown check (`is_fetch_debounced()`) to `Message::RequestWidgetTree` handler; replaced manual `loading = true` with `record_fetch_start()`; added `pending_node_id` tracking to `Message::RequestLayoutData` handler. |
+| `crates/fdemon-app/src/handler/devtools.rs` | Updated `handle_switch_panel` (Layout branch) to skip fetch when `last_fetched_node_id` matches selected node; added `pending_node_id` tracking when fetch starts. Updated `handle_layout_data_fetched` to promote `pending_node_id` to `last_fetched_node_id` on success. Updated `handle_layout_data_fetch_failed` and `handle_layout_data_fetch_timeout` to clear `pending_node_id` on failure. Added 13 new unit tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`last_fetch_time` set at fetch start, not completion**: The cooldown starts when a fetch is dispatched, not when it completes. This prevents queue buildup — if a fetch takes 3s, the cooldown is already expired by the time the next press arrives. This matches the task spec: "Set `last_fetch_time` when starting a fetch."
+
+2. **`pending_node_id` rendezvous pattern**: Since `LayoutDataFetched` doesn't carry the node ID, a `pending_node_id` field is stored in `LayoutExplorerState` when dispatch happens and promoted to `last_fetched_node_id` on success. This avoids changing the `Message` type and keeps all state co-located.
+
+3. **Overlay toggle debounce already complete**: `last_overlay_toggle`, `is_overlay_toggle_debounced()`, and `record_overlay_toggle()` were already implemented by Task 05, as noted in the task context. Verified present in `state.rs` and wired into `update.rs` for `Message::ToggleDebugOverlay`. No further changes needed.
+
+4. **`subtreeDepth` already wired**: `tree_max_depth` was already passed as `subtreeDepth` in `spawn_fetch_widget_tree` in `actions.rs` (lines 941-943). Verified present. No changes needed.
+
+5. **Pre-existing clippy warning**: `handler/session.rs:43` has a pre-existing `unnecessary_unwrap` warning that predates this task, as documented in the task instructions. All new code is warning-free.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (882 tests, 13 new tests added)
+- `cargo check --workspace` — Passed
+- `cargo clippy --workspace` — 1 pre-existing warning in `session.rs:43` (excluded per task instructions), no new warnings
+
+### Risks/Limitations
+
+1. **Cooldown bypasses on timeout**: If `WidgetTreeFetchTimeout` fires, `loading` is set to `false` but `last_fetch_time` remains set from the fetch start. The user must wait up to 2 seconds before retrying. This is the intended behavior per the task spec, and the timeout error message already says "Press [r] to retry."
+
+2. **Layout staleness on session switch**: `DevToolsViewState::reset()` calls `layout_explorer.reset()` which clears `last_fetched_node_id`, so session switches always trigger a fresh fetch. This is correct behavior.

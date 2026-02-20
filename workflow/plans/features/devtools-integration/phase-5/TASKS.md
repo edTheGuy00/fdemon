@@ -68,15 +68,15 @@ Wave 2 (Documentation & Website — parallelizable after Wave 1)           │
 
 | # | Task | Status | Depends On | Est. Hours | Crates/Areas | Key Modules |
 |---|------|--------|------------|------------|--------------|-------------|
-| 1 | [01-expand-devtools-config](tasks/01-expand-devtools-config.md) | Not Started | - | 4-6h | `fdemon-app` | `config/types.rs`, `handler/devtools.rs`, `actions.rs` |
-| 2 | [02-connection-state-ui](tasks/02-connection-state-ui.md) | Not Started | - | 4-6h | `fdemon-tui`, `fdemon-app` | `widgets/devtools/mod.rs`, `state.rs`, `handler/devtools.rs` |
-| 3 | [03-error-ux-improvements](tasks/03-error-ux-improvements.md) | Not Started | 1, 2 | 3-5h | `fdemon-tui`, `fdemon-app` | `widgets/devtools/*.rs`, `handler/devtools.rs` |
-| 4 | [04-performance-polish](tasks/04-performance-polish.md) | Not Started | 2 | 3-4h | `fdemon-app` | `handler/devtools.rs`, `actions.rs` |
-| 5 | [05-phase4-review-fixes](tasks/05-phase4-review-fixes.md) | Not Started | - | 2-3h | `fdemon-app` | `handler/devtools.rs`, `actions.rs` |
-| 6 | [06-readme-devtools-section](tasks/06-readme-devtools-section.md) | Not Started | 1 | 1-2h | docs | `README.md` |
-| 7 | [07-website-devtools-page](tasks/07-website-devtools-page.md) | Not Started | 1, 2 | 6-8h | website | `pages/docs/devtools.rs`, `lib.rs`, `pages/docs/mod.rs` |
-| 8 | [08-website-keybindings-update](tasks/08-website-keybindings-update.md) | Not Started | - | 2-3h | website | `data.rs`, `pages/docs/keybindings.rs` |
-| 9 | [09-website-config-update](tasks/09-website-config-update.md) | Not Started | 1 | 3-5h | website | `pages/docs/configuration.rs` |
+| 1 | [01-expand-devtools-config](tasks/01-expand-devtools-config.md) | [x] Done | - | 4-6h | `fdemon-app` | `config/types.rs`, `handler/devtools.rs`, `actions.rs` |
+| 2 | [02-connection-state-ui](tasks/02-connection-state-ui.md) | [x] Done | - | 4-6h | `fdemon-tui`, `fdemon-app` | `widgets/devtools/mod.rs`, `state.rs`, `handler/devtools.rs` |
+| 3 | [03-error-ux-improvements](tasks/03-error-ux-improvements.md) | [x] Done | 1, 2 | 3-5h | `fdemon-tui`, `fdemon-app` | `widgets/devtools/*.rs`, `handler/devtools.rs` |
+| 4 | [04-performance-polish](tasks/04-performance-polish.md) | [x] Done | 2 | 3-4h | `fdemon-app` | `handler/devtools.rs`, `actions.rs` |
+| 5 | [05-phase4-review-fixes](tasks/05-phase4-review-fixes.md) | [x] Done | - | 2-3h | `fdemon-app` | `handler/devtools.rs`, `actions.rs` |
+| 6 | [06-readme-devtools-section](tasks/06-readme-devtools-section.md) | [x] Done | 1 | 1-2h | docs | `README.md` |
+| 7 | [07-website-devtools-page](tasks/07-website-devtools-page.md) | [x] Done | 1, 2 | 6-8h | website | `pages/docs/devtools.rs`, `lib.rs`, `pages/docs/mod.rs` |
+| 8 | [08-website-keybindings-update](tasks/08-website-keybindings-update.md) | [x] Done | - | 2-3h | website | `data.rs`, `pages/docs/keybindings.rs` |
+| 9 | [09-website-config-update](tasks/09-website-config-update.md) | [x] Done | 1 | 3-5h | website | `pages/docs/configuration.rs` |
 
 ## Success Criteria
 

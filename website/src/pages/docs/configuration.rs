@@ -84,11 +84,51 @@ pub fn Configuration() -> impl IntoView {
 
             // ── DevTools Settings ────────────────────────────────────
             <Section title="DevTools Settings">
-                <CodeBlock language="toml" code="[devtools]\nauto_open = false          # Auto-open DevTools on app start\nbrowser = \"\"               # Browser command (empty = system default)" />
+                <CodeBlock language="toml" code="[devtools]
+auto_open = false              # Auto-open DevTools on app start
+browser = \"\"                   # Browser command (empty = system default)
+default_panel = \"inspector\"    # Default panel: \"inspector\", \"layout\", \"performance\"
+performance_refresh_ms = 2000  # Performance data polling interval (ms)
+memory_history_size = 60       # Memory snapshots to retain
+tree_max_depth = 0             # Widget tree max depth (0 = unlimited)
+auto_repaint_rainbow = false   # Auto-enable repaint rainbow on connect
+auto_performance_overlay = false # Auto-enable performance overlay on connect
+
+[devtools.logging]
+hybrid_enabled = true          # Enable hybrid logging (VM Service + daemon)
+prefer_vm_level = true         # Prefer VM Service log level when available
+show_source_indicator = false  # Show [VM]/[daemon] tags on log entries
+dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                 <SettingsTable entries=vec![
                     ("auto_open", "boolean", "false", "Automatically open DevTools in a browser when app starts"),
                     ("browser", "string", "\"\"", "Browser command (e.g. \"chrome\", \"firefox\"). Empty = system default"),
+                    ("default_panel", "string", "\"inspector\"", "Default panel when entering DevTools mode. Options: \"inspector\", \"layout\", \"performance\""),
+                    ("performance_refresh_ms", "integer", "2000", "Memory/performance data polling interval in milliseconds. Minimum 500"),
+                    ("memory_history_size", "integer", "60", "Number of memory snapshots to retain in the ring buffer"),
+                    ("tree_max_depth", "integer", "0", "Max depth when fetching widget tree. 0 = unlimited"),
+                    ("auto_repaint_rainbow", "boolean", "false", "Automatically enable repaint rainbow overlay when VM connects"),
+                    ("auto_performance_overlay", "boolean", "false", "Automatically enable performance overlay when VM connects"),
                 ] />
+
+                <h3 class="text-lg font-bold text-white mt-6">"Logging Settings"</h3>
+                <p class="text-slate-400 text-sm">
+                    "Configure hybrid logging behavior when both VM Service and daemon log sources are available."
+                </p>
+                <SettingsTable entries=vec![
+                    ("hybrid_enabled", "boolean", "true", "Enable hybrid logging. When true, merges VM Service logs with daemon stdout logs"),
+                    ("prefer_vm_level", "boolean", "true", "Use VM Service log level (accurate) over content-based level detection"),
+                    ("show_source_indicator", "boolean", "false", "Show [VM] or [daemon] tags next to each log entry to indicate its source"),
+                    ("dedupe_threshold_ms", "integer", "100", "Logs from both sources within this window (ms) with matching content are deduplicated"),
+                ] />
+
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm">
+                    <p class="font-medium mb-2">"Notes"</p>
+                    <ul class="list-disc list-inside space-y-1">
+                        <li><code class="text-blue-400">"performance_refresh_ms"</code>" controls how often memory usage is polled. Lower values give more granular data but increase VM Service traffic. Frame timing and GC events are streamed in real-time regardless of this setting."</li>
+                        <li><code class="text-blue-400">"tree_max_depth"</code>" can improve performance for apps with very deep widget trees. A value of 0 (default) fetches the entire tree."</li>
+                        <li>"Auto-overlay settings ("<code class="text-blue-400">"auto_repaint_rainbow"</code>", "<code class="text-blue-400">"auto_performance_overlay"</code>") activate overlays on the device/emulator screen as soon as the VM Service connects."</li>
+                    </ul>
+                </div>
             </Section>
 
             // ── Editor Settings ──────────────────────────────────────

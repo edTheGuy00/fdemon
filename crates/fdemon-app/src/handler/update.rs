@@ -8,7 +8,7 @@
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
 use crate::message::{AutoLaunchSuccess, Message};
-use crate::state::{AppState, DevToolsPanel, UiMode};
+use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode};
 use fdemon_core::{AppPhase, LogSource};
 use tracing::warn;
 
@@ -1157,6 +1157,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::VmServiceConnected { session_id } => {
+            // Read config values before borrowing state mutably.
+            let memory_history_size = state.settings.devtools.memory_history_size;
+            let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+            let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
+            let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
+
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1165,14 +1171,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 ));
                 // Reset performance state on (re)connection so stale data from
                 // a previous session or hot-restart is not shown in the new one.
-                handle.session.performance = crate::session::PerformanceState::default();
+                // Use configurable memory history size from settings.
+                handle.session.performance =
+                    crate::session::PerformanceState::with_memory_history_size(memory_history_size);
             }
             // Clear any previous connection error now that we are connected.
             state.devtools_view_state.vm_connection_error = None;
+            // Update rich connection status indicator.
+            state.devtools_view_state.connection_status =
+                crate::state::VmConnectionStatus::Connected;
 
             // If the user is already in DevTools/Inspector mode with no tree loaded,
             // auto-fetch the widget tree now that the VM is connected.
-            let follow_up = if state.ui_mode == UiMode::DevTools
+            let widget_tree_follow_up = if state.ui_mode == UiMode::DevTools
                 && state.devtools_view_state.active_panel == DevToolsPanel::Inspector
                 && state.devtools_view_state.inspector.root.is_none()
                 && !state.devtools_view_state.inspector.loading
@@ -1182,14 +1193,39 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 None
             };
 
+            // Auto-enable overlays: if configured, queue a ToggleDebugOverlay
+            // message for the first overlay that needs enabling. Only trigger
+            // when the overlay is currently disabled — the toggle action reads
+            // the current state before flipping, so this is safe and idempotent.
+            // Widget tree fetch takes priority over overlay toggles.
+            let auto_overlay_follow_up = if widget_tree_follow_up.is_none() {
+                if auto_repaint_rainbow && !state.devtools_view_state.overlay_repaint_rainbow {
+                    Some(Message::ToggleDebugOverlay {
+                        extension: crate::message::DebugOverlayKind::RepaintRainbow,
+                    })
+                } else if auto_performance_overlay && !state.devtools_view_state.overlay_performance
+                {
+                    Some(Message::ToggleDebugOverlay {
+                        extension: crate::message::DebugOverlayKind::PerformanceOverlay,
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
+
             // Start performance monitoring for this session.
             // process.rs will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
             UpdateResult {
-                message: follow_up,
+                message: follow_up_msg,
                 action: Some(UpdateAction::StartPerformanceMonitoring {
                     session_id,
                     handle: None, // hydrated by process.rs
+                    performance_refresh_ms,
                 }),
             }
         }
@@ -1217,6 +1253,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::VmServiceDisconnected { session_id } => {
+            // Update rich connection status indicator.
+            state.devtools_view_state.connection_status =
+                crate::state::VmConnectionStatus::Disconnected;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.vm_connected = false;
                 // Clear the request handle — the underlying channel is now closed.
@@ -1246,8 +1285,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             log_entry,
         } => {
+            let dedupe_ms = state.settings.devtools.logging.dedupe_threshold_ms as i64;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, DEDUP_THRESHOLD_MS) {
+                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, dedupe_ms) {
                     handle.session.add_log(log_entry);
                 }
             }
@@ -1258,8 +1298,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             log_entry,
         } => {
+            let dedupe_ms = state.settings.devtools.logging.dedupe_threshold_ms as i64;
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, DEDUP_THRESHOLD_MS) {
+                if !is_duplicate_vm_log(&handle.session.logs, &log_entry, dedupe_ms) {
                     handle.session.add_log(log_entry);
                 }
             }
@@ -1343,6 +1384,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
         Message::RequestWidgetTree { session_id } => {
+            // Cooldown: suppress rapid refreshes while loading or within 2 seconds
+            // of the last fetch. This prevents RPC spam when the user holds `r`.
+            if state.devtools_view_state.inspector.is_fetch_debounced() {
+                return UpdateResult::none();
+            }
+
             let vm_connected = state
                 .session_manager
                 .get(session_id)
@@ -1350,14 +1397,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(false);
 
             if vm_connected {
-                state.devtools_view_state.inspector.loading = true;
+                // Clear any previous error so a fresh fetch starts cleanly.
+                state.devtools_view_state.inspector.error = None;
+                state.devtools_view_state.inspector.record_fetch_start();
                 UpdateResult::action(UpdateAction::FetchWidgetTree {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
+                    tree_max_depth: state.settings.devtools.tree_max_depth,
                 })
             } else {
-                state.devtools_view_state.inspector.error =
-                    Some("VM Service not connected — cannot fetch widget tree".to_string());
+                state.devtools_view_state.inspector.error = Some(DevToolsError::new(
+                    "VM Service not available",
+                    "Ensure the app is running in debug mode",
+                ));
                 UpdateResult::none()
             }
         }
@@ -1381,15 +1433,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 .unwrap_or(false);
 
             if vm_connected {
+                // Clear any previous error so a fresh fetch starts cleanly.
+                state.devtools_view_state.layout_explorer.error = None;
                 state.devtools_view_state.layout_explorer.loading = true;
+                // Track which node we are fetching so we can record it on success.
+                state.devtools_view_state.layout_explorer.pending_node_id = Some(node_id.clone());
                 UpdateResult::action(UpdateAction::FetchLayoutData {
                     session_id,
                     node_id,
                     vm_handle: None, // hydrated by process.rs
                 })
             } else {
-                state.devtools_view_state.layout_explorer.error =
-                    Some("VM Service not connected — cannot fetch layout data".to_string());
+                state.devtools_view_state.layout_explorer.error = Some(DevToolsError::new(
+                    "VM Service not available",
+                    "Ensure the app is running in debug mode",
+                ));
                 UpdateResult::none()
             }
         }
@@ -1403,9 +1461,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::ToggleDebugOverlay { extension } => {
+            // Debounce: suppress rapid key presses within 500 ms to avoid
+            // multiple in-flight RPC calls for the same overlay toggle.
+            if state.devtools_view_state.is_overlay_toggle_debounced() {
+                return UpdateResult::none();
+            }
+
             // Find active session_id for the toggle action
             if let Some(handle) = state.session_manager.selected() {
                 let session_id = handle.session.id;
+                state.devtools_view_state.record_overlay_toggle();
                 return UpdateResult::action(UpdateAction::ToggleOverlay {
                     session_id,
                     extension,
@@ -1420,6 +1485,23 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         Message::DevToolsInspectorNavigate(nav) => devtools::handle_inspector_navigate(state, nav),
+
+        // ─────────────────────────────────────────────────────────
+        // VM Service Connection State Messages (Phase 5, Task 02)
+        // ─────────────────────────────────────────────────────────
+        Message::VmServiceReconnecting {
+            session_id,
+            attempt,
+            max_attempts,
+        } => devtools::handle_vm_service_reconnecting(state, session_id, attempt, max_attempts),
+
+        Message::WidgetTreeFetchTimeout { session_id } => {
+            devtools::handle_widget_tree_fetch_timeout(state, session_id)
+        }
+
+        Message::LayoutDataFetchTimeout { session_id } => {
+            devtools::handle_layout_data_fetch_timeout(state, session_id)
+        }
 
         // ─────────────────────────────────────────────────────────
         // Entry Point Discovery Messages (Phase 3, Task 09)
@@ -1457,13 +1539,6 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
     }
 }
-
-/// Deduplication threshold for VM Service logs (milliseconds).
-///
-/// Matches `dedupe_threshold_ms` config default. Logs with the same message
-/// arriving within this window are considered duplicates (both VM Service and
-/// daemon can emit the same event).
-const DEDUP_THRESHOLD_MS: i64 = 100;
 
 /// Number of recent log entries to scan for deduplication.
 const DEDUP_SCAN_DEPTH: usize = 10;

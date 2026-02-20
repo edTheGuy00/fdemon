@@ -3,7 +3,7 @@
 use super::*;
 use crate::input_key::InputKey;
 use crate::message::Message;
-use crate::state::{AppState, UiMode};
+use crate::state::{AppState, DevToolsError, UiMode};
 use fdemon_core::{AppPhase, DaemonEvent};
 
 /// Helper function to create a test Device with minimal required fields
@@ -4176,8 +4176,9 @@ fn test_request_widget_tree_without_vm_sets_error() {
     );
     let error = state.devtools_view_state.inspector.error.as_ref().unwrap();
     assert!(
-        error.contains("VM Service not connected"),
-        "Error message should mention VM Service: {error}"
+        error.message.contains("VM Service") || error.hint.contains("debug mode"),
+        "Error message should mention VM Service or debug mode: {:?}",
+        error
     );
 }
 
@@ -4246,8 +4247,9 @@ fn test_request_layout_data_without_vm_sets_error() {
         .as_ref()
         .unwrap();
     assert!(
-        error.contains("VM Service not connected"),
-        "Error message should mention VM Service: {error}"
+        error.message.contains("VM Service") || error.hint.contains("debug mode"),
+        "Error message should mention VM Service or debug mode: {:?}",
+        error
     );
 }
 
@@ -4423,9 +4425,11 @@ fn test_session_switch_resets_devtools_state() {
 
     // Populate devtools state for session 0
     state.devtools_view_state.inspector.loading = true;
-    state.devtools_view_state.inspector.error = Some("old error".into());
+    state.devtools_view_state.inspector.error =
+        Some(DevToolsError::new("old error", "Press [r] to retry"));
     state.devtools_view_state.layout_explorer.loading = true;
-    state.devtools_view_state.layout_explorer.error = Some("layout error".into());
+    state.devtools_view_state.layout_explorer.error =
+        Some(DevToolsError::new("layout error", "Press [r] to retry"));
     state.devtools_view_state.overlay_repaint_rainbow = true;
     state.devtools_view_state.overlay_debug_paint = true;
     state.devtools_view_state.overlay_performance = true;
@@ -4500,7 +4504,8 @@ fn test_session_switch_same_session_does_not_reset() {
     let mut state = make_state_with_two_sessions();
     // Currently on session 0
     state.devtools_view_state.inspector.loading = true;
-    state.devtools_view_state.inspector.error = Some("existing error".into());
+    state.devtools_view_state.inspector.error =
+        Some(DevToolsError::new("existing error", "Press [r] to retry"));
 
     // Switch to the same session (index 0 is already selected)
     update(&mut state, Message::SelectSessionByIndex(0));
@@ -4510,10 +4515,19 @@ fn test_session_switch_same_session_does_not_reset() {
         state.devtools_view_state.inspector.loading,
         "inspector.loading must not be cleared when switching to the already-selected session"
     );
-    assert_eq!(
-        state.devtools_view_state.inspector.error.as_deref(),
-        Some("existing error"),
+    assert!(
+        state.devtools_view_state.inspector.error.is_some(),
         "inspector.error must not be cleared when switching to the already-selected session"
+    );
+    assert_eq!(
+        state
+            .devtools_view_state
+            .inspector
+            .error
+            .as_ref()
+            .map(|e| e.message.as_str()),
+        Some("existing error"),
+        "inspector.error message must not be cleared when switching to the already-selected session"
     );
 }
 

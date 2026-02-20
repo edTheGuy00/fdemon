@@ -209,3 +209,32 @@ Lucide icons can be found at https://lucide.dev. Use viewBox 24x24, stroke-based
 - **All content is Rust code, not Markdown.** Every string, heading, and paragraph is a Leptos `view!` macro expression. This is more verbose than Markdown but provides full control over layout.
 - **Don't create terminal mockup screenshots.** ASCII representations of the panels are fine for the page content. The existing `terminal_mockup.rs` component is only used on the home page.
 - **The `CodeBlock` component supports `language` and `code` props.** Use `language="toml"` for config examples and omit language for key shortcut examples.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/devtools.rs` | Created new file — full DevTools documentation page as a Leptos component with 10 sections |
+| `website/src/pages/docs/mod.rs` | Added `pub mod devtools;`, imported `Eye` icon, added sidebar entry between Keybindings and Configuration |
+| `website/src/lib.rs` | Added `use pages::docs::devtools::Devtools;` import and `/devtools` route inside the `/docs` parent route |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local sub-components**: Used three local helper components (`Section`, `KeyRow`, `SettingsRow`) matching the pattern in `configuration.rs`. The `SettingsRow` component mirrors `SettingsTable` row style but as individual rows to keep the table construction consistent with the configuration page patterns.
+2. **ASCII tree mockup**: Used Unicode box-drawing characters in a `<pre>` block inside a `bg-slate-900` container to show the inspector layout, as requested in the task notes (no screenshots).
+3. **`Eye` icon**: Used the existing `Eye` icon from `components/icons.rs` as specified in the task. No new icon was needed.
+4. **`A` import from leptos_router**: Added `leptos_router::components::A` import to support the cross-page links to `/docs/keybindings` and `/docs/configuration`.
+
+### Testing Performed
+
+- `cd /home/ed/Dev/zabin/fdemon/website && trunk build` — Passed (4.84s build, ✅ success)
+
+### Risks/Limitations
+
+1. **Manual browser testing**: Only `trunk build` was verified (compilation). Manual browser testing at `http://localhost:8080/docs/devtools` requires a running `trunk serve` session and was not performed in this automated context.

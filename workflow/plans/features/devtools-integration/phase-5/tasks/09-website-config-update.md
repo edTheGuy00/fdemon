@@ -130,3 +130,29 @@ The `SettingsTable` component is defined locally in `configuration.rs`. Check th
 - **This task depends on Task 01** because the config field names, types, and defaults must match the actual `DevToolsSettings` struct. If Task 01 changes any field names or defaults, this page must match.
 - **Don't document the `[devtools]` section in the settings panel** — that's a TUI feature, not a website concern. The settings panel is already documented elsewhere on the configuration page.
 - **The `SettingsTable` component** is a local helper in `configuration.rs`. If it needs modification (e.g., to support sub-sections), make the changes locally rather than extracting to a shared component.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/configuration.rs` | Expanded DevTools Settings section from 2 to 8 fields in main table; added `[devtools.logging]` sub-section with heading, description, and 4-field table; expanded CodeBlock with full 14-line TOML config; added explanatory notes callout with 3 bullets |
+
+### Notable Decisions/Tradeoffs
+
+1. **No SettingsTable component changes**: Existing component's overflow handling and responsive layout worked correctly for the expanded content
+2. **Notes callout placement**: After both tables to provide context for the whole DevTools section
+
+### Testing Performed
+
+- `trunk build` — Passed
+- Configuration page renders correctly with expanded tables
+
+### Risks/Limitations
+
+None

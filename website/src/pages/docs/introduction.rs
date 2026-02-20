@@ -55,7 +55,7 @@ pub fn Introduction() -> impl IntoView {
                 <p class="text-slate-400">
                     "The New Session Dialog appears automatically. Select a device, configure launch settings if needed, and press "
                     <code class="text-blue-400">"Enter"</code>
-                    " to launch. Press "<code class="text-blue-400">"d"</code>" anytime to add more device sessions."
+                    " to launch. Press "<code class="text-blue-400">"+"</code>" anytime to add more device sessions."
                 </p>
             </Section>
 
@@ -113,7 +113,8 @@ pub fn Introduction() -> impl IntoView {
                         <tbody class="divide-y divide-slate-800 bg-slate-950">
                             <KeyRow key="q / Esc" action="Quit (with confirmation if sessions running)" />
                             <KeyRow key="r / R" action="Hot reload / Hot restart" />
-                            <KeyRow key="d / +" action="Open New Session Dialog" />
+                            <KeyRow key="d" action="Enter DevTools mode" />
+                            <KeyRow key="+" action="Open New Session Dialog" />
                             <KeyRow key="1-9" action="Switch to session by number" />
                             <KeyRow key="Tab" action="Cycle to next session" />
                             <KeyRow key="j / k" action="Scroll down / up (vim-style)" />

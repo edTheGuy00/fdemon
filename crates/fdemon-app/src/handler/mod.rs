@@ -137,6 +137,9 @@ pub enum UpdateAction {
         /// `vm_request_handle`. `handle_action` can safely `.unwrap()` this
         /// because `process.rs` discards actions where it remains `None`.
         handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// Memory polling interval in milliseconds (from `settings.devtools.performance_refresh_ms`).
+        /// Clamped to a minimum of 500ms to prevent excessive polling.
+        performance_refresh_ms: u64,
     },
 
     /// Fetch the widget tree from the VM Service for the Inspector panel.
@@ -148,6 +151,9 @@ pub enum UpdateAction {
         session_id: SessionId,
         /// VM Service request handle used for the RPC call.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// Max depth for widget tree fetch (0 = unlimited).
+        /// From `settings.devtools.tree_max_depth`.
+        tree_max_depth: u32,
     },
 
     /// Fetch layout data for a specific widget node.

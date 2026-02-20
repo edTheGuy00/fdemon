@@ -224,3 +224,39 @@ mod tests {
 - **The `[devtools.logging]` section** maps to a nested TOML table. In the Rust struct, use `#[serde(default)]` on the `logging: DevToolsLoggingSettings` field so the entire sub-table is optional.
 - **Performance refresh interval minimum**: Consider clamping `performance_refresh_ms` to a minimum of 500ms to prevent excessive polling.
 - **Ring buffer sizes**: When `memory_history_size` changes at runtime (via settings panel), the existing ring buffer doesn't need to resize — the new size takes effect on the next session start.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Expanded `DevToolsSettings` from 2 to 9 fields, added `DevToolsLoggingSettings` sub-struct with 4 fields, default value functions, explicit `Default` impl, 6 new tests |
+| `crates/fdemon-app/src/config/mod.rs` | Added `DevToolsLoggingSettings` to re-exports |
+| `crates/fdemon-app/src/handler/devtools.rs` | Added `parse_default_panel()`, wired `default_panel` config, `tree_max_depth` in `FetchWidgetTree`, 4 new tests |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `performance_refresh_ms: u64` to `StartPerformanceMonitoring`, `tree_max_depth: u32` to `FetchWidgetTree` |
+| `crates/fdemon-app/src/handler/update.rs` | `VmServiceConnected` wires `memory_history_size`, `performance_refresh_ms`, auto-overlay; dedup uses `settings.devtools.logging.dedupe_threshold_ms` |
+| `crates/fdemon-app/src/actions.rs` | `spawn_performance_polling()` uses configurable clamped interval (min 500ms), `spawn_fetch_widget_tree()` passes `subtreeDepth` when `tree_max_depth > 0` |
+| `crates/fdemon-app/src/process.rs` | Updated hydration for both action variants to pass new fields through |
+| `crates/fdemon-app/src/session/performance.rs` | Added `with_memory_history_size()` constructor |
+| `crates/fdemon-app/src/settings_items.rs` | 10 new settings items in "DevTools" and "DevTools Logging" sections |
+
+### Notable Decisions/Tradeoffs
+
+1. **500ms minimum poll interval**: `performance_refresh_ms` is clamped to `PERF_POLL_MIN_MS = 500` to prevent excessive VM Service traffic
+2. **Auto-overlay priority**: Widget tree auto-fetch takes priority over auto-overlay toggles on VM connect to avoid RPC contention
+3. **Dedup uses config threshold**: `is_duplicate_vm_log()` accepts `threshold_ms` parameter — no hardcoded values
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (871 tests, 9 new)
+- `cargo clippy -p fdemon-app` — Passed (pre-existing warning in session.rs excluded)
+
+### Risks/Limitations
+
+1. **Ring buffer resize at runtime**: Changing `memory_history_size` via settings panel only takes effect on next session start, not for existing sessions

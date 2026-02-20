@@ -4,13 +4,13 @@
 //! actual size, and flex properties. Handles loading, error, and empty states
 //! when no layout data is available.
 
-use fdemon_app::state::LayoutExplorerState;
+use fdemon_app::state::{DevToolsError, LayoutExplorerState, VmConnectionStatus};
 use fdemon_core::widget_tree::{BoxConstraints, LayoutInfo, WidgetSize};
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Rect},
-    style::{Modifier, Style},
-    text::Line,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
@@ -27,6 +27,12 @@ pub struct LayoutExplorer<'a> {
     layout_state: &'a LayoutExplorerState,
     /// The currently selected widget name (from inspector).
     selected_widget_name: Option<&'a str>,
+    /// Whether the VM Service WebSocket is currently connected.
+    /// When `false`, the panel renders a dedicated "VM Service disconnected"
+    /// state instead of the generic empty/error state.
+    vm_connected: bool,
+    /// Rich connection status for contextual disconnected messaging.
+    connection_status: &'a VmConnectionStatus,
 }
 
 impl<'a> LayoutExplorer<'a> {
@@ -34,10 +40,14 @@ impl<'a> LayoutExplorer<'a> {
     pub fn new(
         layout_state: &'a LayoutExplorerState,
         selected_widget_name: Option<&'a str>,
+        vm_connected: bool,
+        connection_status: &'a VmConnectionStatus,
     ) -> Self {
         Self {
             layout_state,
             selected_widget_name,
+            vm_connected,
+            connection_status,
         }
     }
 }
@@ -66,10 +76,12 @@ impl Widget for LayoutExplorer<'_> {
             return;
         }
 
-        if self.layout_state.loading {
+        if !self.vm_connected {
+            self.render_disconnected(inner, buf);
+        } else if self.layout_state.loading {
             self.render_loading(inner, buf);
         } else if let Some(ref error) = self.layout_state.error {
-            self.render_error(inner, buf, error);
+            self.render_error_box(inner, buf, error);
         } else if let Some(ref layout) = self.layout_state.layout {
             self.render_layout(inner, buf, layout);
         } else {
@@ -79,7 +91,55 @@ impl Widget for LayoutExplorer<'_> {
 }
 
 impl LayoutExplorer<'_> {
-    // ── Loading / Error / Empty states ────────────────────────────────────────
+    // ── Loading / Error / Empty / Disconnected states ─────────────────────────
+
+    fn render_disconnected(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 {
+            return;
+        }
+
+        let status_line = match self.connection_status {
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts,
+            } => {
+                format!("Reconnecting to VM Service... ({attempt}/{max_attempts})")
+            }
+            VmConnectionStatus::TimedOut => "Layout data fetch timed out.".to_string(),
+            _ => "VM Service disconnected.".to_string(),
+        };
+
+        let lines = vec![
+            Line::from(Span::styled(
+                status_line,
+                Style::default().fg(palette::STATUS_RED),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Layout data is unavailable while disconnected.",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            Line::from(Span::styled(
+                "Waiting for reconnection...",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press [r] to retry  |  Press [b] to open browser DevTools  |  Press [Esc] to return to logs",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+
+        let y_offset = area.height.saturating_sub(6) / 2;
+        let render_area = Rect {
+            y: area.y + y_offset,
+            height: 6.min(area.height),
+            ..area
+        };
+        paragraph.render(render_area, buf);
+    }
 
     fn render_loading(&self, area: Rect, buf: &mut Buffer) {
         if area.height == 0 {
@@ -99,14 +159,40 @@ impl LayoutExplorer<'_> {
         );
     }
 
-    fn render_error(&self, area: Rect, buf: &mut Buffer, error: &str) {
+    fn render_error_box(&self, area: Rect, buf: &mut Buffer, error: &DevToolsError) {
         if area.height == 0 {
             return;
         }
-        let text = Paragraph::new(format!("Error: {error}"))
-            .style(Style::default().fg(palette::STATUS_RED))
-            .wrap(Wrap { trim: true });
-        text.render(area, buf);
+
+        let lines = vec![
+            Line::from(Span::styled(
+                format!("\u{26a0} {}", error.message),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                error.hint.as_str(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "[r] Retry   [b] Browser DevTools   [Esc] Return to logs",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+
+        let content_height = 5u16;
+        let y_offset = area.height.saturating_sub(content_height) / 2;
+        paragraph.render(
+            Rect {
+                y: area.y + y_offset,
+                height: content_height.min(area.height),
+                ..area
+            },
+            buf,
+        );
     }
 
     fn render_no_selection(&self, area: Rect, buf: &mut Buffer) {
@@ -114,15 +200,22 @@ impl LayoutExplorer<'_> {
             return;
         }
         let lines = vec![
-            Line::from("No widget selected."),
+            Line::from(Span::styled(
+                "Select a widget in the Inspector panel first",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
             Line::from(""),
-            Line::from("Switch to the Inspector panel (press 'i'),"),
-            Line::from("select a widget, then return here."),
+            Line::from(Span::styled(
+                "Switch to Inspector (press 'i'), select a widget,",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            Line::from(Span::styled(
+                "then return here to view its layout.",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
         ];
 
-        let paragraph = Paragraph::new(lines)
-            .style(Style::default().fg(palette::TEXT_MUTED))
-            .alignment(Alignment::Center);
+        let paragraph = Paragraph::new(lines).alignment(Alignment::Center);
 
         let y_offset = area.height.saturating_sub(4) / 2;
         paragraph.render(
@@ -383,7 +476,7 @@ pub fn format_constraint_value(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::state::LayoutExplorerState;
+    use fdemon_app::state::{DevToolsError, LayoutExplorerState, VmConnectionStatus};
     use fdemon_core::widget_tree::{BoxConstraints, LayoutInfo, WidgetSize};
 
     fn make_test_layout() -> LayoutInfo {
@@ -408,7 +501,12 @@ mod tests {
     fn test_layout_explorer_renders_with_data() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("Scaffold"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -416,7 +514,7 @@ mod tests {
     #[test]
     fn test_layout_explorer_no_selection() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None);
+        let widget = LayoutExplorer::new(&state, None, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -425,7 +523,8 @@ mod tests {
     fn test_layout_explorer_loading() {
         let mut state = LayoutExplorerState::default();
         state.loading = true;
-        let widget = LayoutExplorer::new(&state, Some("Column"));
+        let widget =
+            LayoutExplorer::new(&state, Some("Column"), true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -433,8 +532,11 @@ mod tests {
     #[test]
     fn test_layout_explorer_error_state() {
         let mut state = LayoutExplorerState::default();
-        state.error = Some("VM not connected".to_string());
-        let widget = LayoutExplorer::new(&state, None);
+        state.error = Some(DevToolsError::new(
+            "VM Service not available",
+            "Ensure the app is running in debug mode",
+        ));
+        let widget = LayoutExplorer::new(&state, None, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -469,7 +571,12 @@ mod tests {
     fn test_layout_explorer_small_terminal() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("Scaffold"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
     }
@@ -478,7 +585,12 @@ mod tests {
     fn test_layout_explorer_minimum_terminal() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("Scaffold"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         // Minimum per acceptance criteria: 40x10
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
@@ -488,7 +600,7 @@ mod tests {
     #[test]
     fn test_layout_explorer_zero_size_no_panic() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None);
+        let widget = LayoutExplorer::new(&state, None, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         widget.render(Rect::new(0, 0, 1, 1), &mut buf);
     }
@@ -497,7 +609,8 @@ mod tests {
     fn test_layout_explorer_loading_contains_message() {
         let mut state = LayoutExplorerState::default();
         state.loading = true;
-        let widget = LayoutExplorer::new(&state, Some("Column"));
+        let widget =
+            LayoutExplorer::new(&state, Some("Column"), true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -520,8 +633,11 @@ mod tests {
     #[test]
     fn test_layout_explorer_error_contains_error_text() {
         let mut state = LayoutExplorerState::default();
-        state.error = Some("Connection refused".to_string());
-        let widget = LayoutExplorer::new(&state, None);
+        state.error = Some(DevToolsError::new(
+            "VM Service connection lost",
+            "Reconnecting automatically...",
+        ));
+        let widget = LayoutExplorer::new(&state, None, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -536,15 +652,15 @@ mod tests {
             }
         }
         assert!(
-            full.contains("Error") || full.contains("Connection"),
-            "Expected error message in buffer, got: {full:?}"
+            full.contains("VM Service") || full.contains("Reconnecting"),
+            "Expected user-friendly error message in buffer, got: {full:?}"
         );
     }
 
     #[test]
     fn test_layout_explorer_no_selection_contains_prompt() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None);
+        let widget = LayoutExplorer::new(&state, None, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -559,7 +675,7 @@ mod tests {
             }
         }
         assert!(
-            full.contains("No widget") || full.contains("Inspector"),
+            full.contains("Select a widget") || full.contains("Inspector"),
             "Expected no-selection message in buffer, got: {full:?}"
         );
     }
@@ -579,7 +695,12 @@ mod tests {
             flex_fit: None,
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("Container"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("Container"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -617,7 +738,12 @@ mod tests {
             flex_fit: None,
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("SizedBox"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("SizedBox"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -647,7 +773,12 @@ mod tests {
             flex_fit: Some("loose".to_string()),
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("Flexible"));
+        let widget = LayoutExplorer::new(
+            &state,
+            Some("Flexible"),
+            true,
+            &VmConnectionStatus::Connected,
+        );
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -664,6 +795,58 @@ mod tests {
         assert!(
             full.contains("flex") || full.contains("loose"),
             "Expected flex properties in buffer, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn test_layout_explorer_disconnected_shows_vm_message() {
+        let state = LayoutExplorerState::default();
+        let widget = LayoutExplorer::new(&state, None, false, &VmConnectionStatus::Disconnected);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("disconnected")
+                || full.contains("Disconnected")
+                || full.contains("VM Service"),
+            "Expected VM Service disconnected message in buffer, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn test_layout_explorer_reconnecting_shows_attempt_count() {
+        let state = LayoutExplorerState::default();
+        let status = VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        };
+        let widget = LayoutExplorer::new(&state, None, false, &status);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("Reconnecting") || full.contains("3"),
+            "Expected reconnecting message with attempt count, got: {full:?}"
         );
     }
 }

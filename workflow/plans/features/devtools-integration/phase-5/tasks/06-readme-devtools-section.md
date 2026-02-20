@@ -75,3 +75,29 @@ Keep this section concise — the README should give a quick overview, not exhau
 - **Keep it brief.** The README is for quick orientation. The website has the full documentation.
 - **Don't duplicate the entire keybindings table.** Just mention the key shortcuts for entering DevTools and switching panels.
 - **Include a small ASCII screenshot or description** of what the TUI looks like in DevTools mode if it fits the README's style.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `README.md` | Fixed `d` → `+` in "Adding More Sessions" text; updated Quick Reference table (`d` = DevTools, `+` = New Session); added "Built-in DevTools" section with panels table, debug overlays table, browser fallback, and link to website docs |
+
+### Notable Decisions/Tradeoffs
+
+1. **Section placement**: Added between "Keyboard Controls" and "Opening Files from Logs" to maintain logical flow
+2. **Concise format**: Used tables for panels and overlays rather than prose to match existing README style
+
+### Testing Performed
+
+- Visual review of README rendering — Passed
+- No broken markdown links
+
+### Risks/Limitations
+
+None

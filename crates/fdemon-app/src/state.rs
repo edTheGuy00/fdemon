@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::time::Instant;
 
 use rand::Rng;
 
@@ -54,6 +55,66 @@ pub enum UiMode {
 // DevTools State (Phase 4)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// VM Service connection status for display in DevTools UI.
+///
+/// Extends the binary `vm_connected: bool` flag on `Session` with richer
+/// reconnection/timeout state that can be surfaced in the TUI.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum VmConnectionStatus {
+    /// WebSocket connection established and VM Service is responding.
+    #[default]
+    Connected,
+
+    /// No active connection (startup or after a clean disconnect).
+    Disconnected,
+
+    /// Connection was lost and the client is retrying.
+    ///
+    /// `attempt` is 1-based (first retry = 1).
+    /// `max_attempts` is the total number of retries before giving up.
+    Reconnecting {
+        /// Current attempt number (1-based).
+        attempt: u32,
+        /// Maximum number of retry attempts.
+        max_attempts: u32,
+    },
+
+    /// A specific VM RPC call timed out (e.g., FetchWidgetTree, FetchLayoutData).
+    ///
+    /// The connection itself may still be live; this indicates that a single
+    /// on-demand request did not complete within the 10-second deadline.
+    TimedOut,
+}
+
+impl VmConnectionStatus {
+    /// Short human-readable label used in the DevTools tab bar indicator.
+    ///
+    /// Examples:
+    /// - `"Connected"`
+    /// - `"Reconnecting (2/10)"`
+    /// - `"Disconnected"`
+    /// - `"Timed Out"`
+    pub fn label(&self) -> String {
+        match self {
+            VmConnectionStatus::Connected => "Connected".to_string(),
+            VmConnectionStatus::Disconnected => "Disconnected".to_string(),
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts,
+            } => {
+                format!("Reconnecting ({attempt}/{max_attempts})")
+            }
+            VmConnectionStatus::TimedOut => "Timed Out".to_string(),
+        }
+    }
+
+    /// Returns `true` when the status indicates some form of connectivity
+    /// loss (disconnected, reconnecting, or timed-out).
+    pub fn is_degraded(&self) -> bool {
+        !matches!(self, VmConnectionStatus::Connected)
+    }
+}
+
 /// Active sub-panel within DevTools mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DevToolsPanel {
@@ -66,6 +127,28 @@ pub enum DevToolsPanel {
 
     /// FPS, memory usage, and frame timing display.
     Performance,
+}
+
+/// A user-friendly error with an actionable hint for DevTools panels.
+///
+/// Created by [`crate::handler::devtools::map_rpc_error`] which maps raw RPC
+/// error strings to concise messages the TUI can display in a centred error box.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DevToolsError {
+    /// Short, human-readable description of the problem (≤ 60 chars recommended).
+    pub message: String,
+    /// Actionable guidance shown below the message (key hints, mode suggestion, etc.).
+    pub hint: String,
+}
+
+impl DevToolsError {
+    /// Create a new `DevToolsError`.
+    pub fn new(message: impl Into<String>, hint: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            hint: hint.into(),
+        }
+    }
 }
 
 /// State for the widget inspector tree view.
@@ -83,8 +166,12 @@ pub struct InspectorState {
     /// Whether a tree fetch is currently in progress.
     pub loading: bool,
 
-    /// Error message from the last failed fetch attempt.
-    pub error: Option<String>,
+    /// User-friendly error from the last failed fetch attempt.
+    ///
+    /// `None` when no error has occurred or after a successful fetch.
+    /// Populated by [`crate::handler::devtools::map_rpc_error`] so the TUI
+    /// always shows a clear message + hint instead of a raw RPC error string.
+    pub error: Option<DevToolsError>,
 
     /// Whether the `"fdemon-inspector-1"` VM object group exists on the Flutter VM.
     ///
@@ -92,6 +179,16 @@ pub struct InspectorState {
     /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
     /// has been created yet.
     pub has_object_group: bool,
+
+    /// Timestamp of the last successful widget tree fetch.
+    ///
+    /// Used to enforce a 2-second cooldown on rapid refresh requests (`r` key).
+    /// A new fetch is only dispatched when all of the following hold:
+    /// - `loading == false` (no fetch in flight), AND
+    /// - either `last_fetch_time` is `None`, OR at least 2 seconds have elapsed.
+    ///
+    /// This prevents RPC spam when the user holds down the refresh key.
+    pub last_fetch_time: Option<Instant>,
 }
 
 impl InspectorState {
@@ -119,6 +216,32 @@ impl InspectorState {
         self.loading = false;
         self.error = None;
         self.has_object_group = false;
+        self.last_fetch_time = None;
+    }
+
+    /// Returns `true` if a tree refresh request should be suppressed.
+    ///
+    /// A request is suppressed when either:
+    /// - A fetch is already in flight (`loading == true`), OR
+    /// - The last successful fetch occurred within the 2-second cooldown window.
+    pub fn is_fetch_debounced(&self) -> bool {
+        const COOLDOWN: std::time::Duration = std::time::Duration::from_secs(2);
+        if self.loading {
+            return true;
+        }
+        self.last_fetch_time
+            .map(|t| t.elapsed() < COOLDOWN)
+            .unwrap_or(false)
+    }
+
+    /// Record that a fetch was just initiated.
+    ///
+    /// Sets `loading = true` and updates `last_fetch_time` to `Instant::now()`
+    /// so that the next request within 2 seconds is suppressed by
+    /// [`Self::is_fetch_debounced`].
+    pub fn record_fetch_start(&mut self) {
+        self.loading = true;
+        self.last_fetch_time = Some(Instant::now());
     }
 
     /// Build a flat list of visible nodes based on expand/collapse state.
@@ -207,8 +330,11 @@ pub struct LayoutExplorerState {
     /// Whether a layout fetch is in progress.
     pub loading: bool,
 
-    /// Error from the last failed fetch.
-    pub error: Option<String>,
+    /// User-friendly error from the last failed fetch.
+    ///
+    /// `None` when no error has occurred or after a successful fetch.
+    /// Populated by [`crate::handler::devtools::map_rpc_error`].
+    pub error: Option<DevToolsError>,
 
     /// Whether the `"devtools-layout"` VM object group exists on the Flutter VM.
     ///
@@ -216,6 +342,22 @@ pub struct LayoutExplorerState {
     /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
     /// has been created yet.
     pub has_object_group: bool,
+
+    /// The `value_id` of the inspector node for which layout data was last fetched.
+    ///
+    /// Compared against the currently selected inspector node when the user
+    /// switches to the Layout panel. If the selected node has not changed,
+    /// the layout fetch is skipped to avoid redundant RPC calls.
+    ///
+    /// Reset to `None` when the state is reset (e.g., session switch).
+    pub last_fetched_node_id: Option<String>,
+
+    /// The `value_id` of the inspector node for which a fetch is currently in flight.
+    ///
+    /// Set when a `FetchLayoutData` action is dispatched and consumed in
+    /// `handle_layout_data_fetched` to populate `last_fetched_node_id` on
+    /// success. Reset to `None` on failure or reset.
+    pub pending_node_id: Option<String>,
 }
 
 impl LayoutExplorerState {
@@ -225,6 +367,8 @@ impl LayoutExplorerState {
         self.loading = false;
         self.error = None;
         self.has_object_group = false;
+        self.last_fetched_node_id = None;
+        self.pending_node_id = None;
     }
 }
 
@@ -250,6 +394,26 @@ pub struct DevToolsViewState {
     /// Displayed in DevTools panels so users see actionable errors instead of
     /// the generic "VM Service not connected" message.
     pub vm_connection_error: Option<String>,
+
+    /// Rich VM Service connection status (Phase 5, Task 02).
+    ///
+    /// Tracks connected / disconnected / reconnecting / timed-out states so
+    /// the TUI can display colour-coded indicators in the DevTools tab bar
+    /// and show appropriate messages in each panel.
+    ///
+    /// Updated by the handler in response to VM Service lifecycle messages:
+    /// - `VmServiceConnected`    → `Connected`
+    /// - `VmServiceDisconnected` → `Disconnected`
+    /// - `VmServiceReconnecting` → `Reconnecting { attempt, max_attempts }`
+    /// - `WidgetTreeFetchTimeout` / `LayoutDataFetchTimeout` → `TimedOut`
+    pub connection_status: VmConnectionStatus,
+
+    /// Timestamp of the last debug overlay toggle.
+    ///
+    /// Used to debounce rapid key presses: overlay toggle RPCs are suppressed
+    /// if the last toggle occurred within 500 ms. This prevents multiple
+    /// in-flight RPC calls when the user holds down the toggle key.
+    pub last_overlay_toggle: Option<Instant>,
 }
 
 impl DevToolsViewState {
@@ -268,6 +432,28 @@ impl DevToolsViewState {
         self.overlay_debug_paint = false;
         self.overlay_performance = false;
         self.vm_connection_error = None;
+        self.connection_status = VmConnectionStatus::Disconnected;
+        self.last_overlay_toggle = None;
+    }
+
+    /// Returns `true` if the overlay toggle debounce cooldown (500 ms) has
+    /// not yet elapsed since the last toggle.
+    ///
+    /// When this returns `true` the caller should suppress the RPC and not
+    /// update `last_overlay_toggle`.
+    pub fn is_overlay_toggle_debounced(&self) -> bool {
+        const DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(500);
+        self.last_overlay_toggle
+            .map(|t| t.elapsed() < DEBOUNCE)
+            .unwrap_or(false)
+    }
+
+    /// Record that an overlay toggle was just dispatched.
+    ///
+    /// Updates `last_overlay_toggle` to `Instant::now()` so that the next
+    /// call within 500 ms will be suppressed by [`Self::is_overlay_toggle_debounced`].
+    pub fn record_overlay_toggle(&mut self) {
+        self.last_overlay_toggle = Some(Instant::now());
     }
 }
 
@@ -737,6 +923,8 @@ impl AppState {
     }
 
     /// Tick loading animation with optional message cycling
+    ///
+    /// `cycle_messages`: If true, cycle through messages every ~15 ticks (1.5 sec at 100ms)
     pub fn tick_loading_animation_with_cycling(&mut self, cycle_messages: bool) {
         if let Some(ref mut loading) = self.loading_state {
             loading.tick(cycle_messages);
@@ -890,6 +1078,43 @@ mod tests {
         assert!(!state.overlay_repaint_rainbow);
         assert!(!state.overlay_debug_paint);
         assert!(!state.overlay_performance);
+        assert!(state.last_overlay_toggle.is_none());
+    }
+
+    #[test]
+    fn test_overlay_toggle_debounce_initially_false() {
+        let state = DevToolsViewState::default();
+        assert!(
+            !state.is_overlay_toggle_debounced(),
+            "Debounce should be false when no toggle has occurred"
+        );
+    }
+
+    #[test]
+    fn test_overlay_toggle_debounce_active_after_record() {
+        let mut state = DevToolsViewState::default();
+        state.record_overlay_toggle();
+        assert!(
+            state.is_overlay_toggle_debounced(),
+            "Debounce should be active immediately after recording a toggle"
+        );
+    }
+
+    #[test]
+    fn test_overlay_toggle_debounce_cleared_on_reset() {
+        let mut state = DevToolsViewState::default();
+        state.record_overlay_toggle();
+        assert!(state.is_overlay_toggle_debounced());
+
+        state.reset();
+        assert!(
+            state.last_overlay_toggle.is_none(),
+            "reset() should clear last_overlay_toggle"
+        );
+        assert!(
+            !state.is_overlay_toggle_debounced(),
+            "Debounce should be inactive after reset"
+        );
     }
 
     // ─────────────────────────────────────────────────────────
@@ -934,8 +1159,6 @@ mod tests {
     fn test_selected_node_description_returns_root_when_index_zero() {
         let mut inspector = InspectorState::default();
         inspector.root = Some(make_tree_with_three_nodes());
-        // index 0 → root node, even without expanding anything
-        inspector.selected_index = 0;
 
         let desc = inspector.selected_node_description();
         assert_eq!(desc.as_deref(), Some("RootNode"));

@@ -30,9 +30,9 @@ pub use settings::{
 };
 // Re-export public config types used by TUI and other crates
 pub use types::{
-    BehaviorSettings, ConfigSource, DevToolsSettings, EditorSettings, FlutterMode, IconMode,
-    LaunchConfig, LaunchFile, ParentIde, ResolvedLaunchConfig, SettingItem, SettingValue, Settings,
-    SettingsTab, UiSettings, UserPreferences, WatcherSettings, WindowPrefs,
+    BehaviorSettings, ConfigSource, DevToolsLoggingSettings, DevToolsSettings, EditorSettings,
+    FlutterMode, IconMode, LaunchConfig, LaunchFile, ParentIde, ResolvedLaunchConfig, SettingItem,
+    SettingValue, Settings, SettingsTab, UiSettings, UserPreferences, WatcherSettings, WindowPrefs,
 };
 pub use vscode::load_vscode_configs;
 pub use writer::{

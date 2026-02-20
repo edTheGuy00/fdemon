@@ -10,6 +10,7 @@ use leptos_router::hooks::use_location;
 use leptos_router::path;
 use pages::docs::architecture::Architecture;
 use pages::docs::configuration::Configuration;
+use pages::docs::devtools::Devtools;
 use pages::docs::installation::Installation;
 use pages::docs::introduction::Introduction;
 use pages::docs::keybindings::Keybindings;
@@ -29,6 +30,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/") view=Introduction />
                         <Route path=path!("/installation") view=Installation />
                         <Route path=path!("/keybindings") view=Keybindings />
+                        <Route path=path!("/devtools") view=Devtools />
                         <Route path=path!("/configuration") view=Configuration />
                         <Route path=path!("/architecture") view=Architecture />
                     </ParentRoute>

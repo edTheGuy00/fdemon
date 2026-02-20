@@ -84,7 +84,7 @@ Clean, responsive terminal interface built with [ratatui](https://github.com/rat
 4. Configure launch settings in **Launch Context** (right pane) if needed
 5. Press `Enter` to launch
 
-**Adding More Sessions:** Press `d` to open the New Session Dialog and add another device.
+**Adding More Sessions:** Press `+` to open the New Session Dialog and add another device.
 
 ### Basic Usage
 
@@ -135,7 +135,8 @@ Flutter Demon provides extensive keyboard controls for efficient terminal-based 
 |-----|--------|
 | `q` / `Esc` | Quit |
 | `r` / `R` | Hot reload / Hot restart |
-| `d` | Open device selector |
+| `d` | Enter DevTools mode |
+| `+` | Open New Session Dialog |
 | `c` | Clear logs |
 | `1-9` | Switch to session 1-9 |
 | `Tab` | Next/previous session |
@@ -144,6 +145,39 @@ Flutter Demon provides extensive keyboard controls for efficient terminal-based 
 | `/` | Search logs (vim-style) |
 | `e` / `E` | Jump to next/previous error |
 | `L` | Enter link highlight mode |
+
+## Built-in DevTools
+
+Flutter Demon includes built-in DevTools integration via the Flutter VM Service — inspect widgets, explore layouts, and monitor performance without leaving the terminal.
+
+### Accessing DevTools
+
+Press `d` in normal mode to enter DevTools mode (requires a running Flutter app in debug mode). Press `Esc` to return to the log view.
+
+### Panels
+
+| Key | Panel | Description |
+|-----|-------|-------------|
+| `i` | **Widget Inspector** | Browse the widget tree, expand/collapse nodes, view details and source locations |
+| `l` | **Layout Explorer** | Visualize flex constraints, sizes, and layout properties for the selected widget |
+| `p` | **Performance** | Real-time FPS sparkline, memory usage gauge, jank detection, GC history |
+
+### Debug Overlays
+
+Toggle overlays directly on the device/emulator:
+
+| Key | Overlay |
+|-----|---------|
+| `Ctrl+r` | Repaint rainbow |
+| `Ctrl+p` | Performance overlay |
+| `Ctrl+d` | Debug paint |
+
+### Browser Fallback
+
+Press `b` to open the full Flutter DevTools suite in your browser for features not available in the TUI (timeline, network inspector, etc.). Configure the browser with `[devtools] browser = "chrome"` in your config.
+
+> [!TIP]
+> See the [DevTools documentation](https://flutter-demon.dev/docs/devtools) for full details on all panels, keybindings, and configuration options.
 
 ## Opening Files from Logs
 

@@ -668,6 +668,19 @@ pub enum Message {
     /// VM Service disconnected (unexpected or graceful)
     VmServiceDisconnected { session_id: SessionId },
 
+    /// VM Service connection lost and is being retried.
+    ///
+    /// Emitted during the reconnection backoff loop so the TUI can display
+    /// a "Reconnecting (attempt/max)" indicator. Sent by the action layer
+    /// when it detects a disconnection and begins retry logic.
+    VmServiceReconnecting {
+        session_id: SessionId,
+        /// Current attempt number (1-based).
+        attempt: u32,
+        /// Maximum number of retry attempts before giving up.
+        max_attempts: u32,
+    },
+
     /// VM Service received a Flutter.Error event (crash log)
     VmServiceFlutterError {
         session_id: SessionId,
@@ -755,6 +768,13 @@ pub enum Message {
         error: String,
     },
 
+    /// Widget tree fetch timed out (10-second deadline exceeded).
+    ///
+    /// Sent by `spawn_fetch_widget_tree` when `tokio::time::timeout` fires.
+    /// The handler sets `inspector.loading = false` and stores an error message
+    /// with a retry hint so the user can press `r` to try again.
+    WidgetTreeFetchTimeout { session_id: SessionId },
+
     /// Request layout data for a specific widget node.
     RequestLayoutData {
         session_id: SessionId,
@@ -772,6 +792,13 @@ pub enum Message {
         session_id: SessionId,
         error: String,
     },
+
+    /// Layout data fetch timed out (10-second deadline exceeded).
+    ///
+    /// Sent by `spawn_fetch_layout_data` when `tokio::time::timeout` fires.
+    /// The handler sets `layout_explorer.loading = false` and stores an error
+    /// message with a retry hint.
+    LayoutDataFetchTimeout { session_id: SessionId },
 
     /// Toggle a debug overlay extension (repaint rainbow, debug paint, perf overlay).
     ToggleDebugOverlay { extension: DebugOverlayKind },

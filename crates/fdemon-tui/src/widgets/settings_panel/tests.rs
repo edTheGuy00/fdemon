@@ -171,8 +171,8 @@ fn test_project_settings_items_count() {
     let settings = Settings::default();
     let items = project_settings_items(&settings);
 
-    // Should have 17 items across 5 sections (includes ui.icons from Phase 1)
-    assert_eq!(items.len(), 17);
+    // Should have 27 items across 7 sections (includes DevTools + DevTools Logging from Phase 5)
+    assert_eq!(items.len(), 27);
 }
 
 #[test]

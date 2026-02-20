@@ -43,6 +43,26 @@ impl Default for PerformanceState {
     }
 }
 
+impl PerformanceState {
+    /// Create a new [`PerformanceState`] with a configurable memory history size.
+    ///
+    /// The `memory_history_size` parameter controls how many memory snapshots to
+    /// retain (ring buffer capacity). At the default 2-second poll interval,
+    /// `60` snapshots covers 2 minutes of history.
+    ///
+    /// GC and frame history sizes use fixed defaults — only memory is configurable
+    /// for now (see `DEFAULT_GC_HISTORY_SIZE` and `DEFAULT_FRAME_HISTORY_SIZE`).
+    pub fn with_memory_history_size(memory_history_size: usize) -> Self {
+        Self {
+            memory_history: RingBuffer::new(memory_history_size),
+            gc_history: RingBuffer::new(DEFAULT_GC_HISTORY_SIZE),
+            frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
+            stats: PerformanceStats::default(),
+            monitoring_active: false,
+        }
+    }
+}
+
 /// How often to recompute aggregated stats (every N frames).
 ///
 /// At 60 FPS this produces ~6 stats updates per second — fast enough for a

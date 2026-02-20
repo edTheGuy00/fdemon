@@ -105,10 +105,19 @@ fn hydrate_start_performance_monitoring(
     action: UpdateAction,
     state: &AppState,
 ) -> Option<UpdateAction> {
-    if let UpdateAction::StartPerformanceMonitoring { session_id, handle } = action {
+    if let UpdateAction::StartPerformanceMonitoring {
+        session_id,
+        handle,
+        performance_refresh_ms,
+    } = action
+    {
         if handle.is_some() {
             // Already hydrated (shouldn't happen in normal flow, but safe).
-            return Some(UpdateAction::StartPerformanceMonitoring { session_id, handle });
+            return Some(UpdateAction::StartPerformanceMonitoring {
+                session_id,
+                handle,
+                performance_refresh_ms,
+            });
         }
         // Extract the VM request handle from the session. If unavailable,
         // discard the action — there is nothing to poll yet.
@@ -119,6 +128,7 @@ fn hydrate_start_performance_monitoring(
         return Some(UpdateAction::StartPerformanceMonitoring {
             session_id,
             handle: Some(vm_handle),
+            performance_refresh_ms,
         });
     }
     Some(action)
@@ -133,12 +143,14 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
     if let UpdateAction::FetchWidgetTree {
         session_id,
         vm_handle,
+        tree_max_depth,
     } = action
     {
         if vm_handle.is_some() {
             return Some(UpdateAction::FetchWidgetTree {
                 session_id,
                 vm_handle,
+                tree_max_depth,
             });
         }
         let handle = state
@@ -148,6 +160,7 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         return Some(UpdateAction::FetchWidgetTree {
             session_id,
             vm_handle: Some(handle),
+            tree_max_depth,
         });
     }
     Some(action)

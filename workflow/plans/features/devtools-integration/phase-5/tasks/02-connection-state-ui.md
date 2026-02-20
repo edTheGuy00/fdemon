@@ -211,3 +211,49 @@ mod tests {
 - **The performance panel already handles `vm_connected = false`** — verify it works and just enhance the messaging.
 - **Timeout value (10s) is reasonable** for Flutter's VM Service. Some operations (e.g., fetching a very large widget tree) can genuinely take several seconds. Don't set it too low.
 - **Consider cancellation**: If the user exits DevTools mode while a fetch is in-flight, the timeout shouldn't cause errors. The response message handler should check that the session still matches.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `VmConnectionStatus` enum with `label()` and `is_degraded()` methods; added `connection_status: VmConnectionStatus` field to `DevToolsViewState`; updated `reset()` to set `Disconnected` |
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceReconnecting`, `WidgetTreeFetchTimeout`, `LayoutDataFetchTimeout` message variants |
+| `crates/fdemon-app/src/handler/devtools.rs` | Added `handle_vm_service_reconnecting`, `handle_widget_tree_fetch_timeout`, `handle_layout_data_fetch_timeout` handler functions; updated import |
+| `crates/fdemon-app/src/handler/update.rs` | Wired three new message handlers; updated `VmServiceConnected` and `VmServiceDisconnected` to set `connection_status` |
+| `crates/fdemon-app/src/actions.rs` | Wrapped `spawn_fetch_widget_tree` in a 10-second `tokio::time::timeout`; wrapped `spawn_fetch_layout_data` in a 10-second timeout; emit `WidgetTreeFetchTimeout`/`LayoutDataFetchTimeout` on deadline exceeded |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `VmConnectionStatus` import; updated Performance panel call to pass `connection_status`; updated Inspector/Layout panel calls to pass `vm_connected` and `connection_status`; added `connection_indicator_text()` helper; updated `render_tab_bar()` to show degraded connection indicator on the right; added 7 new connection indicator tests |
+| `crates/fdemon-tui/src/widgets/devtools/inspector.rs` | Added `VmConnectionStatus` import and `vm_connected`/`connection_status` fields to `WidgetInspector`; updated constructor; added `render_disconnected()` with status-aware messaging; updated `render()` to call disconnected state when `!vm_connected`; updated all test calls; added 2 disconnected state tests |
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | Same pattern as inspector: added `VmConnectionStatus` import and fields; updated constructor; added `render_disconnected()`; updated render dispatch; updated all test calls; added 2 disconnected state tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance.rs` | Added `VmConnectionStatus` import and `connection_status` field; updated constructor signature; updated `render_disconnected()` to show "Reconnecting..." message with attempt count when in `Reconnecting` state; updated all test calls; added 1 reconnecting state test |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmConnectionStatus::Connected` as default**: Chose `Connected` as the `#[default]` to avoid false disconnected indicators during startup before any VM connection attempt. The `reset()` method explicitly sets `Disconnected` for session resets where a genuine disconnect has occurred.
+
+2. **Connection indicator uses ASCII symbols**: Used `x`, `~`, `!` prefix characters instead of Unicode `✗`, `↻`, `⏱` to ensure compatibility across all terminal emulators without requiring NerdFonts. The indicator is still clearly color-coded (red for disconnected, yellow for reconnecting/timed out).
+
+3. **Right-side rendering order**: When both overlay indicators (Rainbow/DebugPaint/PerfOverlay) and connection indicator are active simultaneously, they are each positioned from the right edge of the inner tab bar area independently. The connection indicator takes priority (leftmost of the right group) since it's more operationally important.
+
+4. **Single 10-second timeout wraps entire RPC sequence**: For `spawn_fetch_widget_tree`, the entire async block (including the API fallback from `getRootWidgetTree` to `getRootWidgetSummaryTree`) is covered by one deadline — not just the first call — to correctly handle multi-step slow operations.
+
+5. **Session filtering in handlers**: All timeout/reconnecting handlers guard with `active_id == Some(session_id)` to avoid updating UI state for background sessions.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo fmt --all` - Passed (no changes needed beyond auto-format)
+- `cargo test -p fdemon-app` - Passed (871 tests)
+- `cargo test -p fdemon-tui -- widgets::devtools` - Passed (84 tests)
+- `cargo test -p fdemon-tui` - 529 passed, 1 pre-existing failure (`test_project_settings_items_count` in settings_panel — caused by task 01 adding 10 more settings items, count changed from 17 to 27, unrelated to this task)
+
+### Risks/Limitations
+
+1. **`VmServiceReconnecting` message not auto-fired**: The `VmServiceReconnecting` message and its handler are fully wired, but no daemon code currently fires it. It must be sent by the daemon layer's reconnection logic when it retries (future work). The state transitions are complete but won't be visually observable until the daemon emits this message.
+
+2. **Pre-existing test failure**: `test_project_settings_items_count` was broken by task 01 (expand config) and remains broken. It expects 17 items but gets 27 after the config expansion. Not caused by this task.

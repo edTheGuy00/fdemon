@@ -116,3 +116,30 @@ The keybindings page at `pages/docs/keybindings.rs` is data-driven — it iterat
 - **The keybindings page is fully data-driven.** All changes go in `data.rs` — the page component itself (`keybindings.rs`) should not need modification unless the rendering logic needs adjustment for the new sections.
 - **Unicode characters**: The existing data already uses `\u{2191}` etc. for arrow keys, so the rendering pipeline handles them. No special handling needed.
 - **Tailwind v4 color classes**: `cyan-400` and `cyan-500` are standard Tailwind colors and should work. If the site uses a custom color palette, check `tailwind.config.js` or `Trunk.toml` for overrides.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/data.rs` | Fixed `"+ / d"` → `"+"` in Session Management; added 3 DevTools keybinding sections (Panel Navigation: 7 bindings, Debug Overlays: 3 bindings, Widget Inspector: 5 bindings) with `bg-cyan-500`/`text-cyan-400` color scheme |
+| `website/src/pages/docs/introduction.rs` | Fixed Quick Start paragraph (`d` → `+` for new session); split Essential Keybindings `"d / +"` row into separate `d` (DevTools) and `+` (New Session) rows |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cyan color scheme**: Matches TUI's cyan DevTools tab bar border; same as existing "Search Input Mode" section
+2. **Section placement**: After "Log Search & Error Navigation" and before "New Session Dialog" per task spec
+
+### Testing Performed
+
+- `trunk build` — Passed
+- Keybindings page data-driven rendering verified
+
+### Risks/Limitations
+
+None

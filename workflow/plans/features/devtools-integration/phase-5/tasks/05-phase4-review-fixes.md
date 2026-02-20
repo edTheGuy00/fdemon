@@ -105,3 +105,51 @@ mod tests {
 - **The `percent_encode_uri` fix is trivial** — a single character change from `x` to `X` in a format string.
 - **The layout `object_id` vs `value_id` issue requires investigation** — read the actual code to determine if the bug exists before fixing. The Phase 4 review flagged it as "needs verification", not a confirmed bug.
 - **If both this task and Task 04 are assigned to different implementors**, coordinate on the overlay debounce to avoid conflicts. The TASKS.md dependency graph allows both to run in parallel.
+
+---
+
+## Completion Summary
+
+**Status:** Done (Blocked on verification — Bash and Edit tools denied)
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools.rs` | Fixed `percent_encode_uri` to use uppercase hex via `write!(encoded, "%{:02X}", byte)`. Added `test_percent_encode_uri_uppercase_hex` test. Updated `test_open_browser_devtools_returns_action` to check for uppercase `ws%3A%2F%2F` instead of case-insensitive lowercase. Removed `.to_lowercase()` from the test. |
+| `crates/fdemon-app/src/state.rs` | Added `use std::time::Instant` import. Changed `#[derive(Debug, Clone, Default)]` on `DevToolsViewState` to `#[derive(Debug, Clone)]`. Added `pub last_overlay_toggle: Option<Instant>` field. Added manual `impl Default for DevToolsViewState`. Added `is_overlay_toggle_debounced()` and `record_overlay_toggle()` methods. Updated `reset()` to clear `last_overlay_toggle`. Added 3 new debounce tests. |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `Message::ToggleDebugOverlay` handler to check `is_overlay_toggle_debounced()` and call `record_overlay_toggle()` before dispatching the `ToggleOverlay` action. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`percent_encode_uri` rewrite**: The original implementation used `char::from_digit(..., 16)` which produces lowercase hex digits. Switched to `write!(encoded, "%{:02X}", byte)` using `std::fmt::Write` trait. The `use std::fmt::Write as _;` wildcard import is placed inside the function body to avoid polluting the module namespace.
+
+2. **Layout `value_id` — no bug found**: Investigation confirmed the original code at `handler/devtools.rs` line 102 already uses `node.value_id.clone()` and the comment on line 96 explicitly states "The getLayoutExplorerNode RPC expects `valueId`, not `objectId`." The phase 4 review concern was speculative and does not apply.
+
+3. **Overlay debounce on `DevToolsViewState`**: Added `last_overlay_toggle: Option<Instant>` field. Since `Instant` doesn't implement `Default`, we had to remove the `#[derive(Default)]` from `DevToolsViewState` and write a manual `impl Default`. The helper methods `is_overlay_toggle_debounced()` and `record_overlay_toggle()` encapsulate the debounce logic cleanly.
+
+4. **Debounce check before session lookup**: The debounce check runs before the `session_manager.selected()` lookup to short-circuit as fast as possible. If debounced, no action is returned and no state changes occur.
+
+5. **500ms debounce matches task spec**: The cooldown matches the value specified in both Task 04 and this task's description.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — NOT RUN (Bash tool denied)
+- `cargo test -p fdemon-app` — NOT RUN (Bash tool denied)
+- `cargo clippy -p fdemon-app -- -D warnings` — NOT RUN (Bash tool denied)
+
+Code was reviewed manually for correctness:
+- `percent_encode_uri`: `{:02X}` produces uppercase hex (A-F, not a-f), confirmed
+- `test_open_browser_devtools_returns_action`: now checks `url.contains("ws%3A%2F%2F")` (uppercase)
+- `test_percent_encode_uri_space_becomes_percent_20`: space is 0x20 (digits only), no case change
+- `DevToolsViewState::Default`: all fields initialized to zero/None/default
+- `is_overlay_toggle_debounced()`: returns `false` when `None` (no previous toggle), `true` when within 500ms
+- Borrow checker: `record_overlay_toggle()` takes `&mut self`, while the session lookup uses `selected()` (shared ref). These don't overlap since `session_manager` and `devtools_view_state` are separate fields on `AppState`.
+
+### Risks/Limitations
+
+1. **Verification blocked**: Bash and Edit tools were denied, so `cargo check`, `cargo test`, and `cargo clippy` could not be run. The changes were reviewed manually for correctness but have not been compiler-verified.
+
+2. **Test for `test_percent_encode_uri_space_becomes_percent_20`**: The assertion `assert_eq!(encoded, "hello%20world")` still passes with uppercase format because space (0x20) contains only digits, so `%20` is the same in both uppercase and lowercase format.
+
+3. **Overlay debounce coordination**: Task 04 (performance-polish) also mentions overlay debounce. This task implements it first. Task 04 should verify debounce is present and skip its overlay debounce section.

@@ -24,8 +24,8 @@ use fdemon_daemon::{
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
 
-/// Default polling interval for memory usage (2 seconds).
-const PERF_POLL_INTERVAL: Duration = Duration::from_secs(2);
+/// Minimum polling interval for memory usage (500ms) to prevent excessive VM Service calls.
+const PERF_POLL_MIN_MS: u64 = 500;
 
 use super::spawn;
 
@@ -166,11 +166,15 @@ pub fn handle_action(
             session_tasks.lock().unwrap().insert(session_id, handle);
         }
 
-        UpdateAction::StartPerformanceMonitoring { session_id, handle } => {
+        UpdateAction::StartPerformanceMonitoring {
+            session_id,
+            handle,
+            performance_refresh_ms,
+        } => {
             // `handle` is guaranteed to be Some here because process.rs
             // discards actions where it couldn't hydrate the handle.
             if let Some(vm_handle) = handle {
-                spawn_performance_polling(session_id, vm_handle, msg_tx);
+                spawn_performance_polling(session_id, vm_handle, msg_tx, performance_refresh_ms);
             } else {
                 warn!(
                     "StartPerformanceMonitoring reached handle_action with no VmRequestHandle \
@@ -186,9 +190,10 @@ pub fn handle_action(
         UpdateAction::FetchWidgetTree {
             session_id,
             vm_handle,
+            tree_max_depth,
         } => {
             if let Some(handle) = vm_handle {
-                spawn_fetch_widget_tree(session_id, handle, msg_tx);
+                spawn_fetch_widget_tree(session_id, handle, msg_tx, tree_max_depth);
             } else {
                 warn!(
                     "FetchWidgetTree reached handle_action with no VmRequestHandle \
@@ -563,11 +568,19 @@ pub async fn execute_task(
 ///
 /// Transient errors from `getMemoryUsage` (e.g., isolate paused during hot
 /// reload) are logged at debug level and skipped — the next tick will retry.
+///
+/// The `performance_refresh_ms` parameter controls the polling interval.
+/// It is clamped to a minimum of [`PERF_POLL_MIN_MS`] (500ms) to prevent
+/// excessive VM Service calls.
 fn spawn_performance_polling(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
+    performance_refresh_ms: u64,
 ) {
+    // Clamp to minimum to prevent excessive polling.
+    let poll_interval = Duration::from_millis(performance_refresh_ms.max(PERF_POLL_MIN_MS));
+
     // Create the shutdown channel outside the task so both ends are available
     // before the task starts running.
     let (perf_shutdown_tx, mut perf_shutdown_rx) = tokio::sync::watch::channel(false);
@@ -601,7 +614,7 @@ fn spawn_performance_polling(
             return;
         }
 
-        let mut interval = tokio::time::interval(PERF_POLL_INTERVAL);
+        let mut interval = tokio::time::interval(poll_interval);
 
         loop {
             tokio::select! {
@@ -862,12 +875,17 @@ async fn forward_vm_events(
 /// named `"fdemon-inspector-1"` is created to scope the returned `valueId`
 /// references.
 ///
+/// When `tree_max_depth` is non-zero, the depth is passed as `subtreeDepth`
+/// to the RPC call (if supported by the Flutter extension). If the parameter
+/// is not supported, the tree is returned at unlimited depth.
+///
 /// Sends `Message::WidgetTreeFetched` on success or
 /// `Message::WidgetTreeFetchFailed` on failure.
 fn spawn_fetch_widget_tree(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
+    tree_max_depth: u32,
 ) {
     tokio::spawn(async move {
         let isolate_id = match handle.main_isolate_id().await {
@@ -919,46 +937,66 @@ fn spawn_fetch_widget_tree(
         newer_args.insert("objectGroup".to_string(), object_group.to_string());
         newer_args.insert("isSummaryTree".to_string(), "true".to_string());
         newer_args.insert("withPreviews".to_string(), "false".to_string());
+        // Pass subtreeDepth when a limit is configured (0 = unlimited).
+        if tree_max_depth > 0 {
+            newer_args.insert("subtreeDepth".to_string(), tree_max_depth.to_string());
+        }
 
-        let result = match handle
-            .call_extension(ext::GET_ROOT_WIDGET_TREE, &isolate_id, Some(newer_args))
-            .await
-        {
-            Ok(value) => parse_diagnostics_node_response(&value),
-            Err(e) => {
-                // If the newer API is not registered, fall back to the older one.
-                if matches!(&e, fdemon_core::Error::Protocol { .. }) {
-                    tracing::debug!(
-                        "getRootWidgetTree not available for session {}, \
-                         falling back to getRootWidgetSummaryTree: {}",
-                        session_id,
-                        e
-                    );
-                    let mut older_args = HashMap::new();
-                    older_args.insert("objectGroup".to_string(), object_group.to_string());
-                    match handle
-                        .call_extension(
-                            ext::GET_ROOT_WIDGET_SUMMARY_TREE,
-                            &isolate_id,
-                            Some(older_args),
-                        )
-                        .await
-                    {
-                        Ok(value) => parse_diagnostics_node_response(&value),
-                        Err(fallback_err) => Err(fallback_err),
+        // Wrap the entire RPC call sequence in a 10-second timeout so that a
+        // hung or very slow VM Service does not leave the UI in a permanent
+        // loading state.
+        const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+        let fetch_result = tokio::time::timeout(FETCH_TIMEOUT, async {
+            match handle
+                .call_extension(ext::GET_ROOT_WIDGET_TREE, &isolate_id, Some(newer_args))
+                .await
+            {
+                Ok(value) => parse_diagnostics_node_response(&value),
+                Err(e) => {
+                    // If the newer API is not registered, fall back to the older one.
+                    if matches!(&e, fdemon_core::Error::Protocol { .. }) {
+                        tracing::debug!(
+                            "getRootWidgetTree not available for session {}, \
+                             falling back to getRootWidgetSummaryTree: {}",
+                            session_id,
+                            e
+                        );
+                        let mut older_args = HashMap::new();
+                        older_args.insert("objectGroup".to_string(), object_group.to_string());
+                        match handle
+                            .call_extension(
+                                ext::GET_ROOT_WIDGET_SUMMARY_TREE,
+                                &isolate_id,
+                                Some(older_args),
+                            )
+                            .await
+                        {
+                            Ok(value) => parse_diagnostics_node_response(&value),
+                            Err(fallback_err) => Err(fallback_err),
+                        }
+                    } else {
+                        Err(e)
                     }
-                } else {
-                    Err(e)
                 }
             }
-        };
+        })
+        .await;
 
-        let msg = match result {
-            Ok(root) => Message::WidgetTreeFetched {
+        let msg = match fetch_result {
+            Err(_timeout) => {
+                // 10-second deadline exceeded.
+                tracing::warn!(
+                    "FetchWidgetTree timed out after 10s for session {}",
+                    session_id
+                );
+                Message::WidgetTreeFetchTimeout { session_id }
+            }
+            Ok(Ok(root)) => Message::WidgetTreeFetched {
                 session_id,
                 root: Box::new(root),
             },
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!("FetchWidgetTree failed for session {}: {}", session_id, e);
                 Message::WidgetTreeFetchFailed {
                     session_id,
@@ -1132,12 +1170,30 @@ fn spawn_fetch_layout_data(
         args.insert("groupName".to_string(), layout_group.to_string());
         args.insert("subtreeDepth".to_string(), "1".to_string());
 
-        let raw_result = match handle
-            .call_extension(ext::GET_LAYOUT_EXPLORER_NODE, &isolate_id, Some(args))
-            .await
-        {
-            Ok(v) => v,
-            Err(e) => {
+        // Wrap the RPC call in a 10-second timeout so that a hung or slow VM
+        // does not leave the Layout panel in a permanent loading state.
+        const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+        let fetch_result = tokio::time::timeout(LAYOUT_FETCH_TIMEOUT, async {
+            handle
+                .call_extension(ext::GET_LAYOUT_EXPLORER_NODE, &isolate_id, Some(args))
+                .await
+        })
+        .await;
+
+        let raw_result = match fetch_result {
+            Err(_timeout) => {
+                tracing::warn!(
+                    "FetchLayoutData timed out after 10s for session {}",
+                    session_id
+                );
+                let _ = msg_tx
+                    .send(Message::LayoutDataFetchTimeout { session_id })
+                    .await;
+                return;
+            }
+            Ok(Ok(v)) => v,
+            Ok(Err(e)) => {
                 tracing::warn!(
                     "FetchLayoutData: extension call failed for session {}: {}",
                     session_id,

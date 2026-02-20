@@ -3,13 +3,13 @@
 //! Renders the Flutter widget tree as an expandable/collapsible tree view
 //! with the selected widget's details shown in a side panel.
 
-use fdemon_app::state::InspectorState;
+use fdemon_app::state::{DevToolsError, InspectorState, VmConnectionStatus};
 use fdemon_core::widget_tree::DiagnosticsNode;
 use ratatui::{
     buffer::Buffer,
     layout::{Alignment, Constraint, Layout, Rect},
-    style::{Modifier, Style},
-    text::Span,
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
@@ -36,12 +36,26 @@ const DETAILS_WIDTH_PCT: u16 = 40;
 /// error, and empty states when no tree data is available.
 pub struct WidgetInspector<'a> {
     inspector_state: &'a InspectorState,
+    /// Whether the VM Service WebSocket is currently connected.
+    /// When `false`, the panel renders a dedicated "VM Service disconnected"
+    /// state instead of the generic empty/error state.
+    vm_connected: bool,
+    /// Rich connection status for contextual disconnected messaging.
+    connection_status: &'a VmConnectionStatus,
 }
 
 impl<'a> WidgetInspector<'a> {
     /// Create a new `WidgetInspector` widget.
-    pub fn new(inspector_state: &'a InspectorState) -> Self {
-        Self { inspector_state }
+    pub fn new(
+        inspector_state: &'a InspectorState,
+        vm_connected: bool,
+        connection_status: &'a VmConnectionStatus,
+    ) -> Self {
+        Self {
+            inspector_state,
+            vm_connected,
+            connection_status,
+        }
     }
 
     // ── Public helpers (used in tests) ────────────────────────────────────────
@@ -96,10 +110,12 @@ impl Widget for WidgetInspector<'_> {
             }
         }
 
-        if self.inspector_state.loading {
+        if !self.vm_connected {
+            self.render_disconnected(area, buf);
+        } else if self.inspector_state.loading {
             self.render_loading(area, buf);
         } else if let Some(ref error) = self.inspector_state.error {
-            self.render_error(area, buf, error);
+            self.render_error_box(area, buf, error);
         } else if self.inspector_state.root.is_some() {
             self.render_tree(area, buf);
         } else {
@@ -361,7 +377,63 @@ impl WidgetInspector<'_> {
         }
     }
 
-    // ── Loading / Error / Empty states ────────────────────────────────────────
+    // ── Loading / Error / Empty / Disconnected states ─────────────────────────
+
+    fn render_disconnected(&self, area: Rect, buf: &mut Buffer) {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .title(" Widget Inspector ")
+            .title_alignment(Alignment::Left);
+        let inner = block.inner(area);
+        block.render(area, buf);
+
+        if inner.height == 0 {
+            return;
+        }
+
+        let status_line = match self.connection_status {
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts,
+            } => {
+                format!("Reconnecting to VM Service... ({attempt}/{max_attempts})")
+            }
+            VmConnectionStatus::TimedOut => "Widget tree fetch timed out.".to_string(),
+            _ => "VM Service disconnected.".to_string(),
+        };
+
+        let lines = vec![
+            ratatui::text::Line::from(Span::styled(
+                status_line,
+                Style::default().fg(palette::STATUS_RED),
+            )),
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from(Span::styled(
+                "Widget tree is unavailable while disconnected.",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            ratatui::text::Line::from(Span::styled(
+                "Waiting for reconnection...",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from(Span::styled(
+                "Press [r] to retry  |  Press [b] to open browser DevTools  |  Press [Esc] to return to logs",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+
+        let y_offset = inner.height.saturating_sub(6) / 2;
+        let render_area = Rect {
+            y: inner.y + y_offset,
+            height: 6.min(inner.height),
+            ..inner
+        };
+        paragraph.render(render_area, buf);
+    }
 
     fn render_loading(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
@@ -390,7 +462,7 @@ impl WidgetInspector<'_> {
         );
     }
 
-    fn render_error(&self, area: Rect, buf: &mut Buffer, error: &str) {
+    fn render_error_box(&self, area: Rect, buf: &mut Buffer, error: &DevToolsError) {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(palette::BORDER_DIM))
@@ -403,10 +475,33 @@ impl WidgetInspector<'_> {
             return;
         }
 
-        let text = Paragraph::new(format!("Error: {error}"))
-            .style(Style::default().fg(palette::STATUS_RED))
-            .wrap(Wrap { trim: true });
-        text.render(inner, buf);
+        let lines = vec![
+            Line::from(Span::styled(
+                format!("\u{26a0} {}", error.message),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                error.hint.as_str(),
+                Style::default().fg(Color::DarkGray),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "[r] Retry   [b] Browser DevTools   [Esc] Return to logs",
+                Style::default().fg(palette::TEXT_MUTED),
+            )),
+        ];
+
+        let paragraph = Paragraph::new(lines).wrap(Wrap { trim: true });
+
+        let content_height = 5u16;
+        let y_offset = inner.height.saturating_sub(content_height) / 2;
+        let render_area = Rect {
+            y: inner.y + y_offset,
+            height: content_height.min(inner.height),
+            ..inner
+        };
+        paragraph.render(render_area, buf);
     }
 
     fn render_empty(&self, area: Rect, buf: &mut Buffer) {
@@ -482,7 +577,7 @@ fn short_path(file: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_app::state::InspectorState;
+    use fdemon_app::state::{DevToolsError, InspectorState, VmConnectionStatus};
     use fdemon_core::widget_tree::{CreationLocation, DiagnosticsNode};
 
     fn make_test_tree() -> DiagnosticsNode {
@@ -509,7 +604,7 @@ mod tests {
         state.root = Some(make_test_tree());
         state.expanded.insert("widget-1".to_string());
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -519,7 +614,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.loading = true;
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -527,9 +622,12 @@ mod tests {
     #[test]
     fn test_inspector_renders_error_state() {
         let mut state = InspectorState::new();
-        state.error = Some("Connection failed".to_string());
+        state.error = Some(DevToolsError::new(
+            "Connection failed",
+            "Press [r] to retry",
+        ));
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -537,7 +635,7 @@ mod tests {
     #[test]
     fn test_inspector_renders_empty_state() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -548,7 +646,7 @@ mod tests {
         state.root = Some(make_test_tree());
         state.expanded.insert("widget-1".to_string());
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 24)); // < 80 cols
         widget.render(Rect::new(0, 0, 60, 24), &mut buf);
 
@@ -573,7 +671,7 @@ mod tests {
     #[test]
     fn test_expand_icon_leaf_node() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let leaf = DiagnosticsNode {
             description: "Text".to_string(),
             children: vec![],
@@ -585,7 +683,7 @@ mod tests {
     #[test]
     fn test_expand_icon_collapsed() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let node = DiagnosticsNode {
             description: "Column".to_string(),
             value_id: Some("w1".to_string()),
@@ -599,7 +697,7 @@ mod tests {
     fn test_expand_icon_expanded() {
         let mut state = InspectorState::new();
         state.expanded.insert("w1".to_string());
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let node = DiagnosticsNode {
             description: "Column".to_string(),
             value_id: Some("w1".to_string()),
@@ -615,7 +713,7 @@ mod tests {
             selected_index: 50,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert!(start <= 50, "start ({start}) should be <= 50");
         assert!(end > 50, "end ({end}) should be > 50");
@@ -627,7 +725,7 @@ mod tests {
             selected_index: 0,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert_eq!(start, 0);
         assert_eq!(end, 20);
@@ -639,7 +737,7 @@ mod tests {
             selected_index: 99,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert_eq!(end, 100);
         assert!(start <= 99);
@@ -648,7 +746,7 @@ mod tests {
     #[test]
     fn test_viewport_empty_total() {
         let state = InspectorState::default();
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let (start, end) = widget.visible_viewport_range(20, 0);
         assert_eq!(start, 0);
         assert_eq!(end, 0);
@@ -705,7 +803,7 @@ mod tests {
         state.expanded.insert("widget-1".to_string());
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -738,7 +836,7 @@ mod tests {
         state.expanded.insert("user-widget".to_string());
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -759,7 +857,7 @@ mod tests {
         state.root = Some(root);
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -767,7 +865,7 @@ mod tests {
     #[test]
     fn test_inspector_zero_area_no_panic() {
         let state = InspectorState::default();
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
         widget.render(Rect::new(0, 0, 10, 1), &mut buf);
     }
@@ -777,7 +875,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.loading = true;
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -802,7 +900,7 @@ mod tests {
     fn test_inspector_empty_state_contains_prompt() {
         let state = InspectorState::new();
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -825,9 +923,12 @@ mod tests {
     #[test]
     fn test_inspector_error_state_contains_error() {
         let mut state = InspectorState::new();
-        state.error = Some("VM not connected".to_string());
+        state.error = Some(DevToolsError::new(
+            "VM Service not available",
+            "Ensure the app is running in debug mode",
+        ));
 
-        let widget = WidgetInspector::new(&state);
+        let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -842,8 +943,60 @@ mod tests {
             }
         }
         assert!(
-            full.contains("Error") || full.contains("VM"),
-            "Expected error message in buffer, got: {full:?}"
+            full.contains("VM Service") || full.contains("debug mode"),
+            "Expected user-friendly error message in buffer, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn test_inspector_disconnected_state_shows_vm_message() {
+        let state = InspectorState::new();
+        let widget = WidgetInspector::new(&state, false, &VmConnectionStatus::Disconnected);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("disconnected")
+                || full.contains("Disconnected")
+                || full.contains("VM Service"),
+            "Expected VM Service disconnected message in buffer, got: {full:?}"
+        );
+    }
+
+    #[test]
+    fn test_inspector_reconnecting_state_shows_attempt_count() {
+        let state = InspectorState::new();
+        let status = VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 5,
+        };
+        let widget = WidgetInspector::new(&state, false, &status);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("Reconnecting") || full.contains("2"),
+            "Expected reconnecting message with attempt count, got: {full:?}"
         );
     }
 }

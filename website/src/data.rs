@@ -71,7 +71,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "Shift+Tab", action: "Previous Session", description: "Cycle to the previous session" },
                 Keybinding { key: "x", action: "Close Session", description: "Close the current session" },
                 Keybinding { key: "Ctrl+W", action: "Close Session", description: "Alternative binding to close current session" },
-                Keybinding { key: "+ / d", action: "Start New Session", description: "Open New Session Dialog to configure and launch a session" },
+                Keybinding { key: "+", action: "Start New Session", description: "Open New Session Dialog to configure and launch a session" },
             ],
         },
         KeybindingSection {
@@ -123,6 +123,44 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
                 Keybinding { key: "E", action: "Previous Error", description: "Jump to the previous error log entry" },
                 Keybinding { key: "Enter", action: "Toggle Stack Trace", description: "Expand/collapse stack trace of the focused entry" },
                 Keybinding { key: "L", action: "Enter Link Mode", description: "Highlight all file references with shortcut badges" },
+            ],
+        },
+
+        // ── DevTools Mode ─────────────────────────────────────────────
+        KeybindingSection {
+            title: "DevTools — Panel Navigation",
+            color: "bg-cyan-500",
+            key_color: "text-cyan-400",
+            bindings: vec![
+                Keybinding { key: "d", action: "Enter DevTools", description: "Enter DevTools mode (requires VM Service connection)" },
+                Keybinding { key: "Esc", action: "Exit DevTools", description: "Return to Normal mode (log view)" },
+                Keybinding { key: "i", action: "Inspector Panel", description: "Switch to Widget Inspector panel" },
+                Keybinding { key: "l", action: "Layout Panel", description: "Switch to Layout Explorer panel" },
+                Keybinding { key: "p", action: "Performance Panel", description: "Switch to Performance monitoring panel" },
+                Keybinding { key: "b", action: "Browser DevTools", description: "Open Flutter DevTools in system browser" },
+                Keybinding { key: "q", action: "Quit", description: "Quit the application" },
+            ],
+        },
+        KeybindingSection {
+            title: "DevTools — Debug Overlays",
+            color: "bg-cyan-500",
+            key_color: "text-cyan-400",
+            bindings: vec![
+                Keybinding { key: "Ctrl+r", action: "Repaint Rainbow", description: "Toggle repaint rainbow overlay on device" },
+                Keybinding { key: "Ctrl+p", action: "Performance Overlay", description: "Toggle performance overlay on device" },
+                Keybinding { key: "Ctrl+d", action: "Debug Paint", description: "Toggle debug paint overlay on device" },
+            ],
+        },
+        KeybindingSection {
+            title: "DevTools — Widget Inspector",
+            color: "bg-cyan-500",
+            key_color: "text-cyan-400",
+            bindings: vec![
+                Keybinding { key: "\u{2191} / k", action: "Move Up", description: "Move selection up in widget tree" },
+                Keybinding { key: "\u{2193} / j", action: "Move Down", description: "Move selection down in widget tree" },
+                Keybinding { key: "\u{2192} / Enter", action: "Expand", description: "Expand selected tree node" },
+                Keybinding { key: "\u{2190} / h", action: "Collapse", description: "Collapse selected tree node" },
+                Keybinding { key: "r", action: "Refresh", description: "Refresh widget tree from VM Service" },
             ],
         },
 
