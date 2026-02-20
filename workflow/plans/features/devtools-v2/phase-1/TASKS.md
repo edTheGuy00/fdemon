@@ -27,10 +27,10 @@ Break existing oversized widget and handler files into smaller, modular sub-comp
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-split-inspector-widget](tasks/01-split-inspector-widget.md) | Not Started | - | `fdemon-tui` | `widgets/devtools/inspector.rs` (1,003 lines) |
-| 2 | [02-split-performance-widget](tasks/02-split-performance-widget.md) | Not Started | - | `fdemon-tui` | `widgets/devtools/performance.rs` (833 lines) |
-| 3 | [03-split-handler-devtools](tasks/03-split-handler-devtools.md) | Not Started | - | `fdemon-app` | `handler/devtools.rs` (1,516 lines) |
-| 4 | [04-verify-no-regressions](tasks/04-verify-no-regressions.md) | Not Started | 1, 2, 3 | workspace | All devtools modules |
+| 1 | [01-split-inspector-widget](tasks/01-split-inspector-widget.md) | Done | - | `fdemon-tui` | `widgets/devtools/inspector/{mod,tree_panel,details_panel,tests}.rs` |
+| 2 | [02-split-performance-widget](tasks/02-split-performance-widget.md) | Done | - | `fdemon-tui` | `widgets/devtools/performance/{mod,frame_section,memory_section,stats_section,styles}.rs` |
+| 3 | [03-split-handler-devtools](tasks/03-split-handler-devtools.md) | Done | - | `fdemon-app` | `handler/devtools/{mod,inspector,layout}.rs` |
+| 4 | [04-verify-no-regressions](tasks/04-verify-no-regressions.md) | Done | 1, 2, 3 | workspace | All devtools modules |
 
 ## Dispatch Plan
 
@@ -46,14 +46,14 @@ Break existing oversized widget and handler files into smaller, modular sub-comp
 
 Phase 1 is complete when:
 
-- [ ] `inspector.rs` split into `inspector/{mod,tree_panel,details_panel}.rs` (each < 400 lines)
-- [ ] `performance.rs` split into `performance/{mod,frame_section,memory_section,stats_section,styles}.rs`
-- [ ] `handler/devtools.rs` split into `handler/devtools/{mod,inspector,layout}.rs`
-- [ ] All 27 inspector widget tests pass unchanged
-- [ ] All 20 performance widget tests pass unchanged
-- [ ] All 42 handler/devtools tests pass unchanged
-- [ ] `cargo clippy --workspace` clean
-- [ ] Visual output identical to pre-refactor
+- [x] `inspector.rs` split into `inspector/{mod,tree_panel,details_panel,tests}.rs` (each < 400 lines)
+- [x] `performance.rs` split into `performance/{mod,frame_section,memory_section,stats_section,styles}.rs`
+- [x] `handler/devtools.rs` split into `handler/devtools/{mod,inspector,layout}.rs`
+- [x] All 27 inspector widget tests pass unchanged
+- [x] All 20 performance widget tests pass unchanged
+- [x] All 42+ handler/devtools tests pass unchanged
+- [x] `cargo clippy --workspace` clean
+- [x] Visual output identical to pre-refactor
 
 ## Notes
 

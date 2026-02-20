@@ -37,10 +37,9 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
         // Convert to log entry if applicable
         if let Some(entry_info) = to_log_entry(&msg) {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                if entry_info.stack_trace.is_some() {
+                if let Some(ref stack_trace) = entry_info.stack_trace {
                     // Has dedicated stack trace — use existing path
-                    let parsed_trace =
-                        ParsedStackTrace::parse(entry_info.stack_trace.as_ref().unwrap());
+                    let parsed_trace = ParsedStackTrace::parse(stack_trace);
                     let log_entry = LogEntry::with_stack_trace(
                         entry_info.level,
                         entry_info.source,

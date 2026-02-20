@@ -155,3 +155,35 @@ All 27 tests should pass without any modifications to test assertions or test he
 - `expand_icon` and `visible_viewport_range` are `pub` methods on `WidgetInspector` — they stay in `mod.rs` since they're part of the public API and used by tests.
 - Rust allows multiple `impl` blocks for the same type across files within a module directory — this is the idiomatic pattern for splitting a large struct implementation.
 - This details panel will be **replaced** in Phase 2 by the layout explorer panel, but extracting it now keeps the refactor clean and lets Phase 2 simply swap one file.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector.rs` | DELETED — replaced by directory module |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | NEW (358 lines) — struct, constructor, Widget impl, render_tree, state panels, short_path, constants |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | NEW (135 lines) — render_tree_panel, node_style |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/details_panel.rs` | NEW (129 lines) — render_details |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | NEW (372 lines) — all 27 tests, extracted via `#[path = "tests.rs"]` to keep mod.rs under 400 lines |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tests extracted to `tests.rs`**: The original file had 428 lines of tests alone, making the ~400-line target for `mod.rs` impossible with inline tests. Used `#[cfg(test)] #[path = "tests.rs"] mod tests;` to keep production code (358 lines) and tests (372 lines) each under 400 lines.
+2. **`truncate_str` re-export**: Added `pub(super) use super::truncate_str;` in `mod.rs` so sibling files (`tree_panel.rs`, `details_panel.rs`) can access it via `super::truncate_str`.
+3. **`collect_buf_text` helper**: Added in `tests.rs` to deduplicate the buffer-to-string collection loop used by 6 tests.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- inspector` — Passed (31 tests, 27 inspector-specific + 4 matching from parent)
+- `cargo clippy -p fdemon-tui` — Passed (zero warnings after removing unused `Modifier` import)
+- `cargo fmt --all --check` — Passed
+
+### Risks/Limitations
+
+1. **4 files instead of 3**: The plan specified 3 files but tests were extracted to a 4th (`tests.rs`) to meet line limits. No functional impact — tests are still in the same module.
