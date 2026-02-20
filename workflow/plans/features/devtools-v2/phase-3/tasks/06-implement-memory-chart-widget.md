@@ -287,4 +287,40 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart.rs` | NEW — full MemoryChart widget with BrailleCanvas, stacked area chart, GC markers, legend, y/x-axis labels, allocation table, compact fallback, and 25 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Added `mod memory_chart;` declaration (consistent with how frame_chart was declared by Task 05) |
+| `crates/fdemon-app/src/handler/keys.rs` | Fixed pre-existing clippy `map_flatten` lint (Task 03/04 introduced `.map(|h|{}).flatten()` → changed to `.and_then(|h|{})`) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart.rs` | Fixed pre-existing clippy `manual_is_multiple_of` lint (`% 2 == 0` → `.is_multiple_of(2)`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **BrailleCanvas is inline private**: Per task specification, the canvas is a private struct in `memory_chart.rs`. Added `#![allow(dead_code)]` (same pattern as `frame_chart.rs`) to suppress dead_code warnings until Task 07 wires the widget into the panel.
+
+2. **Separate canvas per series**: Each layer (heap, native, raster, allocated, RSS) gets its own `BrailleCanvas` then renders in order. This avoids color-merging complexity: the topmost series rendered wins for each cell. Acceptable for stacked area (no true overlap since layers are additive).
+
+3. **Dashed allocated line**: Implemented by drawing only at even dot-x positions and also filling the dot below (`alloc_y + 1`) for every-other column. This creates a visually dashed appearance without needing special character placement.
+
+4. **GC marker fallback**: When no samples bracket the GC timestamp, the marker is simply skipped (out-of-range check). This is safe and silent.
+
+5. **Pre-existing clippy fixes**: Two issues in files from earlier tasks were blocking the quality gate: `map_flatten` in `keys.rs` and `manual_is_multiple_of` in `frame_chart.rs`. Both were minimal, clear fixes aligned with clippy's suggestions.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui` — Passed (584 tests, 25 new from memory_chart.rs)
+- `cargo clippy -p fdemon-tui -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No pixel-perfect fill**: The stacked area uses vertical column-filling from sample positions — doesn't interpolate between samples. With 120 samples across ~160 dot columns, visual gaps are possible on very narrow areas. Acceptable for a TUI context.
+
+2. **Single color per braille cell**: When multiple series share a cell, only the last-rendered canvas's color shows. The stacked design means layers don't overlap (additive heights), so in practice this only affects edge cells near layer boundaries.
+
+3. **Allocation table truncation at 30 chars**: Class names longer than 30 characters are truncated with `...`. Long fully-qualified names like `dart:core/_CompactLinkedHashMap` (30+ chars) may be clipped. The task spec explicitly calls for truncation.

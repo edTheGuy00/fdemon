@@ -740,6 +740,39 @@ pub enum Message {
         timing: fdemon_core::performance::FrameTiming,
     },
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // VM Service Performance Messages — Phase 3 extensions (Task 02)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// User selected or deselected a frame in the performance bar chart.
+    ///
+    /// `index: None` clears the selection (equivalent to pressing Esc in the
+    /// frame bar chart). `index: Some(i)` highlights frame `i` in
+    /// `PerformanceState::frame_history` and shows the detail panel.
+    SelectPerformanceFrame {
+        /// Index into `PerformanceState::frame_history`, or `None` to deselect.
+        index: Option<usize>,
+    },
+
+    /// Rich memory sample received from VM service (for time-series chart).
+    ///
+    /// Pushed into `PerformanceState::memory_samples` by the handler.
+    /// Contains a full per-category breakdown (Dart heap, native, raster cache, RSS)
+    /// at 500ms polling resolution — richer than `VmServiceMemorySnapshot`.
+    VmServiceMemorySample {
+        session_id: SessionId,
+        sample: fdemon_core::performance::MemorySample,
+    },
+
+    /// Allocation profile snapshot received from VM service.
+    ///
+    /// Replaces `PerformanceState::allocation_profile` with the new snapshot.
+    /// Fetched on-demand or periodically, not streamed. Only the most recent
+    /// profile is retained in state.
+    VmServiceAllocationProfileReceived {
+        session_id: SessionId,
+        profile: fdemon_core::performance::AllocationProfile,
+    },
+
     // ── DevTools Mode (Phase 4) ──────────────────────────────────────────────
     /// Enter DevTools mode (from Normal mode via 'd' key).
     EnterDevToolsMode,

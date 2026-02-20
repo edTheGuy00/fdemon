@@ -86,7 +86,7 @@ pub use engine_event::EngineEvent;
 pub use handler::{update, Task, UpdateAction, UpdateResult};
 pub use message::{DebugOverlayKind, Message};
 pub use plugin::EnginePlugin;
-pub use session::{Session, SessionHandle, SessionId};
+pub use session::{AllocationSortColumn, Session, SessionHandle, SessionId};
 pub use session_manager::{SessionManager, MAX_SESSIONS};
 pub use state::{AppState, DevToolsError, DevToolsPanel, DevToolsViewState, InspectorState};
 

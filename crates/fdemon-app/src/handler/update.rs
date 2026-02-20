@@ -1160,6 +1160,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Read config values before borrowing state mutably.
             let memory_history_size = state.settings.devtools.memory_history_size;
             let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+            let allocation_profile_interval_ms =
+                state.settings.devtools.allocation_profile_interval_ms;
             let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
 
@@ -1226,6 +1228,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     session_id,
                     handle: None, // hydrated by process.rs
                     performance_refresh_ms,
+                    allocation_profile_interval_ms,
                 }),
             }
         }
@@ -1537,6 +1540,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             UpdateResult::none()
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // VM Service Performance Messages — Phase 3 extensions (Task 02/04)
+        // ─────────────────────────────────────────────────────────────────────
+        Message::SelectPerformanceFrame { index } => {
+            devtools::handle_select_performance_frame(state, index)
+        }
+
+        Message::VmServiceMemorySample { session_id, sample } => {
+            devtools::handle_memory_sample_received(state, session_id, sample)
+        }
+
+        Message::VmServiceAllocationProfileReceived {
+            session_id,
+            profile,
+        } => devtools::handle_allocation_profile_received(state, session_id, profile),
     }
 }
 

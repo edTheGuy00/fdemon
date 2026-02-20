@@ -70,15 +70,15 @@ Wave 5              └────────┬────────┘
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-extend-core-performance-types](tasks/01-extend-core-performance-types.md) | Not Started | - | `fdemon-core` | `performance.rs`, `lib.rs` |
-| 2 | [02-extend-performance-state-and-messages](tasks/02-extend-performance-state-and-messages.md) | Not Started | 1 | `fdemon-app` | `session/performance.rs`, `message.rs`, `state.rs` |
-| 3 | [03-extend-vm-service-performance-collection](tasks/03-extend-vm-service-performance-collection.md) | Not Started | 1 | `fdemon-daemon` | `vm_service/performance.rs`, `vm_service/timeline.rs` |
-| 4 | [04-add-performance-handler-and-key-bindings](tasks/04-add-performance-handler-and-key-bindings.md) | Not Started | 2 | `fdemon-app` | `handler/devtools/performance.rs`, `handler/devtools/mod.rs`, `handler/keys.rs` |
-| 5 | [05-implement-frame-bar-chart-widget](tasks/05-implement-frame-bar-chart-widget.md) | Not Started | 1, 2 | `fdemon-tui` | `widgets/devtools/performance/frame_chart.rs` (NEW) |
-| 6 | [06-implement-memory-chart-widget](tasks/06-implement-memory-chart-widget.md) | Not Started | 1, 2 | `fdemon-tui` | `widgets/devtools/performance/memory_chart.rs` (NEW) |
-| 7 | [07-rewire-performance-panel-remove-stats](tasks/07-rewire-performance-panel-remove-stats.md) | Not Started | 4, 5, 6 | `fdemon-tui` | `widgets/devtools/performance/mod.rs`, `widgets/devtools/performance/stats_section.rs` |
-| 8 | [08-wire-allocation-polling-and-memory-flow](tasks/08-wire-allocation-polling-and-memory-flow.md) | Not Started | 3, 4 | `fdemon-app` | `handler/update.rs`, engine/actions layer |
-| 9 | [09-final-test-and-cleanup](tasks/09-final-test-and-cleanup.md) | Not Started | 7, 8 | workspace | All devtools modules |
+| 1 | [01-extend-core-performance-types](tasks/01-extend-core-performance-types.md) | Done | - | `fdemon-core` | `performance.rs`, `lib.rs` |
+| 2 | [02-extend-performance-state-and-messages](tasks/02-extend-performance-state-and-messages.md) | Done | 1 | `fdemon-app` | `session/performance.rs`, `message.rs`, `state.rs` |
+| 3 | [03-extend-vm-service-performance-collection](tasks/03-extend-vm-service-performance-collection.md) | Done | 1 | `fdemon-daemon` | `vm_service/performance.rs`, `vm_service/timeline.rs` |
+| 4 | [04-add-performance-handler-and-key-bindings](tasks/04-add-performance-handler-and-key-bindings.md) | Done | 2 | `fdemon-app` | `handler/devtools/performance.rs`, `handler/devtools/mod.rs`, `handler/keys.rs` |
+| 5 | [05-implement-frame-bar-chart-widget](tasks/05-implement-frame-bar-chart-widget.md) | Done | 1, 2 | `fdemon-tui` | `widgets/devtools/performance/frame_chart.rs` (NEW) |
+| 6 | [06-implement-memory-chart-widget](tasks/06-implement-memory-chart-widget.md) | Done | 1, 2 | `fdemon-tui` | `widgets/devtools/performance/memory_chart.rs` (NEW) |
+| 7 | [07-rewire-performance-panel-remove-stats](tasks/07-rewire-performance-panel-remove-stats.md) | Done | 4, 5, 6 | `fdemon-tui` | `widgets/devtools/performance/mod.rs`, `widgets/devtools/performance/stats_section.rs` |
+| 8 | [08-wire-allocation-polling-and-memory-flow](tasks/08-wire-allocation-polling-and-memory-flow.md) | Done | 3, 4 | `fdemon-app` | `handler/update.rs`, engine/actions layer |
+| 9 | [09-final-test-and-cleanup](tasks/09-final-test-and-cleanup.md) | Done | 7, 8 | workspace | All devtools modules |
 
 ## Dispatch Plan
 

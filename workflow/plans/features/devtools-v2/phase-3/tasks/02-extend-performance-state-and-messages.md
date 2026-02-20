@@ -275,4 +275,35 @@ fn push_test_frames(state: &mut PerformanceState, count: u64) {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Added `AllocationSortColumn` enum, `DEFAULT_MEMORY_SAMPLE_SIZE` constant, 4 new fields to `PerformanceState`, updated both constructors, added `select_next_frame` / `select_prev_frame` / `deselect_frame` / `selected_frame_timing` methods, added 22 new unit tests |
+| `crates/fdemon-app/src/message.rs` | Added 3 new `Message` variants: `SelectPerformanceFrame`, `VmServiceMemorySample`, `VmServiceAllocationProfileReceived` |
+| `crates/fdemon-app/src/session/mod.rs` | Re-exported `AllocationSortColumn` and `DEFAULT_MEMORY_SAMPLE_SIZE` from `performance` module |
+| `crates/fdemon-app/src/lib.rs` | Exported `AllocationSortColumn` from crate root |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub match arms for the 3 new `Message` variants (returns `UpdateResult::none()`, handler logic deferred to Task 04) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Stub handlers in update.rs**: Rust's exhaustive match requires every `Message` variant to be handled. Since Task 04 is responsible for the actual handler logic, I added minimal stubs (`UpdateResult::none()`) grouped under a clear comment noting they are placeholders. This keeps the codebase compiling without pre-implementing logic that belongs to a future task.
+
+2. **AllocationSortColumn in performance.rs**: The task gave a choice between `session/performance.rs` and `state.rs`. Placed it in `performance.rs` to keep all allocation-related types co-located. It is re-exported via `session/mod.rs` and `lib.rs` for external access.
+
+3. **DEFAULT_MEMORY_SAMPLE_SIZE exported as `pub`**: The constant is `pub` (not `pub(crate)`) consistent with how the task spec uses it and to allow future TUI/test code in other crates to reference it without hardcoding the value.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (auto-formatted)
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (930 tests, 0 failed; includes 22 new tests in `session/performance.rs`)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (0 warnings)
+- `cargo check --workspace` — Passed (no regressions in fdemon-tui or binary crate)
+
+### Risks/Limitations
+
+1. **Stub handlers**: The three new message variants return `UpdateResult::none()` until Task 04 implements real logic. Any code sending these messages before Task 04 will silently have no effect.
+2. **Frame index invalidation on buffer wrap**: As noted in the task spec, when `frame_history` is full and new frames push old ones out, `selected_frame` may point to a different (newer) frame. Task 04 is expected to handle clearing `selected_frame` when the buffer wraps.

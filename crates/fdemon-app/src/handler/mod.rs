@@ -124,7 +124,9 @@ pub enum UpdateAction {
     ///
     /// Spawns a background polling task that fetches memory usage at a
     /// configured interval (default 2 seconds) and sends
-    /// `VmServiceMemorySnapshot` messages to the TEA loop.
+    /// `VmServiceMemorySnapshot` and `VmServiceMemorySample` messages to
+    /// the TEA loop. Also periodically calls `getAllocationProfile` at a
+    /// lower frequency and sends `VmServiceAllocationProfileReceived`.
     ///
     /// The `handle` field is `None` when returned by `handler::update()` and
     /// hydrated by `process.rs` with the `VmRequestHandle` from the session
@@ -140,6 +142,10 @@ pub enum UpdateAction {
         /// Memory polling interval in milliseconds (from `settings.devtools.performance_refresh_ms`).
         /// Clamped to a minimum of 500ms to prevent excessive polling.
         performance_refresh_ms: u64,
+        /// Allocation profile polling interval in milliseconds (from `settings.devtools.allocation_profile_interval_ms`).
+        /// Clamped to a minimum of 1000ms. `getAllocationProfile` is expensive
+        /// (walks the entire Dart heap), so a lower frequency than memory polling is used.
+        allocation_profile_interval_ms: u64,
     },
 
     /// Fetch the widget tree from the VM Service for the Inspector panel.

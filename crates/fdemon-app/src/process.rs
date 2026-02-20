@@ -109,6 +109,7 @@ fn hydrate_start_performance_monitoring(
         session_id,
         handle,
         performance_refresh_ms,
+        allocation_profile_interval_ms,
     } = action
     {
         if handle.is_some() {
@@ -117,6 +118,7 @@ fn hydrate_start_performance_monitoring(
                 session_id,
                 handle,
                 performance_refresh_ms,
+                allocation_profile_interval_ms,
             });
         }
         // Extract the VM request handle from the session. If unavailable,
@@ -129,6 +131,7 @@ fn hydrate_start_performance_monitoring(
             session_id,
             handle: Some(vm_handle),
             performance_refresh_ms,
+            allocation_profile_interval_ms,
         });
     }
     Some(action)

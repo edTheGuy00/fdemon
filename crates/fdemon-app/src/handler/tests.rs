@@ -3864,6 +3864,8 @@ fn test_frame_timing_handler() {
         raster_micros: 5_000,
         elapsed_micros: 10_000,
         timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
     };
 
     let msg = Message::VmServiceFrameTiming { session_id, timing };
@@ -3904,6 +3906,8 @@ fn test_frame_timing_stats_recomputed_every_interval() {
                     raster_micros: 5_000,
                     elapsed_micros: 10_000,
                     timestamp: chrono::Local::now(),
+                    phases: None,
+                    shader_compilation: false,
                 },
             },
         );
@@ -3932,6 +3936,8 @@ fn test_frame_timing_stats_recomputed_every_interval() {
                 raster_micros: 5_000,
                 elapsed_micros: 10_000,
                 timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
             },
         },
     );
@@ -3965,6 +3971,8 @@ fn test_frame_timing_ignored_for_unknown_session() {
                 raster_micros: 5_000,
                 elapsed_micros: 10_000,
                 timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
             },
         },
     );
@@ -3989,6 +3997,8 @@ fn test_memory_snapshot_triggers_stats_recompute() {
                 raster_micros: 5_000,
                 elapsed_micros: 10_000,
                 timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
             });
         }
     }
@@ -4767,5 +4777,141 @@ fn test_devtools_view_state_reset_clears_has_object_group_flags() {
     assert!(
         !state.devtools_view_state.inspector.has_layout_object_group,
         "inspector.has_layout_object_group should be false after DevToolsViewState::reset()"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Allocation Profile Polling Tests (Phase 3, Task 08)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_connected_starts_perf_monitoring_with_allocation_interval() {
+    // Verify that VmServiceConnected produces a StartPerformanceMonitoring action
+    // that includes the allocation_profile_interval_ms from settings.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+
+    // Set a custom allocation profile interval to verify it is threaded through.
+    state.settings.devtools.allocation_profile_interval_ms = 8000;
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    match result.action {
+        Some(UpdateAction::StartPerformanceMonitoring {
+            allocation_profile_interval_ms,
+            ..
+        }) => {
+            assert_eq!(
+                allocation_profile_interval_ms, 8000,
+                "allocation_profile_interval_ms should match settings value"
+            );
+        }
+        other => panic!(
+            "Expected StartPerformanceMonitoring action, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_vm_connected_uses_default_allocation_interval() {
+    // Verify that the default allocation_profile_interval_ms (5000ms) is used
+    // when the settings value has not been overridden.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Default settings — allocation_profile_interval_ms defaults to 5000.
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    match result.action {
+        Some(UpdateAction::StartPerformanceMonitoring {
+            allocation_profile_interval_ms,
+            performance_refresh_ms,
+            ..
+        }) => {
+            assert_eq!(
+                allocation_profile_interval_ms, 5000,
+                "Default allocation_profile_interval_ms should be 5000ms"
+            );
+            assert_eq!(
+                performance_refresh_ms, 2000,
+                "Default performance_refresh_ms should be 2000ms"
+            );
+        }
+        other => panic!(
+            "Expected StartPerformanceMonitoring action, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_memory_snapshot_still_works_alongside_sample() {
+    // Verify VmServiceMemorySnapshot still populates memory_history (no regression).
+    use fdemon_core::performance::MemoryUsage;
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let memory = MemoryUsage {
+        heap_usage: 10_000_000,
+        heap_capacity: 20_000_000,
+        external_usage: 5_000_000,
+        timestamp: chrono::Local::now(),
+    };
+
+    update(
+        &mut state,
+        Message::VmServiceMemorySnapshot { session_id, memory },
+    );
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert_eq!(
+        perf.memory_history.len(),
+        1,
+        "VmServiceMemorySnapshot should populate memory_history"
+    );
+    assert_eq!(perf.memory_history.latest().unwrap().heap_usage, 10_000_000);
+}
+
+#[test]
+fn test_disconnect_clears_allocation_profile() {
+    // After VmServiceDisconnected, the performance state is reset on reconnect.
+    // Verify that allocation_profile is None after a fresh VmServiceConnected.
+    use fdemon_core::performance::AllocationProfile;
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Populate allocation_profile with synthetic data.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.performance.allocation_profile = Some(AllocationProfile {
+            members: vec![],
+            timestamp: chrono::Local::now(),
+        });
+    }
+
+    // Simulate reconnect — VmServiceConnected resets PerformanceState.
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert!(
+        perf.allocation_profile.is_none(),
+        "allocation_profile should be None after VmServiceConnected resets PerformanceState"
     );
 }

@@ -293,7 +293,7 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// Handle key events in DevTools mode (Phase 4, Task 02).
 ///
 /// Key bindings:
-/// - `Esc` — exit DevTools mode
+/// - `Esc` — exit DevTools mode (or deselect frame when Performance panel has one selected)
 /// - `i` — switch to Inspector panel
 /// - `p` — switch to Performance panel
 /// - `b` — open Flutter DevTools in system browser
@@ -302,17 +302,35 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 /// - `Ctrl+d` — toggle debug paint overlay
 /// - `j`/Down — scroll/navigate down (in Inspector: move selection down)
 /// - `k`/Up — scroll/navigate up (in Inspector: move selection up)
-/// - `h`/Left — in Inspector: collapse node
-/// - `Right`/`Enter` — in Inspector: expand node
+/// - `h`/Left — in Inspector: collapse node; in Performance: previous frame
+/// - `Right`/`Enter` — in Inspector: expand node; in Performance (Right): next frame
 /// - `r` — in Inspector: refresh widget tree
 /// - `q` — request quit
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
+    let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
     match key {
-        // ── Exit DevTools ─────────────────────────────────────────────────────
-        InputKey::Esc => Some(Message::ExitDevToolsMode),
+        // ── Exit DevTools / deselect frame ────────────────────────────────────
+        //
+        // When the Performance panel is active and a frame is selected, Esc
+        // "unwinds" one level: it deselects the frame instead of exiting. This
+        // matches common TUI conventions where Esc dismisses the innermost
+        // selection before navigating outward.
+        InputKey::Esc => {
+            if in_performance {
+                let frame_selected = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.performance.selected_frame.is_some())
+                    .unwrap_or(false);
+                if frame_selected {
+                    return Some(Message::SelectPerformanceFrame { index: None });
+                }
+            }
+            Some(Message::ExitDevToolsMode)
+        }
 
         // ── Sub-panel switching ───────────────────────────────────────────────
         InputKey::Char('i') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector)),
@@ -351,6 +369,41 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Char('r') if in_inspector => {
             active_id.map(|session_id| Message::RequestWidgetTree { session_id })
         }
+
+        // ── Performance panel frame navigation ────────────────────────────────
+        //
+        // Left and Right navigate between frames in the bar chart. The guards
+        // are exclusive with the Inspector panel guards above, so there is no
+        // conflict: Inspector uses Left/Right for tree collapse/expand, and
+        // Performance uses them for frame prev/next.
+        InputKey::Left if in_performance => Some(Message::SelectPerformanceFrame {
+            index: state.session_manager.selected().and_then(|h| {
+                let perf = &h.session.performance;
+                let len = perf.frame_history.len();
+                if len == 0 {
+                    return None;
+                }
+                Some(match perf.selected_frame {
+                    Some(i) if i > 0 => i - 1,
+                    Some(_) => 0,
+                    None => len - 1,
+                })
+            }),
+        }),
+        InputKey::Right if in_performance => Some(Message::SelectPerformanceFrame {
+            index: state.session_manager.selected().and_then(|h| {
+                let perf = &h.session.performance;
+                let len = perf.frame_history.len();
+                if len == 0 {
+                    return None;
+                }
+                Some(match perf.selected_frame {
+                    Some(i) if i + 1 < len => i + 1,
+                    Some(_) => len - 1,
+                    None => len - 1,
+                })
+            }),
+        }),
 
         // ── Quit still works from DevTools mode ───────────────────────────────
         InputKey::Char('q') => Some(Message::RequestQuit),

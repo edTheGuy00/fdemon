@@ -170,11 +170,18 @@ pub fn handle_action(
             session_id,
             handle,
             performance_refresh_ms,
+            allocation_profile_interval_ms,
         } => {
             // `handle` is guaranteed to be Some here because process.rs
             // discards actions where it couldn't hydrate the handle.
             if let Some(vm_handle) = handle {
-                spawn_performance_polling(session_id, vm_handle, msg_tx, performance_refresh_ms);
+                spawn_performance_polling(
+                    session_id,
+                    vm_handle,
+                    msg_tx,
+                    performance_refresh_ms,
+                    allocation_profile_interval_ms,
+                );
             } else {
                 warn!(
                     "StartPerformanceMonitoring reached handle_action with no VmRequestHandle \
@@ -554,6 +561,13 @@ pub async fn execute_task(
     }
 }
 
+/// Minimum allocation profile polling interval (1000ms).
+///
+/// `getAllocationProfile` walks the entire Dart heap, making it significantly
+/// more expensive than `getMemoryUsage`. A higher minimum ensures it is never
+/// called more frequently than once per second even with aggressive settings.
+const ALLOC_PROFILE_POLL_MIN_MS: u64 = 1000;
+
 /// Spawn the periodic memory-usage polling task for a session.
 ///
 /// Creates a `watch::channel(false)` shutdown channel outside the spawned task
@@ -566,20 +580,37 @@ pub async fn execute_task(
 /// - The shutdown channel receives `true` (VM disconnected / session stopped), or
 /// - The `msg_tx` channel is closed (engine shutting down).
 ///
-/// Transient errors from `getMemoryUsage` (e.g., isolate paused during hot
-/// reload) are logged at debug level and skipped — the next tick will retry.
+/// **Memory tick** (every `performance_refresh_ms`, min 500ms):
+/// 1. Calls `getMemoryUsage` → sends `VmServiceMemorySnapshot` (basic gauge).
+/// 2. Calls `get_memory_sample` (combines `getMemoryUsage` + `getIsolate` RSS) →
+///    sends `VmServiceMemorySample` (rich time-series). The two ring buffers stay
+///    in sync because both are populated from the same tick.
 ///
-/// The `performance_refresh_ms` parameter controls the polling interval.
-/// It is clamped to a minimum of [`PERF_POLL_MIN_MS`] (500ms) to prevent
-/// excessive VM Service calls.
+/// **Allocation tick** (every `allocation_profile_interval_ms`, min 1000ms):
+/// - Calls `getAllocationProfile` → sends `VmServiceAllocationProfileReceived`.
+///   This is intentionally lower frequency than the memory tick because it is
+///   expensive (forces the VM to walk the entire heap).
+///
+/// Transient errors from any RPC (e.g., isolate paused during hot reload) are
+/// logged at debug level and skipped — the next tick will retry.
+///
+/// The `performance_refresh_ms` parameter controls the memory polling interval.
+/// It is clamped to a minimum of [`PERF_POLL_MIN_MS`] (500ms).
+///
+/// The `allocation_profile_interval_ms` parameter controls the allocation profile
+/// polling interval. It is clamped to a minimum of [`ALLOC_PROFILE_POLL_MIN_MS`]
+/// (1000ms).
 fn spawn_performance_polling(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     performance_refresh_ms: u64,
+    allocation_profile_interval_ms: u64,
 ) {
-    // Clamp to minimum to prevent excessive polling.
-    let poll_interval = Duration::from_millis(performance_refresh_ms.max(PERF_POLL_MIN_MS));
+    // Clamp intervals to their respective minimums.
+    let memory_interval = Duration::from_millis(performance_refresh_ms.max(PERF_POLL_MIN_MS));
+    let alloc_interval =
+        Duration::from_millis(allocation_profile_interval_ms.max(ALLOC_PROFILE_POLL_MIN_MS));
 
     // Create the shutdown channel outside the task so both ends are available
     // before the task starts running.
@@ -614,51 +645,118 @@ fn spawn_performance_polling(
             return;
         }
 
-        let mut interval = tokio::time::interval(poll_interval);
+        let mut memory_tick = tokio::time::interval(memory_interval);
+        let mut alloc_tick = tokio::time::interval(alloc_interval);
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
+                _ = memory_tick.tick() => {
                     // Fetch the main isolate ID (cached after first call).
-                    match handle.main_isolate_id().await {
-                        Ok(isolate_id) => {
-                            match fdemon_daemon::vm_service::get_memory_usage(
-                                &handle,
-                                &isolate_id,
-                            )
-                            .await
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not get isolate ID for memory polling (session {}): {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // 1. Basic memory snapshot (existing behaviour — populates memory_history).
+                    match fdemon_daemon::vm_service::get_memory_usage(&handle, &isolate_id).await {
+                        Ok(memory) => {
+                            if msg_tx
+                                .send(Message::VmServiceMemorySnapshot {
+                                    session_id,
+                                    memory,
+                                })
+                                .await
+                                .is_err()
                             {
-                                Ok(memory) => {
-                                    if msg_tx
-                                        .send(Message::VmServiceMemorySnapshot {
-                                            session_id,
-                                            memory,
-                                        })
-                                        .await
-                                        .is_err()
-                                    {
-                                        // Engine shutting down.
-                                        break;
-                                    }
-                                }
-                                Err(e) => {
-                                    // Transient errors are expected during hot reload when
-                                    // the isolate is paused. Log at debug and continue.
-                                    tracing::debug!(
-                                        "Memory poll failed for session {}: {}",
-                                        session_id, e
-                                    );
-                                }
+                                // Engine shutting down.
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // Transient errors are expected during hot reload when
+                            // the isolate is paused. Log at debug and continue.
+                            tracing::debug!(
+                                "Memory usage poll failed for session {}: {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    }
+
+                    // 2. Rich memory sample (new — populates memory_samples ring buffer).
+                    //    Shares the same tick as the basic snapshot so both ring buffers
+                    //    stay in sync. If `get_memory_sample` fails (e.g. getIsolate
+                    //    unavailable), the basic VmServiceMemorySnapshot still succeeded
+                    //    above, so the gauge fallback remains functional.
+                    if let Some(sample) =
+                        fdemon_daemon::vm_service::get_memory_sample(&handle, &isolate_id).await
+                    {
+                        if msg_tx
+                            .send(Message::VmServiceMemorySample { session_id, sample })
+                            .await
+                            .is_err()
+                        {
+                            // Engine shutting down.
+                            break;
+                        }
+                    } else {
+                        tracing::debug!(
+                            "Rich memory sample unavailable for session {} (non-fatal)",
+                            session_id
+                        );
+                    }
+                }
+
+                _ = alloc_tick.tick() => {
+                    // Allocation profile polling (lower frequency than memory polling).
+                    // `getAllocationProfile` is expensive — it forces the VM to walk the
+                    // entire Dart heap. Transient failures are silently skipped.
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not get isolate ID for allocation polling (session {}): {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    match fdemon_daemon::vm_service::get_allocation_profile(
+                        &handle,
+                        &isolate_id,
+                        false, // gc=false — no forced GC before profiling
+                    )
+                    .await
+                    {
+                        Ok(profile) => {
+                            if msg_tx
+                                .send(Message::VmServiceAllocationProfileReceived {
+                                    session_id,
+                                    profile,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                // Engine shutting down.
+                                break;
                             }
                         }
                         Err(e) => {
                             tracing::debug!(
-                                "Could not get isolate ID for perf polling (session {}): {}",
+                                "Allocation profile poll failed for session {}: {}",
                                 session_id, e
                             );
                         }
                     }
                 }
+
                 _ = perf_shutdown_rx.changed() => {
                     if *perf_shutdown_rx.borrow() {
                         info!(

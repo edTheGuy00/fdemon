@@ -264,7 +264,11 @@ pub fn handle_layout_data_fetched(
         // node this fetch was dispatched for, discard the response so the UI
         // does not show layout data for the wrong node.
         let selected_id = get_selected_value_id(&state.devtools_view_state.inspector);
-        let pending_id = state.devtools_view_state.inspector.pending_node_id.as_deref();
+        let pending_id = state
+            .devtools_view_state
+            .inspector
+            .pending_node_id
+            .as_deref();
         if pending_id != selected_id.as_deref() {
             state.devtools_view_state.inspector.layout_loading = false;
             state.devtools_view_state.inspector.pending_node_id = None;
@@ -1135,11 +1139,7 @@ mod tests {
 
         // Stale layout data should be cleared.
         assert!(
-            state
-                .devtools_view_state
-                .inspector
-                .layout_error
-                .is_none(),
+            state.devtools_view_state.inspector.layout_error.is_none(),
             "layout_error should be cleared after tree refresh"
         );
         assert_eq!(

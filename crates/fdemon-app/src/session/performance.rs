@@ -1,6 +1,9 @@
 //! Performance monitoring state — memory, GC, and frame timing.
 
-use fdemon_core::performance::{FrameTiming, GcEvent, MemoryUsage, PerformanceStats, RingBuffer};
+use fdemon_core::performance::{
+    AllocationProfile, FrameTiming, GcEvent, MemorySample, MemoryUsage, PerformanceStats,
+    RingBuffer,
+};
 
 /// Default number of memory snapshots to keep (at 2s interval = 2 minutes).
 pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
@@ -12,6 +15,18 @@ pub(crate) const DEFAULT_MEMORY_HISTORY_SIZE: usize = 60;
 pub(crate) const DEFAULT_GC_HISTORY_SIZE: usize = 50;
 /// Default number of frame timings to keep.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 300;
+/// Memory sample buffer size: 120 samples at 500ms polling = 60 seconds of history.
+pub const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
+
+/// Column by which the class allocation table is sorted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AllocationSortColumn {
+    /// Sort by total allocated bytes (descending).
+    #[default]
+    BySize,
+    /// Sort by total instance count (descending).
+    ByInstances,
+}
 
 /// Performance monitoring state for a session.
 ///
@@ -29,6 +44,30 @@ pub struct PerformanceState {
     pub stats: PerformanceStats,
     /// Whether performance monitoring is active.
     pub monitoring_active: bool,
+
+    /// Rich memory samples for time-series chart (populated by VM service polling).
+    ///
+    /// Each entry contains a full breakdown (Dart heap, native, raster cache, RSS)
+    /// at 500ms polling. The buffer holds 120 samples = 60 seconds of history.
+    /// Runs in parallel with `memory_history` — the older `memory_history` is kept
+    /// as a fallback when rich sample data is unavailable.
+    pub memory_samples: RingBuffer<MemorySample>,
+
+    /// Index of the currently selected frame in `frame_history`.
+    ///
+    /// `None` means no frame is selected (normal scroll mode).
+    /// When set, the frame bar chart highlights the frame at this index and
+    /// the detail panel shows per-phase breakdown if available.
+    pub selected_frame: Option<usize>,
+
+    /// Latest allocation profile snapshot from `getAllocationProfile`.
+    ///
+    /// `None` until the first profile is fetched or when monitoring is inactive.
+    /// Replaced on each fetch — only the most recent snapshot is retained.
+    pub allocation_profile: Option<AllocationProfile>,
+
+    /// Column by which the class allocation table is sorted.
+    pub allocation_sort: AllocationSortColumn,
 }
 
 impl Default for PerformanceState {
@@ -39,6 +78,10 @@ impl Default for PerformanceState {
             frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
             stats: PerformanceStats::default(),
             monitoring_active: false,
+            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
+            selected_frame: None,
+            allocation_profile: None,
+            allocation_sort: AllocationSortColumn::default(),
         }
     }
 }
@@ -52,6 +95,7 @@ impl PerformanceState {
     ///
     /// GC and frame history sizes use fixed defaults — only memory is configurable
     /// for now (see `DEFAULT_GC_HISTORY_SIZE` and `DEFAULT_FRAME_HISTORY_SIZE`).
+    /// The `memory_samples` buffer always uses [`DEFAULT_MEMORY_SAMPLE_SIZE`].
     pub fn with_memory_history_size(memory_history_size: usize) -> Self {
         Self {
             memory_history: RingBuffer::new(memory_history_size),
@@ -59,7 +103,56 @@ impl PerformanceState {
             frame_history: RingBuffer::new(DEFAULT_FRAME_HISTORY_SIZE),
             stats: PerformanceStats::default(),
             monitoring_active: false,
+            memory_samples: RingBuffer::new(DEFAULT_MEMORY_SAMPLE_SIZE),
+            selected_frame: None,
+            allocation_profile: None,
+            allocation_sort: AllocationSortColumn::default(),
         }
+    }
+}
+
+impl PerformanceState {
+    /// Select the next frame (Right arrow). Clamps at the end when already at the last frame.
+    ///
+    /// When no frame is selected, selects the most recent frame (index `len - 1`).
+    pub fn select_next_frame(&mut self) {
+        let len = self.frame_history.len();
+        if len == 0 {
+            return;
+        }
+        self.selected_frame = Some(match self.selected_frame {
+            Some(i) if i + 1 < len => i + 1,
+            Some(_) => len - 1, // clamp at end
+            None => len - 1,    // select most recent
+        });
+    }
+
+    /// Select the previous frame (Left arrow). Clamps at the start when already at index 0.
+    ///
+    /// When no frame is selected, selects the most recent frame (index `len - 1`).
+    pub fn select_prev_frame(&mut self) {
+        let len = self.frame_history.len();
+        if len == 0 {
+            return;
+        }
+        self.selected_frame = Some(match self.selected_frame {
+            Some(i) if i > 0 => i - 1,
+            Some(_) => 0,    // clamp at start
+            None => len - 1, // select most recent
+        });
+    }
+
+    /// Deselect any selected frame (Esc). Returns to normal scroll mode.
+    pub fn deselect_frame(&mut self) {
+        self.selected_frame = None;
+    }
+
+    /// Get the currently selected frame timing, if any.
+    ///
+    /// Returns `None` if no frame is selected or if the index is out of bounds.
+    pub fn selected_frame_timing(&self) -> Option<&FrameTiming> {
+        self.selected_frame
+            .and_then(|i| self.frame_history.iter().nth(i))
     }
 }
 
@@ -170,5 +263,219 @@ impl PerformanceState {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
         let index = ((pct / 100.0) * (sorted.len() - 1) as f64).round() as usize;
         Some(sorted[index.min(sorted.len() - 1)])
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use fdemon_core::performance::FrameTiming;
+
+    // ── Test helper ─────────────────────────────────────────────────────────
+
+    /// Push `count` synthetic frame timings into `state.frame_history`.
+    ///
+    /// Frames are numbered 1..=count with 10ms elapsed each.
+    fn push_test_frames(state: &mut PerformanceState, count: u64) {
+        for i in 1..=count {
+            state.frame_history.push(FrameTiming {
+                number: i,
+                build_micros: 5_000,
+                raster_micros: 5_000,
+                elapsed_micros: 10_000,
+                timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
+            });
+        }
+    }
+
+    // ── Frame selection: select_next_frame ──────────────────────────────────
+
+    #[test]
+    fn test_select_next_frame_from_none_selects_most_recent() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.select_next_frame();
+        assert_eq!(state.selected_frame, Some(4)); // 0-based index of 5th frame
+    }
+
+    #[test]
+    fn test_select_next_frame_increments() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.selected_frame = Some(2);
+        state.select_next_frame();
+        assert_eq!(state.selected_frame, Some(3));
+    }
+
+    #[test]
+    fn test_select_next_frame_clamps_at_end() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.selected_frame = Some(4);
+        state.select_next_frame();
+        assert_eq!(state.selected_frame, Some(4)); // already at last, stays clamped
+    }
+
+    #[test]
+    fn test_select_next_frame_empty_history_noop() {
+        let mut state = PerformanceState::default();
+        state.select_next_frame();
+        assert_eq!(state.selected_frame, None);
+    }
+
+    // ── Frame selection: select_prev_frame ──────────────────────────────────
+
+    #[test]
+    fn test_select_prev_frame_from_none_selects_most_recent() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.select_prev_frame();
+        assert_eq!(state.selected_frame, Some(4)); // most recent when None
+    }
+
+    #[test]
+    fn test_select_prev_frame_decrements() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.selected_frame = Some(3);
+        state.select_prev_frame();
+        assert_eq!(state.selected_frame, Some(2));
+    }
+
+    #[test]
+    fn test_select_prev_frame_clamps_at_start() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 5);
+        state.selected_frame = Some(0);
+        state.select_prev_frame();
+        assert_eq!(state.selected_frame, Some(0)); // already at start, stays clamped
+    }
+
+    #[test]
+    fn test_select_prev_frame_empty_history_noop() {
+        let mut state = PerformanceState::default();
+        state.select_prev_frame();
+        assert_eq!(state.selected_frame, None);
+    }
+
+    // ── Frame selection: deselect_frame ────────────────────────────────────
+
+    #[test]
+    fn test_deselect_frame_clears_selection() {
+        let mut state = PerformanceState::default();
+        state.selected_frame = Some(3);
+        state.deselect_frame();
+        assert_eq!(state.selected_frame, None);
+    }
+
+    #[test]
+    fn test_deselect_frame_when_none_is_noop() {
+        let mut state = PerformanceState::default();
+        state.deselect_frame();
+        assert_eq!(state.selected_frame, None);
+    }
+
+    // ── Frame selection: selected_frame_timing ─────────────────────────────
+
+    #[test]
+    fn test_selected_frame_timing_returns_correct_frame() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 3);
+        state.selected_frame = Some(1);
+        let timing = state.selected_frame_timing().unwrap();
+        // push_test_frames assigns number = i (1-based), so index 1 → number 2
+        assert_eq!(timing.number, 2);
+    }
+
+    #[test]
+    fn test_selected_frame_timing_returns_none_when_no_selection() {
+        let mut state = PerformanceState::default();
+        push_test_frames(&mut state, 3);
+        assert!(state.selected_frame_timing().is_none());
+    }
+
+    #[test]
+    fn test_selected_frame_timing_returns_none_on_empty_history() {
+        let state = PerformanceState::default();
+        assert!(state.selected_frame_timing().is_none());
+    }
+
+    // ── Memory samples ring buffer ──────────────────────────────────────────
+
+    #[test]
+    fn test_memory_samples_ring_buffer_default_capacity() {
+        let state = PerformanceState::default();
+        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
+    }
+
+    #[test]
+    fn test_memory_samples_ring_buffer_default_capacity_is_120() {
+        assert_eq!(DEFAULT_MEMORY_SAMPLE_SIZE, 120);
+    }
+
+    // ── AllocationSortColumn defaults ──────────────────────────────────────
+
+    #[test]
+    fn test_allocation_sort_default_is_by_size() {
+        let state = PerformanceState::default();
+        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
+    }
+
+    #[test]
+    fn test_allocation_sort_column_default_trait() {
+        assert_eq!(
+            AllocationSortColumn::default(),
+            AllocationSortColumn::BySize
+        );
+    }
+
+    // ── Constructor: with_memory_history_size ──────────────────────────────
+
+    #[test]
+    fn test_with_memory_history_size_sets_memory_history_capacity() {
+        let state = PerformanceState::with_memory_history_size(30);
+        assert_eq!(state.memory_history.capacity(), 30);
+    }
+
+    #[test]
+    fn test_with_memory_history_size_memory_samples_uses_default() {
+        let state = PerformanceState::with_memory_history_size(30);
+        assert_eq!(state.memory_samples.capacity(), DEFAULT_MEMORY_SAMPLE_SIZE);
+    }
+
+    #[test]
+    fn test_with_memory_history_size_selected_frame_is_none() {
+        let state = PerformanceState::with_memory_history_size(30);
+        assert!(state.selected_frame.is_none());
+    }
+
+    #[test]
+    fn test_with_memory_history_size_allocation_profile_is_none() {
+        let state = PerformanceState::with_memory_history_size(30);
+        assert!(state.allocation_profile.is_none());
+    }
+
+    #[test]
+    fn test_with_memory_history_size_allocation_sort_is_by_size() {
+        let state = PerformanceState::with_memory_history_size(30);
+        assert_eq!(state.allocation_sort, AllocationSortColumn::BySize);
+    }
+
+    // ── Default constructor ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_selected_frame_is_none() {
+        let state = PerformanceState::default();
+        assert!(state.selected_frame.is_none());
+    }
+
+    #[test]
+    fn test_default_allocation_profile_is_none() {
+        let state = PerformanceState::default();
+        assert!(state.allocation_profile.is_none());
     }
 }

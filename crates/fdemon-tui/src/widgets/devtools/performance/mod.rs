@@ -2,26 +2,50 @@
 //!
 //! Displays real-time FPS, memory usage, frame timing, and jank metrics
 //! using data from Phase 3's monitoring pipeline ([`PerformanceState`]).
+//!
+//! # Layout
+//!
+//! The panel uses a two-section layout:
+//!
+//! ```text
+//! ┌─────────────────────────────────────────┐
+//! │                                         │
+//! │           Frame Timing (~55%)           │
+//! │  [bar chart + detail panel]             │
+//! │                                         │
+//! ├─────────────────────────────────────────┤
+//! │                                         │
+//! │           Memory (~45%)                 │
+//! │  [time-series chart + alloc table]      │
+//! │                                         │
+//! └─────────────────────────────────────────┘
+//! ```
 
-mod frame_section;
-mod memory_section;
-mod stats_section;
+mod frame_chart;
+mod memory_chart;
 pub(super) mod styles;
 
 use fdemon_app::session::PerformanceState;
 use fdemon_app::state::VmConnectionStatus;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Paragraph, Widget, Wrap};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
 use crate::theme::{icons::IconSet, palette};
 
-use frame_section::FPS_SECTION_HEIGHT;
-use memory_section::MEMORY_SECTION_HEIGHT;
-use stats_section::STATS_SECTION_HEIGHT;
+use frame_chart::FrameChart;
+use memory_chart::MemoryChart;
 use styles::fps_style;
+
+// ── Responsive layout thresholds ─────────────────────────────────────────────
+
+/// Minimum terminal height to show both sections (7 frame + 7 memory minimum each).
+const DUAL_SECTION_MIN_HEIGHT: u16 = 14;
+
+/// Below this height, show compact summary only.
+const COMPACT_THRESHOLD: u16 = 7;
 
 // ── PerformancePanel ─────────────────────────────────────────────────────────
 
@@ -87,35 +111,87 @@ impl Widget for PerformancePanel<'_> {
             return;
         }
 
-        // Compute section heights based on available area
-        let total_h = area.height;
-        let min_required = FPS_SECTION_HEIGHT + MEMORY_SECTION_HEIGHT + STATS_SECTION_HEIGHT;
-
-        if total_h < min_required {
-            // Very small terminal — just show a compact single-line summary
-            self.render_compact_summary(area, buf);
-            return;
-        }
-
-        // Distribute remaining height to FPS section (sparkline benefits from more height)
-        let fps_h = FPS_SECTION_HEIGHT + (total_h - min_required) / 2;
-        let mem_h = MEMORY_SECTION_HEIGHT + (total_h - min_required + 1) / 4;
-        let stats_h = total_h - fps_h - mem_h;
-
-        let chunks = Layout::vertical([
-            Constraint::Length(fps_h),
-            Constraint::Length(mem_h),
-            Constraint::Min(stats_h),
-        ])
-        .split(area);
-
-        self.render_fps_section(chunks[0], buf);
-        self.render_memory_section(chunks[1], buf);
-        self.render_stats_section(chunks[2], buf);
+        self.render_content(area, buf);
     }
 }
 
 impl PerformancePanel<'_> {
+    // ── Main content rendering ────────────────────────────────────────────────
+
+    fn render_content(&self, area: Rect, buf: &mut Buffer) {
+        let total_h = area.height;
+
+        if total_h < COMPACT_THRESHOLD {
+            // Very small terminal — show a compact single-line summary
+            self.render_compact_summary(area, buf);
+            return;
+        }
+
+        if total_h < DUAL_SECTION_MIN_HEIGHT {
+            // Small terminal — show frame chart only
+            let frame_block = Block::default()
+                .title(format!(" {} Frame Timing ", self.icons.activity()))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(palette::BORDER_DIM))
+                .title_style(Style::default().fg(palette::ACCENT_DIM));
+            let frame_inner = frame_block.inner(area);
+            frame_block.render(area, buf);
+
+            FrameChart::new(
+                &self.performance.frame_history,
+                self.performance.selected_frame,
+                &self.performance.stats,
+                false,
+            )
+            .render(frame_inner, buf);
+            return;
+        }
+
+        // Normal: 55/45 split (requires DUAL_SECTION_MIN_HEIGHT = 14 rows)
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+            .split(area);
+
+        // Frame timing section (with block border)
+        let frame_block = Block::default()
+            .title(format!(" {} Frame Timing ", self.icons.activity()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .title_style(Style::default().fg(palette::ACCENT_DIM));
+        let frame_inner = frame_block.inner(chunks[0]);
+        frame_block.render(chunks[0], buf);
+
+        FrameChart::new(
+            &self.performance.frame_history,
+            self.performance.selected_frame,
+            &self.performance.stats,
+            false,
+        )
+        .render(frame_inner, buf);
+
+        // Memory section (with block border)
+        let memory_block = Block::default()
+            .title(format!(" {} Memory ", self.icons.cpu()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .title_style(Style::default().fg(palette::ACCENT_DIM));
+        let memory_inner = memory_block.inner(chunks[1]);
+        memory_block.render(chunks[1], buf);
+
+        MemoryChart::new(
+            &self.performance.memory_samples,
+            &self.performance.memory_history,
+            &self.performance.gc_history,
+            self.performance.allocation_profile.as_ref(),
+            false,
+        )
+        .render(memory_inner, buf);
+    }
+
     // ── Disconnected / no-data state ─────────────────────────────────────────
 
     fn render_disconnected(&self, area: Rect, buf: &mut Buffer) {
@@ -187,211 +263,4 @@ impl PerformancePanel<'_> {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use fdemon_app::session::PerformanceState;
-    use fdemon_app::state::VmConnectionStatus;
-    use fdemon_core::performance::{FrameTiming, MemoryUsage};
-
-    fn make_test_performance() -> PerformanceState {
-        let mut perf = PerformanceState::default();
-        perf.monitoring_active = true;
-        perf.memory_history.push(MemoryUsage {
-            heap_usage: 50_000_000,
-            heap_capacity: 128_000_000,
-            external_usage: 12_000_000,
-            timestamp: chrono::Local::now(),
-        });
-        for i in 0u64..30 {
-            perf.frame_history.push(FrameTiming {
-                number: i,
-                build_micros: 5000 + (i * 100),
-                raster_micros: 3000 + (i * 50),
-                elapsed_micros: 8000 + (i * 150),
-                timestamp: chrono::Local::now(),
-            });
-        }
-        perf.stats.fps = Some(60.0);
-        perf.stats.jank_count = 2;
-        perf.stats.avg_frame_ms = Some(8.5);
-        perf.stats.buffered_frames = 30;
-        perf
-    }
-
-    fn render_to_buf(widget: PerformancePanel<'_>, width: u16, height: u16) -> Buffer {
-        let mut buf = Buffer::empty(Rect::new(0, 0, width, height));
-        widget.render(Rect::new(0, 0, width, height), &mut buf);
-        buf
-    }
-
-    fn collect_buf_text(buf: &Buffer, width: u16, height: u16) -> String {
-        let mut full = String::new();
-        for y in 0..height {
-            for x in 0..width {
-                if let Some(c) = buf.cell((x, y)) {
-                    if let Some(ch) = c.symbol().chars().next() {
-                        full.push(ch);
-                    }
-                }
-            }
-        }
-        full
-    }
-
-    #[test]
-    fn test_performance_panel_renders_without_panic() {
-        let perf = make_test_performance();
-        let widget = PerformancePanel::new(
-            &perf,
-            true,
-            IconSet::default(),
-            &VmConnectionStatus::Connected,
-        );
-        render_to_buf(widget, 80, 24);
-        // Should not panic
-    }
-
-    #[test]
-    fn test_performance_panel_shows_fps() {
-        let perf = make_test_performance();
-        let widget = PerformancePanel::new(
-            &perf,
-            true,
-            IconSet::default(),
-            &VmConnectionStatus::Connected,
-        );
-        let buf = render_to_buf(widget, 80, 24);
-        // Collect content from row 0
-        let content: String = (0u16..80)
-            .filter_map(|x| {
-                buf.cell((x, 0u16))
-                    .map(|c| c.symbol().chars().next().unwrap_or(' '))
-            })
-            .collect();
-        assert!(content.contains("60.0") || content.contains("FPS") || content.contains("Frame"));
-    }
-
-    #[test]
-    fn test_performance_panel_disconnected_state() {
-        let perf = PerformanceState::default(); // Empty, no data, monitoring_active = false
-        let widget = PerformancePanel::new(
-            &perf,
-            false,
-            IconSet::default(),
-            &VmConnectionStatus::Disconnected,
-        );
-        let buf = render_to_buf(widget, 80, 24);
-        // Should render disconnected message — just check it doesn't panic
-        // and that some text is present. Collect all buffer text into a flat String.
-        let full = collect_buf_text(&buf, 80, 24);
-        assert!(
-            full.contains("VM Service") || full.contains("monitoring") || full.contains("Waiting"),
-            "Expected disconnected message in buffer"
-        );
-    }
-
-    #[test]
-    fn test_performance_panel_small_terminal() {
-        let perf = make_test_performance();
-        let widget = PerformancePanel::new(
-            &perf,
-            true,
-            IconSet::default(),
-            &VmConnectionStatus::Connected,
-        );
-        render_to_buf(widget, 40, 10);
-        // Should not panic even in small terminal
-    }
-
-    #[test]
-    fn test_performance_panel_zero_area() {
-        let perf = make_test_performance();
-        let widget = PerformancePanel::new(
-            &perf,
-            true,
-            IconSet::default(),
-            &VmConnectionStatus::Connected,
-        );
-        render_to_buf(widget, 10, 1);
-        // Extremely small area — should not panic
-    }
-
-    #[test]
-    fn test_performance_panel_shows_connection_error() {
-        // When vm_connection_error is set, render_disconnected should show the
-        // specific error message rather than the generic "not connected" text.
-        let perf = PerformanceState::default();
-        let widget = PerformancePanel::new(
-            &perf,
-            false,
-            IconSet::default(),
-            &VmConnectionStatus::Disconnected,
-        )
-        .with_connection_error(Some("Connection failed: Connection refused"));
-        let full = collect_buf_text(&render_to_buf(widget, 80, 24), 80, 24);
-        assert!(
-            full.contains("Connection failed") || full.contains("Connection refused"),
-            "Expected specific connection error message in buffer, got: {full:?}"
-        );
-        // Must NOT show the generic fallback when a specific error is available.
-        assert!(
-            !full.contains("Performance monitoring requires"),
-            "Should not show generic message when specific error is available"
-        );
-    }
-
-    #[test]
-    fn test_performance_panel_no_error_shows_generic_disconnected() {
-        // When vm_connection_error is None and vm_connected is false, the generic
-        // message should be shown.
-        let perf = PerformanceState::default();
-        let widget = PerformancePanel::new(
-            &perf,
-            false,
-            IconSet::default(),
-            &VmConnectionStatus::Disconnected,
-        )
-        .with_connection_error(None);
-        let full = collect_buf_text(&render_to_buf(widget, 80, 24), 80, 24);
-        assert!(
-            full.contains("VM Service") || full.contains("not connected"),
-            "Expected generic VM Service disconnected message, got: {full:?}"
-        );
-    }
-
-    #[test]
-    fn test_monitoring_inactive_shows_disconnected() {
-        // When monitoring_active is false and vm_connected is true,
-        // we should see the "starting..." message
-        let mut perf = PerformanceState::default();
-        perf.monitoring_active = false;
-        let widget = PerformancePanel::new(
-            &perf,
-            true,
-            IconSet::default(),
-            &VmConnectionStatus::Connected,
-        );
-        let full = collect_buf_text(&render_to_buf(widget, 80, 24), 80, 24);
-        assert!(
-            full.contains("monitoring") || full.contains("Waiting"),
-            "Expected 'monitoring' or 'Waiting' in buffer"
-        );
-    }
-
-    #[test]
-    fn test_performance_panel_reconnecting_shows_attempt_count() {
-        // When connection_status is Reconnecting, the disconnected view should
-        // show the attempt counter rather than the generic "not connected" text.
-        let perf = PerformanceState::default();
-        let status = VmConnectionStatus::Reconnecting {
-            attempt: 3,
-            max_attempts: 10,
-        };
-        let widget = PerformancePanel::new(&perf, false, IconSet::default(), &status);
-        let full = collect_buf_text(&render_to_buf(widget, 80, 24), 80, 24);
-        assert!(
-            full.contains("Reconnecting") || full.contains("3/10"),
-            "Expected reconnecting message with attempt count, got: {full:?}"
-        );
-    }
-}
+mod tests;

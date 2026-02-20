@@ -307,4 +307,34 @@ fn test_memory_sample_in_ring_buffer() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/performance.rs` | Added `FramePhases` struct with `ui_micros()`, `total_micros()`, `ui_ms()`, `raster_ms()` helpers. Extended `FrameTiming` with `phases: Option<FramePhases>` and `shader_compilation: bool` fields plus `has_shader_compilation()` method. Added `MemorySample` struct with `total_usage()` and `from_memory_usage()` helpers. Updated existing `FrameTiming` test constructions to include new fields. Added 8 new tests for all new functionality. |
+| `crates/fdemon-core/src/lib.rs` | Added `FramePhases` and `MemorySample` to the performance re-export block. |
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | Updated `parse_frame_timing()` construction site to set `phases: None, shader_compilation: false`. |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated 5 `FrameTiming` construction sites to set `phases: None, shader_compilation: false`. |
+| `crates/fdemon-app/src/session/tests.rs` | Updated 2 `FrameTiming` construction sites (`make_frame` helper and fps test) to set `phases: None, shader_compilation: false`. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Updated `make_test_performance()` test helper `FrameTiming` construction to set `phases: None, shader_compilation: false`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Breaking change scope wider than documented**: The task notes 3 construction sites, but there were 8 total across 4 files. The additional sites were in `session/tests.rs` (make_frame helper + fps test) and the TUI performance widget test helper. All were updated with `phases: None, shader_compilation: false` as specified.
+2. **`MemorySample` uses `u64` zero sentinel for rss/raster_cache**: Consistent with the task spec rationale — simpler chart rendering logic when all samples are 0 (no line drawn) vs `Option<u64>`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-core` - Passed
+- `cargo test -p fdemon-core` - Passed (339 unit tests + 5 doc tests)
+- `cargo clippy -p fdemon-core -- -D warnings` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace` - Passed (all 5 crates)
+
+### Risks/Limitations
+
+1. **No migration of existing `MemoryUsage` ring buffer**: `MemorySample` coexists alongside `MemoryUsage` as designed. The `from_memory_usage()` bridge exists for progressive migration in later tasks.

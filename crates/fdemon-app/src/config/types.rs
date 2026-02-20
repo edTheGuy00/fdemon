@@ -309,6 +309,15 @@ pub struct DevToolsSettings {
     #[serde(default)]
     pub auto_performance_overlay: bool,
 
+    /// Allocation profile polling interval in milliseconds.
+    ///
+    /// Controls how often `getAllocationProfile` is called to capture per-class
+    /// heap statistics. This RPC is expensive (walks the entire Dart heap), so
+    /// a higher default (5000ms) is used compared to the memory polling interval.
+    /// Clamped to a minimum of 1000ms at the polling task level.
+    #[serde(default = "default_allocation_profile_interval_ms")]
+    pub allocation_profile_interval_ms: u64,
+
     /// Logging sub-settings
     #[serde(default)]
     pub logging: DevToolsLoggingSettings,
@@ -325,6 +334,7 @@ impl Default for DevToolsSettings {
             tree_max_depth: 0,
             auto_repaint_rainbow: false,
             auto_performance_overlay: false,
+            allocation_profile_interval_ms: default_allocation_profile_interval_ms(),
             logging: DevToolsLoggingSettings::default(),
         }
     }
@@ -340,6 +350,10 @@ fn default_performance_refresh_ms() -> u64 {
 
 fn default_memory_history_size() -> usize {
     60
+}
+
+fn default_allocation_profile_interval_ms() -> u64 {
+    5000
 }
 
 /// Logging sub-settings for the hybrid VM Service + daemon log pipeline.

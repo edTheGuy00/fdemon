@@ -69,12 +69,23 @@ pub fn parse_frame_timing(event: &StreamEvent) -> Option<FrameTiming> {
     let build = parse_str_u64(ext_data.get("build")?)?;
     let raster = parse_str_u64(ext_data.get("raster")?)?;
 
+    // Detect shader compilation from event data when available.
+    // Some Flutter versions expose a `shaderCompilation` boolean field.
+    // Defaults to false when the field is absent or not a boolean.
+    let shader_compilation = ext_data
+        .get("shaderCompilation")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
     Some(FrameTiming {
         number,
         build_micros: build,
         raster_micros: raster,
         elapsed_micros: elapsed,
         timestamp: chrono::Local::now(),
+        // Phase breakdown requires timeline event data (deferred to a future task).
+        phases: None,
+        shader_compilation,
     })
 }
 
@@ -289,5 +300,91 @@ mod tests {
             data: json!({ "extensionKind": "Flutter.Error" }),
         };
         assert!(!is_frame_event(&error));
+    }
+
+    /// Build an Extension stream event with arbitrary extensionData payload.
+    fn make_extension_event(
+        extension_kind: &str,
+        extension_data: serde_json::Value,
+    ) -> StreamEvent {
+        StreamEvent {
+            kind: "Extension".to_string(),
+            isolate: Some(IsolateRef {
+                id: "isolates/1234".to_string(),
+                name: "main".to_string(),
+                number: None,
+                is_system_isolate: Some(false),
+            }),
+            timestamp: Some(1704067200000),
+            data: json!({
+                "extensionKind": extension_kind,
+                "extensionData": extension_data,
+            }),
+        }
+    }
+
+    #[test]
+    fn test_parse_frame_timing_with_shader_compilation() {
+        let event = make_extension_event(
+            "Flutter.Frame",
+            json!({
+                "number": "42",
+                "elapsed": "20000",
+                "build": "5000",
+                "raster": "15000",
+                "shaderCompilation": true,
+            }),
+        );
+        let timing = parse_frame_timing(&event).unwrap();
+        assert!(timing.shader_compilation);
+        assert!(timing.phases.is_none());
+    }
+
+    #[test]
+    fn test_parse_frame_timing_without_shader_field_defaults_false() {
+        let event = make_extension_event(
+            "Flutter.Frame",
+            json!({
+                "number": "1",
+                "elapsed": "10000",
+                "build": "5000",
+                "raster": "5000",
+            }),
+        );
+        let timing = parse_frame_timing(&event).unwrap();
+        assert!(!timing.shader_compilation);
+    }
+
+    #[test]
+    fn test_parse_frame_timing_new_fields_populated() {
+        let event = make_extension_event(
+            "Flutter.Frame",
+            json!({
+                "number": "1",
+                "elapsed": "10000",
+                "build": "5000",
+                "raster": "5000",
+            }),
+        );
+        let timing = parse_frame_timing(&event).unwrap();
+        assert_eq!(timing.phases, None);
+        assert!(!timing.shader_compilation);
+    }
+
+    #[test]
+    fn test_parse_frame_timing_shader_compilation_false_value() {
+        // Explicit false value should also work correctly.
+        let event = make_extension_event(
+            "Flutter.Frame",
+            json!({
+                "number": "5",
+                "elapsed": "8000",
+                "build": "4000",
+                "raster": "4000",
+                "shaderCompilation": false,
+            }),
+        );
+        let timing = parse_frame_timing(&event).unwrap();
+        assert!(!timing.shader_compilation);
     }
 }

@@ -270,4 +270,29 @@ fn test_left_right_noop_when_not_in_performance_panel() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | **NEW** — 3 handler functions (`handle_select_performance_frame`, `handle_memory_sample_received`, `handle_allocation_profile_received`) + 15 unit tests |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `pub(crate) mod performance;` declaration |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `in_performance` guard, Left/Right arrow → `SelectPerformanceFrame` with computed index, Esc deselects frame before exiting DevTools |
+| `crates/fdemon-app/src/handler/update.rs` | Routed `SelectPerformanceFrame`, `VmServiceMemorySample`, `VmServiceAllocationProfileReceived` to performance handlers (replaced stub match arms from Task 02) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated Performance panel footer hints to include `[←/→] Frames` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Key handler emits Message (not direct mutation)**: Left/Right compute the target index inline in `keys.rs` then emit `SelectPerformanceFrame { index }`, following the same pattern as Inspector tree navigation. This keeps state mutation in the handler layer.
+2. **Esc two-phase behavior**: Esc in Performance panel first deselects frame (if selected), then exits DevTools mode on second press — matching the "unwind one layer" UX pattern.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (945 tests, 15 new)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **No phase breakdown display yet**: The handler sets `selected_frame` but phase breakdown rendering depends on Task 07 (panel rewire).

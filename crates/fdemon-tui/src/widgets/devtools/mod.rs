@@ -270,7 +270,7 @@ impl DevToolsView<'_> {
                 "[Esc] Logs  [↑↓] Navigate  [→] Expand  [←] Collapse  [r] Refresh  [b] Browser"
             }
             DevToolsPanel::Performance => {
-                "[Esc] Logs  [i] Inspector  [b] Browser  [Ctrl+p] PerfOverlay"
+                "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
             }
         };
 

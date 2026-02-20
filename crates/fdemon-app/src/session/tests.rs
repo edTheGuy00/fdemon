@@ -1536,6 +1536,8 @@ mod tests {
             raster_micros: elapsed_micros / 2,
             elapsed_micros,
             timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
         }
     }
 
@@ -1655,6 +1657,8 @@ mod tests {
                 raster_micros: 5_000,
                 elapsed_micros: 16_667,
                 timestamp: ts,
+                phases: None,
+                shader_compilation: false,
             });
         }
         let fps = PerformanceState::calculate_fps(&frames);

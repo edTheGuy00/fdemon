@@ -8,8 +8,6 @@ use crate::theme::palette;
 
 // ── Style threshold constants ─────────────────────────────────────────────────
 
-/// Cap for sparkline bar heights (2x the 16.67ms frame budget at 60fps).
-pub(super) const SPARKLINE_MAX_MS: u64 = 33;
 /// FPS at or above this value is considered healthy (green).
 pub(super) const FPS_GREEN_THRESHOLD: f64 = 55.0;
 /// FPS at or above this value (but below green) is degraded (yellow).

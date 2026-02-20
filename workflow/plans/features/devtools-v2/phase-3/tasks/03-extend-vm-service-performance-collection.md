@@ -229,4 +229,33 @@ fn test_parse_frame_timing_new_fields_populated() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/performance.rs` | Added `get_memory_sample()` async public function, private `get_isolate_rss()` async helper, test-only `parse_isolate_rss()` pure function for unit testing, updated imports to include `MemorySample`, added 4 new tests |
+| `crates/fdemon-daemon/src/vm_service/timeline.rs` | Updated `parse_frame_timing()` to read `shaderCompilation` from `extensionData`, added `make_extension_event()` test helper, added 4 new tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Exported `get_memory_sample` from the `performance` re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **`parse_isolate_rss` test helper pattern**: `get_isolate_rss` is an `async` function that requires a real `VmRequestHandle`. To make the parsing logic independently testable without network calls, a `#[cfg(test)]` function `parse_isolate_rss` extracts the pure JSON parsing logic. This pattern mirrors how `parse_memory_usage` is a sync testable counterpart to `get_memory_usage`.
+
+2. **Direct `result` access for `getIsolate`**: The `VmRequestHandle::request()` method returns the `result` field of the JSON-RPC response directly (not the full envelope). So `get_isolate_rss` accesses `result.get("_heaps")` at the top level of the returned value, matching the actual Dart VM protocol shape.
+
+3. **`shader_compilation` reads from `extensionData`**: Flutter's `Flutter.Frame` events nest timing data under `extensionData`. The `shaderCompilation` field is also expected there (not at the top-level `data`), which is consistent with the event structure.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (357 tests; 3 ignored integration tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`_heaps` is a private Dart VM API**: The `_heaps` field in `getIsolate` responses is prefixed with `_` indicating it is a private/internal API. It may not be present in all Dart VM versions or Flutter targets. The code is fully defensive — `get_isolate_rss` returns `None` on any missing field, and `get_memory_sample` defaults `rss` to 0 via `unwrap_or(0)`.
+
+2. **`raster_cache` remains 0**: As noted in the task, the raster cache size is not extractable from standard VM service APIs. Set to 0 until `ext.flutter.rasterCache` is exposed by Flutter.

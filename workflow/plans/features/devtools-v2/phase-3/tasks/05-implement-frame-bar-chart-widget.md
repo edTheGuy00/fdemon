@@ -285,4 +285,38 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart.rs` | NEW — Full `FrameChart` widget implementation with bar chart, budget line, detail panel, summary line, and 25 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Added `mod frame_chart;` declaration so the module is compiled and tests run |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[allow(dead_code)]` at module level**: Since the widget is intentionally not wired into the performance panel rendering yet (Task 07 handles that), all items would be flagged as unused. Applied `#[allow(dead_code)]` with a comment explaining it will be removed in Task 07.
+
+2. **`mod frame_chart;` declaration in `mod.rs`**: The task says "not referenced from `performance/mod.rs`" meaning the `FrameChart` type should not be used in the rendering logic yet. However, `mod frame_chart;` must be present for the compiler to see the file and run its tests. Added as a private module declaration only.
+
+3. **Half-block character encoding**: Used direct Unicode codepoints (`\u{2588}` for `█`, `\u{2584}` for `▄`) in `render_bar` to avoid any character encoding ambiguity in source files.
+
+4. **Selected frame scrolling**: Implemented option (b) from the task notes — when a frame is selected, the visible window scrolls to keep the selected frame at the right edge of the view. This prevents the selection from being lost as new frames arrive.
+
+5. **`_use_icons` parameter**: The `icons: bool` parameter is stored and referenced via `_use_icons` variable in `render_summary_line` to suppress unused-variable warnings while leaving the hook for future icon expansion.
+
+6. **Pre-existing `fdemon-app` clippy failures**: The errors from `cargo clippy -p fdemon-tui -- -D warnings` are all in `fdemon-app` (pre-existing from other tasks), not in `frame_chart.rs`. Zero clippy issues in the new file.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check -p fdemon-tui` — Passed (zero warnings in frame_chart)
+- `cargo test -p fdemon-tui` — Passed (559 tests: 534 pre-existing + 25 new frame_chart tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` — Zero issues in `frame_chart.rs`; pre-existing failures in `fdemon-app` are outside scope
+
+### Risks/Limitations
+
+1. **`fdemon-app` clippy failures**: Three pre-existing clippy errors in `fdemon-app` (unused function warnings and `map().flatten()` style issues) cause `cargo clippy -p fdemon-tui -- -D warnings` to exit non-zero. These are from previous tasks and not introduced by this task.
+
+2. **Task 07 wiring**: The `#[allow(dead_code)]` must be removed and the `FrameChart` widget connected to `PerformancePanel::render_fps_section` in Task 07 to complete the visual integration.

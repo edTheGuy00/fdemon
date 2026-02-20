@@ -75,8 +75,8 @@ pub use extensions::{
 };
 pub use logging::{parse_log_record, vm_level_to_log_level, vm_log_to_log_entry, VmLogRecord};
 pub use performance::{
-    get_allocation_profile, get_memory_usage, parse_allocation_profile, parse_gc_event,
-    parse_memory_usage,
+    get_allocation_profile, get_memory_sample, get_memory_usage, parse_allocation_profile,
+    parse_gc_event, parse_memory_usage,
 };
 pub use protocol::{
     parse_vm_message, IsolateGroupRef, IsolateInfo, IsolateRef, LibraryRef, StreamEvent,

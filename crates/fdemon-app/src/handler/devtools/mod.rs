@@ -6,13 +6,20 @@
 //!
 //! Sub-modules:
 //! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
+//! - `performance`: Frame selection, memory sample, and allocation profile handlers
 
 pub mod inspector;
+pub(crate) mod performance;
 
 pub use inspector::{
     handle_inspector_navigate, handle_layout_data_fetch_failed, handle_layout_data_fetch_timeout,
     handle_layout_data_fetched, handle_widget_tree_fetch_failed, handle_widget_tree_fetch_timeout,
     handle_widget_tree_fetched,
+};
+
+pub(crate) use performance::{
+    handle_allocation_profile_received, handle_memory_sample_received,
+    handle_select_performance_frame,
 };
 
 use crate::handler::{UpdateAction, UpdateResult};

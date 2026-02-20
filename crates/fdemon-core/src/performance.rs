@@ -56,6 +56,50 @@ impl MemoryUsage {
     }
 }
 
+// ── MemorySample ─────────────────────────────────────────────────────────────
+
+/// Rich memory snapshot for time-series charting.
+///
+/// Extends `MemoryUsage` with per-category breakdown (Dart heap, native,
+/// raster cache) and RSS. Collected by combining `getMemoryUsage` with
+/// `getIsolate` data from the VM service.
+#[derive(Debug, Clone)]
+pub struct MemorySample {
+    /// Dart/Flutter heap objects (bytes).
+    pub dart_heap: u64,
+    /// Native memory outside Dart heap — decoded images, file I/O buffers (bytes).
+    pub dart_native: u64,
+    /// Raster cache layers/pictures (bytes). 0 if unavailable.
+    pub raster_cache: u64,
+    /// Total Dart heap capacity (bytes).
+    pub allocated: u64,
+    /// Resident set size (bytes). 0 if unavailable.
+    pub rss: u64,
+    pub timestamp: chrono::DateTime<chrono::Local>,
+}
+
+impl MemorySample {
+    /// Total memory tracked (heap + native + raster).
+    pub fn total_usage(&self) -> u64 {
+        self.dart_heap + self.dart_native + self.raster_cache
+    }
+
+    /// Construct from an existing `MemoryUsage` with defaults for unavailable fields.
+    ///
+    /// Used as a migration bridge: converts the simpler `MemoryUsage` into a
+    /// `MemorySample` with `raster_cache` and `rss` set to 0.
+    pub fn from_memory_usage(usage: &MemoryUsage) -> Self {
+        Self {
+            dart_heap: usage.heap_usage,
+            dart_native: usage.external_usage,
+            raster_cache: 0,
+            allocated: usage.heap_capacity,
+            rss: 0,
+            timestamp: usage.timestamp,
+        }
+    }
+}
+
 // ── GcEvent ──────────────────────────────────────────────────────────────────
 
 /// A garbage collection event from the VM Service GC stream.
@@ -147,6 +191,40 @@ pub const FRAME_BUDGET_60FPS_MICROS: u64 = 16_667;
 /// Budget for a single frame at 120 FPS (8.333ms).
 pub const FRAME_BUDGET_120FPS_MICROS: u64 = 8_333;
 
+/// Breakdown of a single frame into build/layout/paint/raster phases.
+///
+/// Not always available — requires timeline event data from the VM service.
+/// When unavailable, `FrameTiming.phases` is `None` and only the aggregate
+/// `build_micros` / `raster_micros` split is shown.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FramePhases {
+    pub build_micros: u64,
+    pub layout_micros: u64,
+    pub paint_micros: u64,
+    pub raster_micros: u64,
+    pub shader_compilation: bool,
+}
+
+impl FramePhases {
+    /// Total UI thread time (build + layout + paint).
+    pub fn ui_micros(&self) -> u64 {
+        self.build_micros + self.layout_micros + self.paint_micros
+    }
+
+    /// Total frame time (UI + raster).
+    pub fn total_micros(&self) -> u64 {
+        self.ui_micros() + self.raster_micros
+    }
+
+    pub fn ui_ms(&self) -> f64 {
+        self.ui_micros() as f64 / 1000.0
+    }
+
+    pub fn raster_ms(&self) -> f64 {
+        self.raster_micros as f64 / 1000.0
+    }
+}
+
 /// Timing data for a single Flutter UI frame.
 ///
 /// Flutter posts `Flutter.Frame` events via `developer.postEvent` on the
@@ -163,6 +241,11 @@ pub struct FrameTiming {
     pub elapsed_micros: u64,
     /// Timestamp of the frame event.
     pub timestamp: chrono::DateTime<chrono::Local>,
+    /// Detailed phase breakdown (build/layout/paint/raster). `None` when
+    /// timeline event data is unavailable from the VM service.
+    pub phases: Option<FramePhases>,
+    /// Whether shader compilation was detected in this frame.
+    pub shader_compilation: bool,
 }
 
 impl FrameTiming {
@@ -184,6 +267,12 @@ impl FrameTiming {
     /// Raster duration in milliseconds.
     pub fn raster_ms(&self) -> f64 {
         self.raster_micros as f64 / 1000.0
+    }
+
+    /// Whether this frame involved shader compilation.
+    /// Checks both the top-level flag and the phases detail.
+    pub fn has_shader_compilation(&self) -> bool {
+        self.shader_compilation || self.phases.as_ref().is_some_and(|p| p.shader_compilation)
     }
 }
 
@@ -391,6 +480,8 @@ mod tests {
             raster_micros: 10000,
             elapsed_micros: 18000,
             timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
         };
         assert!(frame.is_janky()); // 18ms > 16.667ms
     }
@@ -403,6 +494,8 @@ mod tests {
             raster_micros: 5000,
             elapsed_micros: 10000,
             timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
         };
         assert!(!frame.is_janky()); // 10ms < 16.667ms
     }
@@ -447,5 +540,128 @@ mod tests {
         buf.push(2);
         buf.clear();
         assert!(buf.is_empty());
+    }
+
+    // ── FramePhases ─────────────────────────────────
+    #[test]
+    fn test_frame_phases_ui_micros() {
+        let phases = FramePhases {
+            build_micros: 3_000,
+            layout_micros: 1_000,
+            paint_micros: 2_000,
+            raster_micros: 4_000,
+            shader_compilation: false,
+        };
+        assert_eq!(phases.ui_micros(), 6_000);
+        assert_eq!(phases.total_micros(), 10_000);
+    }
+
+    #[test]
+    fn test_frame_phases_ms_conversion() {
+        let phases = FramePhases {
+            build_micros: 5_000,
+            layout_micros: 0,
+            paint_micros: 0,
+            raster_micros: 3_000,
+            shader_compilation: false,
+        };
+        assert!((phases.ui_ms() - 5.0).abs() < f64::EPSILON);
+        assert!((phases.raster_ms() - 3.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_frame_timing_has_shader_compilation_top_level() {
+        let timing = FrameTiming {
+            number: 1,
+            build_micros: 5_000,
+            raster_micros: 5_000,
+            elapsed_micros: 10_000,
+            timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: true,
+        };
+        assert!(timing.has_shader_compilation());
+    }
+
+    #[test]
+    fn test_frame_timing_has_shader_compilation_from_phases() {
+        let timing = FrameTiming {
+            number: 1,
+            build_micros: 5_000,
+            raster_micros: 5_000,
+            elapsed_micros: 10_000,
+            timestamp: chrono::Local::now(),
+            phases: Some(FramePhases {
+                build_micros: 3_000,
+                layout_micros: 1_000,
+                paint_micros: 1_000,
+                raster_micros: 5_000,
+                shader_compilation: true,
+            }),
+            shader_compilation: false,
+        };
+        assert!(timing.has_shader_compilation());
+    }
+
+    #[test]
+    fn test_frame_timing_no_shader_compilation() {
+        let timing = FrameTiming {
+            number: 1,
+            build_micros: 5_000,
+            raster_micros: 5_000,
+            elapsed_micros: 10_000,
+            timestamp: chrono::Local::now(),
+            phases: None,
+            shader_compilation: false,
+        };
+        assert!(!timing.has_shader_compilation());
+    }
+
+    // ── MemorySample ────────────────────────────────
+    #[test]
+    fn test_memory_sample_total_usage() {
+        let sample = MemorySample {
+            dart_heap: 10_000_000,
+            dart_native: 5_000_000,
+            raster_cache: 2_000_000,
+            allocated: 20_000_000,
+            rss: 50_000_000,
+            timestamp: chrono::Local::now(),
+        };
+        assert_eq!(sample.total_usage(), 17_000_000);
+    }
+
+    #[test]
+    fn test_memory_sample_from_memory_usage() {
+        let usage = MemoryUsage {
+            heap_usage: 10_000_000,
+            heap_capacity: 20_000_000,
+            external_usage: 5_000_000,
+            timestamp: chrono::Local::now(),
+        };
+        let sample = MemorySample::from_memory_usage(&usage);
+        assert_eq!(sample.dart_heap, 10_000_000);
+        assert_eq!(sample.dart_native, 5_000_000);
+        assert_eq!(sample.raster_cache, 0);
+        assert_eq!(sample.allocated, 20_000_000);
+        assert_eq!(sample.rss, 0);
+    }
+
+    #[test]
+    fn test_memory_sample_in_ring_buffer() {
+        let mut buf = RingBuffer::new(3);
+        for i in 0..5u64 {
+            buf.push(MemorySample {
+                dart_heap: i * 1_000_000,
+                dart_native: 0,
+                raster_cache: 0,
+                allocated: 0,
+                rss: 0,
+                timestamp: chrono::Local::now(),
+            });
+        }
+        assert_eq!(buf.len(), 3);
+        assert_eq!(buf.oldest().unwrap().dart_heap, 2_000_000);
+        assert_eq!(buf.latest().unwrap().dart_heap, 4_000_000);
     }
 }

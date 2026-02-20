@@ -17,7 +17,9 @@
 //! should invoke it infrequently (e.g., on user request or on a long timer),
 //! not in tight polling loops.
 
-use fdemon_core::performance::{AllocationProfile, ClassHeapStats, GcEvent, MemoryUsage};
+use fdemon_core::performance::{
+    AllocationProfile, ClassHeapStats, GcEvent, MemorySample, MemoryUsage,
+};
 use fdemon_core::prelude::*;
 
 use super::client::VmRequestHandle;
@@ -70,6 +72,94 @@ pub fn parse_memory_usage(result: &serde_json::Value) -> Result<MemoryUsage> {
         external_usage,
         timestamp: chrono::Local::now(),
     })
+}
+
+// ── get_memory_sample ─────────────────────────────────────────────────────────
+
+/// Collect a rich memory sample by combining data from multiple VM service calls.
+///
+/// - `getMemoryUsage(isolateId)` → heap_usage, heap_capacity, external_usage
+/// - `getIsolate(isolateId)` → RSS approximated from `_heaps` field (if available)
+///
+/// Returns `None` if the base `getMemoryUsage` call fails.
+/// Fields that cannot be determined from the VM service are set to 0.
+pub async fn get_memory_sample(handle: &VmRequestHandle, isolate_id: &str) -> Option<MemorySample> {
+    // 1. Get basic memory usage (required — failure returns None).
+    let memory = get_memory_usage(handle, isolate_id).await.ok()?;
+
+    // 2. Attempt to get RSS from isolate info — best-effort, defaults to 0.
+    let rss = get_isolate_rss(handle, isolate_id).await.unwrap_or(0);
+
+    Some(MemorySample {
+        dart_heap: memory.heap_usage,
+        dart_native: memory.external_usage,
+        // Raster cache is not available from standard VM service APIs.
+        // Future enhancement: use ext.flutter.rasterCache if exposed.
+        raster_cache: 0,
+        allocated: memory.heap_capacity,
+        rss,
+        timestamp: memory.timestamp,
+    })
+}
+
+/// Extract an RSS approximation from the `getIsolate` response.
+///
+/// The Dart VM's `getIsolate` response may include a `_heaps` field with
+/// `new` and `old` space details. RSS is approximated from the combined
+/// capacity of both spaces plus external usage.
+///
+/// This field is a private Dart VM API (prefixed with `_`) and may not be
+/// present in all Dart VM versions. Returns `None` if the data is unavailable.
+async fn get_isolate_rss(handle: &VmRequestHandle, isolate_id: &str) -> Option<u64> {
+    let result = handle
+        .request(
+            "getIsolate",
+            Some(serde_json::json!({ "isolateId": isolate_id })),
+        )
+        .await
+        .ok()?;
+
+    // The _heaps field contains new/old space details with capacity values.
+    // `handle.request()` returns the `result` field of the JSON-RPC response
+    // directly, so the isolate object is at the top level.
+    let heaps = result.get("_heaps")?;
+
+    let new_cap = heaps
+        .get("new")
+        .and_then(|n| n.get("capacity"))
+        .and_then(|c| c.as_u64())
+        .unwrap_or(0);
+    let old_cap = heaps
+        .get("old")
+        .and_then(|o| o.get("capacity"))
+        .and_then(|c| c.as_u64())
+        .unwrap_or(0);
+    let external = heaps.get("external").and_then(|e| e.as_u64()).unwrap_or(0);
+
+    Some(new_cap + old_cap + external)
+}
+
+/// Parse RSS from a raw `getIsolate` JSON result for unit testing.
+///
+/// Extracts RSS from the `_heaps` field of the isolate result.
+/// Returns `None` if `_heaps` is absent.
+#[cfg(test)]
+fn parse_isolate_rss(result: &serde_json::Value) -> Option<u64> {
+    let heaps = result.get("_heaps")?;
+
+    let new_cap = heaps
+        .get("new")
+        .and_then(|n| n.get("capacity"))
+        .and_then(|c| c.as_u64())
+        .unwrap_or(0);
+    let old_cap = heaps
+        .get("old")
+        .and_then(|o| o.get("capacity"))
+        .and_then(|c| c.as_u64())
+        .unwrap_or(0);
+    let external = heaps.get("external").and_then(|e| e.as_u64()).unwrap_or(0);
+
+    Some(new_cap + old_cap + external)
 }
 
 // ── getAllocationProfile ──────────────────────────────────────────────────────
@@ -226,6 +316,20 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn test_parse_memory_usage_still_works() {
+        let result = json!({
+            "type": "MemoryUsage",
+            "heapUsage": 52428800,
+            "heapCapacity": 104857600,
+            "externalUsage": 10485760
+        });
+        let mem = parse_memory_usage(&result).unwrap();
+        assert_eq!(mem.heap_usage, 52428800);
+        assert_eq!(mem.heap_capacity, 104857600);
+        assert_eq!(mem.external_usage, 10485760);
+    }
+
+    #[test]
     fn test_parse_memory_usage() {
         let result = json!({
             "type": "MemoryUsage",
@@ -237,6 +341,48 @@ mod tests {
         assert_eq!(mem.heap_usage, 52428800);
         assert_eq!(mem.heap_capacity, 104857600);
         assert_eq!(mem.external_usage, 10485760);
+    }
+
+    #[test]
+    fn test_get_isolate_rss_parses_heaps() {
+        // Simulate a `getIsolate` result (the `result` field of the JSON-RPC
+        // response) containing the private `_heaps` field.
+        let result = json!({
+            "_heaps": {
+                "new": { "capacity": 1_000_000_u64, "used": 500_000_u64 },
+                "old": { "capacity": 10_000_000_u64, "used": 8_000_000_u64 },
+                "external": 2_000_000_u64
+            }
+        });
+        let rss = parse_isolate_rss(&result);
+        assert_eq!(rss, Some(13_000_000));
+    }
+
+    #[test]
+    fn test_get_isolate_rss_missing_heaps_returns_none() {
+        let result = json!({ "type": "Isolate", "id": "isolates/1" });
+        let rss = parse_isolate_rss(&result);
+        assert!(rss.is_none());
+    }
+
+    #[test]
+    fn test_get_isolate_rss_partial_heaps() {
+        // Only `new` space is present — `old` and `external` default to 0.
+        let result = json!({
+            "_heaps": {
+                "new": { "capacity": 500_000_u64, "used": 200_000_u64 }
+            }
+        });
+        let rss = parse_isolate_rss(&result);
+        assert_eq!(rss, Some(500_000));
+    }
+
+    #[test]
+    fn test_get_isolate_rss_empty_heaps_object() {
+        // `_heaps` exists but all sub-fields are absent — each defaults to 0.
+        let result = json!({ "_heaps": {} });
+        let rss = parse_isolate_rss(&result);
+        assert_eq!(rss, Some(0));
     }
 
     #[test]

@@ -216,4 +216,40 @@ fn test_disconnect_clears_allocation_profile() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `allocation_profile_interval_ms: u64` field to `DevToolsSettings` with default 5000ms; added `default_allocation_profile_interval_ms()` fn |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `allocation_profile_interval_ms: u64` field to `UpdateAction::StartPerformanceMonitoring` variant |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `VmServiceConnected` handler to read and pass `allocation_profile_interval_ms` from settings into `StartPerformanceMonitoring` action |
+| `crates/fdemon-app/src/process.rs` | Updated `hydrate_start_performance_monitoring()` to thread `allocation_profile_interval_ms` through the hydration pattern |
+| `crates/fdemon-app/src/actions.rs` | Added `ALLOC_PROFILE_POLL_MIN_MS` constant (1000ms); updated `spawn_performance_polling` signature and implementation to use dual-timer loop with separate memory and allocation ticks; calls `get_memory_sample()` on memory tick and `get_allocation_profile()` on allocation tick; updated `handle_action` match arm to destructure new field |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 new tests: `test_vm_connected_starts_perf_monitoring_with_allocation_interval`, `test_vm_connected_uses_default_allocation_interval`, `test_memory_snapshot_still_works_alongside_sample`, `test_disconnect_clears_allocation_profile` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Dual-timer loop**: The existing single-interval polling loop was replaced with `tokio::select!` across two `tokio::time::interval` timers — one for memory polling (`performance_refresh_ms`, min 500ms) and one for allocation profile polling (`allocation_profile_interval_ms`, min 1000ms). This cleanly separates the two frequencies without requiring a separate task.
+
+2. **`continue` on `main_isolate_id` failure in allocation tick**: Each tick independently fetches the isolate ID. Failures (e.g., during hot restart when the isolate cache is stale) are logged at debug level and skipped — the next tick retries. This is consistent with the memory tick pattern.
+
+3. **`get_memory_sample` called after `get_memory_usage` on same tick**: The memory sample internally calls `get_memory_usage` again. This means two `getMemoryUsage` RPC calls happen per memory tick (one explicit, one inside `get_memory_sample`). The redundancy is intentional per the task spec — it keeps both ring buffers in sync and lets the basic snapshot succeed even if `get_memory_sample` fails (e.g., `getIsolate` unavailable). The extra RPC is acceptable at 2s intervals.
+
+4. **Minimum allocation interval (1000ms)**: A higher minimum than memory polling (500ms) was chosen because `getAllocationProfile` walks the entire Dart heap. This protects against aggressive configurations degrading VM performance.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (949 unit tests, 1 doc test; 4 new tests added)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Double `getMemoryUsage` per memory tick**: Calling `get_memory_sample` after `get_memory_usage` means the VM service receives two `getMemoryUsage` requests per tick. At the default 2s interval this is negligible, but could be optimised in the future by having `get_memory_sample` accept an already-fetched `MemoryUsage` to avoid the duplicate call.
+
+2. **No panel-active guard**: The task notes mention "only polling allocation profiles when the Performance panel is active". This optimisation was not implemented in this task — the polling loop runs unconditionally once started. Implementing a panel-active check would require state inspection inside an async background task, which would need additional synchronisation (e.g., a watch channel). This is left as a future optimisation.
+
+3. **Allocation tick fires immediately**: `tokio::time::interval` fires immediately on the first tick. The first allocation profile fetch will happen shortly after VM connection, not after the first 5-second interval. This is generally acceptable behaviour and matches how memory polling works.
