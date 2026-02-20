@@ -131,4 +131,33 @@ fn test_request_layout_data_without_vm_sets_error() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added `vm_connected` guard to `RequestWidgetTree` and `RequestLayoutData` handlers; sets error instead of loading when VM not connected |
+| `crates/fdemon-app/src/process.rs` | Added `pre_hydration_action` capture before hydration chain; sends `WidgetTreeFetchFailed` / `LayoutDataFetchFailed` failure messages when hydration discards fetch actions |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 regression tests: `test_request_widget_tree_without_vm_sets_error`, `test_request_widget_tree_with_vm_sets_loading`, `test_request_layout_data_without_vm_sets_error`, `test_request_layout_data_with_vm_sets_loading` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two-layer defense as specified**: Layer 1 (update.rs guard) prevents the bug in the normal case. Layer 2 (process.rs failure message) handles the race where `vm_connected` is true at handler time but the VM handle disappears before hydration. This matches the pattern already used in `handle_enter_devtools_mode` and `handle_switch_panel` in `devtools.rs`.
+
+2. **Error messages are user-friendly**: "VM Service not connected — cannot fetch widget tree" (Layer 1) and "VM Service handle unavailable" (Layer 2, defense-in-depth) — both clearly describe the root cause without exposing internal implementation details.
+
+3. **`UpdateAction` derives `Clone`** (confirmed in `handler/mod.rs`), so `action.clone()` before the hydration chain works without any special treatment.
+
+4. **`hydrate_toggle_overlay` not fixed**: As noted in the task, `ToggleDebugOverlay` does not set a loading flag, so a discarded hydration does not cause a stuck UI. Only `FetchWidgetTree` and `FetchLayoutData` are handled in the defense-in-depth layer.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (828 tests, 0 failed; 4 new tests included)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Race window is tiny**: Layer 2 covers the window between handler execution and hydration within a single synchronous `process_message` call, which is effectively instantaneous. The main benefit is defense-in-depth for future refactors that might make this path asynchronous.

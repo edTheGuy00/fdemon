@@ -229,6 +229,35 @@ pub fn handle_action(
                 );
             }
         }
+
+        // ─────────────────────────────────────────────────────────
+        // DevTools Group Disposal (Phase 4, Task 07)
+        // ─────────────────────────────────────────────────────────
+        UpdateAction::DisposeDevToolsGroups {
+            session_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_dispose_devtools_groups(session_id, handle);
+            } else {
+                tracing::debug!(
+                    "DisposeDevToolsGroups reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // DevTools Browser Launch (Phase 4, Task 03)
+        // ─────────────────────────────────────────────────────────
+        UpdateAction::OpenBrowserDevTools { url, browser } => {
+            tokio::spawn(async move {
+                if let Err(e) = open_url_in_browser(&url, &browser) {
+                    tracing::error!("Failed to open browser DevTools: {e}");
+                }
+            });
+        }
     }
 }
 
@@ -864,6 +893,27 @@ fn spawn_fetch_widget_tree(
         // workflows; for the initial inspector view one group is sufficient.
         let object_group = "fdemon-inspector-1";
 
+        // Dispose the previous object group before creating a new one.
+        // This releases VM references from any prior tree fetch and prevents
+        // memory from accumulating on the Flutter VM during repeated refreshes.
+        // `disposeGroup` is idempotent — safe to call even on the first fetch.
+        // Failure is non-fatal: log at debug level and continue with the fetch.
+        {
+            let mut dispose_args = HashMap::new();
+            dispose_args.insert("objectGroup".to_string(), object_group.to_string());
+            if let Err(e) = handle
+                .call_extension(ext::DISPOSE_GROUP, &isolate_id, Some(dispose_args))
+                .await
+            {
+                tracing::debug!(
+                    "FetchWidgetTree: disposeGroup '{}' failed for session {} (non-fatal): {}",
+                    object_group,
+                    session_id,
+                    e
+                );
+            }
+        }
+
         // Build args for the newer getRootWidgetTree API.
         let mut newer_args = HashMap::new();
         newer_args.insert("objectGroup".to_string(), object_group.to_string());
@@ -1053,10 +1103,33 @@ fn spawn_fetch_layout_data(
         };
 
         // Use a dedicated object group for the layout explorer.
+        let layout_group = "devtools-layout";
+
+        // Dispose the previous layout object group before creating a new one.
+        // This releases VM references from any prior layout fetch and prevents
+        // memory from accumulating on the Flutter VM during repeated refreshes.
+        // `disposeGroup` is idempotent — safe to call even on the first fetch.
+        // Failure is non-fatal: log at debug level and continue with the fetch.
+        {
+            let mut dispose_args = HashMap::new();
+            dispose_args.insert("objectGroup".to_string(), layout_group.to_string());
+            if let Err(e) = handle
+                .call_extension(ext::DISPOSE_GROUP, &isolate_id, Some(dispose_args))
+                .await
+            {
+                tracing::debug!(
+                    "FetchLayoutData: disposeGroup '{}' failed for session {} (non-fatal): {}",
+                    layout_group,
+                    session_id,
+                    e
+                );
+            }
+        }
+
         let mut args = HashMap::new();
         // NOTE: Layout explorer uses "id" and "groupName", not "arg" and "objectGroup".
         args.insert("id".to_string(), node_id.clone());
-        args.insert("groupName".to_string(), "devtools-layout".to_string());
+        args.insert("groupName".to_string(), layout_group.to_string());
         args.insert("subtreeDepth".to_string(), "1".to_string());
 
         let raw_result = match handle
@@ -1108,4 +1181,105 @@ fn spawn_fetch_layout_data(
             })
             .await;
     });
+}
+
+/// Spawn a background task that disposes both DevTools VM object groups.
+///
+/// Disposes `"fdemon-inspector-1"` (widget inspector) and `"devtools-layout"`
+/// (layout explorer) groups. Called when the user exits DevTools mode to release
+/// VM references held by the Flutter inspector and prevent memory accumulation
+/// during long debugging sessions.
+///
+/// Both disposal calls are fire-and-forget: failures are logged at debug level
+/// and do not surface to the UI. `disposeGroup` is idempotent, so calling it
+/// when a group does not exist is also safe.
+fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmRequestHandle) {
+    tokio::spawn(async move {
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::debug!(
+                    "DisposeDevToolsGroups: could not get isolate ID for session {} \
+                     (non-fatal, VM may have disconnected): {}",
+                    session_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        for group in &["fdemon-inspector-1", "devtools-layout"] {
+            let mut args = HashMap::new();
+            args.insert("objectGroup".to_string(), (*group).to_string());
+            if let Err(e) = handle
+                .call_extension(ext::DISPOSE_GROUP, &isolate_id, Some(args))
+                .await
+            {
+                tracing::debug!(
+                    "DisposeDevToolsGroups: disposeGroup '{}' failed for session {} \
+                     (non-fatal): {}",
+                    group,
+                    session_id,
+                    e
+                );
+            } else {
+                tracing::debug!(
+                    "DisposeDevToolsGroups: disposed '{}' for session {}",
+                    group,
+                    session_id
+                );
+            }
+        }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helper: Browser launcher
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Open a URL in the system browser (cross-platform, fire-and-forget).
+///
+/// If `browser` is non-empty, uses it as the browser command.
+/// Otherwise uses the platform-default browser opener.
+///
+/// Called from the `handle_action` dispatch for
+/// [`UpdateAction::OpenBrowserDevTools`].
+fn open_url_in_browser(url: &str, browser: &str) -> std::io::Result<()> {
+    use std::process::Command;
+
+    if !browser.is_empty() {
+        // Custom browser specified in settings.
+        Command::new(browser).arg(url).spawn()?;
+        return Ok(());
+    }
+
+    // Platform-default browser.
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open").arg(url).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        Command::new("xdg-open").arg(url).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        Command::new("cmd").args(["/C", "start", "", url]).spawn()?;
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "no browser opener available for this platform",
+        ));
+    }
+
+    #[allow(unreachable_code)]
+    Ok(())
 }

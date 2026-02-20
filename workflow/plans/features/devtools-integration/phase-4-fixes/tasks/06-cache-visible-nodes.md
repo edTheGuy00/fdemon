@@ -144,4 +144,35 @@ fn test_selected_node_description_index_out_of_bounds() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `selected_node_description(&self) -> Option<String>` and private `find_nth_description()` helper to `InspectorState`. Added 7 new tests covering empty tree, correct node, third node, index out of bounds, collapsed children, and parity with `visible_nodes()`. |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Replaced `visible_nodes().into_iter().nth(selected_index).map(...)` with `selected_node_description()` in the `DevToolsPanel::Layout` render branch. Eliminates the per-frame `Vec` allocation. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Approach (c) — targeted accessor only**: Followed the task's recommended pragmatic minimum. `selected_node_description()` traverses the tree in pre-order using a countdown (`remaining` counter), stopping at the nth visible node without ever collecting a `Vec`. The `inspector.rs` render path keeps calling `visible_nodes()` since it needs the full list.
+
+2. **Private recursive helper `find_nth_description`**: The traversal logic mirrors `collect_visible()` exactly — same visibility check, same expand-set guard, same pre-order ordering — but short-circuits and returns a `&str` borrow instead of pushing to a Vec. This keeps the two traversals in sync by sharing the same code shape.
+
+3. **Test borrow workaround**: The parity test (`test_selected_node_description_no_allocation_path_matches_visible_nodes`) first collects descriptions into an owned `Vec<String>` to drop the borrow from `visible_nodes()` before mutating `selected_index`. This is test-only and has no production impact.
+
+4. **`devtools.rs` handler uses left unchanged**: The two `visible_nodes()` calls in `handle_switch_panel` and `handle_inspector_navigate` are in handler paths (not the render hot path) and were acceptable per the task spec. They remain unchanged to keep the diff minimal.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (852 tests, 7 new)
+- `cargo test -p fdemon-tui` - Passed (518 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`inspector.rs` render path still allocates**: The `WidgetInspector::render_tree()` method calls `visible_nodes()` every frame. For very large trees (2000+ nodes) this may cause frame drops. A full caching solution with `visible_cache: Option<Vec<VisibleNode>>` remains as a future optimization.
+
+2. **Borrow-checker prevents caching in render**: The render signature `fn render(self, area: Rect, buf: &mut Buffer)` takes `&DevToolsViewState` immutably. A mutable cache on `InspectorState` would require `RefCell` or a signature change. Both are deferred as noted in the task notes.

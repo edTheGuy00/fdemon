@@ -135,4 +135,38 @@ fn test_maybe_connect_succeeds_after_disconnect() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `vm_connection_error: Option<String>` field to `DevToolsViewState` with doc comment |
+| `crates/fdemon-app/src/handler/update.rs` | (1) `VmServiceDisconnected`: added `handle.vm_shutdown_tx = None` with explanatory comment. (2) `VmServiceConnectionFailed`: sets `state.devtools_view_state.vm_connection_error = Some(format!("Connection failed: {error}"))`. (3) `VmServiceConnected`: clears `state.devtools_view_state.vm_connection_error = None` |
+| `crates/fdemon-tui/src/widgets/devtools/performance.rs` | Added `vm_connection_error: Option<&'a str>` field to `PerformancePanel`; added `with_connection_error()` builder method; updated `render_disconnected()` to show the specific error when present; added 2 new tests |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Updated `PerformancePanel::new(...)` call to chain `.with_connection_error(self.state.vm_connection_error.as_deref())` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 regression tests: `test_vm_disconnected_clears_shutdown_tx`, `test_vm_connection_failed_sets_devtools_error`, `test_vm_connected_clears_devtools_error`, `test_maybe_connect_succeeds_after_disconnect` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Builder pattern for `PerformancePanel`**: Added `with_connection_error()` instead of changing the `new()` signature. This keeps all existing call sites unchanged and makes the error opt-in, matching the optional nature of the field.
+
+2. **`error_owned` binding in `render_disconnected`**: The `vm_connection_error` is `Option<&'a str>`, so converting to a `&str` for the `message` variable requires a local owned `String` for the formatted case. This avoids lifetime issues without unnecessary clones in the non-error path.
+
+3. **`vm_connection_error` not cleared on `VmServiceDisconnected`**: Per the task notes, a natural disconnect (WebSocket closed cleanly) is not an error state — the user will see "VM Service not connected" which is accurate. Only `VmServiceConnectionFailed` sets the error; `VmServiceConnected` clears it.
+
+4. **`vm_shutdown_tx = None` is safe**: The `forward_vm_events` task sends `VmServiceDisconnected` as its final act before returning, so the background task has already exited by the time this handler runs. Dropping the `Arc<Sender>` here has no effect other than allowing the guard in `maybe_connect_vm_service` to pass.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (no errors)
+- `cargo test -p fdemon-app` - Passed (837 tests including 4 new regression tests)
+- `cargo test -p fdemon-tui` - Passed (519 tests including 2 new widget tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`vm_connection_error` is global state**: It lives on `AppState.devtools_view_state` and is not scoped to a session. If multiple sessions have different connection states, only the most recent failure/success is shown. Task 04 will add a `DevToolsViewState::reset()` method to clear this field on session switch.
+
+2. **No `VmServiceDisconnected` clearing of `vm_connection_error`**: A natural disconnect does not clear the error. If a session previously had a failed connection, then connected successfully (clearing the error), then disconnected cleanly, the DevTools panel will show "VM Service not connected" (generic) rather than a stale error — which is the correct behavior.

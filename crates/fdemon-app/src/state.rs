@@ -85,6 +85,13 @@ pub struct InspectorState {
 
     /// Error message from the last failed fetch attempt.
     pub error: Option<String>,
+
+    /// Whether the `"fdemon-inspector-1"` VM object group exists on the Flutter VM.
+    ///
+    /// Set to `true` after a successful widget tree fetch, `false` after disposal
+    /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
+    /// has been created yet.
+    pub has_object_group: bool,
 }
 
 impl InspectorState {
@@ -111,6 +118,7 @@ impl InspectorState {
         self.selected_index = 0;
         self.loading = false;
         self.error = None;
+        self.has_object_group = false;
     }
 
     /// Build a flat list of visible nodes based on expand/collapse state.
@@ -143,6 +151,51 @@ impl InspectorState {
             }
         }
     }
+
+    /// Return the description of the currently selected visible node.
+    ///
+    /// Traverses the tree in pre-order (same order as [`Self::visible_nodes`])
+    /// and returns the `description` of the node at [`Self::selected_index`].
+    /// Returns `None` when no tree is loaded, or when `selected_index` is out
+    /// of bounds.
+    ///
+    /// Unlike [`Self::visible_nodes`], this method does **not** allocate a
+    /// `Vec`. It is O(n) in the number of visible nodes but avoids the
+    /// allocation cost, making it suitable for the render path where only a
+    /// single description is needed.
+    pub fn selected_node_description(&self) -> Option<String> {
+        let root = self.root.as_ref()?;
+        let mut remaining = self.selected_index;
+        self.find_nth_description(root, &mut remaining)
+            .map(|s| s.to_string())
+    }
+
+    /// Recursive pre-order traversal that counts down `remaining` and returns
+    /// the description when `remaining` hits zero.
+    fn find_nth_description<'a>(
+        &self,
+        node: &'a DiagnosticsNode,
+        remaining: &mut usize,
+    ) -> Option<&'a str> {
+        if !node.is_visible() {
+            return None;
+        }
+        if *remaining == 0 {
+            return Some(&node.description);
+        }
+        *remaining -= 1;
+
+        if let Some(value_id) = &node.value_id {
+            if self.is_expanded(value_id) {
+                for child in &node.children {
+                    if let Some(found) = self.find_nth_description(child, remaining) {
+                        return Some(found);
+                    }
+                }
+            }
+        }
+        None
+    }
 }
 
 /// State for the layout explorer panel.
@@ -156,6 +209,23 @@ pub struct LayoutExplorerState {
 
     /// Error from the last failed fetch.
     pub error: Option<String>,
+
+    /// Whether the `"devtools-layout"` VM object group exists on the Flutter VM.
+    ///
+    /// Set to `true` after a successful layout fetch, `false` after disposal
+    /// or reset. Used to skip unnecessary `disposeGroup` RPC calls when no group
+    /// has been created yet.
+    pub has_object_group: bool,
+}
+
+impl LayoutExplorerState {
+    /// Reset state (e.g., on session change or refresh).
+    pub fn reset(&mut self) {
+        self.layout = None;
+        self.loading = false;
+        self.error = None;
+        self.has_object_group = false;
+    }
 }
 
 /// Complete state for the DevTools mode UI.
@@ -174,6 +244,31 @@ pub struct DevToolsViewState {
     pub overlay_repaint_rainbow: bool,
     pub overlay_debug_paint: bool,
     pub overlay_performance: bool,
+
+    /// Last VM Service connection error message, if any.
+    /// Set on `VmServiceConnectionFailed`, cleared on `VmServiceConnected`.
+    /// Displayed in DevTools panels so users see actionable errors instead of
+    /// the generic "VM Service not connected" message.
+    pub vm_connection_error: Option<String>,
+}
+
+impl DevToolsViewState {
+    /// Reset all session-specific DevTools state.
+    ///
+    /// Called when the user switches between sessions so that stale data
+    /// from the previous session is not displayed for the new session.
+    ///
+    /// NOTE: `active_panel` is intentionally preserved — the user's panel
+    /// choice (Inspector / Layout / Performance) persists across session
+    /// switches as it is a UI preference, not session data.
+    pub fn reset(&mut self) {
+        self.inspector.reset();
+        self.layout_explorer.reset();
+        self.overlay_repaint_rainbow = false;
+        self.overlay_debug_paint = false;
+        self.overlay_performance = false;
+        self.vm_connection_error = None;
+    }
 }
 
 /// State for the settings panel view
@@ -795,6 +890,126 @@ mod tests {
         assert!(!state.overlay_repaint_rainbow);
         assert!(!state.overlay_debug_paint);
         assert!(!state.overlay_performance);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // selected_node_description Tests (Task 06)
+    // ─────────────────────────────────────────────────────────
+
+    /// Build a three-node tree: root → child-1 → child-2.
+    /// The root is auto-expanded so that all three nodes are visible.
+    fn make_tree_with_three_nodes() -> DiagnosticsNode {
+        DiagnosticsNode {
+            description: "RootNode".to_string(),
+            value_id: Some("root-id".to_string()),
+            children: vec![DiagnosticsNode {
+                description: "SecondNode".to_string(),
+                value_id: Some("child-1-id".to_string()),
+                children: vec![DiagnosticsNode {
+                    description: "ThirdNode".to_string(),
+                    value_id: Some("child-2-id".to_string()),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }
+    }
+
+    fn make_single_node() -> DiagnosticsNode {
+        DiagnosticsNode {
+            description: "SingleNode".to_string(),
+            value_id: Some("single-id".to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_selected_node_description_empty_tree() {
+        let inspector = InspectorState::default();
+        assert!(inspector.selected_node_description().is_none());
+    }
+
+    #[test]
+    fn test_selected_node_description_returns_root_when_index_zero() {
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_tree_with_three_nodes());
+        // index 0 → root node, even without expanding anything
+        inspector.selected_index = 0;
+
+        let desc = inspector.selected_node_description();
+        assert_eq!(desc.as_deref(), Some("RootNode"));
+    }
+
+    #[test]
+    fn test_selected_node_description_returns_correct_node() {
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_tree_with_three_nodes());
+        // Expand root and first child so that all three nodes are visible.
+        inspector.expanded.insert("root-id".to_string());
+        inspector.expanded.insert("child-1-id".to_string());
+        inspector.selected_index = 1;
+
+        let desc = inspector.selected_node_description();
+        assert_eq!(desc.as_deref(), Some("SecondNode"));
+    }
+
+    #[test]
+    fn test_selected_node_description_third_node() {
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_tree_with_three_nodes());
+        inspector.expanded.insert("root-id".to_string());
+        inspector.expanded.insert("child-1-id".to_string());
+        inspector.selected_index = 2;
+
+        let desc = inspector.selected_node_description();
+        assert_eq!(desc.as_deref(), Some("ThirdNode"));
+    }
+
+    #[test]
+    fn test_selected_node_description_index_out_of_bounds() {
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_single_node());
+        inspector.selected_index = 99;
+        assert!(inspector.selected_node_description().is_none());
+    }
+
+    #[test]
+    fn test_selected_node_description_collapsed_children_not_counted() {
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_tree_with_three_nodes());
+        // Root is NOT expanded — children are hidden, so only root is visible.
+        inspector.selected_index = 1; // index 1 is out of range
+
+        // Only root visible (index 0), index 1 should return None.
+        assert!(inspector.selected_node_description().is_none());
+    }
+
+    #[test]
+    fn test_selected_node_description_no_allocation_path_matches_visible_nodes() {
+        // Verify that selected_node_description agrees with visible_nodes().
+        let mut inspector = InspectorState::default();
+        inspector.root = Some(make_tree_with_three_nodes());
+        inspector.expanded.insert("root-id".to_string());
+        inspector.expanded.insert("child-1-id".to_string());
+
+        // Collect descriptions from visible_nodes() first to drop the borrow
+        // before we mutate selected_index.
+        let descriptions: Vec<String> = inspector
+            .visible_nodes()
+            .into_iter()
+            .map(|(node, _)| node.description.clone())
+            .collect();
+
+        for (i, expected) in descriptions.iter().enumerate() {
+            inspector.selected_index = i;
+            let desc = inspector.selected_node_description();
+            assert_eq!(
+                desc.as_deref(),
+                Some(expected.as_str()),
+                "Mismatch at index {i}"
+            );
+        }
     }
 
     // Helper to create a test device

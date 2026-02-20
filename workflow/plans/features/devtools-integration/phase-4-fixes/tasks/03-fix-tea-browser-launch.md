@@ -131,4 +131,33 @@ fn test_open_browser_devtools_no_ws_uri_returns_none() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `OpenBrowserDevTools { url: String, browser: String }` variant to `UpdateAction` enum |
+| `crates/fdemon-app/src/handler/devtools.rs` | Refactored `handle_open_browser_devtools` to return `UpdateResult::action(UpdateAction::OpenBrowserDevTools { .. })` instead of calling browser directly; removed `open_url_in_browser` from this file; added `make_state_with_session` test helper; added `test_open_browser_devtools_returns_action` and `test_open_browser_devtools_no_ws_uri_returns_none` tests |
+| `crates/fdemon-app/src/actions.rs` | Added `OpenBrowserDevTools` match arm to `handle_action`; moved `open_url_in_browser` here with platform fallback error for unsupported platforms |
+
+### Notable Decisions/Tradeoffs
+
+1. **Platform `return Ok(())` after each `#[cfg]` block**: Added explicit `return Ok(())` after each platform-specific `Command::spawn()` call to avoid "unreachable code" warnings from the trailing `Ok(())`. The `#[allow(unreachable_code)]` annotation on that trailing `Ok(())` keeps clippy/rustc satisfied on supported platforms where all `#[cfg(not(...))]` blocks are dead code.
+
+2. **`tokio::spawn` for browser launch**: The `Command::spawn()` call itself is non-blocking (it forks), but wrapping it in `tokio::spawn` ensures the event loop is never held up by any brief delay (e.g. PATH lookup), matching the pattern used by other fire-and-forget actions in `actions.rs`.
+
+3. **`percent_encode_uri` stays in `devtools.rs`**: It is a pure function used only by the handler to build the URL before the action is created — no I/O. Moving it would have been unnecessary churn.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (828 tests, 0 failed, 5 ignored)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Unsupported platform error**: The `#[cfg(not(any(...)))]` fallback returns `Err(Unsupported)` which is logged by `handle_action`. On such platforms the browser simply will not open, which is better than silently claiming success.
+
+2. **Browser launch is fire-and-forget**: If the spawned browser process fails after the initial `spawn()` succeeds (e.g. exits with a non-zero code), the error is not surfaced to the user. This is consistent with how browser launchers typically work.

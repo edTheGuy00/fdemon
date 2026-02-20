@@ -56,13 +56,13 @@ Wave 3 (Major + Quality — parallel after 02, 04)
 
 | # | Task | Status | Depends On | Est. Hours | Severity | Key Modules |
 |---|------|--------|------------|------------|----------|-------------|
-| 1 | [01-fix-loading-stuck](tasks/01-fix-loading-stuck.md) | Not Started | - | 2-3h | Critical | `handler/update.rs`, `process.rs`, `handler/devtools.rs` |
-| 2 | [02-fix-vm-connection](tasks/02-fix-vm-connection.md) | Not Started | 1 | 2-3h | Critical | `handler/update.rs`, `handler/session.rs`, `state.rs` |
-| 3 | [03-fix-tea-browser-launch](tasks/03-fix-tea-browser-launch.md) | Not Started | - | 1-2h | Critical | `handler/devtools.rs`, `handler/mod.rs`, `actions.rs` |
-| 4 | [04-session-switch-reset](tasks/04-session-switch-reset.md) | Not Started | 1 | 1-2h | Major | `handler/session_lifecycle.rs`, `state.rs` |
-| 5 | [05-code-quality-cleanup](tasks/05-code-quality-cleanup.md) | Not Started | 2, 4 | 2-3h | Minor | `widgets/devtools/*.rs` |
-| 6 | [06-cache-visible-nodes](tasks/06-cache-visible-nodes.md) | Not Started | 2, 4 | 2-3h | Major | `state.rs`, `widgets/devtools/inspector.rs`, `widgets/devtools/mod.rs` |
-| 7 | [07-object-group-disposal](tasks/07-object-group-disposal.md) | Not Started | 2, 4 | 2-3h | Major | `actions.rs`, `state.rs`, `handler/devtools.rs` |
+| 1 | [01-fix-loading-stuck](tasks/01-fix-loading-stuck.md) | Done | - | 2-3h | Critical | `handler/update.rs`, `process.rs`, `handler/devtools.rs` |
+| 2 | [02-fix-vm-connection](tasks/02-fix-vm-connection.md) | Done | 1 | 2-3h | Critical | `handler/update.rs`, `handler/session.rs`, `state.rs` |
+| 3 | [03-fix-tea-browser-launch](tasks/03-fix-tea-browser-launch.md) | Done | - | 1-2h | Critical | `handler/devtools.rs`, `handler/mod.rs`, `actions.rs` |
+| 4 | [04-session-switch-reset](tasks/04-session-switch-reset.md) | Done | 1 | 1-2h | Major | `handler/session_lifecycle.rs`, `state.rs` |
+| 5 | [05-code-quality-cleanup](tasks/05-code-quality-cleanup.md) | Done | 2, 4 | 2-3h | Minor | `widgets/devtools/*.rs` |
+| 6 | [06-cache-visible-nodes](tasks/06-cache-visible-nodes.md) | Done | 2, 4 | 2-3h | Major | `state.rs`, `widgets/devtools/inspector.rs`, `widgets/devtools/mod.rs` |
+| 7 | [07-object-group-disposal](tasks/07-object-group-disposal.md) | Done | 2, 4 | 2-3h | Major | `actions.rs`, `state.rs`, `handler/devtools.rs` |
 
 ## Success Criteria
 

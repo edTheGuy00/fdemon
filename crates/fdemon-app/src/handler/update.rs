@@ -8,7 +8,7 @@
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
 use crate::message::{AutoLaunchSuccess, Message};
-use crate::state::{AppState, UiMode};
+use crate::state::{AppState, DevToolsPanel, UiMode};
 use fdemon_core::{AppPhase, LogSource};
 use tracing::warn;
 
@@ -1167,13 +1167,31 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // a previous session or hot-restart is not shown in the new one.
                 handle.session.performance = crate::session::PerformanceState::default();
             }
+            // Clear any previous connection error now that we are connected.
+            state.devtools_view_state.vm_connection_error = None;
+
+            // If the user is already in DevTools/Inspector mode with no tree loaded,
+            // auto-fetch the widget tree now that the VM is connected.
+            let follow_up = if state.ui_mode == UiMode::DevTools
+                && state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+                && state.devtools_view_state.inspector.root.is_none()
+                && !state.devtools_view_state.inspector.loading
+            {
+                Some(Message::RequestWidgetTree { session_id })
+            } else {
+                None
+            };
+
             // Start performance monitoring for this session.
             // process.rs will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
-                session_id,
-                handle: None, // hydrated by process.rs
-            })
+            UpdateResult {
+                message: follow_up,
+                action: Some(UpdateAction::StartPerformanceMonitoring {
+                    session_id,
+                    handle: None, // hydrated by process.rs
+                }),
+            }
         }
 
         Message::VmServiceConnectionFailed { session_id, error } => {
@@ -1191,6 +1209,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     ),
                 ));
             }
+            // Surface the error in DevTools panels so users see the specific reason
+            // instead of the generic "VM Service not connected" message.
+            state.devtools_view_state.vm_connection_error =
+                Some(format!("Connection failed: {error}"));
             UpdateResult::none()
         }
 
@@ -1201,6 +1223,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Making this explicit signals intent even though the handle itself
                 // would return Error::ChannelClosed on any subsequent call.
                 handle.vm_request_handle = None;
+                // Clear the shutdown sender. By the time VmServiceDisconnected is
+                // dispatched, the forward_vm_events task has already exited (it sends
+                // this message as its final act), so dropping the sender is safe and
+                // allows maybe_connect_vm_service to attempt a fresh connection on
+                // the next AppDebugPort message.
+                handle.vm_shutdown_tx = None;
                 // Abort the performance polling task and signal it to stop cleanly.
                 if let Some(h) = handle.perf_task_handle.take() {
                     h.abort();
@@ -1315,11 +1343,23 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::OpenBrowserDevTools => devtools::handle_open_browser_devtools(state),
 
         Message::RequestWidgetTree { session_id } => {
-            state.devtools_view_state.inspector.loading = true;
-            UpdateResult::action(UpdateAction::FetchWidgetTree {
-                session_id,
-                vm_handle: None, // hydrated by process.rs
-            })
+            let vm_connected = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.session.vm_connected)
+                .unwrap_or(false);
+
+            if vm_connected {
+                state.devtools_view_state.inspector.loading = true;
+                UpdateResult::action(UpdateAction::FetchWidgetTree {
+                    session_id,
+                    vm_handle: None, // hydrated by process.rs
+                })
+            } else {
+                state.devtools_view_state.inspector.error =
+                    Some("VM Service not connected — cannot fetch widget tree".to_string());
+                UpdateResult::none()
+            }
         }
 
         Message::WidgetTreeFetched { session_id, root } => {
@@ -1334,12 +1374,24 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             node_id,
         } => {
-            state.devtools_view_state.layout_explorer.loading = true;
-            UpdateResult::action(UpdateAction::FetchLayoutData {
-                session_id,
-                node_id,
-                vm_handle: None, // hydrated by process.rs
-            })
+            let vm_connected = state
+                .session_manager
+                .get(session_id)
+                .map(|h| h.session.vm_connected)
+                .unwrap_or(false);
+
+            if vm_connected {
+                state.devtools_view_state.layout_explorer.loading = true;
+                UpdateResult::action(UpdateAction::FetchLayoutData {
+                    session_id,
+                    node_id,
+                    vm_handle: None, // hydrated by process.rs
+                })
+            } else {
+                state.devtools_view_state.layout_explorer.error =
+                    Some("VM Service not connected — cannot fetch layout data".to_string());
+                UpdateResult::none()
+            }
         }
 
         Message::LayoutDataFetched { session_id, layout } => {

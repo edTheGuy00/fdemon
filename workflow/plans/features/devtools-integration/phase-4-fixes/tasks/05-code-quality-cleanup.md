@@ -121,4 +121,34 @@ cargo test -p fdemon-tui --lib
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `pub(super) fn truncate_str` (zero-allocation `&str` return); changed `render_tab_bar` from `pub fn` to private `fn` |
+| `crates/fdemon-tui/src/widgets/devtools/inspector.rs` | Removed local `truncate_str` (Vec<char> allocating); removed `icons: IconSet` field and constructor parameter; updated `new()` signature; added `use super::truncate_str`; removed needless `&` borrows at call sites; updated all tests to use new 1-arg `new()` |
+| `crates/fdemon-tui/src/widgets/devtools/layout_explorer.rs` | Removed local `truncate_str`; removed `icons: IconSet` field and constructor parameter; updated `new()` signature; updated doc comment on `format_constraint_value`; added `use super::truncate_str`; removed needless `&` borrows at call sites; updated all tests to use new 2-arg `new()` |
+| `crates/fdemon-tui/src/widgets/devtools/performance.rs` | Added 6 named threshold constants (`SPARKLINE_MAX_MS`, `FPS_GREEN_THRESHOLD`, `FPS_YELLOW_THRESHOLD`, `MEM_GREEN_THRESHOLD`, `MEM_YELLOW_THRESHOLD`, `JANK_WARN_THRESHOLD`); replaced all magic number literals in style functions; removed duplicate `test_performance_panel_minimum_size` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **`truncate_str` visibility `pub(super)`**: Task specified `pub(super)`. Child modules (`inspector.rs`, `layout_explorer.rs`) access it via `use super::truncate_str`. Private items in a parent are visible to descendants in Rust, so this works cleanly.
+
+2. **`render_tab_bar` made private**: Tests that call it directly are in `mod tests` inside `mod.rs` (same module as `DevToolsView`), so they can access private methods without any visibility upgrade needed.
+
+3. **Needless borrow removal**: Clippy `needless_borrows_for_generic_args` correctly flagged `&desc_trunc` etc. since the variables are now `&str` (not `String`). All call sites updated to pass the `&str` directly.
+
+4. **`DevToolsView` keeps `icons` field**: As specified, only `WidgetInspector` and `LayoutExplorer` had their `icons` fields removed. `PerformancePanel` actively uses icons for section titles.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (518 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (formatting consistent)
+
+### Risks/Limitations
+
+1. **Test count**: Went from 519 to 518 tests due to removal of the duplicate `test_performance_panel_minimum_size` in `performance.rs`. This is intentional.

@@ -81,23 +81,16 @@ impl Widget for DevToolsView<'_> {
         // Render active panel
         match self.state.active_panel {
             DevToolsPanel::Inspector => {
-                let widget = WidgetInspector::new(&self.state.inspector, self.icons);
+                let widget = WidgetInspector::new(&self.state.inspector);
                 widget.render(chunks[1], buf);
             }
             DevToolsPanel::Layout => {
-                let selected_name = self
-                    .state
-                    .inspector
-                    .visible_nodes()
-                    .into_iter()
-                    .nth(self.state.inspector.selected_index)
-                    .map(|(node, _)| node.description.clone());
+                // Use the targeted accessor instead of building a full Vec just
+                // to extract one element. This avoids the per-frame allocation.
+                let selected_name = self.state.inspector.selected_node_description();
 
-                let widget = LayoutExplorer::new(
-                    &self.state.layout_explorer,
-                    selected_name.as_deref(),
-                    self.icons,
-                );
+                let widget =
+                    LayoutExplorer::new(&self.state.layout_explorer, selected_name.as_deref());
                 widget.render(chunks[1], buf);
             }
             DevToolsPanel::Performance => {
@@ -111,7 +104,8 @@ impl Widget for DevToolsView<'_> {
                     .map(|s| (&s.session.performance, s.session.vm_connected))
                     .unwrap_or_else(|| (&*DEFAULT_PERF, false));
 
-                let widget = PerformancePanel::new(perf, vm_connected, self.icons);
+                let widget = PerformancePanel::new(perf, vm_connected, self.icons)
+                    .with_connection_error(self.state.vm_connection_error.as_deref());
                 widget.render(chunks[1], buf);
             }
         }
@@ -125,7 +119,7 @@ impl DevToolsView<'_> {
     // ── Sub-tab bar ───────────────────────────────────────────────────────────
 
     /// Render the DevTools sub-tab bar with panel tabs and overlay status indicators.
-    pub fn render_tab_bar(&self, area: Rect, buf: &mut Buffer) {
+    fn render_tab_bar(&self, area: Rect, buf: &mut Buffer) {
         // Outer block with border
         let block = ratatui::widgets::Block::bordered()
             .title(" DevTools ")
@@ -226,6 +220,20 @@ impl DevToolsView<'_> {
             &display_hints,
             Style::default().fg(palette::TEXT_MUTED),
         );
+    }
+}
+
+// ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Truncate a string to at most `max_chars` Unicode characters.
+/// Returns a `&str` slice — no allocation when the string fits.
+pub(super) fn truncate_str(s: &str, max_chars: usize) -> &str {
+    if max_chars == 0 {
+        return "";
+    }
+    match s.char_indices().nth(max_chars) {
+        Some((idx, _)) => &s[..idx],
+        None => s,
     }
 }
 

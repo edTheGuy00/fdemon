@@ -4,6 +4,7 @@ use crate::handler::UpdateResult;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{DaemonEvent, DaemonMessage, LogEntry, LogSource};
+use fdemon_daemon::parse_daemon_message;
 
 use super::session::{
     handle_session_exited, handle_session_message_state, handle_session_stdout,
@@ -41,8 +42,21 @@ pub fn handle_session_daemon_event(
 
     match event {
         DaemonEvent::Stdout(line) => {
+            // Check for AppDebugPort before handle_session_stdout mutates state,
+            // so we can capture the ws_uri for VM Service connection.
+            let vm_action =
+                if let Some(msg @ DaemonMessage::AppDebugPort(_)) = parse_daemon_message(&line) {
+                    maybe_connect_vm_service(state, session_id, &msg)
+                } else {
+                    None
+                };
+
             handle_session_stdout(state, session_id, &line);
-            UpdateResult::none()
+
+            match vm_action {
+                Some(action) => UpdateResult::action(action),
+                None => UpdateResult::none(),
+            }
         }
         DaemonEvent::Stderr(line) => {
             if !line.trim().is_empty() {

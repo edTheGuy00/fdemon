@@ -42,6 +42,13 @@ pub fn process_message(
             let session_senders = get_session_cmd_senders_for_action(&action, state);
             let session_cmd_sender = get_session_cmd_sender(&action, state);
 
+            // Capture the pre-hydration action for defense-in-depth failure
+            // reporting. If hydration discards a FetchWidgetTree or
+            // FetchLayoutData action (e.g. VM disconnected between handler and
+            // hydration), we send a failure message so the loading spinner is
+            // cleared.
+            let pre_hydration_action = action.clone();
+
             // Hydrate actions that carry an optional VmRequestHandle with the
             // actual handle from the session. The handlers only return session_id;
             // we need the handle from AppState here before dispatching.
@@ -49,6 +56,7 @@ pub fn process_message(
             let action = action.and_then(|a| hydrate_fetch_widget_tree(a, state));
             let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
             let action = action.and_then(|a| hydrate_toggle_overlay(a, state));
+            let action = action.and_then(|a| hydrate_dispose_devtools_groups(a, state));
 
             if let Some(action) = action {
                 handle_action(
@@ -61,6 +69,24 @@ pub fn process_message(
                     project_path,
                     state.tool_availability.clone(),
                 );
+            } else {
+                // Hydration discarded the action. Send a failure message for
+                // fetch actions so the loading spinner is not stuck forever.
+                match &pre_hydration_action {
+                    UpdateAction::FetchWidgetTree { session_id, .. } => {
+                        let _ = msg_tx.try_send(Message::WidgetTreeFetchFailed {
+                            session_id: *session_id,
+                            error: "VM Service handle unavailable".to_string(),
+                        });
+                    }
+                    UpdateAction::FetchLayoutData { session_id, .. } => {
+                        let _ = msg_tx.try_send(Message::LayoutDataFetchFailed {
+                            session_id: *session_id,
+                            error: "VM Service handle unavailable".to_string(),
+                        });
+                    }
+                    _ => {}
+                }
             }
         }
 
@@ -184,6 +210,39 @@ fn hydrate_toggle_overlay(action: UpdateAction, state: &AppState) -> Option<Upda
         return Some(UpdateAction::ToggleOverlay {
             session_id,
             extension,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `DisposeDevToolsGroups` with the `VmRequestHandle` from the session.
+///
+/// Unlike the fetch hydration functions, this one does **not** return `None`
+/// when the handle is unavailable. If the VM is not connected there is nothing
+/// to dispose, so the action is silently discarded by returning `None`.
+/// All other action variants are returned unchanged.
+fn hydrate_dispose_devtools_groups(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::DisposeDevToolsGroups {
+        session_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::DisposeDevToolsGroups {
+                session_id,
+                vm_handle,
+            });
+        }
+        // If no VM handle is available (VM disconnected or not yet connected),
+        // silently discard — there is nothing to dispose.
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::DisposeDevToolsGroups {
+            session_id,
             vm_handle: Some(handle),
         });
     }

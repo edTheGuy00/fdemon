@@ -16,6 +16,7 @@
 //! - [`WidgetSize`] — Actual rendered size of a widget
 //! - [`DiagnosticLevel`] — Severity/visibility level for a diagnostic node
 
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -61,7 +62,8 @@ pub struct DiagnosticsNode {
     /// Source code location where the widget was created
     pub creation_location: Option<CreationLocation>,
 
-    /// Location ID for source mapping
+    /// Location ID for source mapping (Flutter sends this as an integer)
+    #[serde(default, deserialize_with = "deserialize_string_or_int")]
     pub location_id: Option<String>,
 
     /// Whether this widget was created by user's project code (vs framework)
@@ -350,6 +352,54 @@ impl std::str::FromStr for DiagnosticLevel {
 }
 
 // ============================================================================
+// Serde helpers
+// ============================================================================
+
+/// Deserialize a value that may be a string or an integer into `Option<String>`.
+///
+/// Flutter's VM Service inspector extensions serialize some fields (e.g., `locationId`)
+/// as integers, while the Dart `toJsonMap()` method sometimes uses strings for the
+/// same fields. This helper accepts either type.
+fn deserialize_string_or_int<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Visitor;
+
+    struct StringOrInt;
+
+    impl<'de> Visitor<'de> for StringOrInt {
+        type Value = Option<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a string, integer, or null")
+        }
+
+        fn visit_str<E: de::Error>(self, v: &str) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<Self::Value, E> {
+            Ok(Some(v.to_string()))
+        }
+
+        fn visit_none<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrInt)
+}
+
+// ============================================================================
 // Tests
 // ============================================================================
 
@@ -504,6 +554,28 @@ mod tests {
         }"#;
         let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
         assert_eq!(node.description, "Widget");
+    }
+
+    #[test]
+    fn test_diagnostics_node_location_id_as_integer() {
+        // Flutter sends locationId as an integer, not a string
+        let json = r#"{"description": "Widget", "locationId": 9}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.location_id.as_deref(), Some("9"));
+    }
+
+    #[test]
+    fn test_diagnostics_node_location_id_as_string() {
+        let json = r#"{"description": "Widget", "locationId": "42"}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert_eq!(node.location_id.as_deref(), Some("42"));
+    }
+
+    #[test]
+    fn test_diagnostics_node_location_id_null() {
+        let json = r#"{"description": "Widget", "locationId": null}"#;
+        let node: DiagnosticsNode = serde_json::from_str(json).unwrap();
+        assert!(node.location_id.is_none());
     }
 
     #[test]

@@ -79,20 +79,34 @@ pub fn handle_session_process_attached(
 
 /// Handle select session by index message
 pub fn handle_select_session_by_index(state: &mut AppState, index: usize) -> UpdateResult {
+    let old_index = state.session_manager.selected_index();
     // Silently ignore if index is out of range
     state.session_manager.select_by_index(index);
+    if state.session_manager.selected_index() != old_index {
+        state.devtools_view_state.reset();
+    }
     UpdateResult::none()
 }
 
 /// Handle next session message
 pub fn handle_next_session(state: &mut AppState) -> UpdateResult {
+    let old_id = state.session_manager.selected_id();
     state.session_manager.select_next();
+    let new_id = state.session_manager.selected_id();
+    if old_id != new_id {
+        state.devtools_view_state.reset();
+    }
     UpdateResult::none()
 }
 
 /// Handle previous session message
 pub fn handle_previous_session(state: &mut AppState) -> UpdateResult {
+    let old_id = state.session_manager.selected_id();
     state.session_manager.select_previous();
+    let new_id = state.session_manager.selected_id();
+    if old_id != new_id {
+        state.devtools_view_state.reset();
+    }
     UpdateResult::none()
 }
 

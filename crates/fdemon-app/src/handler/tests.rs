@@ -4145,3 +4145,613 @@ fn test_app_stop_signals_perf_shutdown() {
         "perf_shutdown_tx should be cleared after AppStop"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DevTools: RequestWidgetTree / RequestLayoutData VM guard regression tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_request_widget_tree_without_vm_sets_error() {
+    // Setup: session with vm_connected = false (the default).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+    // No action should be returned — the handler bails out early.
+    assert!(
+        result.action.is_none(),
+        "Should not return an action when VM is not connected"
+    );
+    // loading must not be set — doing so would leave the UI stuck.
+    assert!(
+        !state.devtools_view_state.inspector.loading,
+        "inspector.loading must remain false when VM is not connected"
+    );
+    // A user-visible error message should be set instead.
+    assert!(
+        state.devtools_view_state.inspector.error.is_some(),
+        "inspector.error should be set when VM is not connected"
+    );
+    let error = state.devtools_view_state.inspector.error.as_ref().unwrap();
+    assert!(
+        error.contains("VM Service not connected"),
+        "Error message should mention VM Service: {error}"
+    );
+}
+
+#[test]
+fn test_request_widget_tree_with_vm_sets_loading() {
+    // Setup: session with vm_connected = true.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark the session as VM-connected.
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    let result = update(&mut state, Message::RequestWidgetTree { session_id });
+
+    // Should set loading = true and return a FetchWidgetTree action.
+    assert!(
+        state.devtools_view_state.inspector.loading,
+        "inspector.loading should be true when VM is connected"
+    );
+    assert!(
+        matches!(result.action, Some(UpdateAction::FetchWidgetTree { .. })),
+        "Should return FetchWidgetTree action when VM is connected"
+    );
+    // Error must be cleared (not set) when successfully starting a fetch.
+    assert!(
+        state.devtools_view_state.inspector.error.is_none(),
+        "inspector.error should not be set when VM is connected"
+    );
+}
+
+#[test]
+fn test_request_layout_data_without_vm_sets_error() {
+    // Setup: session with vm_connected = false (the default).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(
+        &mut state,
+        Message::RequestLayoutData {
+            session_id,
+            node_id: "node-123".to_string(),
+        },
+    );
+
+    // No action should be returned.
+    assert!(
+        result.action.is_none(),
+        "Should not return an action when VM is not connected"
+    );
+    // loading must not be set.
+    assert!(
+        !state.devtools_view_state.layout_explorer.loading,
+        "layout_explorer.loading must remain false when VM is not connected"
+    );
+    // A user-visible error message should be set.
+    assert!(
+        state.devtools_view_state.layout_explorer.error.is_some(),
+        "layout_explorer.error should be set when VM is not connected"
+    );
+    let error = state
+        .devtools_view_state
+        .layout_explorer
+        .error
+        .as_ref()
+        .unwrap();
+    assert!(
+        error.contains("VM Service not connected"),
+        "Error message should mention VM Service: {error}"
+    );
+}
+
+#[test]
+fn test_request_layout_data_with_vm_sets_loading() {
+    // Setup: session with vm_connected = true.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark the session as VM-connected.
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    let result = update(
+        &mut state,
+        Message::RequestLayoutData {
+            session_id,
+            node_id: "node-123".to_string(),
+        },
+    );
+
+    // Should set loading = true and return a FetchLayoutData action.
+    assert!(
+        state.devtools_view_state.layout_explorer.loading,
+        "layout_explorer.loading should be true when VM is connected"
+    );
+    assert!(
+        matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+        "Should return FetchLayoutData action when VM is connected"
+    );
+    assert!(
+        state.devtools_view_state.layout_explorer.error.is_none(),
+        "layout_explorer.error should not be set when VM is connected"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// VM Connection Lifecycle Regression Tests (Phase 4 Fix: Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_disconnected_clears_shutdown_tx() {
+    // Regression: VmServiceDisconnected must clear vm_shutdown_tx so that
+    // maybe_connect_vm_service can attempt a fresh connection on the next
+    // AppDebugPort message.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Simulate VmServiceAttached having stored a shutdown sender.
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.vm_shutdown_tx = Some(std::sync::Arc::new(tx));
+        assert!(
+            handle.vm_shutdown_tx.is_some(),
+            "vm_shutdown_tx should be Some before disconnect"
+        );
+    }
+
+    update(&mut state, Message::VmServiceDisconnected { session_id });
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.vm_shutdown_tx.is_none(),
+        "vm_shutdown_tx must be None after VmServiceDisconnected to allow reconnection"
+    );
+}
+
+#[test]
+fn test_vm_connection_failed_sets_devtools_error() {
+    // VmServiceConnectionFailed should store a human-readable error in
+    // DevToolsViewState so the Performance panel can show an actionable message.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error should be None initially"
+    );
+
+    update(
+        &mut state,
+        Message::VmServiceConnectionFailed {
+            session_id,
+            error: "Connection refused".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.devtools_view_state.vm_connection_error.as_deref(),
+        Some("Connection failed: Connection refused"),
+        "vm_connection_error should be set after VmServiceConnectionFailed"
+    );
+}
+
+#[test]
+fn test_vm_connected_clears_devtools_error() {
+    // VmServiceConnected should clear any previously stored connection error so
+    // the DevTools panel no longer shows a stale failure message.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Pre-populate an error (as if a prior connection attempt had failed).
+    state.devtools_view_state.vm_connection_error =
+        Some("Connection failed: Connection refused".to_string());
+
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error must be cleared after VmServiceConnected"
+    );
+}
+
+#[test]
+fn test_maybe_connect_succeeds_after_disconnect() {
+    // After VmServiceDisconnected, vm_shutdown_tx is None, which means
+    // maybe_connect_vm_service will not be blocked on the next AppDebugPort.
+    // We verify the post-condition: vm_shutdown_tx is None after disconnect,
+    // which is exactly the guard that maybe_connect_vm_service checks.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Simulate the full connect → disconnect lifecycle.
+    let (tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.vm_shutdown_tx = Some(std::sync::Arc::new(tx));
+        handle.session.vm_connected = true;
+    }
+
+    // Disconnect
+    update(&mut state, Message::VmServiceDisconnected { session_id });
+
+    // Post-condition: the guard in maybe_connect_vm_service checks
+    // `handle.vm_shutdown_tx.is_none()`. Verify it is None.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.vm_shutdown_tx.is_none(),
+        "vm_shutdown_tx must be None after disconnect so maybe_connect_vm_service can reconnect"
+    );
+    assert!(
+        !handle.session.vm_connected,
+        "vm_connected must be false after VmServiceDisconnected"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Session switch DevTools reset tests (Phase 4, Task 04)
+// ─────────────────────────────────────────────────────────
+
+/// Helper that creates an AppState with two sessions and returns it.
+fn make_state_with_two_sessions() -> AppState {
+    let mut state = AppState::new();
+    let device0 = test_device("device-0", "Device 0");
+    let device1 = test_device("device-1", "Device 1");
+    let _ = state.session_manager.create_session(&device0);
+    let _ = state.session_manager.create_session(&device1);
+    // Ensure session 0 is selected to start
+    state.session_manager.select_by_index(0);
+    state
+}
+
+#[test]
+fn test_session_switch_resets_devtools_state() {
+    use crate::state::DevToolsPanel;
+
+    let mut state = make_state_with_two_sessions();
+
+    // Populate devtools state for session 0
+    state.devtools_view_state.inspector.loading = true;
+    state.devtools_view_state.inspector.error = Some("old error".into());
+    state.devtools_view_state.layout_explorer.loading = true;
+    state.devtools_view_state.layout_explorer.error = Some("layout error".into());
+    state.devtools_view_state.overlay_repaint_rainbow = true;
+    state.devtools_view_state.overlay_debug_paint = true;
+    state.devtools_view_state.overlay_performance = true;
+    state.devtools_view_state.vm_connection_error = Some("Connection failed".into());
+    state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+    // Switch to session 1
+    update(&mut state, Message::SelectSessionByIndex(1));
+
+    // All session-specific data should be cleared
+    assert!(
+        !state.devtools_view_state.inspector.loading,
+        "inspector.loading should be cleared on session switch"
+    );
+    assert!(
+        state.devtools_view_state.inspector.error.is_none(),
+        "inspector.error should be cleared on session switch"
+    );
+    assert!(
+        state.devtools_view_state.inspector.root.is_none(),
+        "inspector.root should be cleared on session switch"
+    );
+    assert!(
+        !state.devtools_view_state.layout_explorer.loading,
+        "layout_explorer.loading should be cleared on session switch"
+    );
+    assert!(
+        state.devtools_view_state.layout_explorer.error.is_none(),
+        "layout_explorer.error should be cleared on session switch"
+    );
+    assert!(
+        state.devtools_view_state.layout_explorer.layout.is_none(),
+        "layout_explorer.layout should be cleared on session switch"
+    );
+    assert!(
+        !state.devtools_view_state.overlay_repaint_rainbow,
+        "overlay_repaint_rainbow should be cleared on session switch"
+    );
+    assert!(
+        !state.devtools_view_state.overlay_debug_paint,
+        "overlay_debug_paint should be cleared on session switch"
+    );
+    assert!(
+        !state.devtools_view_state.overlay_performance,
+        "overlay_performance should be cleared on session switch"
+    );
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error should be cleared on session switch"
+    );
+}
+
+#[test]
+fn test_session_switch_preserves_active_panel() {
+    use crate::state::DevToolsPanel;
+
+    let mut state = make_state_with_two_sessions();
+    state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+
+    // Switch to session 1
+    update(&mut state, Message::SelectSessionByIndex(1));
+
+    assert_eq!(
+        state.devtools_view_state.active_panel,
+        DevToolsPanel::Performance,
+        "active_panel must be preserved across session switches"
+    );
+}
+
+#[test]
+fn test_session_switch_same_session_does_not_reset() {
+    let mut state = make_state_with_two_sessions();
+    // Currently on session 0
+    state.devtools_view_state.inspector.loading = true;
+    state.devtools_view_state.inspector.error = Some("existing error".into());
+
+    // Switch to the same session (index 0 is already selected)
+    update(&mut state, Message::SelectSessionByIndex(0));
+
+    // loading and error should NOT be cleared
+    assert!(
+        state.devtools_view_state.inspector.loading,
+        "inspector.loading must not be cleared when switching to the already-selected session"
+    );
+    assert_eq!(
+        state.devtools_view_state.inspector.error.as_deref(),
+        Some("existing error"),
+        "inspector.error must not be cleared when switching to the already-selected session"
+    );
+}
+
+#[test]
+fn test_next_session_resets_devtools_state() {
+    let mut state = make_state_with_two_sessions();
+    state.devtools_view_state.overlay_repaint_rainbow = true;
+    state.devtools_view_state.vm_connection_error = Some("error".into());
+
+    // Advance to session 1
+    update(&mut state, Message::NextSession);
+
+    assert!(
+        !state.devtools_view_state.overlay_repaint_rainbow,
+        "overlay_repaint_rainbow should be cleared after NextSession"
+    );
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error should be cleared after NextSession"
+    );
+}
+
+#[test]
+fn test_previous_session_resets_devtools_state() {
+    let mut state = make_state_with_two_sessions();
+    // Start on session 1
+    state.session_manager.select_by_index(1);
+    state.devtools_view_state.overlay_debug_paint = true;
+    state.devtools_view_state.inspector.loading = true;
+
+    // Go back to session 0
+    update(&mut state, Message::PreviousSession);
+
+    assert!(
+        !state.devtools_view_state.overlay_debug_paint,
+        "overlay_debug_paint should be cleared after PreviousSession"
+    );
+    assert!(
+        !state.devtools_view_state.inspector.loading,
+        "inspector.loading should be cleared after PreviousSession"
+    );
+}
+
+#[test]
+fn test_next_session_single_session_no_reset() {
+    use crate::state::DevToolsPanel;
+
+    let mut state = AppState::new();
+    let device = test_device("device-0", "Device 0");
+    let _ = state.session_manager.create_session(&device);
+
+    state.devtools_view_state.inspector.loading = true;
+    state.devtools_view_state.active_panel = DevToolsPanel::Layout;
+
+    // With a single session, NextSession is a no-op (wraps to itself)
+    update(&mut state, Message::NextSession);
+
+    // State should NOT be reset because the selected session did not change
+    assert!(
+        state.devtools_view_state.inspector.loading,
+        "inspector.loading must not be cleared when NextSession wraps to same session"
+    );
+    assert_eq!(
+        state.devtools_view_state.active_panel,
+        DevToolsPanel::Layout,
+        "active_panel must not change when NextSession wraps to same session"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Object Group Disposal Tests (Phase 4, Task 07)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_inspector_has_object_group_set_after_widget_tree_fetched() {
+    use crate::state::DevToolsPanel;
+    use fdemon_core::DiagnosticsNode;
+
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Initially false
+    assert!(
+        !state.devtools_view_state.inspector.has_object_group,
+        "has_object_group should start false"
+    );
+
+    let node: DiagnosticsNode = serde_json::from_value(serde_json::json!({
+        "description": "MaterialApp"
+    }))
+    .unwrap();
+
+    // Simulate a successful widget tree fetch
+    update(
+        &mut state,
+        Message::WidgetTreeFetched {
+            session_id,
+            root: Box::new(node),
+        },
+    );
+
+    assert!(
+        state.devtools_view_state.inspector.has_object_group,
+        "has_object_group should be true after WidgetTreeFetched"
+    );
+    let _ = DevToolsPanel::Inspector; // suppress unused warning
+}
+
+#[test]
+fn test_inspector_has_object_group_cleared_after_reset() {
+    let mut state = AppState::new();
+
+    // Simulate an object group existing
+    state.devtools_view_state.inspector.has_object_group = true;
+
+    // Reset clears it
+    state.devtools_view_state.inspector.reset();
+
+    assert!(
+        !state.devtools_view_state.inspector.has_object_group,
+        "has_object_group should be false after InspectorState::reset()"
+    );
+}
+
+#[test]
+fn test_layout_explorer_has_object_group_cleared_after_reset() {
+    let mut state = AppState::new();
+
+    // Simulate an object group existing
+    state.devtools_view_state.layout_explorer.has_object_group = true;
+
+    // Reset clears it
+    state.devtools_view_state.layout_explorer.reset();
+
+    assert!(
+        !state.devtools_view_state.layout_explorer.has_object_group,
+        "has_object_group should be false after LayoutExplorerState::reset()"
+    );
+}
+
+#[test]
+fn test_handle_exit_devtools_mode_returns_dispose_action_when_vm_connected() {
+    use crate::handler::devtools::handle_exit_devtools_mode;
+    use crate::handler::UpdateAction;
+
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark the session as VM-connected
+    state
+        .session_manager
+        .selected_mut()
+        .unwrap()
+        .session
+        .vm_connected = true;
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    let result = handle_exit_devtools_mode(&mut state);
+
+    assert_eq!(
+        state.ui_mode,
+        crate::state::UiMode::Normal,
+        "ui_mode should return to Normal"
+    );
+    assert!(
+        result.action.is_some(),
+        "Should return DisposeDevToolsGroups action when VM is connected"
+    );
+    if let Some(UpdateAction::DisposeDevToolsGroups {
+        session_id: sid,
+        vm_handle,
+    }) = result.action
+    {
+        assert_eq!(sid, session_id, "session_id should match active session");
+        assert!(
+            vm_handle.is_none(),
+            "vm_handle should be None before hydration"
+        );
+    } else {
+        panic!("Expected DisposeDevToolsGroups action");
+    }
+}
+
+#[test]
+fn test_handle_exit_devtools_mode_no_action_when_vm_not_connected() {
+    use crate::handler::devtools::handle_exit_devtools_mode;
+
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    state.session_manager.create_session(&device).unwrap();
+
+    // VM is NOT connected (default)
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    let result = handle_exit_devtools_mode(&mut state);
+
+    assert_eq!(
+        state.ui_mode,
+        crate::state::UiMode::Normal,
+        "ui_mode should return to Normal even without VM"
+    );
+    assert!(
+        result.action.is_none(),
+        "Should not return action when VM is not connected"
+    );
+}
+
+#[test]
+fn test_handle_exit_devtools_mode_no_action_when_no_session() {
+    use crate::handler::devtools::handle_exit_devtools_mode;
+
+    let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    // No sessions at all
+    let result = handle_exit_devtools_mode(&mut state);
+
+    assert_eq!(state.ui_mode, crate::state::UiMode::Normal);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_devtools_view_state_reset_clears_has_object_group_flags() {
+    let mut state = AppState::new();
+
+    state.devtools_view_state.inspector.has_object_group = true;
+    state.devtools_view_state.layout_explorer.has_object_group = true;
+
+    state.devtools_view_state.reset();
+
+    assert!(
+        !state.devtools_view_state.inspector.has_object_group,
+        "inspector.has_object_group should be false after DevToolsViewState::reset()"
+    );
+    assert!(
+        !state.devtools_view_state.layout_explorer.has_object_group,
+        "layout_explorer.has_object_group should be false after DevToolsViewState::reset()"
+    );
+}

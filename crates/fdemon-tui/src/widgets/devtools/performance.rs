@@ -27,6 +27,21 @@ const STATS_SECTION_HEIGHT: u16 = 3;
 /// Width below which we use compact (sparkline-less) layout.
 const COMPACT_WIDTH_THRESHOLD: u16 = 50;
 
+// ── Style threshold constants ─────────────────────────────────────────────────
+
+/// Cap for sparkline bar heights (2x the 16.67ms frame budget at 60fps).
+const SPARKLINE_MAX_MS: u64 = 33;
+/// FPS at or above this value is considered healthy (green).
+const FPS_GREEN_THRESHOLD: f64 = 55.0;
+/// FPS at or above this value (but below green) is degraded (yellow).
+const FPS_YELLOW_THRESHOLD: f64 = 30.0;
+/// Memory utilization below this is healthy (green).
+const MEM_GREEN_THRESHOLD: f64 = 0.6;
+/// Memory utilization below this (but above green) is elevated (yellow).
+const MEM_YELLOW_THRESHOLD: f64 = 0.8;
+/// Jank frame percentage below this is acceptable (yellow, not red).
+const JANK_WARN_THRESHOLD: f64 = 0.05;
+
 // ── PerformancePanel ─────────────────────────────────────────────────────────
 
 /// Performance panel widget for the DevTools mode.
@@ -36,6 +51,10 @@ const COMPACT_WIDTH_THRESHOLD: u16 = 50;
 pub struct PerformancePanel<'a> {
     performance: &'a PerformanceState,
     vm_connected: bool,
+    /// Optional connection error from `DevToolsViewState::vm_connection_error`.
+    /// When `Some`, the disconnected state shows the specific failure reason instead
+    /// of the generic "VM Service not connected" message.
+    vm_connection_error: Option<&'a str>,
     icons: IconSet,
 }
 
@@ -45,8 +64,18 @@ impl<'a> PerformancePanel<'a> {
         Self {
             performance,
             vm_connected,
+            vm_connection_error: None,
             icons,
         }
+    }
+
+    /// Attach the optional VM connection error string (from `DevToolsViewState`).
+    ///
+    /// When set, the disconnected view shows the specific failure reason instead of
+    /// the generic "VM Service not connected" message.
+    pub fn with_connection_error(mut self, error: Option<&'a str>) -> Self {
+        self.vm_connection_error = error;
+        self
     }
 }
 
@@ -100,8 +129,16 @@ impl PerformancePanel<'_> {
     // ── Disconnected / no-data state ─────────────────────────────────────────
 
     fn render_disconnected(&self, area: Rect, buf: &mut Buffer) {
-        let message = if !self.vm_connected {
-            "VM Service not connected. Performance monitoring requires a debug connection."
+        // If a specific connection error was recorded, prefer that over the
+        // generic "not connected" message so the user sees an actionable reason.
+        let error_owned: String;
+        let message: &str = if !self.vm_connected {
+            if let Some(err) = self.vm_connection_error {
+                error_owned = err.to_string();
+                &error_owned
+            } else {
+                "VM Service not connected. Performance monitoring requires a debug connection."
+            }
         } else if !self.performance.monitoring_active {
             "Performance monitoring starting..."
         } else {
@@ -230,7 +267,7 @@ impl PerformancePanel<'_> {
 
         let sparkline = Sparkline::default()
             .data(&frame_data)
-            .max(33) // cap at 33ms (2x 16.67ms budget)
+            .max(SPARKLINE_MAX_MS)
             .style(Style::default().fg(Color::Cyan));
 
         sparkline.render(area, buf);
@@ -398,8 +435,8 @@ impl PerformancePanel<'_> {
 /// Choose a colour for the FPS value based on its magnitude.
 fn fps_style(fps: Option<f64>) -> Style {
     match fps {
-        Some(v) if v >= 55.0 => Style::default().fg(palette::STATUS_GREEN),
-        Some(v) if v >= 30.0 => Style::default().fg(palette::STATUS_YELLOW),
+        Some(v) if v >= FPS_GREEN_THRESHOLD => Style::default().fg(palette::STATUS_GREEN),
+        Some(v) if v >= FPS_YELLOW_THRESHOLD => Style::default().fg(palette::STATUS_YELLOW),
         Some(_) => Style::default().fg(palette::STATUS_RED),
         None => Style::default().fg(Color::DarkGray), // stale / no data
     }
@@ -407,9 +444,9 @@ fn fps_style(fps: Option<f64>) -> Style {
 
 /// Choose a gauge colour based on heap utilisation (0.0–1.0).
 fn gauge_style_for_utilization(util: f64) -> Style {
-    if util < 0.6 {
+    if util < MEM_GREEN_THRESHOLD {
         Style::default().fg(palette::STATUS_GREEN)
-    } else if util < 0.8 {
+    } else if util < MEM_YELLOW_THRESHOLD {
         Style::default().fg(palette::STATUS_YELLOW)
     } else {
         Style::default().fg(palette::STATUS_RED)
@@ -422,7 +459,7 @@ fn jank_style(jank_count: u32, total_frames: u64) -> Style {
         return Style::default().fg(palette::STATUS_GREEN);
     }
     let pct = jank_count as f64 / total_frames as f64;
-    if pct < 0.05 {
+    if pct < JANK_WARN_THRESHOLD {
         Style::default().fg(palette::STATUS_YELLOW)
     } else {
         Style::default().fg(palette::STATUS_RED)
@@ -539,15 +576,6 @@ mod tests {
     }
 
     #[test]
-    fn test_performance_panel_minimum_size() {
-        let perf = make_test_performance();
-        let widget = PerformancePanel::new(&perf, true, IconSet::default());
-        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
-        widget.render(Rect::new(0, 0, 40, 10), &mut buf);
-        // Should not panic — explicit minimum size test
-    }
-
-    #[test]
     fn test_performance_panel_zero_area() {
         let perf = make_test_performance();
         let widget = PerformancePanel::new(&perf, true, IconSet::default());
@@ -620,6 +648,65 @@ mod tests {
     #[test]
     fn test_format_number_millions() {
         assert_eq!(format_number(1_234_567), "1,234,567");
+    }
+
+    #[test]
+    fn test_performance_panel_shows_connection_error() {
+        // When vm_connection_error is set, render_disconnected should show the
+        // specific error message rather than the generic "not connected" text.
+        let perf = PerformanceState::default();
+        let widget = PerformancePanel::new(&perf, false, IconSet::default())
+            .with_connection_error(Some("Connection failed: Connection refused"));
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("Connection failed") || full.contains("Connection refused"),
+            "Expected specific connection error message in buffer, got: {full:?}"
+        );
+        // Must NOT show the generic fallback when a specific error is available.
+        assert!(
+            !full.contains("Performance monitoring requires"),
+            "Should not show generic message when specific error is available"
+        );
+    }
+
+    #[test]
+    fn test_performance_panel_no_error_shows_generic_disconnected() {
+        // When vm_connection_error is None and vm_connected is false, the generic
+        // message should be shown.
+        let perf = PerformanceState::default();
+        let widget =
+            PerformancePanel::new(&perf, false, IconSet::default()).with_connection_error(None);
+
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+        widget.render(Rect::new(0, 0, 80, 24), &mut buf);
+
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..80u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("VM Service") || full.contains("not connected"),
+            "Expected generic VM Service disconnected message, got: {full:?}"
+        );
     }
 
     #[test]

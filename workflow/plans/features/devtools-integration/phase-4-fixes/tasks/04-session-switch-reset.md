@@ -153,4 +153,25 @@ fn test_session_switch_same_session_does_not_reset() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `LayoutExplorerState::reset()` and `DevToolsViewState::reset()` methods |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Added change-guard + `devtools_view_state.reset()` call in `handle_select_session_by_index`, `handle_next_session`, and `handle_previous_session` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 6 regression tests: `test_session_switch_resets_devtools_state`, `test_session_switch_preserves_active_panel`, `test_session_switch_same_session_does_not_reset`, `test_next_session_resets_devtools_state`, `test_previous_session_resets_devtools_state`, `test_next_session_single_session_no_reset` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard uses `selected_id()` not `selected_index()` for next/previous**: `handle_next_session` and `handle_previous_session` use `selected_id()` (UUID comparison) as the change guard, which is more robust than index comparison — it correctly handles edge cases where index arithmetic could be misleading. `handle_select_session_by_index` uses index comparison because `select_by_index` silently ignores out-of-range indices and returns the same index.
+2. **`active_panel` intentionally preserved**: As specified, `DevToolsViewState::reset()` does not reset `active_panel`. The user's panel choice (Inspector/Layout/Performance) is a UI preference that should survive session switches.
+3. **Single-session no-op guard**: When there is only one session, `NextSession` wraps back to itself — the `old_id != new_id` guard correctly prevents a spurious reset.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (838 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed

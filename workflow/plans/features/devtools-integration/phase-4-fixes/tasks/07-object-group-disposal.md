@@ -115,4 +115,41 @@ fn test_inspector_has_object_group_cleared_after_reset() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `has_object_group: bool` to `InspectorState` and `LayoutExplorerState`; clear the flag in both `reset()` methods |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::DisposeDevToolsGroups { session_id, vm_handle }` variant |
+| `crates/fdemon-app/src/handler/devtools.rs` | Updated `handle_exit_devtools_mode` to return `DisposeDevToolsGroups` action when VM is connected; set `has_object_group = true` in `handle_widget_tree_fetched` and `handle_layout_data_fetched` |
+| `crates/fdemon-app/src/actions.rs` | Added `disposeGroup` call before each widget tree fetch and layout data fetch; added `spawn_dispose_devtools_groups` function; handled `DisposeDevToolsGroups` in `handle_action` dispatch |
+| `crates/fdemon-app/src/process.rs` | Added `hydrate_dispose_devtools_groups` function and wired it into the hydration chain in `process_message` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 8 new tests covering `has_object_group` tracking, reset behavior, and `DisposeDevToolsGroups` action generation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A implemented (dispose on exit)**: The task recommended Option A for correctness. `handle_exit_devtools_mode` now returns `DisposeDevToolsGroups` when a VM connection is active. Hydration in `process.rs` follows the same pattern as other VM-handle actions — silently discards when no handle is available.
+
+2. **Always-dispose pattern in actions**: The `disposeGroup` call is issued unconditionally before each tree/layout fetch (not guarded by `has_object_group`). This matches the "idempotent" guarantee from the task description and simplifies the action layer. The `has_object_group` flag is available for future optimizations but is not currently used as a gate in `actions.rs`.
+
+3. **Non-fatal disposal failures**: All disposal failures are logged at `tracing::debug` level and do not block the subsequent fetch. This follows the task's "Ignore result — disposal failure is non-fatal" requirement.
+
+4. **Disposal in a loop**: `spawn_dispose_devtools_groups` iterates over both group names in a for loop rather than two separate awaits, keeping the pattern DRY and easy to extend.
+
+5. **Pre-existing clippy errors in fdemon-tui**: `cargo clippy --workspace -- -D warnings` fails due to 8 pre-existing `needless_borrows_for_generic_args` warnings in `fdemon-tui`. These are unrelated to this task and were present before these changes. `cargo clippy -p fdemon-app -- -D warnings` passes cleanly.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (845 unit tests + 1 doc-test; 8 new tests added)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed
+- `cargo clippy --workspace -- -D warnings` — Pre-existing fdemon-tui failures (not introduced by this task)
+
+### Risks/Limitations
+
+1. **No disposal on session close**: If the user closes a DevTools-active session without pressing Esc first, the object groups on the Flutter VM are not explicitly disposed. They will be cleaned up naturally when the Flutter process exits. A future improvement could trigger disposal on `SessionClosed` events when DevTools was active.
+
+2. **`has_object_group` not used as a guard in actions.rs**: The flag tracks state but doesn't currently short-circuit the `disposeGroup` RPC call. Since `disposeGroup` is idempotent, this is safe but does issue one extra RPC on the first fetch. Using the flag as a guard would require passing it from state to the action, which would add complexity without meaningful benefit given the idempotency guarantee.

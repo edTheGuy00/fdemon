@@ -173,6 +173,30 @@ pub enum UpdateAction {
         /// VM Service request handle used for the RPC call.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
+
+    /// Open the Flutter DevTools URL in the system browser.
+    ///
+    /// Fire-and-forget OS call — no VM Service handle needed.
+    /// If `browser` is empty, the platform default opener is used.
+    OpenBrowserDevTools { url: String, browser: String },
+
+    /// Dispose both DevTools VM object groups when exiting DevTools mode.
+    ///
+    /// Disposes `"fdemon-inspector-1"` and `"devtools-layout"` groups to
+    /// release VM references held by the Flutter inspector. This prevents
+    /// memory accumulation on the Flutter VM side during long debug sessions.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    ///
+    /// Disposal failures are logged at debug level and do not block the exit.
+    DisposeDevToolsGroups {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC calls.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
 }
 
 /// Background tasks to spawn

@@ -14,7 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::theme::{icons::IconSet, palette};
+use super::truncate_str;
+use crate::theme::palette;
 
 // ── LayoutExplorer ────────────────────────────────────────────────────────────
 
@@ -26,8 +27,6 @@ pub struct LayoutExplorer<'a> {
     layout_state: &'a LayoutExplorerState,
     /// The currently selected widget name (from inspector).
     selected_widget_name: Option<&'a str>,
-    #[allow(dead_code)]
-    icons: IconSet,
 }
 
 impl<'a> LayoutExplorer<'a> {
@@ -35,12 +34,10 @@ impl<'a> LayoutExplorer<'a> {
     pub fn new(
         layout_state: &'a LayoutExplorerState,
         selected_widget_name: Option<&'a str>,
-        icons: IconSet,
     ) -> Self {
         Self {
             layout_state,
             selected_widget_name,
-            icons,
         }
     }
 }
@@ -155,7 +152,7 @@ impl LayoutExplorer<'_> {
                 buf.set_string(
                     area.x + 1,
                     y,
-                    &header_trunc,
+                    header_trunc,
                     Style::default()
                         .fg(palette::ACCENT)
                         .add_modifier(Modifier::BOLD),
@@ -243,7 +240,7 @@ impl LayoutExplorer<'_> {
             buf.set_string(
                 inner.x,
                 inner.y,
-                &trunc,
+                trunc,
                 Style::default().fg(palette::STATUS_BLUE),
             );
         }
@@ -259,7 +256,7 @@ impl LayoutExplorer<'_> {
             buf.set_string(
                 inner.x,
                 inner.y + 1,
-                &trunc,
+                trunc,
                 Style::default().fg(palette::STATUS_BLUE),
             );
         }
@@ -364,7 +361,7 @@ impl LayoutExplorer<'_> {
         buf.set_string(
             area.x + 1,
             area.y,
-            &trunc,
+            trunc,
             Style::default().fg(palette::STATUS_INDIGO),
         );
     }
@@ -372,25 +369,12 @@ impl LayoutExplorer<'_> {
 
 // ── Helper functions ──────────────────────────────────────────────────────────
 
-/// Format a constraint value, showing "Inf" for infinity.
+/// Format a layout constraint value for display. Infinite values render as "Inf".
 pub fn format_constraint_value(value: f64) -> String {
     if value == f64::INFINITY || value >= 1e10 {
         "Inf".to_string()
     } else {
         format!("{:.1}", value)
-    }
-}
-
-/// Truncate a string to at most `max_chars` characters (by char count, not bytes).
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
-    } else {
-        chars[..max_chars].iter().collect()
     }
 }
 
@@ -424,7 +408,7 @@ mod tests {
     fn test_layout_explorer_renders_with_data() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -432,7 +416,7 @@ mod tests {
     #[test]
     fn test_layout_explorer_no_selection() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None, IconSet::default());
+        let widget = LayoutExplorer::new(&state, None);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -441,7 +425,7 @@ mod tests {
     fn test_layout_explorer_loading() {
         let mut state = LayoutExplorerState::default();
         state.loading = true;
-        let widget = LayoutExplorer::new(&state, Some("Column"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Column"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -450,7 +434,7 @@ mod tests {
     fn test_layout_explorer_error_state() {
         let mut state = LayoutExplorerState::default();
         state.error = Some("VM not connected".to_string());
-        let widget = LayoutExplorer::new(&state, None, IconSet::default());
+        let widget = LayoutExplorer::new(&state, None);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -485,7 +469,7 @@ mod tests {
     fn test_layout_explorer_small_terminal() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
     }
@@ -494,7 +478,7 @@ mod tests {
     fn test_layout_explorer_minimum_terminal() {
         let mut state = LayoutExplorerState::default();
         state.layout = Some(make_test_layout());
-        let widget = LayoutExplorer::new(&state, Some("Scaffold"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Scaffold"));
         // Minimum per acceptance criteria: 40x10
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
         widget.render(Rect::new(0, 0, 40, 10), &mut buf);
@@ -504,7 +488,7 @@ mod tests {
     #[test]
     fn test_layout_explorer_zero_size_no_panic() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None, IconSet::default());
+        let widget = LayoutExplorer::new(&state, None);
         let mut buf = Buffer::empty(Rect::new(0, 0, 1, 1));
         widget.render(Rect::new(0, 0, 1, 1), &mut buf);
     }
@@ -513,7 +497,7 @@ mod tests {
     fn test_layout_explorer_loading_contains_message() {
         let mut state = LayoutExplorerState::default();
         state.loading = true;
-        let widget = LayoutExplorer::new(&state, Some("Column"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Column"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -537,7 +521,7 @@ mod tests {
     fn test_layout_explorer_error_contains_error_text() {
         let mut state = LayoutExplorerState::default();
         state.error = Some("Connection refused".to_string());
-        let widget = LayoutExplorer::new(&state, None, IconSet::default());
+        let widget = LayoutExplorer::new(&state, None);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -560,7 +544,7 @@ mod tests {
     #[test]
     fn test_layout_explorer_no_selection_contains_prompt() {
         let state = LayoutExplorerState::default();
-        let widget = LayoutExplorer::new(&state, None, IconSet::default());
+        let widget = LayoutExplorer::new(&state, None);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -595,7 +579,7 @@ mod tests {
             flex_fit: None,
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("Container"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Container"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -633,7 +617,7 @@ mod tests {
             flex_fit: None,
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("SizedBox"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("SizedBox"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -663,7 +647,7 @@ mod tests {
             flex_fit: Some("loose".to_string()),
             description: None,
         });
-        let widget = LayoutExplorer::new(&state, Some("Flexible"), IconSet::default());
+        let widget = LayoutExplorer::new(&state, Some("Flexible"));
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 

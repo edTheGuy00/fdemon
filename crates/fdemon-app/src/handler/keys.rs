@@ -321,11 +321,8 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         // 'p' always switches to Performance panel.
         InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
 
-        // 'l' switches to Layout unless we're already in the Inspector panel,
-        // where it is used for expand-right (vim-style navigation).
-        InputKey::Char('l') if !in_inspector => {
-            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Layout))
-        }
+        // 'l' always switches to Layout panel.
+        InputKey::Char('l') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Layout)),
 
         // ── Browser DevTools ──────────────────────────────────────────────────
         InputKey::Char('b') => Some(Message::OpenBrowserDevTools),
@@ -348,7 +345,7 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Down | InputKey::Char('j') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
         }
-        InputKey::Enter | InputKey::Right | InputKey::Char('l') if in_inspector => {
+        InputKey::Enter | InputKey::Right if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Expand))
         }
         InputKey::Left | InputKey::Char('h') if in_inspector => {

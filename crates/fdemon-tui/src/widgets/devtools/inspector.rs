@@ -13,7 +13,8 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
-use crate::theme::{icons::IconSet, palette};
+use super::truncate_str;
+use crate::theme::palette;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -35,17 +36,12 @@ const DETAILS_WIDTH_PCT: u16 = 40;
 /// error, and empty states when no tree data is available.
 pub struct WidgetInspector<'a> {
     inspector_state: &'a InspectorState,
-    #[allow(dead_code)]
-    icons: IconSet,
 }
 
 impl<'a> WidgetInspector<'a> {
     /// Create a new `WidgetInspector` widget.
-    pub fn new(inspector_state: &'a InspectorState, icons: IconSet) -> Self {
-        Self {
-            inspector_state,
-            icons,
-        }
+    pub fn new(inspector_state: &'a InspectorState) -> Self {
+        Self { inspector_state }
     }
 
     // ── Public helpers (used in tests) ────────────────────────────────────────
@@ -128,7 +124,10 @@ impl WidgetInspector<'_> {
             .split(area);
             (chunks[0], Some(chunks[1]))
         } else {
-            (area, None)
+            // Narrow terminal: vertical split — tree on top, details on bottom.
+            let chunks = Layout::vertical([Constraint::Percentage(60), Constraint::Percentage(40)])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
         };
 
         self.render_tree_panel(tree_area, buf, &visible, selected);
@@ -196,7 +195,7 @@ impl WidgetInspector<'_> {
             // Truncate line to fit within available width
             let max_w = tree_inner.width as usize;
             let display_line = truncate_str(&line, max_w);
-            buf.set_string(tree_inner.x, y, &display_line, style);
+            buf.set_string(tree_inner.x, y, display_line, style);
 
             // Source location hint for selected user-code nodes
             if is_selected && is_user_code {
@@ -288,7 +287,7 @@ impl WidgetInspector<'_> {
         buf.set_string(
             inner.x + 1,
             y,
-            &desc_trunc,
+            desc_trunc,
             Style::default()
                 .fg(palette::ACCENT)
                 .add_modifier(Modifier::BOLD),
@@ -323,7 +322,7 @@ impl WidgetInspector<'_> {
                 buf.set_string(
                     inner.x + 1,
                     y,
-                    &prop_trunc,
+                    prop_trunc,
                     Style::default().fg(palette::TEXT_PRIMARY),
                 );
                 y += 1;
@@ -355,7 +354,7 @@ impl WidgetInspector<'_> {
                 buf.set_string(
                     inner.x + 1,
                     y,
-                    &path_trunc,
+                    path_trunc,
                     Style::default().fg(palette::STATUS_BLUE),
                 );
             }
@@ -478,19 +477,6 @@ fn short_path(file: &str) -> &str {
     &without_scheme[split_pos..]
 }
 
-/// Truncate a string to at most `max_chars` characters (by char count, not bytes).
-fn truncate_str(s: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-    let chars: Vec<char> = s.chars().collect();
-    if chars.len() <= max_chars {
-        s.to_string()
-    } else {
-        chars[..max_chars].iter().collect()
-    }
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -523,7 +509,7 @@ mod tests {
         state.root = Some(make_test_tree());
         state.expanded.insert("widget-1".to_string());
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -533,7 +519,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.loading = true;
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -543,7 +529,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.error = Some("Connection failed".to_string());
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -551,27 +537,43 @@ mod tests {
     #[test]
     fn test_inspector_renders_empty_state() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
 
     #[test]
-    fn test_inspector_narrow_terminal_no_details() {
+    fn test_inspector_narrow_terminal_vertical_layout() {
         let mut state = InspectorState::new();
         state.root = Some(make_test_tree());
         state.expanded.insert("widget-1".to_string());
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 60, 24)); // < 80 cols
         widget.render(Rect::new(0, 0, 60, 24), &mut buf);
-        // Should render without panic, no details panel
+
+        // Verify the details panel renders in vertical mode by checking
+        // that "Details" border title appears somewhere in the buffer.
+        let mut full = String::new();
+        for y in 0..24u16 {
+            for x in 0..60u16 {
+                if let Some(c) = buf.cell((x, y)) {
+                    if let Some(ch) = c.symbol().chars().next() {
+                        full.push(ch);
+                    }
+                }
+            }
+        }
+        assert!(
+            full.contains("Details"),
+            "Narrow terminal should show Details panel in vertical layout, got: {full:?}"
+        );
     }
 
     #[test]
     fn test_expand_icon_leaf_node() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let leaf = DiagnosticsNode {
             description: "Text".to_string(),
             children: vec![],
@@ -583,7 +585,7 @@ mod tests {
     #[test]
     fn test_expand_icon_collapsed() {
         let state = InspectorState::new();
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let node = DiagnosticsNode {
             description: "Column".to_string(),
             value_id: Some("w1".to_string()),
@@ -597,7 +599,7 @@ mod tests {
     fn test_expand_icon_expanded() {
         let mut state = InspectorState::new();
         state.expanded.insert("w1".to_string());
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let node = DiagnosticsNode {
             description: "Column".to_string(),
             value_id: Some("w1".to_string()),
@@ -613,7 +615,7 @@ mod tests {
             selected_index: 50,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert!(start <= 50, "start ({start}) should be <= 50");
         assert!(end > 50, "end ({end}) should be > 50");
@@ -625,7 +627,7 @@ mod tests {
             selected_index: 0,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert_eq!(start, 0);
         assert_eq!(end, 20);
@@ -637,7 +639,7 @@ mod tests {
             selected_index: 99,
             ..Default::default()
         };
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let (start, end) = widget.visible_viewport_range(20, 100);
         assert_eq!(end, 100);
         assert!(start <= 99);
@@ -646,7 +648,7 @@ mod tests {
     #[test]
     fn test_viewport_empty_total() {
         let state = InspectorState::default();
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let (start, end) = widget.visible_viewport_range(20, 0);
         assert_eq!(start, 0);
         assert_eq!(end, 0);
@@ -703,7 +705,7 @@ mod tests {
         state.expanded.insert("widget-1".to_string());
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -736,7 +738,7 @@ mod tests {
         state.expanded.insert("user-widget".to_string());
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -757,7 +759,7 @@ mod tests {
         state.root = Some(root);
         state.selected_index = 0;
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
     }
@@ -765,7 +767,7 @@ mod tests {
     #[test]
     fn test_inspector_zero_area_no_panic() {
         let state = InspectorState::default();
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 10, 1));
         widget.render(Rect::new(0, 0, 10, 1), &mut buf);
     }
@@ -775,7 +777,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.loading = true;
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -800,7 +802,7 @@ mod tests {
     fn test_inspector_empty_state_contains_prompt() {
         let state = InspectorState::new();
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
@@ -825,7 +827,7 @@ mod tests {
         let mut state = InspectorState::new();
         state.error = Some("VM not connected".to_string());
 
-        let widget = WidgetInspector::new(&state, IconSet::default());
+        let widget = WidgetInspector::new(&state);
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
         widget.render(Rect::new(0, 0, 80, 24), &mut buf);
 
