@@ -3979,6 +3979,172 @@ fn test_frame_timing_ignored_for_unknown_session() {
     assert!(result.action.is_none());
 }
 
+// ─────────────────────────────────────────────────────────
+// selected_frame ring-buffer wrap compensation tests
+// (Phase 3 Fixes, Task 03)
+// ─────────────────────────────────────────────────────────
+
+/// Helper: build a minimal `FrameTiming` with the given frame number.
+fn make_frame_timing(number: u64) -> fdemon_core::performance::FrameTiming {
+    fdemon_core::performance::FrameTiming {
+        number,
+        build_micros: 5_000,
+        raster_micros: 5_000,
+        elapsed_micros: 10_000,
+        timestamp: chrono::Local::now(),
+        phases: None,
+        shader_compilation: false,
+    }
+}
+
+/// Helper: retrieve `selected_frame` from the given session.
+fn get_selected_frame(state: &AppState, session_id: crate::session::SessionId) -> Option<usize> {
+    state
+        .session_manager
+        .get(session_id)
+        .map(|h| h.session.performance.selected_frame)
+        .flatten()
+}
+
+#[test]
+fn test_selected_frame_decrements_on_buffer_wrap() {
+    use crate::session::performance::DEFAULT_FRAME_HISTORY_SIZE;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Fill the buffer to capacity (300 frames).
+    for i in 0..DEFAULT_FRAME_HISTORY_SIZE as u64 {
+        update(
+            &mut state,
+            Message::VmServiceFrameTiming {
+                session_id,
+                timing: make_frame_timing(i),
+            },
+        );
+    }
+
+    // Verify buffer is now full.
+    {
+        let perf = &state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .performance;
+        assert_eq!(perf.frame_history.len(), DEFAULT_FRAME_HISTORY_SIZE);
+        assert!(perf.frame_history.is_full());
+    }
+
+    // Select frame at index 50.
+    update(
+        &mut state,
+        Message::SelectPerformanceFrame { index: Some(50) },
+    );
+    assert_eq!(get_selected_frame(&state, session_id), Some(50));
+
+    // Push one more frame — causes eviction of oldest, shifting all indices by -1.
+    update(
+        &mut state,
+        Message::VmServiceFrameTiming {
+            session_id,
+            timing: make_frame_timing(DEFAULT_FRAME_HISTORY_SIZE as u64),
+        },
+    );
+
+    // selected_frame must decrement to 49 to continue pointing at the same logical frame.
+    assert_eq!(
+        get_selected_frame(&state, session_id),
+        Some(49),
+        "selected_frame should decrement from 50 to 49 after one eviction"
+    );
+}
+
+#[test]
+fn test_selected_frame_clears_when_evicted() {
+    use crate::session::performance::DEFAULT_FRAME_HISTORY_SIZE;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Fill the buffer to capacity.
+    for i in 0..DEFAULT_FRAME_HISTORY_SIZE as u64 {
+        update(
+            &mut state,
+            Message::VmServiceFrameTiming {
+                session_id,
+                timing: make_frame_timing(i),
+            },
+        );
+    }
+
+    // Select the oldest frame (index 0).
+    update(
+        &mut state,
+        Message::SelectPerformanceFrame { index: Some(0) },
+    );
+    assert_eq!(get_selected_frame(&state, session_id), Some(0));
+
+    // Push one more frame — the oldest (index 0) is evicted.
+    update(
+        &mut state,
+        Message::VmServiceFrameTiming {
+            session_id,
+            timing: make_frame_timing(DEFAULT_FRAME_HISTORY_SIZE as u64),
+        },
+    );
+
+    // selected_frame must become None because the selected frame was evicted.
+    assert_eq!(
+        get_selected_frame(&state, session_id),
+        None,
+        "selected_frame should become None when the selected frame is evicted"
+    );
+}
+
+#[test]
+fn test_selected_frame_unchanged_when_buffer_not_full() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Push only 5 frames — well below capacity (300), no eviction.
+    for i in 0..5_u64 {
+        update(
+            &mut state,
+            Message::VmServiceFrameTiming {
+                session_id,
+                timing: make_frame_timing(i),
+            },
+        );
+    }
+
+    // Select frame at index 2.
+    update(
+        &mut state,
+        Message::SelectPerformanceFrame { index: Some(2) },
+    );
+    assert_eq!(get_selected_frame(&state, session_id), Some(2));
+
+    // Push one more frame — buffer still has room, no eviction occurs.
+    update(
+        &mut state,
+        Message::VmServiceFrameTiming {
+            session_id,
+            timing: make_frame_timing(5),
+        },
+    );
+
+    // selected_frame must remain unchanged.
+    assert_eq!(
+        get_selected_frame(&state, session_id),
+        Some(2),
+        "selected_frame should not change when the buffer is not full"
+    );
+}
+
 #[test]
 fn test_memory_snapshot_triggers_stats_recompute() {
     use fdemon_core::performance::{FrameTiming, MemoryUsage};

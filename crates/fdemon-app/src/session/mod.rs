@@ -16,8 +16,8 @@ pub use block_state::LogBlockState;
 pub use collapse::CollapseState;
 pub use handle::SessionHandle;
 pub use log_batcher::LogBatcher;
+pub use performance::PerformanceState;
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
-pub use performance::{AllocationSortColumn, PerformanceState, DEFAULT_MEMORY_SAMPLE_SIZE};
 pub use session::Session;
 
 // SessionId and next_session_id live here in mod.rs

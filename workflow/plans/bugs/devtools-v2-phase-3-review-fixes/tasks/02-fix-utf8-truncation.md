@@ -125,3 +125,38 @@ fn test_search_error_truncation_with_unicode() {
 - The `session.rs` site uses a Unicode ellipsis `"…"` while the other two use `"..."`. Maintain the existing style per site.
 - Consider adding a shared `truncate_chars(s: &str, max: usize) -> String` utility if this pattern appears elsewhere in the future. For now, three inline fixes are simpler than adding a utility function.
 - Instance 2 (`search_input.rs`) and instance 3 (`session.rs`) are pre-existing issues discovered by the researcher — they predate the Phase 3 work but should be fixed in the same pass.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart.rs` | Replaced `&class.class_name[..27]` byte-slice with `chars().count() > 30` / `chars().take(27).collect::<String>()` |
+| `crates/fdemon-tui/src/widgets/search_input.rs` | Replaced `&error[..27]` byte-slice with char-based truncation; added 4 UTF-8 test cases |
+| `crates/fdemon-app/src/session/session.rs` | Replaced `&self.name[..14]` byte-slice with char-based truncation (preserving `"…"` ellipsis style) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/tests.rs` | Added 4 tests: CJK truncation, emoji truncation, ellipsis check, short-name no-truncation |
+| `crates/fdemon-app/src/session/tests.rs` | Added 3 tests: Chinese device name, emoji device name, short Chinese name no-truncation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept inline fixes, no shared utility**: The task notes suggest a `truncate_chars()` helper for future use but recommends inline fixes for now. All three sites are independent and the inline approach keeps the diff minimal.
+2. **Preserved ellipsis style per site**: `memory_chart.rs` and `search_input.rs` use `"..."` (three ASCII dots); `session.rs` uses `"…"` (U+2026 Unicode ellipsis). Both preserved as-is.
+3. **chars().count() vs floor_char_boundary**: Used `chars().count()` as specified in the task (O(n) but negligible for short strings < 100 chars). The `floor_char_boundary` alternative would truncate by byte budget rather than character count.
+4. **Test string length assertion**: The initial CJK test string in `search_input.rs` had exactly 30 chars, causing the `> 30` assertion to fail. Fixed by using a 32-character CJK string.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-tui` - Passed (604 tests)
+- `cargo test -p fdemon-app` - Passed (955 tests)
+- `cargo clippy -p fdemon-tui -p fdemon-app` - No errors
+
+### Risks/Limitations
+
+1. **None identified**: All three fixes are semantically equivalent to the original code for ASCII-only input, and now correctly handle multi-byte UTF-8 codepoints.

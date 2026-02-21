@@ -515,8 +515,9 @@ impl Session {
     /// Get a short display title for tabs
     pub fn tab_title(&self) -> String {
         let icon = self.status_icon();
-        let name = if self.name.len() > 15 {
-            format!("{}…", &self.name[..14])
+        // Char-aware truncation to avoid panic on multi-byte UTF-8 (e.g. Chinese device names)
+        let name = if self.name.chars().count() > 15 {
+            format!("{}…", self.name.chars().take(14).collect::<String>())
         } else {
             self.name.clone()
         };

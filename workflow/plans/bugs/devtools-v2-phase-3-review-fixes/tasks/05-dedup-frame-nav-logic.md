@@ -147,3 +147,33 @@ fn test_compute_prev_frame_index_none_selects_newest() {
 
 - The `compute_*` methods are `&self` (immutable) while `select_*` methods are `&mut self`. Both should exist: the pure methods for `keys.rs` (which needs to return a `Message`), and the mutating methods for direct state manipulation in handlers.
 - This task should be done after Task 03 lands, since Task 03 changes how `selected_frame` is managed on buffer wrap. The navigation logic should be consistent with the wrap-adjustment behavior.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Added `compute_prev_frame_index(&self)` and `compute_next_frame_index(&self)` pure methods; simplified `select_prev_frame` and `select_next_frame` to delegate to the new pure methods; added 8 tests for the new pure methods |
+| `crates/fdemon-app/src/handler/keys.rs` | Replaced inline frame index computation in Left/Right key handlers with calls to `compute_prev_frame_index()` / `compute_next_frame_index()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`compute_next_frame_index` uses `Some(i) => i` (stay)**: The existing `select_next_frame` used `Some(_) => len - 1` (go to last frame). The task specifies `Some(i) => i`. These are semantically equivalent when `selected_frame` is always in-bounds (which it is, since all mutations clamp), so the behavioral change is nil in practice. The `Some(i) => i` form is more explicit about the "stay at current index" intent.
+
+2. **Tests added inline in `performance.rs`**: The task mentioned both `performance.rs` and `session/tests.rs` as possible locations. The inline `#[cfg(test)]` block in `performance.rs` already contains all the frame selection tests and the `push_test_frames` helper, making it the natural home for these new tests.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (963 passed, 5 ignored; 8 new `compute_*` tests confirmed via `cargo test -p fdemon-app compute`)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-app` - Passed
+
+### Risks/Limitations
+
+1. **Behavioral equivalence assumption**: The `select_next_frame` behavior change (`Some(_) => len - 1` to `Some(i) => i`) is safe only because `selected_frame` is always kept in-bounds by all callers. If future code sets `selected_frame` to an out-of-bounds index, the old code would silently correct it to `len - 1` while the new code would return the out-of-bounds index. This is an acceptable tradeoff given that all existing mutations clamp correctly.

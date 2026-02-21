@@ -90,3 +90,41 @@ cargo test -p fdemon-tui -- frame_chart
 - The `frame_chart/tests.rs` file already exists in the directory. When converting `frame_chart.rs` to `frame_chart/mod.rs`, the `mod tests;` declaration will continue to find `frame_chart/tests.rs` without changes.
 - Pure helper functions like `bar_colors()` and `ms_to_half_blocks()` are used by both `render_bar_chart()` and potentially by tests. Keep them in `bars.rs` with `pub(super)` visibility so both `mod.rs` and `tests.rs` can access them via `super::bars::function_name()`.
 - If tests import from `super::*`, verify that re-exports in `mod.rs` cover everything the tests need. May need to add `pub(super) use bars::*;` or `pub(super) use detail::*;` in `mod.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart.rs` | Deleted (converted to directory module) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/mod.rs` | NEW — module entry point: imports, constants, colour helpers, `FrameChart` struct + `Widget` impl (131 lines) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/bars.rs` | NEW — bar chart rendering: `render_bar_chart`, `compute_visible_range`, `render_budget_line`, plus pure helpers `bar_colors`, `ms_to_half_blocks`, `render_bar` (260 lines) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/detail.rs` | NEW — detail panel: `render_detail_panel`, `render_frame_detail`, `render_summary_line`, `frame_status_label_and_style`, `render_ui_phase_line` (193 lines) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/tests.rs` | Unchanged (399 lines) |
+
+### Notable Decisions/Tradeoffs
+
+1. **pub(crate) for re-exported helpers**: `bar_colors` and `ms_to_half_blocks` in `bars.rs` are marked `pub(crate)` (not `pub(super)`) to allow `mod.rs` to re-export them with `pub(super) use`. If both were `pub(super)`, the re-export would widen visibility from `frame_chart` scope to `performance` scope, triggering E0364.
+
+2. **#[cfg(test)] on re-exports**: The re-export `pub(super) use bars::{bar_colors, ms_to_half_blocks}` in `mod.rs` is gated with `#[cfg(test)]` to avoid an "unused imports" warning in non-test builds. The functions are only needed by `tests.rs` via `use super::*`.
+
+3. **super::super::styles in detail.rs**: `detail.rs` accesses `fps_style` and `jank_style` via `use super::super::styles::{fps_style, jank_style}` (navigating up to the `performance` module) because those functions are `pub(super)` in `styles.rs` where `super` = `performance`.
+
+4. **FrameChart fields made pub(super)**: Struct fields were changed from private to `pub(super)` so that `bars.rs` and `detail.rs` (as children of `frame_chart`) can access them via `self.frame_history`, etc. in `impl FrameChart` blocks.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (no warnings)
+- `cargo test -p fdemon-tui --lib -- frame_chart` - Passed (25 tests)
+- `cargo test --workspace --lib` - Passed (2264 tests total: 963 + 340 + 357 + 604)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: This is a pure refactor with no logic changes. The test suite provides full coverage of the extracted code.

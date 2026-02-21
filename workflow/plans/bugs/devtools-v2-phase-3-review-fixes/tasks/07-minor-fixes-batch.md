@@ -145,3 +145,33 @@ cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo cl
 - Items 1-5 are mechanical changes with no behavioral impact.
 - Item 6 is documentation only — no code logic changes.
 - This task is intentionally last to avoid merge conflicts with earlier tasks that touch the same files.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/performance.rs` | Deleted duplicate `test_parse_memory_usage` test (kept `test_parse_memory_usage_still_works`) |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Replaced `.map().flatten()` with `.and_then()` in `current_selected_frame` |
+| `crates/fdemon-app/src/session/performance.rs` | Added `// TODO: wire to allocation table sort interaction` comment; changed `DEFAULT_MEMORY_SAMPLE_SIZE` to `pub(crate)`; changed `AllocationSortColumn` to `pub(crate)` with `#[allow(dead_code)]`; changed `allocation_sort` field to `pub(crate)` with `#[allow(dead_code)]` |
+| `crates/fdemon-app/src/session/mod.rs` | Removed `AllocationSortColumn` and `DEFAULT_MEMORY_SAMPLE_SIZE` from `pub use` re-export |
+| `crates/fdemon-app/src/lib.rs` | Removed `AllocationSortColumn` from `pub use session::{...}` re-export |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/mod.rs` | Added `const Y_AXIS_WIDTH: u16 = 7;` to constants block; replaced all `y_axis_width` local bindings with `Y_AXIS_WIDTH` |
+| `crates/fdemon-app/src/actions.rs` | Added `// Arc is required because Message derives Clone and watch::Sender does not impl Clone.` comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **AllocationSortColumn visibility**: Changed to `pub(crate)` and also removed from `lib.rs` re-export (in addition to `session/mod.rs`). Since `AllocationSortColumn` is now `pub(crate)`, the `allocation_sort` field in `PerformanceState` was also narrowed to `pub(crate)`, and `#[allow(dead_code)]` was added to both the enum and field to suppress Clippy/dead-code warnings while preserving the design intent.
+2. **E2e test failures**: The `cargo test --workspace` run shows 25 e2e integration tests failing with "Process did not terminate after kill" and "ExpectTimeout" — these require a real terminal/TTY and Flutter environment, and are pre-existing environment-level failures unrelated to this task. All 604 unit tests pass.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (no warnings)
+- `cargo test --lib --workspace` - Passed (604 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)

@@ -377,32 +377,16 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         // conflict: Inspector uses Left/Right for tree collapse/expand, and
         // Performance uses them for frame prev/next.
         InputKey::Left if in_performance => Some(Message::SelectPerformanceFrame {
-            index: state.session_manager.selected().and_then(|h| {
-                let perf = &h.session.performance;
-                let len = perf.frame_history.len();
-                if len == 0 {
-                    return None;
-                }
-                Some(match perf.selected_frame {
-                    Some(i) if i > 0 => i - 1,
-                    Some(_) => 0,
-                    None => len - 1,
-                })
-            }),
+            index: state
+                .session_manager
+                .selected()
+                .and_then(|h| h.session.performance.compute_prev_frame_index()),
         }),
         InputKey::Right if in_performance => Some(Message::SelectPerformanceFrame {
-            index: state.session_manager.selected().and_then(|h| {
-                let perf = &h.session.performance;
-                let len = perf.frame_history.len();
-                if len == 0 {
-                    return None;
-                }
-                Some(match perf.selected_frame {
-                    Some(i) if i + 1 < len => i + 1,
-                    Some(_) => len - 1,
-                    None => len - 1,
-                })
-            }),
+            index: state
+                .session_manager
+                .selected()
+                .and_then(|h| h.session.performance.compute_next_frame_index()),
         }),
 
         // ── Quit still works from DevTools mode ───────────────────────────────

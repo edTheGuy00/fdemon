@@ -127,6 +127,60 @@ mod tests {
     }
 
     #[test]
+    fn test_tab_title_truncation_with_chinese_device_name() {
+        // Chinese device names use multi-byte UTF-8 (3 bytes per CJK character).
+        // The old byte-index `&self.name[..14]` would panic inside a CJK codepoint.
+        let session = Session::new(
+            "d".into(),
+            "小米 14 Ultra 测试设备名称".into(),
+            "android".into(),
+            false,
+        );
+        // Must not panic
+        let title = session.tab_title();
+        assert!(
+            title.contains('…'),
+            "Chinese device name should be truncated with '…'"
+        );
+        assert!(
+            title.chars().count() <= 20,
+            "Truncated title should be short"
+        );
+    }
+
+    #[test]
+    fn test_tab_title_truncation_with_emoji_device_name() {
+        // Emoji are 4-byte sequences in UTF-8.
+        let session = Session::new(
+            "d".into(),
+            "My Device 🎉🎊🎈 Extra Long Name".into(),
+            "android".into(),
+            false,
+        );
+        // Must not panic
+        let title = session.tab_title();
+        assert!(
+            title.contains('…'),
+            "Emoji device name should be truncated with '…'"
+        );
+    }
+
+    #[test]
+    fn test_tab_title_no_truncation_for_short_chinese_name() {
+        // Short CJK name (<= 15 chars) must be rendered in full without '…'
+        let session = Session::new("d".into(), "小米手机".into(), "android".into(), false);
+        let title = session.tab_title();
+        assert!(
+            !title.contains('…'),
+            "Short Chinese name should not be truncated"
+        );
+        assert!(
+            title.contains("小米手机"),
+            "Full name should appear in title"
+        );
+    }
+
+    #[test]
     fn test_session_with_config() {
         let session = Session::new("d".into(), "Device".into(), "ios".into(), false);
         let config = LaunchConfig {

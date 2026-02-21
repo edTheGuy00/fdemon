@@ -204,6 +204,18 @@ pub fn parse_allocation_profile(result: &serde_json::Value) -> Result<Allocation
 
     let stats: Vec<ClassHeapStats> = members.iter().filter_map(parse_class_heap_stats).collect();
 
+    if stats.is_empty() && !members.is_empty() {
+        // All members were filtered out — the response format may differ from
+        // what we expect. Log the first member's keys for debugging.
+        if let Some(first) = members.first() {
+            tracing::warn!(
+                "getAllocationProfile: {} raw members but 0 parsed. First member keys: {:?}",
+                members.len(),
+                first.as_object().map(|o| o.keys().collect::<Vec<_>>()),
+            );
+        }
+    }
+
     Ok(AllocationProfile {
         members: stats,
         timestamp: chrono::Local::now(),
@@ -226,7 +238,9 @@ pub fn parse_allocation_profile(result: &serde_json::Value) -> Result<Allocation
 /// churn. This is an approximation — the real new/old split is not directly
 /// exposed by the protocol.
 fn parse_class_heap_stats(member: &serde_json::Value) -> Option<ClassHeapStats> {
-    let class_ref = member.get("classRef")?;
+    // The wire JSON uses "class" (the protocol field name), not "classRef"
+    // (the Dart client renames it because `class` is a Dart reserved keyword).
+    let class_ref = member.get("class").or_else(|| member.get("classRef"))?;
     let class_name = class_ref.get("name")?.as_str()?.to_string();
     let library_uri = class_ref
         .get("library")
@@ -330,20 +344,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_memory_usage() {
-        let result = json!({
-            "type": "MemoryUsage",
-            "heapUsage": 52428800,
-            "heapCapacity": 104857600,
-            "externalUsage": 10485760
-        });
-        let mem = parse_memory_usage(&result).unwrap();
-        assert_eq!(mem.heap_usage, 52428800);
-        assert_eq!(mem.heap_capacity, 104857600);
-        assert_eq!(mem.external_usage, 10485760);
-    }
-
-    #[test]
     fn test_get_isolate_rss_parses_heaps() {
         // Simulate a `getIsolate` result (the `result` field of the JSON-RPC
         // response) containing the private `_heaps` field.
@@ -393,11 +393,13 @@ mod tests {
 
     #[test]
     fn test_parse_allocation_profile() {
+        // Wire format uses "class" (not "classRef") — the Dart client renames
+        // it because `class` is a reserved keyword in Dart.
         let result = json!({
             "type": "AllocationProfile",
             "members": [
                 {
-                    "classRef": {
+                    "class": {
                         "type": "@Class",
                         "id": "classes/42",
                         "name": "String",

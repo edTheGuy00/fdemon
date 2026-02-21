@@ -88,9 +88,9 @@ impl SearchInput<'_> {
             // Show error if regex is invalid
             if let Some(ref error) = self.search_state.error {
                 spans.push(Span::raw(" "));
-                // Truncate error message if too long
-                let short_error = if error.len() > 30 {
-                    format!("{}...", &error[..27])
+                // Truncate error message if too long (char-aware to avoid panic on multi-byte UTF-8)
+                let short_error = if error.chars().count() > 30 {
+                    format!("{}...", error.chars().take(27).collect::<String>())
                 } else {
                     error.clone()
                 };
@@ -206,5 +206,83 @@ mod tests {
         let widget = SearchInput::new(&state);
         assert!(!widget.search_state.is_valid);
         assert!(widget.search_state.error.is_some());
+    }
+
+    // ── UTF-8 error truncation tests ─────────────────────────────────────────
+
+    /// Build a SearchState with a manually set error message (bypassing regex).
+    fn make_state_with_error(error_msg: &str) -> SearchState {
+        let mut state = SearchState::default();
+        // Set a non-empty query so the error display branch is reached
+        state.query = "x".to_string();
+        state.is_active = true;
+        state.error = Some(error_msg.to_string());
+        state
+    }
+
+    #[test]
+    fn test_search_error_truncation_with_cyrillic() {
+        // Cyrillic characters are 2 bytes each; byte-indexing at 27 would
+        // panic mid-codepoint without the char-based fix.
+        let cyrillic_error = "ошибка разбора регулярного выражения: неверный синтаксис";
+        assert!(cyrillic_error.chars().count() > 30);
+        let state = make_state_with_error(cyrillic_error);
+        let widget = SearchInput::new(&state).inline();
+        let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        // Must not panic
+        widget.render(area, &mut buf);
+    }
+
+    #[test]
+    fn test_search_error_truncation_with_cjk() {
+        // CJK characters are 3 bytes each; byte-indexing would panic without the char-based fix.
+        let cjk_error =
+            "正则表达式解析错误：模式无效，因为存在未闭合的括号结构以及其他问题导致失败";
+        assert!(cjk_error.chars().count() > 30);
+        let state = make_state_with_error(cjk_error);
+        let widget = SearchInput::new(&state).inline();
+        let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        // Must not panic
+        widget.render(area, &mut buf);
+    }
+
+    #[test]
+    fn test_search_error_truncation_result_contains_ellipsis() {
+        // Long ASCII error should be truncated with "..."
+        let long_error = "regex parse error: unclosed group in pattern at position 5";
+        assert!(long_error.chars().count() > 30);
+        let state = make_state_with_error(long_error);
+        let widget = SearchInput::new(&state).inline();
+        let area = ratatui::layout::Rect::new(0, 0, 120, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = (0..120u16)
+            .filter_map(|x| buf.cell((x, 0u16)).map(|c| c.symbol().to_string()))
+            .collect();
+        assert!(
+            content.contains("..."),
+            "Truncated error should end with '...'"
+        );
+    }
+
+    #[test]
+    fn test_search_error_no_truncation_for_short_error() {
+        // Short error (<= 30 chars) should be shown in full
+        let short_error = "invalid pattern";
+        assert!(short_error.chars().count() <= 30);
+        let state = make_state_with_error(short_error);
+        let widget = SearchInput::new(&state).inline();
+        let area = ratatui::layout::Rect::new(0, 0, 80, 1);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        widget.render(area, &mut buf);
+        let content: String = (0..80u16)
+            .filter_map(|x| buf.cell((x, 0u16)).map(|c| c.symbol().to_string()))
+            .collect();
+        assert!(
+            content.contains("invalid pattern"),
+            "Short error should appear untruncated"
+        );
     }
 }

@@ -156,7 +156,7 @@ fn test_performance_panel_compact_mode_shows_fps() {
 
 #[test]
 fn test_performance_panel_frame_only_mode() {
-    // Height between COMPACT_THRESHOLD (7) and DUAL_SECTION_MIN_HEIGHT (14)
+    // Height between COMPACT_THRESHOLD (7) and DUAL_SECTION_MIN_HEIGHT (16)
     // should show frame chart only, no memory section
     let perf = make_test_performance();
     let widget = PerformancePanel::new(
@@ -165,12 +165,114 @@ fn test_performance_panel_frame_only_mode() {
         IconSet::default(),
         &VmConnectionStatus::Connected,
     );
-    let buf = render_to_buf(widget, 80, 10);
-    let content = collect_buf_text(&buf, 80, 10);
+    // Height 12 is >= COMPACT_THRESHOLD(7) and < DUAL_SECTION_MIN_HEIGHT(16)
+    let buf = render_to_buf(widget, 80, 12);
+    let content = collect_buf_text(&buf, 80, 12);
     // Should show Frame Timing but not a separate Memory block
     assert!(
         content.contains("Frame Timing"),
         "Frame-only mode should still show Frame Timing block; content: {content:?}"
+    );
+}
+
+#[test]
+fn test_performance_panel_dual_section_at_min_height() {
+    // At exactly DUAL_SECTION_MIN_HEIGHT (16), both sections should appear
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    let buf = render_to_buf(widget, 80, 16);
+    let content = collect_buf_text(&buf, 80, 16);
+    assert!(
+        content.contains("Frame Timing"),
+        "Frame Timing section should appear at DUAL_SECTION_MIN_HEIGHT; content: {content:?}"
+    );
+    assert!(
+        content.contains("Memory"),
+        "Memory section should appear at DUAL_SECTION_MIN_HEIGHT; content: {content:?}"
+    );
+}
+
+#[test]
+fn test_performance_panel_allocation_table_visible_on_24_row_terminal() {
+    // Simulate a 24-row terminal: DevTools panel receives ~18 rows
+    // (24 - 3 header - 3 tab bar = 18).
+    // With 50/50 split and Borders::TOP, memory inner should be >= 8 rows
+    // (MIN_CHART_HEIGHT=6 + MIN_TABLE_HEIGHT=2), making show_table = true.
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    // Give the panel 18 rows (what it receives from DevToolsView on a 24-row terminal)
+    let buf = render_to_buf(widget, 80, 18);
+    let content = collect_buf_text(&buf, 80, 18);
+    // Memory section should appear
+    assert!(
+        content.contains("Memory"),
+        "Memory section should be visible at 18 rows; content: {content:?}"
+    );
+    // Allocation table should appear (header "Class" or loading message)
+    assert!(
+        content.contains("loading") || content.contains("Class") || content.contains("Instances"),
+        "Allocation table should be visible at 18 rows; content: {content:?}"
+    );
+}
+
+#[test]
+fn test_performance_panel_allocation_table_visible_on_30_row_terminal() {
+    // Simulate a 30-row terminal: DevTools panel receives ~24 rows
+    // Allocation table should have more rows available
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    let buf = render_to_buf(widget, 80, 24);
+    let content = collect_buf_text(&buf, 80, 24);
+    assert!(
+        content.contains("Memory"),
+        "Memory section should be visible at 24 rows; content: {content:?}"
+    );
+    assert!(
+        content.contains("loading") || content.contains("Class") || content.contains("Instances"),
+        "Allocation table should be visible at 24 rows; content: {content:?}"
+    );
+}
+
+#[test]
+fn test_footer_does_not_overlap_memory_border() {
+    // The performance panel reserves 1 row for the parent's footer.
+    // Verify the memory block renders within [0, height-2] rows,
+    // leaving row height-1 clear for the footer.
+    let perf = make_test_performance();
+    let widget = PerformancePanel::new(
+        &perf,
+        true,
+        IconSet::default(),
+        &VmConnectionStatus::Connected,
+    );
+    let height = 18u16;
+    let buf = render_to_buf(widget, 80, height);
+
+    // Collect text on the last row (footer row) — should be empty (spaces)
+    // as PerformancePanel reserves that row for the parent DevToolsView footer.
+    let last_row_y = height - 1;
+    let last_row_content: String = (0..80u16)
+        .filter_map(|x| buf.cell((x, last_row_y)).map(|c| c.symbol().to_string()))
+        .collect();
+    // The last row should contain only spaces (PerformancePanel leaves it for the footer)
+    assert!(
+        last_row_content.chars().all(|c| c == ' '),
+        "Last row should be empty (reserved for footer); got: {last_row_content:?}"
     );
 }
 

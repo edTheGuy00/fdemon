@@ -10,12 +10,12 @@
 //! ```text
 //! ┌─────────────────────────────────────────┐
 //! │                                         │
-//! │           Frame Timing (~55%)           │
+//! │           Frame Timing (~45%)           │
 //! │  [bar chart + detail panel]             │
 //! │                                         │
 //! ├─────────────────────────────────────────┤
 //! │                                         │
-//! │           Memory (~45%)                 │
+//! │           Memory (~55%)                 │
 //! │  [time-series chart + alloc table]      │
 //! │                                         │
 //! └─────────────────────────────────────────┘
@@ -41,8 +41,10 @@ use styles::fps_style;
 
 // ── Responsive layout thresholds ─────────────────────────────────────────────
 
-/// Minimum terminal height to show both sections (7 frame + 7 memory minimum each).
-const DUAL_SECTION_MIN_HEIGHT: u16 = 14;
+/// Minimum terminal height to show both sections.
+/// At 16 rows, each section gets 8 outer rows: frame inner = 6 (Borders::ALL removes 2),
+/// memory inner = 7 (Borders::TOP removes 1). Both exceed their minimum chart height.
+const DUAL_SECTION_MIN_HEIGHT: u16 = 16;
 
 /// Below this height, show compact summary only.
 const COMPACT_THRESHOLD: u16 = 7;
@@ -148,11 +150,21 @@ impl PerformancePanel<'_> {
             return;
         }
 
-        // Normal: 55/45 split (requires DUAL_SECTION_MIN_HEIGHT = 14 rows)
+        // Two-section split. Reserve 1 row at the bottom for the DevTools
+        // footer that the parent DevToolsView renders over this area.
+        // Memory gets 55% so that on odd-height areas ratatui's rounding
+        // favours the memory section (which needs the larger inner area for the
+        // allocation table).  Frame gets 45%, which still yields at least
+        // MIN_CHART_HEIGHT inner rows at DUAL_SECTION_MIN_HEIGHT.
+        let usable_area = Rect {
+            height: area.height.saturating_sub(1),
+            ..area
+        };
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
-            .split(area);
+            .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+            .split(usable_area);
 
         // Frame timing section (with block border)
         let frame_block = Block::default()
@@ -172,10 +184,12 @@ impl PerformancePanel<'_> {
         )
         .render(frame_inner, buf);
 
-        // Memory section (with block border)
+        // Memory section — use Borders::TOP only to maximise inner height.
+        // The top border carries the title; no bottom/side borders are needed
+        // because the footer hint line occupies the row below.
         let memory_block = Block::default()
             .title(format!(" {} Memory ", self.icons.cpu()))
-            .borders(Borders::ALL)
+            .borders(Borders::TOP)
             .border_type(BorderType::Rounded)
             .border_style(Style::default().fg(palette::BORDER_DIM))
             .title_style(Style::default().fg(palette::ACCENT_DIM));

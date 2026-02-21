@@ -52,6 +52,11 @@ pub(crate) fn handle_allocation_profile_received(
     profile: AllocationProfile,
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
+        tracing::debug!(
+            "Allocation profile received for session {}: {} classes",
+            session_id,
+            profile.members.len(),
+        );
         handle.session.performance.allocation_profile = Some(profile);
     }
     UpdateResult::none()
@@ -132,8 +137,7 @@ mod tests {
         state
             .session_manager
             .selected()
-            .map(|h| h.session.performance.selected_frame)
-            .flatten()
+            .and_then(|h| h.session.performance.selected_frame)
     }
 
     fn make_memory_sample() -> MemorySample {

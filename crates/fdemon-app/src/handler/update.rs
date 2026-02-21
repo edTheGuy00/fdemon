@@ -1349,13 +1349,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::VmServiceFrameTiming { session_id, timing } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
-                handle.session.performance.frame_history.push(timing);
+                let perf = &mut handle.session.performance;
+
+                // Check before pushing: if the buffer is already at capacity,
+                // `push()` will call `pop_front()`, evicting the oldest entry
+                // and shifting all positional indices down by 1. We must
+                // compensate `selected_frame` so it continues to refer to the
+                // same logical frame after the eviction.
+                let was_full = perf.frame_history.is_full();
+
+                perf.frame_history.push(timing);
+
+                if was_full {
+                    // checked_sub returns None when i == 0, which means the
+                    // selected frame was the oldest and has just been evicted —
+                    // clearing the selection is the correct behaviour.
+                    perf.selected_frame = perf.selected_frame.and_then(|i| i.checked_sub(1));
+                }
+
                 // Recompute stats every STATS_RECOMPUTE_INTERVAL frames to
                 // avoid per-frame allocation overhead. At 60 FPS this produces
                 // ~6 stats updates/second — fast enough for a ~30 FPS TUI.
-                let len = handle.session.performance.frame_history.len();
+                let len = perf.frame_history.len();
                 if len % crate::session::STATS_RECOMPUTE_INTERVAL == 0 {
-                    handle.session.performance.recompute_stats();
+                    perf.recompute_stats();
                 }
             }
             UpdateResult::none()

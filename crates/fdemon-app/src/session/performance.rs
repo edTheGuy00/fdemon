@@ -16,11 +16,12 @@ pub(crate) const DEFAULT_GC_HISTORY_SIZE: usize = 50;
 /// Default number of frame timings to keep.
 pub(crate) const DEFAULT_FRAME_HISTORY_SIZE: usize = 300;
 /// Memory sample buffer size: 120 samples at 500ms polling = 60 seconds of history.
-pub const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
+pub(crate) const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
 
 /// Column by which the class allocation table is sorted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AllocationSortColumn {
+#[allow(dead_code)] // TODO: wire to allocation table sort interaction
+pub(crate) enum AllocationSortColumn {
     /// Sort by total allocated bytes (descending).
     #[default]
     BySize,
@@ -67,7 +68,9 @@ pub struct PerformanceState {
     pub allocation_profile: Option<AllocationProfile>,
 
     /// Column by which the class allocation table is sorted.
-    pub allocation_sort: AllocationSortColumn,
+    // TODO: wire to allocation table sort interaction
+    #[allow(dead_code)]
+    pub(crate) allocation_sort: AllocationSortColumn,
 }
 
 impl Default for PerformanceState {
@@ -112,34 +115,52 @@ impl PerformanceState {
 }
 
 impl PerformanceState {
+    /// Compute the index of the previous frame without mutating state.
+    ///
+    /// Returns `None` when the frame history is empty.
+    /// When no frame is selected, returns the index of the most recent frame (`len - 1`).
+    /// When already at index 0, clamps and returns `Some(0)`.
+    pub fn compute_prev_frame_index(&self) -> Option<usize> {
+        let len = self.frame_history.len();
+        if len == 0 {
+            return None;
+        }
+        Some(match self.selected_frame {
+            Some(i) if i > 0 => i - 1,
+            Some(_) => 0,    // already at first frame, stay
+            None => len - 1, // nothing selected, select most recent
+        })
+    }
+
+    /// Compute the index of the next frame without mutating state.
+    ///
+    /// Returns `None` when the frame history is empty.
+    /// When no frame is selected, returns the index of the most recent frame (`len - 1`).
+    /// When already at the last frame, clamps and returns `Some(i)`.
+    pub fn compute_next_frame_index(&self) -> Option<usize> {
+        let len = self.frame_history.len();
+        if len == 0 {
+            return None;
+        }
+        Some(match self.selected_frame {
+            Some(i) if i + 1 < len => i + 1,
+            Some(i) => i,    // already at last frame, stay
+            None => len - 1, // nothing selected, select most recent
+        })
+    }
+
     /// Select the next frame (Right arrow). Clamps at the end when already at the last frame.
     ///
     /// When no frame is selected, selects the most recent frame (index `len - 1`).
     pub fn select_next_frame(&mut self) {
-        let len = self.frame_history.len();
-        if len == 0 {
-            return;
-        }
-        self.selected_frame = Some(match self.selected_frame {
-            Some(i) if i + 1 < len => i + 1,
-            Some(_) => len - 1, // clamp at end
-            None => len - 1,    // select most recent
-        });
+        self.selected_frame = self.compute_next_frame_index();
     }
 
     /// Select the previous frame (Left arrow). Clamps at the start when already at index 0.
     ///
     /// When no frame is selected, selects the most recent frame (index `len - 1`).
     pub fn select_prev_frame(&mut self) {
-        let len = self.frame_history.len();
-        if len == 0 {
-            return;
-        }
-        self.selected_frame = Some(match self.selected_frame {
-            Some(i) if i > 0 => i - 1,
-            Some(_) => 0,    // clamp at start
-            None => len - 1, // select most recent
-        });
+        self.selected_frame = self.compute_prev_frame_index();
     }
 
     /// Deselect any selected frame (Esc). Returns to normal scroll mode.
@@ -360,6 +381,70 @@ mod tests {
         let mut state = PerformanceState::default();
         state.select_prev_frame();
         assert_eq!(state.selected_frame, None);
+    }
+
+    // ── Pure computation: compute_prev_frame_index ──────────────────────────
+
+    #[test]
+    fn test_compute_prev_frame_index_from_middle() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = Some(5);
+        assert_eq!(perf.compute_prev_frame_index(), Some(4));
+    }
+
+    #[test]
+    fn test_compute_prev_frame_index_at_start() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = Some(0);
+        assert_eq!(perf.compute_prev_frame_index(), Some(0)); // clamp at 0
+    }
+
+    #[test]
+    fn test_compute_prev_frame_index_none_selects_newest() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = None;
+        assert_eq!(perf.compute_prev_frame_index(), Some(9));
+    }
+
+    #[test]
+    fn test_compute_prev_frame_index_empty_returns_none() {
+        let perf = PerformanceState::default();
+        assert_eq!(perf.compute_prev_frame_index(), None);
+    }
+
+    // ── Pure computation: compute_next_frame_index ──────────────────────────
+
+    #[test]
+    fn test_compute_next_frame_index_from_middle() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = Some(5);
+        assert_eq!(perf.compute_next_frame_index(), Some(6));
+    }
+
+    #[test]
+    fn test_compute_next_frame_index_at_end() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = Some(9);
+        assert_eq!(perf.compute_next_frame_index(), Some(9)); // clamp at end
+    }
+
+    #[test]
+    fn test_compute_next_frame_index_none_selects_newest() {
+        let mut perf = PerformanceState::default();
+        push_test_frames(&mut perf, 10);
+        perf.selected_frame = None;
+        assert_eq!(perf.compute_next_frame_index(), Some(9));
+    }
+
+    #[test]
+    fn test_compute_next_frame_index_empty_returns_none() {
+        let perf = PerformanceState::default();
+        assert_eq!(perf.compute_next_frame_index(), None);
     }
 
     // ── Frame selection: deselect_frame ────────────────────────────────────

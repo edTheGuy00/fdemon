@@ -195,7 +195,7 @@ fn test_legend_omits_raster_when_zero() {
     // All raster_cache values are 0 → "Raster" should not appear in legend
     let mut samples: RingBuffer<MemorySample> = RingBuffer::new(10);
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(10);
-    let gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
+    let _gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
 
     samples.push(make_sample(50_000_000, 10_000_000, 0, 128_000_000, 0));
 
@@ -216,7 +216,7 @@ fn test_legend_omits_raster_when_zero() {
 fn test_legend_omits_rss_when_zero() {
     let mut samples: RingBuffer<MemorySample> = RingBuffer::new(10);
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(10);
-    let gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
+    let _gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
 
     samples.push(make_sample(
         50_000_000,
@@ -243,7 +243,7 @@ fn test_legend_omits_rss_when_zero() {
 fn test_legend_includes_raster_when_nonzero() {
     let mut samples: RingBuffer<MemorySample> = RingBuffer::new(10);
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(10);
-    let gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
+    let _gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
 
     samples.push(make_sample(
         50_000_000,
@@ -424,7 +424,8 @@ fn test_y_axis_auto_scaling() {
 #[test]
 fn test_chart_only_mode_no_table() {
     // Total height in [MIN_CHART_HEIGHT, MIN_CHART_HEIGHT + MIN_TABLE_HEIGHT - 1]
-    // → shows chart only, no table
+    // → shows chart only, no table.
+    // MIN_TABLE_HEIGHT is now 2, so threshold is 6+2=8. Height 7 is chart-only.
     let mut samples: RingBuffer<MemorySample> = RingBuffer::new(10);
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(10);
     let gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
@@ -432,11 +433,38 @@ fn test_chart_only_mode_no_table() {
     samples.push(make_sample(50_000_000, 5_000_000, 0, 100_000_000, 0));
 
     let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
-    // height = 8 is >= MIN_CHART_HEIGHT(6) but < MIN_CHART_HEIGHT+MIN_TABLE_HEIGHT (9)
-    let area = Rect::new(0, 0, 80, 8);
+    // height = 7 is >= MIN_CHART_HEIGHT(6) but < MIN_CHART_HEIGHT+MIN_TABLE_HEIGHT (8)
+    let area = Rect::new(0, 0, 80, 7);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
     // No panic, no "loading" or class table text expected
+}
+
+#[test]
+fn test_allocation_table_visible_at_threshold() {
+    // Height exactly at MIN_CHART_HEIGHT + MIN_TABLE_HEIGHT (= 6 + 2 = 8)
+    // → show_table should be true, allocation table renders
+    let mut samples: RingBuffer<MemorySample> = RingBuffer::new(10);
+    let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(10);
+    let gc_history: RingBuffer<GcEvent> = RingBuffer::new(10);
+
+    samples.push(make_sample(50_000_000, 5_000_000, 0, 100_000_000, 0));
+
+    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    // height = 8 is exactly MIN_CHART_HEIGHT(6) + MIN_TABLE_HEIGHT(2)
+    let area = Rect::new(0, 0, 80, 8);
+    let mut buf = Buffer::empty(area);
+    widget.render(area, &mut buf);
+
+    // Should render the allocation table header ("loading..." or "Class")
+    let content: String = (0..8u16)
+        .flat_map(|y| (0..80u16).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+        .collect();
+    assert!(
+        content.contains("loading") || content.contains("Class") || content.contains("Instances"),
+        "Allocation table should be visible at height 8 (threshold); content: {content:?}"
+    );
 }
 
 #[test]
@@ -485,4 +513,114 @@ fn test_compact_summary_no_data() {
         .filter_map(|x| buf.cell((x, 0u16)).map(|c| c.symbol().to_string()))
         .collect();
     assert!(content.contains("No memory data"));
+}
+
+// ── UTF-8 truncation tests ────────────────────────────────────────────────
+
+#[test]
+fn test_class_name_truncation_with_cjk() {
+    // CJK class name longer than 30 characters (each CJK char is 3 bytes, so
+    // byte-indexing by 27 would panic mid-codepoint without the char-based fix)
+    let long_cjk = "这是一个非常长的类名称用于测试截断功能是否正确工作还有更多内容确保超三十";
+    assert!(long_cjk.chars().count() > 30);
+    let profile = AllocationProfile {
+        members: vec![ClassHeapStats {
+            class_name: long_cjk.to_string(),
+            library_uri: None,
+            new_space_instances: 100,
+            new_space_size: 50_000,
+            old_space_instances: 50,
+            old_space_size: 25_000,
+        }],
+        timestamp: chrono::Local::now(),
+    };
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    // Must not panic
+    render_allocation_table(Some(&profile), area, &mut buf);
+}
+
+#[test]
+fn test_class_name_truncation_with_emoji() {
+    // Emoji are 4-byte sequences — byte-indexing would panic without the fix
+    let emoji_name = "MyClass🎉🎊🎈PaddingToMakeItLongEnoughToTruncate";
+    assert!(emoji_name.chars().count() > 30);
+    let profile = AllocationProfile {
+        members: vec![ClassHeapStats {
+            class_name: emoji_name.to_string(),
+            library_uri: None,
+            new_space_instances: 10,
+            new_space_size: 1_000,
+            old_space_instances: 5,
+            old_space_size: 500,
+        }],
+        timestamp: chrono::Local::now(),
+    };
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    // Must not panic
+    render_allocation_table(Some(&profile), area, &mut buf);
+}
+
+#[test]
+fn test_class_name_truncation_result_ends_with_ellipsis() {
+    // Verify that a long ASCII name gets truncated with "..."
+    let long_ascii = "AVeryLongClassNameThatDefinitelyExceedsThirtyChars";
+    assert!(long_ascii.chars().count() > 30);
+    let profile = AllocationProfile {
+        members: vec![ClassHeapStats {
+            class_name: long_ascii.to_string(),
+            library_uri: None,
+            new_space_instances: 1,
+            new_space_size: 100,
+            old_space_instances: 0,
+            old_space_size: 0,
+        }],
+        timestamp: chrono::Local::now(),
+    };
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    render_allocation_table(Some(&profile), area, &mut buf);
+    // The rendered row should contain "..." and the first 27 chars of the name
+    let content: String = (0..10u16)
+        .flat_map(|y| (0..80u16).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+        .collect();
+    assert!(
+        content.contains("..."),
+        "Truncated name should end with '...'"
+    );
+    assert!(
+        content.contains(&long_ascii[..27]),
+        "Truncated name should start with first 27 chars"
+    );
+}
+
+#[test]
+fn test_class_name_no_truncation_for_short_name() {
+    // Short name (<= 30 chars) must be rendered in full, no ellipsis
+    let short_name = "dart:core/String";
+    assert!(short_name.chars().count() <= 30);
+    let profile = AllocationProfile {
+        members: vec![ClassHeapStats {
+            class_name: short_name.to_string(),
+            library_uri: None,
+            new_space_instances: 500,
+            new_space_size: 200_000,
+            old_space_instances: 200,
+            old_space_size: 100_000,
+        }],
+        timestamp: chrono::Local::now(),
+    };
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+    render_allocation_table(Some(&profile), area, &mut buf);
+    let content: String = (0..10u16)
+        .flat_map(|y| (0..80u16).map(move |x| (x, y)))
+        .filter_map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+        .collect();
+    assert!(
+        content.contains("dart:core/String"),
+        "Short name should be rendered in full"
+    );
 }

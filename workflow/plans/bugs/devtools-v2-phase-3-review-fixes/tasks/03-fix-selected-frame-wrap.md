@@ -137,3 +137,36 @@ fn test_ring_buffer_is_full() {
 - An alternative design is to anchor `selected_frame` to `FrameTiming::number` (the monotonically increasing frame number from the VM) instead of a positional index, resolving to position at render time. This eliminates the class of bug entirely but requires changing the `FrameChart` API. The index-adjustment approach is simpler and sufficient for the current capacity of 300 frames.
 - At 60fps, the buffer wraps every ~5 seconds. The bug manifests quickly in normal usage when a user has a frame selected.
 - The `checked_sub` returning `None` when `i == 0` is the correct behavior: the user's selected frame has been evicted, so the selection should clear.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/performance.rs` | Added `RingBuffer::is_full()` method and `test_ring_buffer_is_full` test |
+| `crates/fdemon-app/src/handler/update.rs` | Modified `VmServiceFrameTiming` handler to capture `was_full` before push and decrement/clear `selected_frame` on eviction |
+| `crates/fdemon-app/src/handler/tests.rs` | Added three new tests: `test_selected_frame_decrements_on_buffer_wrap`, `test_selected_frame_clears_when_evicted`, `test_selected_frame_unchanged_when_buffer_not_full` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`perf` local borrow**: Refactored handler body to borrow `&mut handle.session.performance` as a local `perf` variable, which avoids the repeated `handle.session.performance.` prefix across the eviction logic and stats recompute — cleaner and matches the task's suggested code structure.
+2. **`capacity()` accessor not added**: `capacity()` was already present in `RingBuffer` (line 347-349 pre-change), so no new accessor was needed.
+3. **Test placement**: New tests were added immediately after `test_frame_timing_ignored_for_unknown_session` with a section comment, consistent with the existing Phase 3 section grouping in `handler/tests.rs`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed
+- `cargo test -p fdemon-core` - Passed (340 tests, +1 new: `test_ring_buffer_is_full`)
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (955 tests, +3 new selected_frame wrap tests)
+- `cargo clippy -p fdemon-core -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Single-eviction-per-push assumption**: The fix assumes each `push()` evicts at most one entry (the oldest). This is guaranteed by the `RingBuffer` implementation (`pop_front()` is called at most once per `push()`), so the -1 adjustment is always correct.

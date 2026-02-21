@@ -615,6 +615,7 @@ fn spawn_performance_polling(
     // Create the shutdown channel outside the task so both ends are available
     // before the task starts running.
     let (perf_shutdown_tx, mut perf_shutdown_rx) = tokio::sync::watch::channel(false);
+    // Arc is required because Message derives Clone and watch::Sender does not impl Clone.
     let perf_shutdown_tx = std::sync::Arc::new(perf_shutdown_tx);
 
     // The JoinHandle from `tokio::spawn` is only available after the call, but

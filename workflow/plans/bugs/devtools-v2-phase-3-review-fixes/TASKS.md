@@ -36,13 +36,13 @@ Wave 3 (solo — cleanup)                    │
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-fix-alloc-table-layout](tasks/01-fix-alloc-table-layout.md) | Not Started | - | `fdemon-tui` | `performance/mod.rs`, `memory_chart.rs`, `devtools/mod.rs` |
-| 2 | [02-fix-utf8-truncation](tasks/02-fix-utf8-truncation.md) | Not Started | - | `fdemon-tui`, `fdemon-app` | `memory_chart.rs`, `search_input.rs`, `session.rs` |
-| 3 | [03-fix-selected-frame-wrap](tasks/03-fix-selected-frame-wrap.md) | Not Started | - | `fdemon-app` | `handler/update.rs` |
-| 4 | [04-extract-memory-chart-mods](tasks/04-extract-memory-chart-mods.md) | Not Started | 1, 2 | `fdemon-tui` | `memory_chart/` directory |
-| 5 | [05-dedup-frame-nav-logic](tasks/05-dedup-frame-nav-logic.md) | Not Started | 3 | `fdemon-app` | `handler/keys.rs`, `session/performance.rs` |
-| 6 | [06-extract-frame-chart-mods](tasks/06-extract-frame-chart-mods.md) | Not Started | - | `fdemon-tui` | `frame_chart/` directory |
-| 7 | [07-minor-fixes-batch](tasks/07-minor-fixes-batch.md) | Not Started | 4, 5 | workspace | Multiple files |
+| 1 | [01-fix-alloc-table-layout](tasks/01-fix-alloc-table-layout.md) | Done | - | `fdemon-tui` | `performance/mod.rs`, `memory_chart.rs`, `devtools/mod.rs` |
+| 2 | [02-fix-utf8-truncation](tasks/02-fix-utf8-truncation.md) | Done | - | `fdemon-tui`, `fdemon-app` | `memory_chart.rs`, `search_input.rs`, `session.rs` |
+| 3 | [03-fix-selected-frame-wrap](tasks/03-fix-selected-frame-wrap.md) | Done | - | `fdemon-app` | `handler/update.rs` |
+| 4 | [04-extract-memory-chart-mods](tasks/04-extract-memory-chart-mods.md) | Done | 1, 2 | `fdemon-tui` | `memory_chart/` directory |
+| 5 | [05-dedup-frame-nav-logic](tasks/05-dedup-frame-nav-logic.md) | Done | 3 | `fdemon-app` | `handler/keys.rs`, `session/performance.rs` |
+| 6 | [06-extract-frame-chart-mods](tasks/06-extract-frame-chart-mods.md) | Done | - | `fdemon-tui` | `frame_chart/` directory |
+| 7 | [07-minor-fixes-batch](tasks/07-minor-fixes-batch.md) | Done | 4, 5 | workspace | Multiple files |
 
 ## Dispatch Plan
 

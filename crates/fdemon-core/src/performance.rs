@@ -343,6 +343,11 @@ impl<T> RingBuffer<T> {
         self.buf.is_empty()
     }
 
+    /// Returns true if the buffer is at capacity and the next push will evict.
+    pub fn is_full(&self) -> bool {
+        self.buf.len() == self.capacity
+    }
+
     /// Maximum capacity.
     pub fn capacity(&self) -> usize {
         self.capacity
@@ -524,6 +529,23 @@ mod tests {
         assert_eq!(buf.latest(), Some(&4));
         let items: Vec<_> = buf.iter().copied().collect();
         assert_eq!(items, vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn test_ring_buffer_is_full() {
+        let mut buf = RingBuffer::new(3);
+        assert!(!buf.is_full(), "empty buffer should not be full");
+        buf.push(1);
+        assert!(!buf.is_full(), "partially filled buffer should not be full");
+        buf.push(2);
+        assert!(!buf.is_full(), "partially filled buffer should not be full");
+        buf.push(3);
+        assert!(buf.is_full(), "buffer at capacity should be full");
+        buf.push(4); // evicts 1
+        assert!(
+            buf.is_full(),
+            "buffer should remain full after eviction push"
+        );
     }
 
     #[test]
