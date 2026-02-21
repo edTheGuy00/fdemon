@@ -40,6 +40,9 @@ dependencies:
   talker: ^4.5.0
   talker_flutter: ^4.5.0
 
+  # HTTP client for testing network monitoring
+  http: ^1.2.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

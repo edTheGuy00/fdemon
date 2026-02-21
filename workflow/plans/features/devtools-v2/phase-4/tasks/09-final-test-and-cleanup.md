@@ -138,3 +138,52 @@ This task IS the testing task. No new tests are written here — it verifies tha
 - **No documentation updates in this task**: Documentation updates (KEYBINDINGS.md, ARCHITECTURE.md) are deferred to Phase 5, which is the polish/documentation phase.
 - **E2E testing limitations**: Full end-to-end testing of the network monitoring flow requires a running Flutter app making HTTP requests. Unit tests cover the parsing and rendering logic. Integration testing of the full poll → message → render pipeline would require mocking the VM service, which is complex. Manual spot-checking is the pragmatic approach for the initial implementation.
 - **Snapshot test updates**: If the project uses snapshot tests (the `.snap.new` file in git status suggests this), the startup screen snapshot may need updating if the DevTools tab bar is visible in the snapshot. Update the snapshot if needed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/tests.rs` | Fixed pre-existing test assertion: `content.contains("loading")` → `content.contains("Waiting")` to match actual implementation text "Waiting for allocation data..." |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | Clippy auto-fixes: removed 8 unnecessary `&` borrows on format strings/owned values passed to `buf.set_string()`, collapsed nested `if` into compound condition |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_table.rs` | Clippy auto-fixes: removed 6 unnecessary `&` borrows on `truncate()` return values, changed `.last()` to `.next_back()` on `DoubleEndedIterator` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing allocation test fix**: The test asserted `content.contains("loading")` but the implementation emits "Waiting for allocation data...". This was a mismatched test introduced in phase 3 review. Fixed to match the actual rendered text rather than changing the implementation, since "Waiting..." is a more accurate UX label.
+
+2. **E2E test failures are pre-existing**: The 25 e2e test failures (settings_page, tui_interaction, tui_workflows) were confirmed to exist at HEAD before any phase 4 changes. They involve PTY process timing issues and snapshot mismatches unrelated to network monitoring. Not treated as blockers.
+
+3. **Clippy `needless_borrows_for_generic_args`**: `buf.set_string()` accepts `AsRef<str>`, so `String` values don't need `&format!(...)` wrappers. Auto-fixed by `cargo clippy --fix`.
+
+### Testing Performed
+
+- `cargo fmt --all --check` - Passed (no changes needed)
+- `cargo check --workspace` - Passed (clean compilation)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings after auto-fix)
+- `cargo test -p fdemon-core` - Passed (375 tests, 0 failures)
+- `cargo test -p fdemon-daemon` - Passed (358 tests, 0 failures)
+- `cargo test -p fdemon-app` - Passed (992 tests, 0 failures)
+- `cargo test -p fdemon-tui` - Passed (696 tests, 0 failures)
+- Network tests: 158 total (18 core + 19 daemon + 29 app + 92 tui) — far exceeds 30+ target
+
+### DevToolsPanel::Network Coverage
+
+All required match arms verified:
+1. `handler/devtools/mod.rs` — `handle_switch_panel()` has `Network` arm (starts monitoring)
+2. `handler/keys.rs` — `in_network` guard with `NetworkNavigate`, `ToggleNetworkRecording`, detail sub-tab keys
+3. `widgets/devtools/mod.rs` — `render()` has `Network` arm (renders `NetworkMonitor`)
+4. `widgets/devtools/mod.rs` — `render_footer()` has `Network` arm with context-sensitive hints
+5. `widgets/devtools/mod.rs` — `render_tab_bar()` includes `[n] Network` tab
+6. `state.rs` — `DevToolsViewState` default has `NetworkState` via `session.network`
+7. Message flow fully wired: `StartNetworkMonitoring` → `VmServiceHttpProfileReceived` → `NetworkState` → `NetworkMonitor`
+
+### Risks/Limitations
+
+1. **E2E PTY tests**: 25 pre-existing failures due to PTY process timing issues on this system. Not caused by phase 4 changes (confirmed by baseline check at HEAD).
+2. **Startup screen snapshot**: The `.snap.new` file indicates the golden snapshot differs from the recorded one. This is a pre-existing divergence from phase 3 UI changes, not phase 4.

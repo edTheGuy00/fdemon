@@ -5,9 +5,11 @@
 //! dispatches to the active panel below it.
 
 pub mod inspector;
+pub mod network;
 pub mod performance;
 
 pub use inspector::WidgetInspector;
+pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
 use fdemon_app::session::{PerformanceState, SessionHandle};
@@ -110,6 +112,21 @@ impl Widget for DevToolsView<'_> {
                 .with_connection_error(self.state.vm_connection_error.as_deref());
                 widget.render(chunks[1], buf);
             }
+            DevToolsPanel::Network => {
+                // Safety fallback: DevTools mode is only reachable when a session
+                // exists, but guard defensively.
+                static DEFAULT_NETWORK: std::sync::LazyLock<fdemon_app::session::NetworkState> =
+                    std::sync::LazyLock::new(fdemon_app::session::NetworkState::default);
+
+                let (network_state, vm_connected) = self
+                    .session
+                    .map(|s| (&s.session.network, s.session.vm_connected))
+                    .unwrap_or_else(|| (&*DEFAULT_NETWORK, false));
+
+                let widget =
+                    NetworkMonitor::new(network_state, vm_connected, &self.state.connection_status);
+                widget.render(chunks[1], buf);
+            }
         }
 
         // Render footer hints at the bottom of the panel area
@@ -137,6 +154,7 @@ impl DevToolsView<'_> {
         let tabs = [
             (DevToolsPanel::Inspector, "[i] Inspector"),
             (DevToolsPanel::Performance, "[p] Performance"),
+            (DevToolsPanel::Network, "[n] Network"),
         ];
 
         let mut x = inner.x + 1;
@@ -271,6 +289,16 @@ impl DevToolsView<'_> {
             }
             DevToolsPanel::Performance => {
                 "[Esc] Logs  [i] Inspector  [b] Browser  [←/→] Frames  [Ctrl+p] PerfOverlay"
+            }
+            DevToolsPanel::Network => {
+                let has_selection = self
+                    .session
+                    .is_some_and(|s| s.session.network.selected_index.is_some());
+                if has_selection {
+                    "[Esc] Deselect  [g/h/q/s/t] Detail tabs  [Space] Toggle rec  [b] Browser"
+                } else {
+                    "[Esc] Logs  [↑↓] Navigate  [Enter] Detail  [Space] Toggle rec  [b] Browser"
+                }
             }
         };
 

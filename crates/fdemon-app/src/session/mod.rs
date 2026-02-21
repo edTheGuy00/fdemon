@@ -4,6 +4,7 @@ mod block_state;
 mod collapse;
 mod handle;
 pub(crate) mod log_batcher;
+pub mod network;
 pub(crate) mod performance;
 #[allow(clippy::module_inception)]
 mod session;
@@ -16,6 +17,7 @@ pub use block_state::LogBlockState;
 pub use collapse::CollapseState;
 pub use handle::SessionHandle;
 pub use log_batcher::LogBatcher;
+pub use network::NetworkState;
 pub use performance::PerformanceState;
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
 pub use session::Session;

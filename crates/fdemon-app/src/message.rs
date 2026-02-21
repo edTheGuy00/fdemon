@@ -5,6 +5,7 @@ use crate::input_key::InputKey;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::SessionId;
 use crate::state::DevToolsPanel;
+use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, NetworkDetailTab};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
@@ -26,6 +27,15 @@ pub enum InspectorNav {
     Down,
     Expand,
     Collapse,
+}
+
+/// Navigation actions for the network request list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NetworkNav {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
 }
 
 /// Type of device discovery (Connected or Bootable)
@@ -844,4 +854,53 @@ pub enum Message {
 
     /// Navigate within the widget inspector tree.
     DevToolsInspectorNavigate(InspectorNav),
+
+    // ── VM Service Network Messages (Phase 4, Network Monitor) ───────────────
+    /// HTTP profile poll results arrived.
+    VmServiceHttpProfileReceived {
+        session_id: SessionId,
+        timestamp: i64,
+        entries: Vec<HttpProfileEntry>,
+    },
+
+    /// Full detail for a single HTTP request arrived.
+    VmServiceHttpRequestDetailReceived {
+        session_id: SessionId,
+        detail: Box<HttpProfileEntryDetail>,
+    },
+
+    /// Detail fetch failed.
+    VmServiceHttpRequestDetailFailed {
+        session_id: SessionId,
+        error: String,
+    },
+
+    /// Network monitoring background task started.
+    VmServiceNetworkMonitoringStarted {
+        session_id: SessionId,
+        network_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        network_task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    },
+
+    /// Network extensions not available (e.g., release mode).
+    VmServiceNetworkExtensionsUnavailable { session_id: SessionId },
+
+    // ── Network Monitor UI Messages ───────────────────────────────────────────
+    /// Navigate the network request list.
+    NetworkNavigate(NetworkNav),
+
+    /// Select a specific request by index.
+    NetworkSelectRequest { index: Option<usize> },
+
+    /// Switch detail sub-tab.
+    NetworkSwitchDetailTab(NetworkDetailTab),
+
+    /// Toggle recording on/off.
+    ToggleNetworkRecording,
+
+    /// Clear all recorded network entries.
+    ClearNetworkProfile { session_id: SessionId },
+
+    /// Update filter text.
+    NetworkFilterChanged(String),
 }

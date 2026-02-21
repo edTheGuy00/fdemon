@@ -17,6 +17,7 @@ use fdemon_core::{
 use super::block_state::LogBlockState;
 use super::collapse::CollapseState;
 use super::log_batcher::LogBatcher;
+use super::network::NetworkState;
 use super::next_session_id;
 use super::performance::PerformanceState;
 
@@ -122,6 +123,12 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     /// Performance monitoring state (memory, GC, frames).
     pub performance: PerformanceState,
+
+    // ─────────────────────────────────────────────────────────
+    // Network Monitoring (Phase 4, Task 03)
+    // ─────────────────────────────────────────────────────────
+    /// Network monitoring state (HTTP profile, sockets).
+    pub network: NetworkState,
 }
 
 impl Session {
@@ -161,6 +168,7 @@ impl Session {
             error_count: 0,
             log_batcher: LogBatcher::new(),
             performance: PerformanceState::default(),
+            network: NetworkState::default(),
         }
     }
 

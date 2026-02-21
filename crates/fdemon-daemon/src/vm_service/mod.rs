@@ -58,6 +58,7 @@ pub mod client;
 pub mod errors;
 pub mod extensions;
 pub mod logging;
+pub mod network;
 pub mod performance;
 pub mod protocol;
 pub mod timeline;
@@ -74,6 +75,12 @@ pub use extensions::{
     ObjectGroupManager, WidgetInspector,
 };
 pub use logging::{parse_log_record, vm_level_to_log_level, vm_log_to_log_entry, VmLogRecord};
+pub use network::{
+    clear_http_profile, clear_http_profile_handle, enable_http_timeline_logging,
+    enable_http_timeline_logging_handle, get_http_profile, get_http_profile_handle,
+    get_http_profile_request, get_http_profile_request_handle, get_socket_profile,
+    set_socket_profiling_enabled, set_socket_profiling_enabled_handle, HttpProfile,
+};
 pub use performance::{
     get_allocation_profile, get_memory_sample, get_memory_usage, parse_allocation_profile,
     parse_gc_event, parse_memory_usage,

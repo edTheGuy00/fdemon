@@ -404,3 +404,38 @@ mod tests {
 - **Scroll management**: The scroll offset is passed in from `NetworkState.scroll_offset`. The widget doesn't modify scroll state — it just renders the visible window. Scroll adjustment happens in the handler layer.
 - **Column width strategy**: Fixed widths for Status (5), Method (7), Duration (8), Size (8), Type (10). URI gets all remaining space. This works well for terminals 60+ chars wide. For very narrow terminals (< 40), the URI column may be tiny or hidden — acceptable degradation.
 - **Style composition**: Use `.patch(row_style)` to layer column-specific foreground colors over the row background (selected vs unselected). This ensures the DarkGray selection background applies consistently.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | NEW — wires `request_table` and `request_details` modules |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_table.rs` | NEW — `RequestTable` widget with 28 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | NEW — `RequestDetails` stub added by linter (Task 07 prep) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `pub mod network;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **Content-type ordering**: The task spec orders `"text"` before `"javascript"` and `"css"` in `short_content_type()`. This means `"text/css"` returns `"text"` (matches text first), not `"css"`. Tests were written to match the spec's intended ordering, and additional tests cover pure `application/javascript` and `application/css` inputs which correctly return `"js"` and `"css"` respectively.
+
+2. **`format_bytes` not directly imported**: The task spec listed `format_bytes` in the import, but `response_size_display()` on `HttpProfileEntry` handles size formatting internally. Removed the unused import to satisfy clippy.
+
+3. **`request_details.rs` stub**: The linter added a `RequestDetails` widget stub (for Task 07) alongside the `mod.rs` changes. This compiles cleanly and the 41 tests it includes also pass.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed (zero warnings)
+- `cargo test -p fdemon-tui widgets::devtools::network::request_table` — Passed (28/28)
+- `cargo test -p fdemon-tui widgets::devtools::network` — Passed (69/69)
+- `cargo fmt --all` — Applied
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `widgets::devtools::performance::memory_chart::tests::test_allocation_table_none_profile` was already failing before this task. This is unrelated to the network widget work.
+2. **Pre-existing clippy failures in fdemon-app**: Multiple unused-function warnings in `fdemon-app/src/handler/devtools/network.rs` from earlier tasks. Not introduced by this task.

@@ -105,6 +105,36 @@ pub mod ext {
 
     /// Dump the layer tree to a string.
     pub const DEBUG_DUMP_LAYER_TREE: &str = "ext.flutter.debugDumpLayerTree";
+
+    // ── Network Profiling (ext.dart.io) ──────────────────────────────────────
+
+    /// Enable or disable HTTP timeline logging.
+    ///
+    /// Must be set to `true` before `getHttpProfile` returns data.
+    pub const HTTP_ENABLE_TIMELINE_LOGGING: &str = "ext.dart.io.httpEnableTimelineLogging";
+
+    /// Fetch the HTTP profile (list of recorded HTTP requests).
+    ///
+    /// Supports an optional `updatedSince` parameter (microseconds since epoch)
+    /// for incremental polling.
+    pub const GET_HTTP_PROFILE: &str = "ext.dart.io.getHttpProfile";
+
+    /// Fetch full details for a single HTTP request (headers, bodies, events).
+    ///
+    /// Requires an `id` parameter matching the request ID from `getHttpProfile`.
+    pub const GET_HTTP_PROFILE_REQUEST: &str = "ext.dart.io.getHttpProfileRequest";
+
+    /// Clear all recorded HTTP profile data.
+    pub const CLEAR_HTTP_PROFILE: &str = "ext.dart.io.clearHttpProfile";
+
+    /// Fetch socket profiling statistics.
+    pub const GET_SOCKET_PROFILE: &str = "ext.dart.io.getSocketProfile";
+
+    /// Enable or disable socket profiling.
+    pub const SOCKET_PROFILING_ENABLED: &str = "ext.dart.io.socketProfilingEnabled";
+
+    /// Get the dart:io version string.
+    pub const GET_DART_IO_VERSION: &str = "ext.dart.io.getVersion";
 }
 
 // ---------------------------------------------------------------------------

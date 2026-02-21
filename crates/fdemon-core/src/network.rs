@@ -1,23 +1,25 @@
-## Task: Add Network Domain Types
+//! # Network Monitor Domain Types
+//!
+//! Domain data types for representing HTTP request/response entries, socket
+//! profiling data, timing breakdowns, and UI state for the Network Monitor tab.
+//!
+//! These types are the shared vocabulary between:
+//! - `fdemon-daemon` (parsing VM Service HTTP profile responses)
+//! - `fdemon-app` (state management and aggregation)
+//! - `fdemon-tui` (rendering the network monitor UI)
+//!
+//! ## Protocol Assumptions
+//!
+//! - **Protocol v4.0+**: All IDs are `String`, all timestamps are `i64` (microseconds
+//!   since Unix epoch). Targets Dart 3.0+ / Flutter 3.10+.
+//! - **Bodies are `Vec<u8>`**: The VM Service transmits bodies as JSON int arrays.
+//! - **Headers as `Vec<(String, Vec<String>)>`**: Preserves insertion order and
+//!   supports duplicate header names.
+//! - **`NetworkTiming` is computed**: Computed on-demand from the event list, not
+//!   stored as separate fields, to avoid redundancy.
 
-**Objective**: Create the `network` module in `fdemon-core` with all domain types needed for the Network Monitor tab: HTTP request/response entries, detailed request data with headers/bodies/timing, socket entries, and helper enums. These types form the shared vocabulary between the daemon (parsing VM Service responses), app (state management), and TUI (rendering).
+// ── HttpProfileEntry ──────────────────────────────────────────────────────────
 
-**Depends on**: None
-
-### Scope
-
-- `crates/fdemon-core/src/network.rs`: **NEW** — All network domain types
-- `crates/fdemon-core/src/lib.rs`: Add `pub mod network;` and flat re-exports
-
-### Details
-
-#### Core types
-
-Create `crates/fdemon-core/src/network.rs` with the following types. Follow the existing `performance.rs` pattern: zero internal crate dependencies, `Clone + Debug` on all structs, `chrono::DateTime<chrono::Local>` for timestamps.
-
-##### `HttpProfileEntry` — Summary of a single HTTP request (from `getHttpProfile`)
-
-```rust
 /// Summary of a single HTTP request from the VM Service HTTP profile.
 ///
 /// Returned by `ext.dart.io.getHttpProfile`. Does NOT include request/response
@@ -45,11 +47,7 @@ pub struct HttpProfileEntry {
     /// Error message if the request failed.
     pub error: Option<String>,
 }
-```
 
-Add helper methods:
-
-```rust
 impl HttpProfileEntry {
     /// Whether this request is still in-flight (no end time or status).
     pub fn is_pending(&self) -> bool {
@@ -58,13 +56,13 @@ impl HttpProfileEntry {
 
     /// Duration in milliseconds. `None` if still pending.
     pub fn duration_ms(&self) -> Option<f64> {
-        self.end_time_us.map(|end| (end - self.start_time_us) as f64 / 1000.0)
+        self.end_time_us
+            .map(|end| (end - self.start_time_us) as f64 / 1000.0)
     }
 
     /// Whether the request resulted in an error (non-2xx or explicit error).
     pub fn is_error(&self) -> bool {
-        self.error.is_some()
-            || self.status_code.is_some_and(|s| s >= 400)
+        self.error.is_some() || self.status_code.is_some_and(|s| s >= 400)
     }
 
     /// Human-readable response size. Returns `None` if unknown or negative.
@@ -77,7 +75,11 @@ impl HttpProfileEntry {
     /// Short path from the URI (strips scheme + host for display).
     pub fn short_uri(&self) -> &str {
         // Try to find the path portion after the authority
-        if let Some(rest) = self.uri.strip_prefix("https://").or_else(|| self.uri.strip_prefix("http://")) {
+        if let Some(rest) = self
+            .uri
+            .strip_prefix("https://")
+            .or_else(|| self.uri.strip_prefix("http://"))
+        {
             if let Some(slash_pos) = rest.find('/') {
                 return &rest[slash_pos..];
             }
@@ -85,11 +87,9 @@ impl HttpProfileEntry {
         &self.uri
     }
 }
-```
 
-##### `HttpProfileEntryDetail` — Full request detail (from `getHttpProfileRequest`)
+// ── HttpProfileEntryDetail ────────────────────────────────────────────────────
 
-```rust
 /// Full detail for a single HTTP request, including headers and bodies.
 ///
 /// Returned by `ext.dart.io.getHttpProfileRequest`. Bodies are raw bytes
@@ -111,11 +111,7 @@ pub struct HttpProfileEntryDetail {
     /// Connection info (remote address, ports).
     pub connection_info: Option<ConnectionInfo>,
 }
-```
 
-Add helper methods:
-
-```rust
 impl HttpProfileEntryDetail {
     /// Request body as UTF-8 string, or None if empty or not valid UTF-8.
     pub fn request_body_text(&self) -> Option<String> {
@@ -138,11 +134,9 @@ impl HttpProfileEntryDetail {
         NetworkTiming::from_events(&self.events, &self.entry)
     }
 }
-```
 
-##### `HttpProfileEvent` — Timeline event within a request
+// ── HttpProfileEvent ──────────────────────────────────────────────────────────
 
-```rust
 /// A timeline event within an HTTP request lifecycle.
 #[derive(Debug, Clone)]
 pub struct HttpProfileEvent {
@@ -151,23 +145,22 @@ pub struct HttpProfileEvent {
     /// Event timestamp (microseconds since Unix epoch).
     pub timestamp_us: i64,
 }
-```
 
-##### `ConnectionInfo` — Connection details
+// ── ConnectionInfo ────────────────────────────────────────────────────────────
 
-```rust
 /// Connection info for an HTTP request.
 #[derive(Debug, Clone)]
 pub struct ConnectionInfo {
+    /// Local port used for this connection.
     pub local_port: Option<u16>,
+    /// Remote IP address.
     pub remote_address: Option<String>,
+    /// Remote port.
     pub remote_port: Option<u16>,
 }
-```
 
-##### `NetworkTiming` — Computed timing breakdown
+// ── NetworkTiming ─────────────────────────────────────────────────────────────
 
-```rust
 /// Timing breakdown for a network request, computed from timeline events.
 #[derive(Debug, Clone, Default)]
 pub struct NetworkTiming {
@@ -187,32 +180,35 @@ impl NetworkTiming {
         let total_ms = entry.duration_ms().unwrap_or(0.0);
 
         // Find known event timestamps for breakdown
-        let connection_ts = events.iter()
+        let connection_ts = events
+            .iter()
             .find(|e| e.event.contains("connection"))
             .map(|e| e.timestamp_us);
-        let response_start_ts = events.iter()
+        let response_start_ts = events
+            .iter()
             .find(|e| e.event.contains("response"))
             .map(|e| e.timestamp_us);
 
-        let connection_ms = connection_ts
-            .map(|ts| (ts - entry.start_time_us) as f64 / 1000.0);
-        let waiting_ms = response_start_ts
-            .map(|rs| {
-                let base = connection_ts.unwrap_or(entry.start_time_us);
-                (rs - base) as f64 / 1000.0
-            });
-        let receiving_ms = entry.end_time_us.and_then(|end| {
-            response_start_ts.map(|rs| (end - rs) as f64 / 1000.0)
+        let connection_ms = connection_ts.map(|ts| (ts - entry.start_time_us) as f64 / 1000.0);
+        let waiting_ms = response_start_ts.map(|rs| {
+            let base = connection_ts.unwrap_or(entry.start_time_us);
+            (rs - base) as f64 / 1000.0
         });
+        let receiving_ms = entry
+            .end_time_us
+            .and_then(|end| response_start_ts.map(|rs| (end - rs) as f64 / 1000.0));
 
-        Self { total_ms, connection_ms, waiting_ms, receiving_ms }
+        Self {
+            total_ms,
+            connection_ms,
+            waiting_ms,
+            receiving_ms,
+        }
     }
 }
-```
 
-##### `SocketEntry` — Socket profiling data
+// ── SocketEntry ───────────────────────────────────────────────────────────────
 
-```rust
 /// A socket statistics entry from the VM Service socket profile.
 #[derive(Debug, Clone)]
 pub struct SocketEntry {
@@ -233,11 +229,9 @@ pub struct SocketEntry {
     /// Total bytes written through this socket.
     pub write_bytes: u64,
 }
-```
 
-##### `NetworkDetailTab` — Detail view sub-tabs
+// ── NetworkDetailTab ──────────────────────────────────────────────────────────
 
-```rust
 /// Sub-tab selection for the network request detail panel.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum NetworkDetailTab {
@@ -248,11 +242,9 @@ pub enum NetworkDetailTab {
     ResponseBody,
     Timing,
 }
-```
 
-##### Helper functions
+// ── Helper functions ──────────────────────────────────────────────────────────
 
-```rust
 /// Format a byte count as a human-readable string (B, KB, MB).
 pub fn format_bytes(bytes: u64) -> String {
     if bytes < 1024 {
@@ -274,41 +266,9 @@ pub fn format_duration_ms(ms: f64) -> String {
         format!("{:.2}s", ms / 1000.0)
     }
 }
-```
 
-#### Export from lib.rs
+// ── Tests ─────────────────────────────────────────────────────────────────────
 
-Add to `crates/fdemon-core/src/lib.rs`:
-
-```rust
-pub mod network;
-pub use network::{
-    ConnectionInfo, HttpProfileEntry, HttpProfileEntryDetail, HttpProfileEvent,
-    NetworkDetailTab, NetworkTiming, SocketEntry, format_bytes, format_duration_ms,
-};
-```
-
-### Acceptance Criteria
-
-1. `HttpProfileEntry` struct exists with all fields (`id`, `method`, `uri`, `status_code`, `content_type`, `start_time_us`, `end_time_us`, `request_content_length`, `response_content_length`, `error`)
-2. `HttpProfileEntry::is_pending()` returns `true` when `end_time_us` is `None`
-3. `HttpProfileEntry::duration_ms()` computes correct duration from timestamps
-4. `HttpProfileEntry::short_uri()` strips scheme and authority
-5. `HttpProfileEntryDetail` struct exists with headers, bodies, events, connection info
-6. `HttpProfileEntryDetail::request_body_text()` / `response_body_text()` decode UTF-8 bodies
-7. `NetworkTiming::from_events()` computes timing breakdown from event list
-8. `SocketEntry` struct exists with all socket profiling fields
-9. `NetworkDetailTab` enum has `General`, `Headers`, `RequestBody`, `ResponseBody`, `Timing` variants
-10. `format_bytes()` and `format_duration_ms()` produce correct human-readable strings
-11. All new types exported from `fdemon-core` lib.rs
-12. `cargo check -p fdemon-core` passes
-13. `cargo test -p fdemon-core` passes
-
-### Testing
-
-Add inline tests in `network.rs`:
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,7 +366,10 @@ mod tests {
             connection_info: None,
         };
         assert_eq!(detail.request_body_text(), Some("hello".to_string()));
-        assert_eq!(detail.response_body_text(), Some("{\"ok\":true}".to_string()));
+        assert_eq!(
+            detail.response_body_text(),
+            Some("{\"ok\":true}".to_string())
+        );
     }
 
     #[test]
@@ -428,8 +391,14 @@ mod tests {
     fn test_network_timing_from_events() {
         let entry = make_entry(Some(200), 1_000_000, Some(1_100_000));
         let events = vec![
-            HttpProfileEvent { event: "connection established".to_string(), timestamp_us: 1_020_000 },
-            HttpProfileEvent { event: "response started".to_string(), timestamp_us: 1_060_000 },
+            HttpProfileEvent {
+                event: "connection established".to_string(),
+                timestamp_us: 1_020_000,
+            },
+            HttpProfileEvent {
+                event: "response started".to_string(),
+                timestamp_us: 1_060_000,
+            },
         ];
         let timing = NetworkTiming::from_events(&events, &entry);
         assert!((timing.total_ms - 100.0).abs() < f64::EPSILON);
@@ -486,41 +455,3 @@ mod tests {
         assert_eq!(socket.read_bytes, 4096);
     }
 }
-```
-
-### Notes
-
-- **Protocol v4.0 assumption**: All IDs are `String`, all timestamps are `i64` (microseconds since Unix epoch). This targets Dart 3.0+ / Flutter 3.10+.
-- **Bodies are `Vec<u8>`**: The VM Service transmits bodies as JSON int arrays (`[72, 101, 108, 108, 111]`). The Rust domain type stores them as `Vec<u8>`, with helper methods for UTF-8 decoding.
-- **Headers as `Vec<(String, Vec<String>)>`**: HTTP headers can have multiple values per key. Using `Vec` of tuples preserves insertion order (important for display) and supports duplicate header names.
-- **`NetworkTiming` is computed, not stored**: Timing breakdown is computed on-demand from the event list, not stored as separate fields. This avoids redundancy and simplifies the data model.
-- **No `serde` derives needed**: These types are not directly deserialized from JSON — the daemon layer parses JSON manually (matching the `performance.rs` pattern). Add `Serialize`/`Deserialize` only if needed later.
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `crates/fdemon-core/src/network.rs` | NEW — All network domain types: `HttpProfileEntry`, `HttpProfileEntryDetail`, `HttpProfileEvent`, `ConnectionInfo`, `NetworkTiming`, `SocketEntry`, `NetworkDetailTab`, `format_bytes()`, `format_duration_ms()`, plus 20 inline unit tests |
-| `crates/fdemon-core/src/lib.rs` | Added `pub mod network;` declaration and flat re-exports for all 8 public items from the new module |
-
-### Notable Decisions/Tradeoffs
-
-1. **Re-export ordering**: `cargo fmt` sorted the `pub use network` block alphabetically before `pub use performance` in `lib.rs`. This matches the existing crate convention of alphabetical re-export ordering and is correct.
-2. **Exact task spec adherence**: All types, fields, helper methods, and test cases were implemented exactly as specified in the task file with no additions or omissions.
-
-### Testing Performed
-
-- `cargo check -p fdemon-core` — Passed
-- `cargo test -p fdemon-core` — Passed (358 tests: 338 pre-existing + 20 new network tests)
-- `cargo clippy -p fdemon-core -- -D warnings` — Passed (zero warnings)
-- `cargo fmt -p fdemon-core` — Applied (minor formatting normalization in `NetworkTiming::from_events`)
-
-### Risks/Limitations
-
-1. **No risks identified**: This task adds pure domain types with zero internal dependencies and no side effects. All acceptance criteria are met.

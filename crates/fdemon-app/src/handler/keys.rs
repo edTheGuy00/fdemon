@@ -1,8 +1,9 @@
 //! Key event handlers for different UI modes
 
 use crate::input_key::InputKey;
-use crate::message::{InspectorNav, Message};
+use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::state::{AppState, DevToolsPanel, UiMode};
+use fdemon_core::network::NetworkDetailTab;
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
@@ -309,6 +310,7 @@ fn handle_key_link_highlight(key: InputKey) -> Option<Message> {
 fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_inspector = state.devtools_view_state.active_panel == DevToolsPanel::Inspector;
     let in_performance = state.devtools_view_state.active_panel == DevToolsPanel::Performance;
+    let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
     match key {
@@ -318,6 +320,8 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         // "unwinds" one level: it deselects the frame instead of exiting. This
         // matches common TUI conventions where Esc dismisses the innermost
         // selection before navigating outward.
+        //
+        // When the Network panel is active, Esc deselects the current request.
         InputKey::Esc => {
             if in_performance {
                 let frame_selected = state
@@ -329,6 +333,16 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
                     return Some(Message::SelectPerformanceFrame { index: None });
                 }
             }
+            if in_network {
+                let has_selection = state
+                    .session_manager
+                    .selected()
+                    .map(|h| h.session.network.selected_index.is_some())
+                    .unwrap_or(false);
+                if has_selection {
+                    return Some(Message::NetworkSelectRequest { index: None });
+                }
+            }
             Some(Message::ExitDevToolsMode)
         }
 
@@ -337,6 +351,9 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
         // 'p' always switches to Performance panel.
         InputKey::Char('p') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+
+        // 'n' always switches to Network panel.
+        InputKey::Char('n') => Some(Message::SwitchDevToolsPanel(DevToolsPanel::Network)),
 
         // ── Browser DevTools ──────────────────────────────────────────────────
         InputKey::Char('b') => Some(Message::OpenBrowserDevTools),
@@ -351,6 +368,55 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::CharCtrl('d') => Some(Message::ToggleDebugOverlay {
             extension: crate::message::DebugOverlayKind::DebugPaint,
         }),
+
+        // ── Network panel — list navigation ───────────────────────────────────
+        InputKey::Up | InputKey::Char('k') if in_network => {
+            Some(Message::NetworkNavigate(NetworkNav::Up))
+        }
+        InputKey::Down | InputKey::Char('j') if in_network => {
+            Some(Message::NetworkNavigate(NetworkNav::Down))
+        }
+        InputKey::PageUp if in_network => Some(Message::NetworkNavigate(NetworkNav::PageUp)),
+        InputKey::PageDown if in_network => Some(Message::NetworkNavigate(NetworkNav::PageDown)),
+
+        // ── Network panel — request selection ────────────────────────────────
+        InputKey::Enter if in_network => {
+            // Re-fetch detail for the currently selected request (if any).
+            if let Some(handle) = state.session_manager.selected() {
+                if handle.session.network.selected_index.is_some() {
+                    return Some(Message::NetworkSelectRequest {
+                        index: handle.session.network.selected_index,
+                    });
+                }
+            }
+            None
+        }
+
+        // ── Network panel — detail sub-tab switching ──────────────────────────
+        InputKey::Char('g') if in_network => {
+            Some(Message::NetworkSwitchDetailTab(NetworkDetailTab::General))
+        }
+        InputKey::Char('h') if in_network => {
+            Some(Message::NetworkSwitchDetailTab(NetworkDetailTab::Headers))
+        }
+        InputKey::Char('q') if in_network => Some(Message::NetworkSwitchDetailTab(
+            NetworkDetailTab::RequestBody,
+        )),
+        InputKey::Char('s') if in_network => Some(Message::NetworkSwitchDetailTab(
+            NetworkDetailTab::ResponseBody,
+        )),
+        InputKey::Char('t') if in_network => {
+            Some(Message::NetworkSwitchDetailTab(NetworkDetailTab::Timing))
+        }
+
+        // ── Network panel — recording toggle ─────────────────────────────────
+        InputKey::Char(' ') if in_network => Some(Message::ToggleNetworkRecording),
+
+        // ── Network panel — clear history ─────────────────────────────────────
+        InputKey::CharCtrl('x') if in_network => state
+            .session_manager
+            .selected_id()
+            .map(|session_id| Message::ClearNetworkProfile { session_id }),
 
         // ── Inspector navigation (only active in Inspector panel) ─────────────
         InputKey::Up | InputKey::Char('k') if in_inspector => {
@@ -390,6 +456,9 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         }),
 
         // ── Quit still works from DevTools mode ───────────────────────────────
+        // Guard: 'q' is also used as RequestBody sub-tab in Network panel
+        // (handled above by the in_network guard). At this point in the match
+        // we are NOT in the Network panel, so this is a safe global quit.
         InputKey::Char('q') => Some(Message::RequestQuit),
 
         // Force quit

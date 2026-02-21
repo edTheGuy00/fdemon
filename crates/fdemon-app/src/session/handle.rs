@@ -47,6 +47,21 @@ pub struct SessionHandle {
     /// tasks from continuing after the session has ended. Set by
     /// `VmServicePerformanceMonitoringStarted`, cleared on disconnect/close.
     pub perf_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Shutdown sender for the network monitoring polling task.
+    ///
+    /// Sending `true` stops the network polling loop cleanly. Stored as `Arc`
+    /// because the `Message` enum (which carries the initial sender) requires
+    /// `Clone`. Set by `VmServiceNetworkMonitoringStarted`, cleared on
+    /// disconnect.
+    pub network_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// JoinHandle for the network monitoring polling task.
+    ///
+    /// Aborted on session close or VM disconnect to prevent zombie polling
+    /// tasks from continuing after the session has ended. Set by
+    /// `VmServiceNetworkMonitoringStarted`, cleared on disconnect/close.
+    pub network_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -59,6 +74,8 @@ impl std::fmt::Debug for SessionHandle {
             .field("vm_request_handle", &self.vm_request_handle)
             .field("has_perf_shutdown", &self.perf_shutdown_tx.is_some())
             .field("has_perf_task", &self.perf_task_handle.is_some())
+            .field("has_network_shutdown", &self.network_shutdown_tx.is_some())
+            .field("has_network_task", &self.network_task_handle.is_some())
             .finish()
     }
 }
@@ -75,6 +92,8 @@ impl SessionHandle {
             vm_request_handle: None,
             perf_shutdown_tx: None,
             perf_task_handle: None,
+            network_shutdown_tx: None,
+            network_task_handle: None,
         }
     }
 

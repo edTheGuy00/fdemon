@@ -9,6 +9,7 @@
 //! - `performance`: Frame selection, memory sample, and allocation profile handlers
 
 pub mod inspector;
+pub(crate) mod network;
 pub(crate) mod performance;
 
 pub use inspector::{
@@ -91,6 +92,7 @@ pub fn map_rpc_error(raw: &str) -> DevToolsError {
 pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
     match panel {
         "performance" => DevToolsPanel::Performance,
+        "network" | "net" => DevToolsPanel::Network,
         _ => DevToolsPanel::Inspector, // "layout" falls through to Inspector
     }
 }
@@ -165,6 +167,23 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
             }
         }
         DevToolsPanel::Performance => {}
+        DevToolsPanel::Network => {
+            // Start network monitoring if the VM is connected and extensions
+            // are not known to be unavailable.
+            if let Some(handle) = state.session_manager.selected() {
+                let session_id = handle.session.id;
+                let vm_connected = handle.session.vm_connected;
+                let extensions_unavailable =
+                    handle.session.network.extensions_available == Some(false);
+                if vm_connected && !extensions_unavailable {
+                    return UpdateResult::action(UpdateAction::StartNetworkMonitoring {
+                        session_id,
+                        handle: None, // hydrated by process.rs
+                        poll_interval_ms: 1000,
+                    });
+                }
+            }
+        }
     }
 
     UpdateResult::none()

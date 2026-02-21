@@ -1280,6 +1280,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 }
                 handle.perf_shutdown_tx = None;
                 handle.session.performance.monitoring_active = false;
+                // Abort the network monitoring polling task and signal it to stop.
+                if let Some(h) = handle.network_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(ref tx) = handle.network_shutdown_tx {
+                    let _ = tx.send(true);
+                }
+                handle.network_shutdown_tx = None;
             }
             UpdateResult::none()
         }
@@ -1573,6 +1581,58 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             profile,
         } => devtools::handle_allocation_profile_received(state, session_id, profile),
+
+        // ── Network Monitor Messages (Phase 4, Task 04) ──────────────────────
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp,
+            entries,
+        } => devtools::network::handle_http_profile_received(state, session_id, timestamp, entries),
+
+        Message::VmServiceHttpRequestDetailReceived { session_id, detail } => {
+            devtools::network::handle_http_request_detail_received(state, session_id, detail)
+        }
+
+        Message::VmServiceHttpRequestDetailFailed { session_id, error } => {
+            devtools::network::handle_http_request_detail_failed(state, session_id, error)
+        }
+
+        Message::VmServiceNetworkMonitoringStarted {
+            session_id,
+            network_shutdown_tx,
+            network_task_handle,
+        } => devtools::network::handle_network_monitoring_started(
+            state,
+            session_id,
+            network_shutdown_tx,
+            network_task_handle,
+        ),
+
+        Message::VmServiceNetworkExtensionsUnavailable { session_id } => {
+            devtools::network::handle_network_extensions_unavailable(state, session_id)
+        }
+
+        Message::NetworkNavigate(nav) => devtools::network::handle_network_navigate(state, nav),
+
+        Message::NetworkSelectRequest { index } => {
+            devtools::network::handle_network_select_request(state, index)
+        }
+
+        Message::NetworkSwitchDetailTab(tab) => {
+            devtools::network::handle_network_switch_detail_tab(state, tab)
+        }
+
+        Message::ToggleNetworkRecording => {
+            devtools::network::handle_toggle_network_recording(state)
+        }
+
+        Message::ClearNetworkProfile { session_id } => {
+            devtools::network::handle_clear_network_profile(state, session_id)
+        }
+
+        Message::NetworkFilterChanged(filter) => {
+            devtools::network::handle_network_filter_changed(state, filter)
+        }
     }
 }
 

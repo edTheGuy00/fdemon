@@ -270,6 +270,57 @@ pub fn handle_action(
                 }
             });
         }
+
+        // ─────────────────────────────────────────────────────────
+        // Network Monitoring (Phase 4, Task 05)
+        // ─────────────────────────────────────────────────────────
+        UpdateAction::StartNetworkMonitoring {
+            session_id,
+            handle,
+            poll_interval_ms,
+        } => {
+            // `handle` is guaranteed to be Some here because process.rs
+            // discards actions where it couldn't hydrate the handle.
+            if let Some(vm_handle) = handle {
+                spawn_network_monitoring(session_id, vm_handle, msg_tx, poll_interval_ms);
+            } else {
+                warn!(
+                    "StartNetworkMonitoring reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        UpdateAction::FetchHttpRequestDetail {
+            session_id,
+            request_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_fetch_http_request_detail(session_id, request_id, handle, msg_tx);
+            } else {
+                warn!(
+                    "FetchHttpRequestDetail reached handle_action with no VmRequestHandle \
+                     for session {} — skipping",
+                    session_id
+                );
+            }
+        }
+
+        UpdateAction::ClearHttpProfile {
+            session_id,
+            vm_handle,
+        } => {
+            if let Some(handle) = vm_handle {
+                spawn_clear_http_profile(session_id, handle, msg_tx);
+            } else {
+                tracing::debug!(
+                    "ClearHttpProfile for session {} — no VM handle (VM disconnected), skipping",
+                    session_id
+                );
+            }
+        }
     }
 }
 
@@ -1385,6 +1436,295 @@ fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmRequestHandle)
                 );
             }
         }
+    });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Network monitoring helpers (Phase 4, Task 05)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Minimum network polling interval (500ms) to avoid excessive VM Service calls.
+const NETWORK_POLL_MIN_MS: u64 = 500;
+
+/// Spawn the periodic HTTP-profile polling task for a session.
+///
+/// Creates a `watch::channel(false)` shutdown channel outside the spawned task
+/// so that both the sender and the `JoinHandle` are available to package into
+/// `VmServiceNetworkMonitoringStarted`. The TEA layer can then:
+/// - Signal the task to stop by sending `true` on the shutdown channel, and
+/// - Abort the task directly via the `JoinHandle` if needed.
+///
+/// The polling loop:
+/// 1. Sends `VmServiceNetworkMonitoringStarted` (carries lifecycle handles).
+/// 2. Calls `ext.dart.io.httpEnableTimelineLogging(enabled: true)`.
+///    - If the extension is unavailable (release mode), sends
+///      `VmServiceNetworkExtensionsUnavailable` and exits.
+/// 3. Best-effort: enables socket profiling via `ext.dart.io.socketProfilingEnabled`.
+/// 4. Polls `ext.dart.io.getHttpProfile` at `poll_interval_ms` (min 500ms),
+///    passing the previous response's `timestamp` as `updatedSince` for
+///    incremental updates.
+/// 5. Exits when the shutdown channel receives `true` or `msg_tx` is closed.
+fn spawn_network_monitoring(
+    session_id: SessionId,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+    poll_interval_ms: u64,
+) {
+    let poll_interval_ms = poll_interval_ms.max(NETWORK_POLL_MIN_MS);
+
+    // Create the shutdown channel outside the task so both ends are available
+    // before the task starts running.
+    let (network_shutdown_tx, mut network_shutdown_rx) = tokio::sync::watch::channel(false);
+    // Arc is required because Message derives Clone and watch::Sender does not impl Clone.
+    let network_shutdown_tx = std::sync::Arc::new(network_shutdown_tx);
+
+    // The JoinHandle from `tokio::spawn` is only available after the call, but
+    // the task will read it from the slot when sending the "started" message.
+    // We use `Arc<Mutex<Option<>>>` as a rendezvous — the slot is filled
+    // synchronously (before any await) after spawn returns.
+    let task_handle_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let task_handle_slot_for_msg = task_handle_slot.clone();
+
+    let join_handle = tokio::spawn(async move {
+        use fdemon_daemon::vm_service::network;
+
+        // Notify the TEA layer that monitoring has started, passing the lifecycle
+        // handles so the session can store them for later cleanup. The slot is
+        // populated synchronously by the caller before this first `.await` runs.
+        if msg_tx
+            .send(Message::VmServiceNetworkMonitoringStarted {
+                session_id,
+                network_shutdown_tx,
+                network_task_handle: task_handle_slot_for_msg,
+            })
+            .await
+            .is_err()
+        {
+            // Engine shutting down.
+            return;
+        }
+
+        // Obtain the main isolate ID (cached after the first successful call).
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "Network monitoring: could not get isolate ID for session {}: {}",
+                    session_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        // Step 1: Enable HTTP timeline logging so the VM starts recording requests.
+        // If the extension is not available (release mode), inform the TEA layer
+        // and exit — no point polling for data that will never arrive.
+        match network::enable_http_timeline_logging_handle(&handle, &isolate_id, true).await {
+            Ok(_) => {
+                tracing::info!(
+                    "Network monitoring: HTTP timeline logging enabled for session {}",
+                    session_id
+                );
+            }
+            Err(e) => {
+                // `Error::Protocol` is the variant returned when the VM Service
+                // reports a JSON-RPC error (-32601 "Method not found"), which
+                // indicates the extension is not registered in release/profile mode.
+                if matches!(e, fdemon_core::Error::Protocol { .. }) {
+                    tracing::info!(
+                        "Network monitoring: ext.dart.io extensions not available for \
+                         session {} (release mode?): {}",
+                        session_id,
+                        e
+                    );
+                    let _ = msg_tx
+                        .send(Message::VmServiceNetworkExtensionsUnavailable { session_id })
+                        .await;
+                    return;
+                }
+                // Other errors (channel closed, transient) — log and continue.
+                // The polling loop will fail gracefully if the VM is gone.
+                tracing::warn!(
+                    "Network monitoring: failed to enable HTTP timeline logging for \
+                     session {}: {}",
+                    session_id,
+                    e
+                );
+            }
+        }
+
+        // Step 2: Best-effort — enable socket profiling. Failure is non-fatal.
+        if let Err(e) =
+            network::set_socket_profiling_enabled_handle(&handle, &isolate_id, true).await
+        {
+            tracing::debug!(
+                "Network monitoring: socket profiling unavailable for session {} \
+                 (non-fatal): {}",
+                session_id,
+                e
+            );
+        }
+
+        // Step 3: Start incremental polling loop.
+        let mut poll_tick =
+            tokio::time::interval(tokio::time::Duration::from_millis(poll_interval_ms));
+        // Track the last profile timestamp for incremental `updatedSince` polling.
+        let mut last_timestamp: Option<i64> = None;
+
+        loop {
+            tokio::select! {
+                _ = poll_tick.tick() => {
+                    match network::get_http_profile_handle(&handle, &isolate_id, last_timestamp).await {
+                        Ok(profile) => {
+                            // Always update the timestamp so the next poll only returns new data.
+                            last_timestamp = Some(profile.timestamp);
+                            if !profile.requests.is_empty()
+                                && msg_tx
+                                    .send(Message::VmServiceHttpProfileReceived {
+                                        session_id,
+                                        timestamp: profile.timestamp,
+                                        entries: profile.requests,
+                                    })
+                                    .await
+                                    .is_err()
+                            {
+                                // Engine shutting down.
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            // Transient errors (isolate paused during reload, etc.)
+                            // are expected — log at debug level and retry next tick.
+                            tracing::debug!(
+                                "Network monitoring: HTTP profile poll failed for \
+                                 session {} (non-fatal): {}",
+                                session_id,
+                                e
+                            );
+                        }
+                    }
+                }
+                _ = network_shutdown_rx.changed() => {
+                    if *network_shutdown_rx.borrow() {
+                        tracing::info!(
+                            "Network monitoring: shutdown signal received for session {}",
+                            session_id
+                        );
+                        break;
+                    }
+                }
+            }
+        }
+    });
+
+    // Synchronously store the JoinHandle in the slot. The task hasn't run yet
+    // (tokio tasks don't run until the current thread yields to the runtime),
+    // so the slot is populated before the first `.await` inside the task.
+    let _ = task_handle_slot
+        .lock()
+        .map(|mut slot| *slot = Some(join_handle));
+}
+
+/// Spawn a one-shot task that fetches full detail for a single HTTP request.
+///
+/// Uses `ext.dart.io.getHttpProfileRequest` to retrieve request/response
+/// headers, bodies, timeline events, and connection info.
+///
+/// Sends `Message::VmServiceHttpRequestDetailReceived` on success or
+/// `Message::VmServiceHttpRequestDetailFailed` on failure.
+fn spawn_fetch_http_request_detail(
+    session_id: SessionId,
+    request_id: String,
+    handle: VmRequestHandle,
+    msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        use fdemon_daemon::vm_service::network;
+
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "FetchHttpRequestDetail: could not get isolate ID for session {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::VmServiceHttpRequestDetailFailed {
+                        session_id,
+                        error: format!("Could not get isolate ID: {e}"),
+                    })
+                    .await;
+                return;
+            }
+        };
+
+        match network::get_http_profile_request_handle(&handle, &isolate_id, &request_id).await {
+            Ok(detail) => {
+                let _ = msg_tx
+                    .send(Message::VmServiceHttpRequestDetailReceived {
+                        session_id,
+                        detail: Box::new(detail),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                tracing::debug!(
+                    "FetchHttpRequestDetail: request detail fetch failed for session {}: {}",
+                    session_id,
+                    e
+                );
+                let _ = msg_tx
+                    .send(Message::VmServiceHttpRequestDetailFailed {
+                        session_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn a one-shot task that clears the VM-side HTTP profile.
+///
+/// Calls `ext.dart.io.clearHttpProfile`. The local `NetworkState` is cleared
+/// immediately by the TEA handler; this action resets the VM's request history.
+/// Fire-and-forget: errors are logged at warn level but do not propagate.
+fn spawn_clear_http_profile(
+    session_id: SessionId,
+    handle: VmRequestHandle,
+    _msg_tx: mpsc::Sender<Message>,
+) {
+    tokio::spawn(async move {
+        use fdemon_daemon::vm_service::network;
+
+        let isolate_id = match handle.main_isolate_id().await {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::warn!(
+                    "ClearHttpProfile: could not get isolate ID for session {} \
+                     (non-fatal, VM may have disconnected): {}",
+                    session_id,
+                    e
+                );
+                return;
+            }
+        };
+
+        if let Err(e) = network::clear_http_profile_handle(&handle, &isolate_id).await {
+            tracing::warn!(
+                "ClearHttpProfile: failed to clear HTTP profile for session {} \
+                 (non-fatal): {}",
+                session_id,
+                e
+            );
+        }
+        // Fire-and-forget: the local NetworkState is already cleared by the TEA
+        // handler that produced the ClearHttpProfile action (handle_clear_network_profile).
+        // No follow-up message is needed — sending ClearNetworkProfile back would
+        // re-trigger the handler and create an infinite loop.
     });
 }
 

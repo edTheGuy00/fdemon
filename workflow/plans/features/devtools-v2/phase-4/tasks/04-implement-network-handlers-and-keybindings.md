@@ -448,3 +448,41 @@ mod tests {
 - **Recording toggle doesn't stop the polling task**: The polling task checks `session.network.recording` each cycle and skips the poll when false. This avoids the complexity of stopping/restarting the background task. The task only dies on session disconnect.
 - **Key binding ordering**: Network-specific guards (`if in_network`) must be placed correctly relative to global DevTools keys. The `'n'` key is a global panel switch (not guarded by `in_network`). Sub-tab keys (`g`, `h`, `q`, `s`, `t`) are only active `if in_network`. This prevents conflicts with other panels using the same keys.
 - **Filter mode**: The `/` key for entering filter mode is commented out initially. Full filter input (text entry with cursor) would require a mini text input widget, which can be added as a follow-up. For now, the `NetworkFilterChanged` message handler exists but is only triggered programmatically.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/network.rs` | NEW — all network handler functions with 19 unit tests |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `pub(crate) mod network;`, extended `handle_switch_panel()` with Network arm, extended `parse_default_panel()` with `"network"` / `"net"` |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `NetworkNav` and `NetworkDetailTab` imports; added `in_network` guard; added `'n'` panel-switch key; added Up/Down/j/k/PageUp/PageDown navigation, Enter selection, Esc deselect, g/h/q/s/t detail-tab, Space recording toggle, Ctrl+x clear |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced all 11 network message stub impls with calls to `devtools::network::*` handler functions; added network task abort to `VmServiceDisconnected` |
+| `crates/fdemon-app/src/session/handle.rs` | Added `network_shutdown_tx` and `network_task_handle` fields to `SessionHandle`; updated `new()`, `Debug` impl |
+
+### Notable Decisions/Tradeoffs
+
+1. **SessionHandle fields**: The task called `handle.network_shutdown_tx` and `handle.network_task_handle` in the handler — these required adding fields to `SessionHandle`. This mirrors the identical pattern for `perf_shutdown_tx` / `perf_task_handle`.
+2. **Esc key in Network panel**: Rather than immediately exiting DevTools, Esc first clears the network request selection (analogous to how Performance deselects a frame before exiting). This provides a more natural "dismiss" UX.
+3. **`'q'` key guard ordering**: The `'q'` sub-tab key is guarded by `if in_network` and appears before the global `'q' => RequestQuit` arm. This is safe because in_network is false for other panels.
+4. **`fetch_selected_detail_action` uses immutable borrow**: The helper takes `&AppState` (not `&mut`) to avoid borrow conflicts when called after navigation mutations.
+5. **Network task cleanup on disconnect**: Added abort/shutdown for `network_task_handle`/`network_shutdown_tx` to `VmServiceDisconnected` handler, matching the same cleanup done for performance tasks.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (992 passed, 5 ignored)
+- `cargo test -p fdemon-app handler::devtools::network` — Passed (19 new tests)
+- `cargo fmt --all` — No changes needed
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+- `cargo check --workspace` — Passed
+
+### Risks/Limitations
+
+1. **`'q'` key conflict in Network panel**: The `'q'` key switches to RequestBody sub-tab when `in_network` is active. Users who habitually press `'q'` to quit while in the Network panel will instead switch detail tabs. This is mitigated by the fact that Esc exits DevTools mode from any panel.
+2. **`'h'` key conflict**: `'h'` is Headers sub-tab in Network but Collapse in Inspector. The guards are mutually exclusive so there is no actual conflict, but it may surprise users switching panels.

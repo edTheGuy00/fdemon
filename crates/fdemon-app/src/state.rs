@@ -124,6 +124,9 @@ pub enum DevToolsPanel {
 
     /// FPS, memory usage, and frame timing display.
     Performance,
+
+    /// HTTP/WebSocket network request monitor.
+    Network,
 }
 
 /// A user-friendly error with an actionable hint for DevTools panels.

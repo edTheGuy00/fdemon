@@ -502,3 +502,38 @@ mod tests {
 - **`response` may be `null`**: For in-flight requests, the `response` field is `null`. All response field extraction chains through `.get("response")` must handle this gracefully with `.and_then()`.
 - **Extension availability**: If `ext.dart.io.*` extensions are not registered (e.g., release mode), the calls fail with error code -32601. Use `is_extension_not_available()` from `extensions/mod.rs` to detect this and show an appropriate message in the UI.
 - **No stream subscription needed**: Unlike performance monitoring (which uses `Extension` stream events), network profiling works purely via polling `getHttpProfile`. No changes to `RESUBSCRIBE_STREAMS` or stream event handlers are needed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/network.rs` | NEW — All network VM Service extension wrappers and pure parsers |
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | Added 7 `ext.dart.io.*` constants in new "Network Profiling" section |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod network;` and re-exports for 6 public functions + `HttpProfile` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`parse_http_profile_entry` is `pub`**: The task spec requires it to be accessible from the test module in `network.rs`. Since tests in the same file need it and callers in `fdemon-app` may want to reuse it for incremental updates, keeping it `pub` (not `pub(crate)`) matches the established pattern in `performance.rs` (`parse_class_heap_stats` is private but `parse_memory_usage` is public).
+
+2. **`enabled` field accepts JSON bool or string**: The `enable_http_timeline_logging` and `set_socket_profiling_enabled` responses may return `enabled` as either a JSON boolean (`true`) or string (`"true"`) depending on the Dart/Flutter version. The `.as_bool().or_else(|| v.as_str().map(|s| s == "true"))` chain handles both, matching the task spec exactly.
+
+3. **Graceful degradation throughout**: All optional fields use `.unwrap_or_default()` / `.unwrap_or(0)` / `.unwrap_or_default()` patterns. Individual malformed entries are silently skipped via `filter_map`. This matches the established pattern in `parse_class_heap_stats`.
+
+4. **19 additional tests beyond task spec**: Added edge-case tests (`test_parse_body_bytes_null_value`, `test_parse_headers_none`, `test_parse_connection_info_partial`, `test_parse_http_profile_no_requests_field`, `test_parse_http_profile_entry_skips_missing_required_fields`, `test_parse_http_profile_entry_with_error`, `test_parse_socket_entry_skips_missing_id`, `test_parse_socket_profile_partial_entries`, `test_parse_http_profile_request_detail_missing_required_fields_returns_error`) to improve coverage of error paths and graceful degradation.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (375 tests: 19 new network tests + 356 pre-existing)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied, re-checked, still passes
+
+### Risks/Limitations
+
+1. **No live VM tests**: All tests are pure parser functions with JSON fixtures — no live Dart VM is available in CI. The async functions (`enable_http_timeline_logging`, `get_http_profile`, etc.) are not independently tested, but their implementations follow the identical pattern as `overlays.rs` functions which are similarly untested in isolation.

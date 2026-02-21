@@ -192,6 +192,52 @@ pub enum UpdateAction {
     /// If `browser` is empty, the platform default opener is used.
     OpenBrowserDevTools { url: String, browser: String },
 
+    /// Start the network monitoring polling task.
+    ///
+    /// Spawns a background task that polls `ext.dart.io.getHttpProfile` at
+    /// the given interval and sends `VmServiceHttpProfileReceived` messages.
+    ///
+    /// `handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` discards the action when `handle`
+    /// remains `None` (VM not yet connected).
+    StartNetworkMonitoring {
+        session_id: SessionId,
+        /// VM Service request handle used by the polling task.
+        /// `None` until hydrated by `process.rs`.
+        handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// Polling interval in milliseconds.
+        poll_interval_ms: u64,
+    },
+
+    /// Fetch full detail for a specific HTTP request.
+    ///
+    /// Issues a `ext.dart.io.getHttpProfileRequest` call and sends
+    /// `VmServiceHttpRequestDetailReceived` or `VmServiceHttpRequestDetailFailed`.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    FetchHttpRequestDetail {
+        session_id: SessionId,
+        /// The unique ID of the HTTP request to fetch detail for.
+        request_id: String,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
+    /// Clear the HTTP profile on the VM.
+    ///
+    /// Issues a `ext.dart.io.clearHttpProfile` call to reset the VM's
+    /// request history. The local `NetworkState` is cleared immediately
+    /// by the handler; this action clears the VM side.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs`.
+    ClearHttpProfile {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+    },
+
     /// Dispose both DevTools VM object groups when exiting DevTools mode.
     ///
     /// Disposes `"fdemon-inspector-1"` and `"devtools-layout"` groups to

@@ -57,6 +57,9 @@ pub fn process_message(
             let action = action.and_then(|a| hydrate_fetch_layout_data(a, state));
             let action = action.and_then(|a| hydrate_toggle_overlay(a, state));
             let action = action.and_then(|a| hydrate_dispose_devtools_groups(a, state));
+            let action = action.and_then(|a| hydrate_start_network_monitoring(a, state));
+            let action = action.and_then(|a| hydrate_fetch_http_request_detail(a, state));
+            let action = action.and_then(|a| hydrate_clear_http_profile(a, state));
 
             if let Some(action) = action {
                 handle_action(
@@ -258,6 +261,107 @@ fn hydrate_dispose_devtools_groups(action: UpdateAction, state: &AppState) -> Op
             .get(session_id)
             .and_then(|h| h.vm_request_handle.clone())?;
         return Some(UpdateAction::DisposeDevToolsGroups {
+            session_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `StartNetworkMonitoring` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection, since there is nothing to poll without one.
+/// All other action variants are returned unchanged.
+fn hydrate_start_network_monitoring(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::StartNetworkMonitoring {
+        session_id,
+        handle,
+        poll_interval_ms,
+    } = action
+    {
+        if handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::StartNetworkMonitoring {
+                session_id,
+                handle,
+                poll_interval_ms,
+            });
+        }
+        let vm_handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::StartNetworkMonitoring {
+            session_id,
+            handle: Some(vm_handle),
+            poll_interval_ms,
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `FetchHttpRequestDetail` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_fetch_http_request_detail(
+    action: UpdateAction,
+    state: &AppState,
+) -> Option<UpdateAction> {
+    if let UpdateAction::FetchHttpRequestDetail {
+        session_id,
+        request_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::FetchHttpRequestDetail {
+                session_id,
+                request_id,
+                vm_handle,
+            });
+        }
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::FetchHttpRequestDetail {
+            session_id,
+            request_id,
+            vm_handle: Some(handle),
+        });
+    }
+    Some(action)
+}
+
+/// Hydrate `ClearHttpProfile` with the `VmRequestHandle` from the session.
+///
+/// Returns `None` (discards the action) if the session has no active VM
+/// connection. All other action variants are returned unchanged.
+fn hydrate_clear_http_profile(action: UpdateAction, state: &AppState) -> Option<UpdateAction> {
+    if let UpdateAction::ClearHttpProfile {
+        session_id,
+        vm_handle,
+    } = action
+    {
+        if vm_handle.is_some() {
+            // Already hydrated.
+            return Some(UpdateAction::ClearHttpProfile {
+                session_id,
+                vm_handle,
+            });
+        }
+        // Silently discard if VM is not connected — nothing to clear on VM side.
+        let handle = state
+            .session_manager
+            .get(session_id)
+            .and_then(|h| h.vm_request_handle.clone())?;
+        return Some(UpdateAction::ClearHttpProfile {
             session_id,
             vm_handle: Some(handle),
         });

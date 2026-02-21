@@ -51,6 +51,7 @@ pub mod error;
 pub mod events;
 pub mod exception_block;
 pub mod logging;
+pub mod network;
 pub mod performance;
 pub mod stack_trace;
 pub mod types;
@@ -74,6 +75,10 @@ pub use events::{
     DaemonLogMessage, DaemonMessage, DeviceInfo,
 };
 pub use exception_block::{ExceptionBlock, ExceptionBlockParser, FeedResult};
+pub use network::{
+    format_bytes, format_duration_ms, ConnectionInfo, HttpProfileEntry, HttpProfileEntryDetail,
+    HttpProfileEvent, NetworkDetailTab, NetworkTiming, SocketEntry,
+};
 pub use performance::{
     AllocationProfile, ClassHeapStats, FramePhases, FrameTiming, GcEvent, MemorySample,
     MemoryUsage, PerformanceStats, RingBuffer, FRAME_BUDGET_120FPS_MICROS,

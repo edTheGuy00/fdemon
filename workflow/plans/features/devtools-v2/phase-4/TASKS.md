@@ -63,15 +63,15 @@ Wave 5         └────────────────┬───�
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-add-network-domain-types](tasks/01-add-network-domain-types.md) | Not Started | - | `fdemon-core` | `network.rs` (NEW), `lib.rs` |
-| 2 | [02-implement-vm-service-network-extensions](tasks/02-implement-vm-service-network-extensions.md) | Not Started | 1 | `fdemon-daemon` | `vm_service/network.rs` (NEW), `vm_service/extensions/mod.rs`, `vm_service/mod.rs` |
-| 3 | [03-add-network-state-and-messages](tasks/03-add-network-state-and-messages.md) | Not Started | 1 | `fdemon-app` | `session/network.rs` (NEW), `session/session.rs`, `session/mod.rs`, `state.rs`, `message.rs`, `handler/mod.rs` |
-| 4 | [04-implement-network-handlers-and-keybindings](tasks/04-implement-network-handlers-and-keybindings.md) | Not Started | 3 | `fdemon-app` | `handler/devtools/network.rs` (NEW), `handler/devtools/mod.rs`, `handler/keys.rs`, `handler/update.rs` |
-| 5 | [05-wire-network-monitoring-engine](tasks/05-wire-network-monitoring-engine.md) | Not Started | 2, 4 | `fdemon-app` | `actions.rs`, `process.rs`, `session/handle.rs` |
-| 6 | [06-implement-request-table-widget](tasks/06-implement-request-table-widget.md) | Not Started | 1, 3 | `fdemon-tui` | `widgets/devtools/network/request_table.rs` (NEW) |
-| 7 | [07-implement-request-details-widget](tasks/07-implement-request-details-widget.md) | Not Started | 1, 3 | `fdemon-tui` | `widgets/devtools/network/request_details.rs` (NEW) |
-| 8 | [08-wire-network-monitor-panel](tasks/08-wire-network-monitor-panel.md) | Not Started | 4, 6, 7 | `fdemon-tui` | `widgets/devtools/network/mod.rs` (NEW), `widgets/devtools/mod.rs` |
-| 9 | [09-final-test-and-cleanup](tasks/09-final-test-and-cleanup.md) | Not Started | 5, 8 | workspace | All devtools modules |
+| 1 | [01-add-network-domain-types](tasks/01-add-network-domain-types.md) | Done | - | `fdemon-core` | `network.rs` (NEW), `lib.rs` |
+| 2 | [02-implement-vm-service-network-extensions](tasks/02-implement-vm-service-network-extensions.md) | Done | 1 | `fdemon-daemon` | `vm_service/network.rs` (NEW), `vm_service/extensions/mod.rs`, `vm_service/mod.rs` |
+| 3 | [03-add-network-state-and-messages](tasks/03-add-network-state-and-messages.md) | Done | 1 | `fdemon-app` | `session/network.rs` (NEW), `session/session.rs`, `session/mod.rs`, `state.rs`, `message.rs`, `handler/mod.rs` |
+| 4 | [04-implement-network-handlers-and-keybindings](tasks/04-implement-network-handlers-and-keybindings.md) | Done | 3 | `fdemon-app` | `handler/devtools/network.rs` (NEW), `handler/devtools/mod.rs`, `handler/keys.rs`, `handler/update.rs` |
+| 5 | [05-wire-network-monitoring-engine](tasks/05-wire-network-monitoring-engine.md) | Done | 2, 4 | `fdemon-app` | `actions.rs`, `process.rs`, `session/handle.rs` |
+| 6 | [06-implement-request-table-widget](tasks/06-implement-request-table-widget.md) | Done | 1, 3 | `fdemon-tui` | `widgets/devtools/network/request_table.rs` (NEW) |
+| 7 | [07-implement-request-details-widget](tasks/07-implement-request-details-widget.md) | Done | 1, 3 | `fdemon-tui` | `widgets/devtools/network/request_details.rs` (NEW) |
+| 8 | [08-wire-network-monitor-panel](tasks/08-wire-network-monitor-panel.md) | Done | 4, 6, 7 | `fdemon-tui` | `widgets/devtools/network/mod.rs` (NEW), `widgets/devtools/mod.rs` |
+| 9 | [09-final-test-and-cleanup](tasks/09-final-test-and-cleanup.md) | Done | 5, 8 | workspace | All devtools modules |
 
 ## Dispatch Plan
 

@@ -414,3 +414,43 @@ mod tests {
 - **Narrow mode interaction**: In narrow terminals, selecting a request and pressing Enter shows the detail view full-width. Pressing Esc returns to the table. This is handled by the handler logic (selection state), not the widget.
 - **`filtered_entries()` called once**: The parent widget calls `filtered_entries()` once and passes the slice to both the table and the selection logic. This avoids computing the filter twice per render.
 - **`selected_detail.as_deref()`**: The `Box<HttpProfileEntryDetail>` is deref'd to `&HttpProfileEntryDetail` for the details widget. This avoids cloning.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Rewrote stub into full `NetworkMonitor` widget; made `request_details` and `request_table` submodules public; added `#[cfg(test)] mod tests;`; implemented all layout variants (wide/narrow/table-only), disconnected, extensions-unavailable, and background-clear states |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Created new file with 28 unit tests covering no-panic/basic render, disconnected state, extensions unavailable, recording indicator, entry display, wide/narrow layout variants, footer row reservation, paused recording, and active filter |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `pub use network::NetworkMonitor;` re-export; added `[n] Network` tab to tab bar array; replaced `DevToolsPanel::Network => {}` stub with full render dispatch using `LazyLock` for default network state; added context-aware footer hints |
+| `crates/fdemon-app/src/actions.rs` | Fixed pre-existing lifetime error (E0597) in `spawn_network_monitoring` by replacing `if let Ok(mut slot) = task_handle_slot.lock() { ... }` with `let _ = task_handle_slot.lock().map(|mut slot| *slot = Some(join_handle));` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmConnectionStatus::Reconnecting` has `max_attempts` field**: The task spec showed only `attempt` in the match arm, but the actual enum variant has both `attempt` and `max_attempts`. The implementation correctly matches both and displays `attempt/max_attempts` in the reconnecting message, which is more informative.
+
+2. **`std::sync::LazyLock` for default `NetworkState`**: The render dispatch in `devtools/mod.rs` needs a default `NetworkState` reference when no session is active. Used `LazyLock<NetworkState>` (stable since Rust 1.80) to avoid re-creating the default on every render frame, matching the pattern used by `PerformancePanel`.
+
+3. **Footer hints use `is_some_and`**: Initially used `map_or(false, ...)` but Clippy warned to prefer `is_some_and`. Changed to `self.session.is_some_and(|s| s.session.network.selected_index.is_some())`.
+
+4. **Pre-existing lifetime bug in `actions.rs`**: The `spawn_network_monitoring` function had a compile error (E0597) that blocked `fdemon-app` from building. This was a pre-existing defect from task 04. Fixed as a prerequisite since `fdemon-tui` depends on `fdemon-app`.
+
+5. **`render_narrow_detail` signature**: The task spec included a `filtered` parameter in `render_narrow_detail`, but the function only needs the selected entry from `NetworkState` directly. The parameter was omitted to avoid dead code.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (clean, no warnings in new code)
+- `cargo test -p fdemon-tui widgets::devtools::network` - Passed (92 tests: 28 new NetworkMonitor + 64 from tasks 06/07)
+- `cargo test -p fdemon-tui` - 695 passed, 1 pre-existing failure (`test_allocation_table_none_profile` in memory_chart — confirmed pre-existing before this task)
+- `cargo fmt --all` - Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `widgets::devtools::performance::memory_chart::tests::test_allocation_table_none_profile` fails but is unrelated to network monitor work. This was failing before this task and needs to be addressed separately.
+
+2. **Clippy warnings in tasks 06/07 files**: `request_details.rs` and `request_table.rs` have pre-existing Clippy warnings from tasks 06/07. Not addressed here as they are out of scope for this task.

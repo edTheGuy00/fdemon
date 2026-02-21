@@ -448,3 +448,37 @@ mod tests {
 - **Body display is basic**: No JSON pretty-printing or syntax highlighting in this initial implementation. Bodies are displayed as raw text. JSON formatting can be added as a follow-up enhancement.
 - **Scroll support deferred**: The body and headers views don't support scrolling in this initial implementation. For long bodies/headers, content is simply truncated at the bottom of the area. Scroll support can be added later by tracking a per-tab scroll offset.
 - **Timing breakdown is approximate**: The timing phases (Connect, Wait, Receive) are computed from event timestamps which may not always be present. When events are missing, the corresponding bar is not shown. The total duration from `entry.duration_ms()` is always accurate.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | NEW — `RequestDetails` widget with all 5 sub-tab renderers (General, Headers, RequestBody, ResponseBody, Timing), helper functions `method_style` and `status_color`, and 41 unit tests |
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Added `mod request_details` declaration and `pub use request_details::RequestDetails` re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **Bounds checking throughout render methods**: Added `y >= area.bottom()` guards at every row-advance to prevent rendering outside the allocated area, which satisfies the "no panic for any terminal size" acceptance criterion.
+2. **`truncate_str` reuse**: Used the existing `pub(super)` helper from `devtools/mod.rs` via `super::super::truncate_str`, staying consistent with the codebase pattern rather than duplicating logic.
+3. **3xx mapped to Cyan in `status_color`**: The task spec only specified 2xx=green, 4xx=yellow, 5xx=red. I added 3xx=cyan as a reasonable choice for redirects, consistent with common HTTP tooling conventions.
+4. **`network/mod.rs` already existed**: Task 06 (request_table) had already created this file, so I only needed to add `request_details` to the existing module declaration rather than creating it fresh.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (auto-formatted)
+- `cargo check -p fdemon-tui` - Passed (no errors)
+- `cargo test -p fdemon-tui -- widgets::devtools::network::request_details` - Passed (41/41 tests)
+- `cargo test -p fdemon-tui network` - Passed (69/69 network tests including pre-existing request_table tests)
+- `cargo check --workspace` - Passed (no errors)
+
+### Risks/Limitations
+
+1. **Pre-existing failing test**: `test_allocation_table_none_profile` in the performance memory_chart module was already failing before this task — not introduced by our changes.
+2. **Scroll not implemented**: As noted in the task, body and header content is truncated at the bottom of the area without scroll support. This is expected per the task spec.
+3. **No JSON pretty-printing**: Bodies are shown as raw text. JSON formatting is deferred as a follow-up enhancement per the task spec.

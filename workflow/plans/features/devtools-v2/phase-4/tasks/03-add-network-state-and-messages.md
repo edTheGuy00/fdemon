@@ -482,3 +482,83 @@ mod tests {
 - **`entries: Vec<HttpProfileEntry>` not `RingBuffer`**: Using `Vec` with manual eviction (instead of `RingBuffer`) because `merge_entries` needs to update existing entries by ID. `RingBuffer` doesn't support random-access updates. Eviction is oldest-first with `remove(0)` when `max_entries` exceeded.
 - **`selected_detail: Option<Box<...>>`**: Boxed to avoid bloating the struct size. Detail is fetched on-demand via `FetchHttpRequestDetail` action when a request is selected.
 - **Breaking changes to existing types**: Adding `DevToolsPanel::Network` requires updating all `match` arms on `DevToolsPanel`. The compiler will catch these — update each with a `Network => ...` arm (typically mirroring the `Performance` arm behavior).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/network.rs` | NEW — copied from main develop branch (Task 01 output): all network domain types with 20 tests |
+| `crates/fdemon-core/src/lib.rs` | Added `pub mod network;` and flat re-exports for all 8 network types |
+| `crates/fdemon-app/src/session/network.rs` | NEW — `NetworkState` struct with all fields, `merge_entries`, `filtered_entries`, `select_prev`/`select_next`, `clear`, `reset`, plus 10 unit tests |
+| `crates/fdemon-app/src/session/mod.rs` | Added `pub mod network;` and `pub use network::NetworkState;` |
+| `crates/fdemon-app/src/session/session.rs` | Added `use super::network::NetworkState;`, added `pub network: NetworkState` field, initialized in `Session::new()` |
+| `crates/fdemon-app/src/state.rs` | Added `DevToolsPanel::Network` variant |
+| `crates/fdemon-app/src/message.rs` | Added `NetworkNav` enum; added 11 new `Message` variants for VM Service network messages and UI interaction |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 3 new `UpdateAction` variants: `StartNetworkMonitoring`, `FetchHttpRequestDetail`, `ClearHttpProfile` |
+| `crates/fdemon-app/src/handler/update.rs` | Added handler arms for all 11 new `Message` variants |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `DevToolsPanel::Network => {}` arm in `handle_switch_panel` |
+| `crates/fdemon-app/src/actions.rs` | Added stub arms for 3 new `UpdateAction` variants (logged at debug level; full implementation deferred to Task 04+) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `DevToolsPanel::Network => {}` arm in render match; added Network panel footer hints |
+
+### Notable Decisions/Tradeoffs
+
+1. **Network types ported from main branch**: The worktree was on an older commit that didn't include Task 01's `fdemon-core/src/network.rs`. The file was ported directly from the main `develop` branch (identical content) to unblock this task.
+2. **Stub action arms in `actions.rs`**: The three new `UpdateAction` variants (`StartNetworkMonitoring`, `FetchHttpRequestDetail`, `ClearHttpProfile`) are handled with `debug!` log stubs — full background task implementation is deferred to Task 04. This keeps the match exhaustive without `todo!()` panics.
+3. **Handler arms added for all new messages**: All 11 new `Message` variants are handled in `update.rs` with real state mutations (not `todo!()`), making the code immediately functional for the state-management aspects even before Task 04 adds the background polling.
+4. **TUI stubs for Network panel**: `fdemon-tui/src/widgets/devtools/mod.rs` renders nothing for `DevToolsPanel::Network` — the actual widget will be added in Task 05. Footer hints for the Network panel are included as a placeholder.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --lib --workspace` — Passed (2,147 total tests: 916 fdemon-app + 349 fdemon-core + 348 fdemon-daemon + 534 fdemon-tui; 10 new NetworkState tests added)
+- `cargo clippy --workspace -- -D warnings` — Passed (zero warnings)
+- `cargo fmt --all` — Applied (minor formatting normalization)
+
+### Risks/Limitations
+
+1. **`VmServiceNetworkMonitoringStarted` handler is a no-op**: The shutdown sender and task handle are not stored because `SessionHandle` doesn't have those fields yet (Task 04 will add them). If this message arrives before Task 04, it will be silently ignored rather than panicking.
+2. **Network panel renders blank**: The TUI `DevToolsPanel::Network` arm renders nothing — the panel widget is Task 05's scope.
+
+---
+
+## Completion Summary (Main Repo Application)
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/network.rs` | NEW — `NetworkState` struct with all fields, `merge_entries`, `filtered_entries`, `select_prev`/`select_next`, `clear`, `reset`, plus 10 unit tests |
+| `crates/fdemon-app/src/session/mod.rs` | Added `pub mod network;` and `pub use network::NetworkState;` |
+| `crates/fdemon-app/src/session/session.rs` | Added `use super::network::NetworkState;` import, `pub network: NetworkState` field, and `network: NetworkState::default()` in `Session::new()` |
+| `crates/fdemon-app/src/state.rs` | Added `DevToolsPanel::Network` variant |
+| `crates/fdemon-app/src/message.rs` | Added `NetworkNav` enum and network `use` import; added 11 new `Message` variants for VM Service network messages and UI interaction |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 3 new `UpdateAction` variants: `StartNetworkMonitoring`, `FetchHttpRequestDetail`, `ClearHttpProfile` |
+| `crates/fdemon-app/src/handler/update.rs` | Added handler arms for all 11 new `Message` variants |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `DevToolsPanel::Network => {}` arm in `handle_switch_panel` |
+| `crates/fdemon-app/src/actions.rs` | Added stub arms for 3 new `UpdateAction` variants (logged at debug level; full implementation deferred to Task 04+) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `DevToolsPanel::Network => {}` arm in render match; added Network panel footer hints |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing test failure not caused by this task**: `test_allocation_table_none_profile` in `fdemon-tui` was already failing before these changes — confirmed by stashing all changes and re-running the test.
+2. **Stub action arms in `actions.rs`**: The three new `UpdateAction` variants (`StartNetworkMonitoring`, `FetchHttpRequestDetail`, `ClearHttpProfile`) are handled with `debug!` log stubs — full background task implementation is deferred to Task 04.
+3. **Handler arms for all new messages**: All 11 new `Message` variants are handled in `update.rs` with real state mutations, making the state-management aspects immediately functional.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app session::network` — Passed (10 new NetworkState tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_allocation_table_none_profile` fails in `fdemon-tui` — this is not related to Task 03 changes.
+2. **Network panel renders blank**: The TUI `DevToolsPanel::Network` arm renders nothing — the panel widget is Task 05's scope.

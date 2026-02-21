@@ -351,8 +351,8 @@ fn test_allocation_table_none_profile() {
         .collect();
 
     assert!(
-        content.contains("loading"),
-        "Should show loading message when profile is None"
+        content.contains("Waiting"),
+        "Should show waiting message when profile is None"
     );
 }
 

@@ -12,6 +12,7 @@ import 'package:talker_flutter/talker_flutter.dart';
 
 import 'logging/mixed_loggers.dart';
 import 'errors/flutter_errors.dart';
+import 'networking/http_requests.dart';
 
 final logger = Logger(printer: PrettyPrinter(methodCount: 3));
 final talker = TalkerFlutter.init();
@@ -83,6 +84,23 @@ class _Sample2TestPageState extends State<Sample2TestPage> {
                 ),
               ],
             ),
+          ]),
+          _buildSection('Network Requests', [
+            _buildButton('GET Post', fetchSinglePost),
+            _buildButton('GET List', fetchPostsList),
+            _buildButton('POST', createPost),
+            _buildButton('PUT', updatePost),
+            _buildButton('PATCH', patchPost),
+            _buildButton('DELETE', deletePost),
+            _buildButton('Comments', fetchComments),
+            _buildButton('Dog Image', fetchDogImage),
+            _buildButton('Cat Fact', fetchCatFact),
+            _buildButton('Headers', fetchWithHeaders),
+            _buildButton('Delay 2s', fetchDelayed),
+            _buildButton('404', fetch404),
+            _buildButton('500', fetch500),
+            _buildButton('Burst (6x)', burstRequests),
+            _buildButton('Run All', runAllRequests),
           ]),
           _buildSection('Mixed Loggers', [
             _buildButton('Mixed Demo', demonstrateMixedLoggers),

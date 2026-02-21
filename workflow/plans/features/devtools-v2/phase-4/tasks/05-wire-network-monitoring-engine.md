@@ -343,3 +343,43 @@ fn test_hydrate_clear_http_profile_fills_handle() {
 - **Single `UpdateAction` constraint**: If the TEA architecture only supports one action per `update()` call, network monitoring cannot be started in the same action as performance monitoring. The lazy start via `handle_switch_panel(Network)` avoids this issue.
 - **Polling interval**: Default 1000ms (1 second). This balances responsiveness with overhead. Configurable via settings (Phase 5).
 - **`updatedSince` is stored per-session**: The `last_poll_timestamp` in `NetworkState` tracks the timestamp for incremental polling. It's reset on clear.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/network.rs` | Added `VmRequestHandle`-accepting variants of the four network functions: `enable_http_timeline_logging_handle`, `get_http_profile_handle`, `get_http_profile_request_handle`, `clear_http_profile_handle`, `set_socket_profiling_enabled_handle`. Also imported `VmRequestHandle`. |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Re-exported the five new handle-accepting network functions. |
+| `crates/fdemon-app/src/process.rs` | Added three hydration functions (`hydrate_start_network_monitoring`, `hydrate_fetch_http_request_detail`, `hydrate_clear_http_profile`) and wired them into the hydration chain after `hydrate_dispose_devtools_groups`. |
+| `crates/fdemon-app/src/actions.rs` | Replaced stub `StartNetworkMonitoring`, `FetchHttpRequestDetail`, `ClearHttpProfile` action handlers with real implementations. Added `spawn_network_monitoring()`, `spawn_fetch_http_request_detail()`, and `spawn_clear_http_profile()` functions. Added `NETWORK_POLL_MIN_MS` constant. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmRequestHandle`-accepting network variants**: The existing `network.rs` functions accept `&VmServiceClient`, but background tasks only have `VmRequestHandle`. Added `_handle` suffix variants that accept `&VmRequestHandle` directly (both types have the same `call_extension()` method). This avoids duplicating the parsing logic and keeps the daemon crate as the single source of truth for VM protocol details.
+
+2. **Extension unavailability detection via `Error::Protocol`**: The task spec referenced `extensions::is_extension_not_available(&e)` which takes `&VmServiceError`, but `handle.call_extension()` returns `fdemon_core::Error`. Used `matches!(e, fdemon_core::Error::Protocol { .. })` instead, consistent with how `spawn_fetch_widget_tree` detects unavailable extensions.
+
+3. **No `ClearNetworkProfile` re-send from `spawn_clear_http_profile`**: The initial draft sent `ClearNetworkProfile` after VM-side clear, but this would create an infinite loop: `ClearNetworkProfile` → `handle_clear_network_profile` → `ClearHttpProfile` action → `spawn_clear_http_profile` → `ClearNetworkProfile` again. The local state is already cleared by `handle_clear_network_profile` before `spawn_clear_http_profile` runs, so no follow-up message is needed. `msg_tx` parameter kept with `_` prefix for API consistency.
+
+4. **`session/handle.rs` already complete**: Task 04 had already added `network_shutdown_tx` and `network_task_handle` fields. The `VmServiceDisconnected` handler already cleans them up. `handle_close_current_session` did NOT yet clean up network tasks — this could be a follow-up if needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (992 tests)
+- `cargo test -p fdemon-daemon` - Passed (375 tests)
+- `cargo clippy -p fdemon-app -p fdemon-daemon -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`handle_close_current_session` missing network cleanup**: The `session_lifecycle.rs` `handle_close_current_session` aborts the perf task but does not abort the network task. This mirrors a pre-existing pattern (perf task is cleaned up there, network is only cleaned up on `VmServiceDisconnected`). A follow-up task should add network task cleanup to `handle_close_current_session` for symmetry.
+
+2. **Pre-existing test failure**: `fdemon-tui::widgets::devtools::performance::memory_chart::tests::test_allocation_table_none_profile` was already failing before this task and is unrelated to network monitoring.
