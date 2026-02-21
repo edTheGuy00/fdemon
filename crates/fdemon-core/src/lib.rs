@@ -77,7 +77,7 @@ pub use events::{
 pub use exception_block::{ExceptionBlock, ExceptionBlockParser, FeedResult};
 pub use network::{
     format_bytes, format_duration_ms, ConnectionInfo, HttpProfileEntry, HttpProfileEntryDetail,
-    HttpProfileEvent, NetworkDetailTab, NetworkTiming, SocketEntry,
+    HttpProfileEvent, NetworkTiming, SocketEntry,
 };
 pub use performance::{
     AllocationProfile, ClassHeapStats, FramePhases, FrameTiming, GcEvent, MemorySample,

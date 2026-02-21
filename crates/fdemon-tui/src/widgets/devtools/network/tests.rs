@@ -4,7 +4,7 @@ use super::*;
 use fdemon_app::session::NetworkState;
 use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::network::HttpProfileEntry;
-use ratatui::{buffer::Buffer, layout::Rect};
+use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
@@ -271,14 +271,51 @@ fn test_narrow_terminal_no_selection_shows_table() {
 }
 
 #[test]
-fn test_narrow_terminal_with_selection_shows_detail_only() {
+fn test_narrow_terminal_with_selection_shows_vertical_split() {
     let mut state = make_network_state_with_entries(3);
     state.selected_index = Some(0);
     let buf = render_monitor(&state, true, 60, 24);
-    // In narrow mode with selection, should show detail view
+    // Narrow vertical split: both table content (top half) and detail (bottom half) visible
+    assert!(
+        buf_contains(&buf, 60, 24, "GET"),
+        "Narrow vertical split should show table (top half) with GET method"
+    );
     assert!(
         buf_contains(&buf, 60, 24, "General"),
-        "Narrow with selection should show detail tab bar"
+        "Narrow vertical split should show detail tab bar (bottom half)"
+    );
+}
+
+#[test]
+fn test_narrow_terminal_with_selection_shows_both_panels() {
+    // Additional verification: narrow split shows request count (table header)
+    // AND detail tab bar simultaneously
+    let mut state = make_network_state_with_entries(3);
+    state.selected_index = Some(0);
+    let buf = render_monitor(&state, true, 60, 24);
+    assert!(
+        buf_contains(&buf, 60, 24, "requests"),
+        "Narrow vertical split should show 'requests' count from table header"
+    );
+    assert!(
+        buf_contains(&buf, 60, 24, "General"),
+        "Narrow vertical split should show 'General' detail tab"
+    );
+}
+
+#[test]
+fn test_narrow_terminal_just_below_threshold_uses_vertical_split() {
+    // Width 99 is just below WIDE_THRESHOLD (100) — must use vertical split
+    let mut state = make_network_state_with_entries(3);
+    state.selected_index = Some(0);
+    let buf = render_monitor(&state, true, 99, 24);
+    assert!(
+        buf_contains(&buf, 99, 24, "GET"),
+        "Width 99 (< WIDE_THRESHOLD) should use vertical split showing table"
+    );
+    assert!(
+        buf_contains(&buf, 99, 24, "General"),
+        "Width 99 (< WIDE_THRESHOLD) should use vertical split showing details"
     );
 }
 
@@ -302,6 +339,85 @@ fn test_footer_row_reserved_no_content_on_last_row() {
     assert!(
         last_row_blank,
         "Last row should be reserved for parent footer (blank)"
+    );
+}
+
+// ── http_method_color unit tests ──────────────────────────────────────────────
+
+#[test]
+fn test_http_method_color_get_is_green() {
+    assert_eq!(
+        http_method_color("GET"),
+        Color::Green,
+        "GET should be green"
+    );
+}
+
+#[test]
+fn test_http_method_color_post_is_blue() {
+    assert_eq!(
+        http_method_color("POST"),
+        Color::Blue,
+        "POST should be blue"
+    );
+}
+
+#[test]
+fn test_http_method_color_put_is_yellow() {
+    assert_eq!(
+        http_method_color("PUT"),
+        Color::Yellow,
+        "PUT should be yellow"
+    );
+}
+
+#[test]
+fn test_http_method_color_patch_is_yellow() {
+    assert_eq!(
+        http_method_color("PATCH"),
+        Color::Yellow,
+        "PATCH should be yellow (same as PUT)"
+    );
+}
+
+#[test]
+fn test_http_method_color_delete_is_red() {
+    assert_eq!(
+        http_method_color("DELETE"),
+        Color::Red,
+        "DELETE should be red"
+    );
+}
+
+#[test]
+fn test_http_method_color_head_is_cyan() {
+    assert_eq!(
+        http_method_color("HEAD"),
+        Color::Cyan,
+        "HEAD should be cyan"
+    );
+}
+
+#[test]
+fn test_http_method_color_options_is_magenta() {
+    assert_eq!(
+        http_method_color("OPTIONS"),
+        Color::Magenta,
+        "OPTIONS should be magenta"
+    );
+}
+
+#[test]
+fn test_http_method_color_unknown_is_white() {
+    assert_eq!(
+        http_method_color("CONNECT"),
+        Color::White,
+        "Unknown methods should be white"
+    );
+    assert_eq!(
+        http_method_color(""),
+        Color::White,
+        "Empty method should be white"
     );
 }
 

@@ -139,3 +139,55 @@ cargo test --workspace
 cargo clippy --workspace
 cargo fmt --all
 ```
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/network.rs` | Issue 9: Added TODO explaining bool-as-string quirk on `enable_http_timeline_logging` and `set_socket_profiling_enabled`. Issue 19: Added TODO explaining duplicate `_handle` variants. |
+| `crates/fdemon-core/src/network.rs` | Issue 10: Changed `request_body_text()` and `response_body_text()` to return `Option<&str>` (zero-allocation). Removed `NetworkDetailTab` enum (moved to fdemon-app). Updated tests. |
+| `crates/fdemon-core/src/lib.rs` | Issue 16: Removed `NetworkDetailTab` from re-exports. |
+| `crates/fdemon-app/src/session/network.rs` | Issue 13: Changed `entries` from `Vec` to `VecDeque`, using `push_back`/`pop_front`. Issue 14: Added private `entry_matches()` predicate and rewrote `filtered_count()` to use iterator count. Issue 16: Added `NetworkDetailTab` enum definition here. Added new tests for `filtered_count` consistency and `NetworkDetailTab`. |
+| `crates/fdemon-app/src/session/mod.rs` | Issue 16: Re-exported `NetworkDetailTab` from `session::`. |
+| `crates/fdemon-app/src/handler/devtools/network.rs` | Issue 11: Added `NETWORK_PAGE_STEP: usize = 10` constant. Issue 16: Updated import from `fdemon_core` to `crate::session`. Issue 17: Added `SharedTaskHandle` type alias; used in function signature. |
+| `crates/fdemon-app/src/handler/keys.rs` | Issue 16: Updated `NetworkDetailTab` import to `crate::session`. |
+| `crates/fdemon-app/src/message.rs` | Issue 16: Updated `NetworkDetailTab` import to `crate::session`. Issue 17: Added `SharedTaskHandle` type alias; used in two `Message` variants. |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | Issue 12: Added `LABEL_COL_WIDTH: u16 = 18` constant. Issue 16: Updated `NetworkDetailTab` import to `fdemon_app::session`. |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_table.rs` | Issue 15: Moved `javascript`/`css` checks before `text` in `short_content_type`. Added regression tests for `text/javascript` and `text/css`. |
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Issue 18: Replaced manual cell-by-cell background fill loop with `Block::new().style(...).render(area, buf)`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Issue 10 (body_text return type)**: Changed return type from `Option<String>` to `Option<&str>`. Call sites in `request_details.rs` are unaffected because `&str` also has `.lines()` and the match arm `Some(text)` still works. If future callers need owned strings they can call `.to_string()`.
+
+2. **Issue 13 (VecDeque)**: `VecDeque` supports random access via `[]` and `.get()`, so `entries[0]` in tests and `entries.iter()` in filter methods continue to work without changes. Only `push` → `push_back` and `remove(0)` → `pop_front` needed updating.
+
+3. **Issue 14 (filtered_count)**: Extracted a private `entry_matches()` helper to avoid duplicating the filter predicate. The old `filtered_count()` collected a full `Vec` just to call `.len()`; the new version uses `.count()` directly on the iterator.
+
+4. **Issue 16 (NetworkDetailTab location)**: The type was used in `fdemon-app` (message.rs, handler, session state), `fdemon-tui` (request_details widget), and `fdemon-core` (definitions). Moved to `fdemon-app/src/session/network.rs` and re-exported via `session::NetworkDetailTab`. Updated all 4 import sites. The `fdemon-core` test for `NetworkDetailTab::default()` was removed (test now lives in `fdemon-app/src/session/network.rs`).
+
+5. **Issue 17 (SharedTaskHandle)**: Defined the type alias in both `handler/devtools/network.rs` (for the handler function signature) and `message.rs` (for the Message enum variants). The two definitions are intentionally local to their respective modules to keep things self-contained.
+
+6. **Issue 18 (background clear)**: `Block::new().style(Style::default().bg(color)).render(area, buf)` is the idiomatic ratatui way to fill a region with a background color. The previous hand-rolled loop was functionally equivalent but non-idiomatic.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --lib --workspace` - Passed (2,455 unit tests: 1009 + 357 + 375 + 714)
+- `cargo clippy --workspace -- -D warnings` - Passed (zero warnings)
+- New tests added: `test_short_content_type_text_javascript_maps_to_js`, `test_short_content_type_text_css_maps_to_css`, `test_filtered_count_matches_filtered_entries_len_no_filter`, `test_filtered_count_matches_filtered_entries_len_with_filter`, `test_filtered_count_empty_state`, `test_network_detail_tab_default_is_general`, `test_network_detail_tab_all_variants`
+
+### Risks/Limitations
+
+1. **E2E tests**: 25 E2E tests in the binary crate fail due to missing Flutter environment (pre-existing failure, unrelated to these changes). All library unit tests pass.
+
+2. **Issue 9 (bool-as-string)**: Not fixed, only documented with a TODO. Requires a cross-cutting change to `call_extension`'s signature from `HashMap<String, String>` to `HashMap<String, serde_json::Value>`. Deferred as planned.
+
+3. **Issue 19 (duplicate _handle functions)**: Not refactored, only documented with a TODO. The pattern is shared across other VM Service modules (performance, inspector), requiring a coordinated cross-cutting refactor.

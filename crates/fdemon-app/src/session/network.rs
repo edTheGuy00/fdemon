@@ -4,9 +4,26 @@
 //! Stores the rolling request history, selected request detail,
 //! and UI interaction state (filter, sort, recording toggle).
 
-use fdemon_core::network::{
-    HttpProfileEntry, HttpProfileEntryDetail, NetworkDetailTab, SocketEntry,
-};
+use std::collections::VecDeque;
+
+use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, SocketEntry};
+
+// ── NetworkDetailTab ──────────────────────────────────────────────────────────
+
+/// Sub-tab selection for the network request detail panel.
+///
+/// This is a UI concern (which detail panel is active) and belongs in
+/// `fdemon-app` alongside `NetworkState`, not in the zero-dependency
+/// `fdemon-core` domain crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum NetworkDetailTab {
+    #[default]
+    General,
+    Headers,
+    RequestBody,
+    ResponseBody,
+    Timing,
+}
 
 /// Maximum number of network entries to keep per session.
 pub const DEFAULT_MAX_NETWORK_ENTRIES: usize = 500;
@@ -14,8 +31,10 @@ pub const DEFAULT_MAX_NETWORK_ENTRIES: usize = 500;
 /// Per-session network monitoring state.
 #[derive(Debug)]
 pub struct NetworkState {
-    /// Rolling history of HTTP requests (FIFO, bounded).
-    pub entries: Vec<HttpProfileEntry>,
+    /// Rolling history of HTTP requests (FIFO, bounded). Uses a `VecDeque` so
+    /// that front-eviction (`pop_front`) is O(1) instead of the O(n) shift
+    /// required by `Vec::remove(0)`.
+    pub entries: VecDeque<HttpProfileEntry>,
     /// Maximum entries to keep. Oldest are evicted when exceeded.
     pub max_entries: usize,
     /// Index of the currently selected request in `entries`. `None` if no selection.
@@ -45,7 +64,7 @@ pub struct NetworkState {
 impl Default for NetworkState {
     fn default() -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             max_entries: DEFAULT_MAX_NETWORK_ENTRIES,
             selected_index: None,
             selected_detail: None,
@@ -81,12 +100,13 @@ impl NetworkState {
                 // Update existing entry (e.g., request completed, status code arrived)
                 *existing = new_entry;
             } else {
-                self.entries.push(new_entry);
+                self.entries.push_back(new_entry);
             }
         }
-        // Evict oldest entries if over capacity
+        // Evict oldest entries if over capacity. `pop_front` is O(1) on VecDeque
+        // whereas the previous `Vec::remove(0)` was O(n) due to element shifting.
         while self.entries.len() > self.max_entries {
-            self.entries.remove(0);
+            self.entries.pop_front();
             // Adjust selected_index and scroll_offset
             if let Some(ref mut idx) = self.selected_index {
                 if *idx == 0 {
@@ -102,6 +122,22 @@ impl NetworkState {
         }
     }
 
+    /// Returns `true` if `entry` matches the given lowercase filter string.
+    ///
+    /// Centralises the filter predicate used by both [`filtered_entries`] and
+    /// [`filtered_count`] so they cannot diverge.
+    fn entry_matches(entry: &HttpProfileEntry, filter_lower: &str) -> bool {
+        entry.method.to_lowercase().contains(filter_lower)
+            || entry.uri.to_lowercase().contains(filter_lower)
+            || entry
+                .status_code
+                .is_some_and(|s| s.to_string().contains(filter_lower))
+            || entry
+                .content_type
+                .as_deref()
+                .is_some_and(|ct| ct.to_lowercase().contains(filter_lower))
+    }
+
     /// Get entries filtered by the current filter text.
     pub fn filtered_entries(&self) -> Vec<&HttpProfileEntry> {
         if self.filter.is_empty() {
@@ -110,21 +146,37 @@ impl NetworkState {
         let filter_lower = self.filter.to_lowercase();
         self.entries
             .iter()
-            .filter(|e| {
-                e.method.to_lowercase().contains(&filter_lower)
-                    || e.uri.to_lowercase().contains(&filter_lower)
-                    || e.status_code
-                        .is_some_and(|s| s.to_string().contains(&filter_lower))
-                    || e.content_type
-                        .as_deref()
-                        .is_some_and(|ct| ct.to_lowercase().contains(&filter_lower))
-            })
+            .filter(|e| Self::entry_matches(e, &filter_lower))
             .collect()
     }
 
     /// Number of entries visible after filtering.
+    ///
+    /// Uses an iterator count to avoid allocating a full `Vec` just to get a length.
     pub fn filtered_count(&self) -> usize {
-        self.filtered_entries().len()
+        if self.filter.is_empty() {
+            return self.entries.len();
+        }
+        let filter_lower = self.filter.to_lowercase();
+        self.entries
+            .iter()
+            .filter(|e| Self::entry_matches(e, &filter_lower))
+            .count()
+    }
+
+    /// Update the filter text and clear any active selection.
+    ///
+    /// Clearing the selection on filter change avoids the index domain mismatch
+    /// between the filtered list (used by `select_prev`/`select_next`/`selected_entry`)
+    /// and the raw list (used by the eviction loop in `merge_entries`). When the
+    /// filter changes the old `selected_index` would point to the wrong entry in
+    /// the new filtered view, so we reset it here as the single authoritative
+    /// location for this invariant.
+    pub fn set_filter(&mut self, filter: String) {
+        self.filter = filter;
+        self.selected_index = None;
+        self.selected_detail = None;
+        self.scroll_offset = 0;
     }
 
     /// Clear all entries and reset poll timestamp.
@@ -173,7 +225,7 @@ impl NetworkState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_core::network::HttpProfileEntry;
+    use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 
     fn make_entry(id: &str, method: &str, status: Option<u16>) -> HttpProfileEntry {
         HttpProfileEntry {
@@ -296,5 +348,197 @@ mod tests {
         state.reset();
         assert!(state.entries.is_empty());
         assert_eq!(state.max_entries, 100);
+    }
+
+    // ── set_filter / selected_index semantics ─────────────────────────────────
+
+    #[test]
+    fn test_set_filter_clears_selected_index() {
+        let mut state = NetworkState::default();
+        state.merge_entries(vec![
+            make_entry("1", "GET", Some(200)),
+            make_entry("2", "POST", Some(201)),
+        ]);
+        state.select_next(); // selected_index = Some(0)
+        assert_eq!(state.selected_index, Some(0));
+
+        // Changing the filter must clear the selection to avoid domain mismatch.
+        state.set_filter("POST".to_string());
+        assert_eq!(
+            state.selected_index, None,
+            "set_filter must clear selected_index to avoid filtered vs raw index mismatch"
+        );
+    }
+
+    #[test]
+    fn test_set_filter_clears_scroll_offset() {
+        let mut state = NetworkState::default();
+        state.scroll_offset = 5;
+        state.set_filter("api".to_string());
+        assert_eq!(
+            state.scroll_offset, 0,
+            "set_filter must reset scroll_offset"
+        );
+    }
+
+    #[test]
+    fn test_set_filter_clears_selected_detail() {
+        let mut state = NetworkState::default();
+        state.selected_index = Some(0);
+        state.selected_detail = Some(Box::new(HttpProfileEntryDetail {
+            entry: make_entry("1", "GET", Some(200)),
+            request_headers: vec![],
+            response_headers: vec![],
+            request_body: vec![],
+            response_body: vec![],
+            events: vec![],
+            connection_info: None,
+        }));
+        state.set_filter("something".to_string());
+        assert!(
+            state.selected_detail.is_none(),
+            "set_filter must clear selected_detail"
+        );
+    }
+
+    #[test]
+    fn test_set_filter_to_empty_string_resets() {
+        let mut state = NetworkState::default();
+        state.set_filter("GET".to_string());
+        assert_eq!(state.filter, "GET");
+        // Clearing filter should also clear selection.
+        state.set_filter(String::new());
+        assert!(state.filter.is_empty());
+        assert!(state.selected_index.is_none());
+    }
+
+    // ── eviction regression tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_eviction_without_filter_adjusts_selection() {
+        // With no active filter, eviction must decrement selected_index correctly.
+        let mut state = NetworkState::default();
+        state.max_entries = 3;
+        // Add 3 entries: raw index 0=a, 1=b, 2=c
+        state.merge_entries(vec![
+            make_entry("a", "GET", Some(200)),
+            make_entry("b", "GET", Some(200)),
+            make_entry("c", "GET", Some(200)),
+        ]);
+        // Select raw index 2 (entry "c")
+        state.selected_index = Some(2);
+
+        // Add a 4th entry, triggering eviction of entry "a" (raw 0).
+        // selected_index should decrement from 2 to 1.
+        state.merge_entries(vec![make_entry("d", "GET", Some(200))]);
+        assert_eq!(
+            state.selected_index,
+            Some(1),
+            "Eviction should decrement selected_index when no filter active"
+        );
+        // The selected entry should now be "c" (now at raw index 1)
+        assert_eq!(
+            state.entries[1].id, "c",
+            "Entry 'c' should now be at raw index 1"
+        );
+    }
+
+    #[test]
+    fn test_eviction_clears_selection_when_selected_entry_is_evicted() {
+        let mut state = NetworkState::default();
+        state.max_entries = 2;
+        state.merge_entries(vec![
+            make_entry("a", "GET", Some(200)),
+            make_entry("b", "GET", Some(200)),
+        ]);
+        // Select the oldest entry (raw index 0).
+        state.selected_index = Some(0);
+
+        // Adding a 3rd entry evicts "a" (raw index 0). Selected entry is gone.
+        state.merge_entries(vec![make_entry("c", "GET", Some(200))]);
+        assert_eq!(
+            state.selected_index, None,
+            "selected_index must be cleared when the selected entry is evicted"
+        );
+    }
+
+    // ── filtered_count consistency tests ─────────────────────────────────────
+
+    #[test]
+    fn test_filtered_count_matches_filtered_entries_len_no_filter() {
+        let mut state = NetworkState::default();
+        state.merge_entries(vec![
+            make_entry("1", "GET", Some(200)),
+            make_entry("2", "POST", Some(201)),
+            make_entry("3", "PUT", Some(204)),
+        ]);
+        assert_eq!(
+            state.filtered_count(),
+            state.filtered_entries().len(),
+            "filtered_count() must equal filtered_entries().len() with no filter"
+        );
+    }
+
+    #[test]
+    fn test_filtered_count_matches_filtered_entries_len_with_filter() {
+        let mut state = NetworkState::default();
+        state.merge_entries(vec![
+            make_entry("1", "GET", Some(200)),
+            make_entry("2", "POST", Some(201)),
+            make_entry("3", "GET", Some(404)),
+        ]);
+        state.filter = "GET".to_string();
+        assert_eq!(
+            state.filtered_count(),
+            state.filtered_entries().len(),
+            "filtered_count() must equal filtered_entries().len() when filter is active"
+        );
+    }
+
+    #[test]
+    fn test_filtered_count_empty_state() {
+        let state = NetworkState::default();
+        assert_eq!(
+            state.filtered_count(),
+            0,
+            "filtered_count() must be 0 for empty state"
+        );
+        assert_eq!(
+            state.filtered_count(),
+            state.filtered_entries().len(),
+            "filtered_count() must equal filtered_entries().len() for empty state"
+        );
+    }
+
+    // ── NetworkDetailTab moved-location tests ─────────────────────────────────
+
+    #[test]
+    fn test_network_detail_tab_default_is_general() {
+        assert_eq!(
+            NetworkDetailTab::default(),
+            NetworkDetailTab::General,
+            "NetworkDetailTab default must be General"
+        );
+    }
+
+    #[test]
+    fn test_network_detail_tab_all_variants() {
+        // Ensure all variants are constructible and distinct.
+        let tabs = [
+            NetworkDetailTab::General,
+            NetworkDetailTab::Headers,
+            NetworkDetailTab::RequestBody,
+            NetworkDetailTab::ResponseBody,
+            NetworkDetailTab::Timing,
+        ];
+        for (i, a) in tabs.iter().enumerate() {
+            for (j, b) in tabs.iter().enumerate() {
+                if i == j {
+                    assert_eq!(a, b);
+                } else {
+                    assert_ne!(a, b);
+                }
+            }
+        }
     }
 }

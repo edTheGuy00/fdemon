@@ -149,6 +149,17 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
                 );
             }
             handle.session.performance.monitoring_active = false;
+            // Abort and signal the network monitoring polling task to stop.
+            if let Some(h) = handle.network_task_handle.take() {
+                h.abort();
+            }
+            if let Some(tx) = handle.network_shutdown_tx.take() {
+                let _ = tx.send(true);
+                tracing::info!(
+                    "Sent network shutdown signal on session close for session {}",
+                    current_session_id
+                );
+            }
         }
 
         if let Some((app_id, cmd_sender_opt)) = session_info {

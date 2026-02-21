@@ -61,6 +61,13 @@ pub async fn enable_http_timeline_logging(
     isolate_id: &str,
     enabled: bool,
 ) -> Result<bool> {
+    // TODO: The `call_extension` API uses `HashMap<String, String>`, so booleans are
+    // serialised as `"true"/"false"` strings. The Dart VM Service extension
+    // `ext.dart.io.httpEnableTimelineLogging` accepts both the string and native
+    // JSON-bool forms, so this works in practice but is technically incorrect.
+    // To fix properly, change `call_extension` in `vm_service/client.rs` to accept
+    // `HashMap<String, serde_json::Value>` and update all callers. Deferred until
+    // there is a cross-cutting refactor of the VM Service client API.
     let mut args = HashMap::new();
     args.insert("enabled".to_string(), enabled.to_string());
     let result = client
@@ -350,6 +357,13 @@ pub async fn clear_http_profile(client: &VmServiceClient, isolate_id: &str) -> R
 // These mirror the `VmServiceClient`-accepting functions above but accept a
 // `VmRequestHandle` instead. Background polling tasks (which hold a handle,
 // not the full client) use these variants.
+//
+// TODO(Issue 19): Every function here duplicates a `VmServiceClient`-accepting
+// counterpart that differs only in the receiver type. The other VM Service
+// modules (performance, inspector) follow the same pattern. A cross-cutting
+// refactor — e.g. a trait abstracting over both receiver types — would
+// eliminate the duplication, but is deferred until all VM Service modules are
+// stable.
 
 /// Enable or disable HTTP timeline logging via a `VmRequestHandle`.
 ///
@@ -517,6 +531,8 @@ pub async fn set_socket_profiling_enabled(
     isolate_id: &str,
     enabled: bool,
 ) -> Result<bool> {
+    // TODO: Same bool-as-string quirk as `enable_http_timeline_logging`. See that
+    // function for the rationale and the deferred fix.
     let mut args = HashMap::new();
     args.insert("enabled".to_string(), enabled.to_string());
     let result = client

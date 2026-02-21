@@ -2,8 +2,8 @@
 
 use crate::input_key::InputKey;
 use crate::message::{InspectorNav, Message, NetworkNav};
+use crate::session::NetworkDetailTab;
 use crate::state::{AppState, DevToolsPanel, UiMode};
-use fdemon_core::network::NetworkDetailTab;
 
 /// Convert key events to messages based on current UI mode
 pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {

@@ -4247,6 +4247,62 @@ fn test_close_session_signals_perf_shutdown() {
 }
 
 #[test]
+fn test_close_session_cleans_up_network_monitoring() {
+    // Setup: two sessions so close doesn't quit, one with network monitoring active.
+    // Uses a tokio runtime to create a real JoinHandle for network_task_handle.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device1 = test_device("dev-1", "Device 1");
+        let device2 = test_device("dev-2", "Device 2");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device1).unwrap();
+        state.session_manager.create_session(&device2).unwrap();
+
+        // Make session_id the selected one
+        state.session_manager.select_by_id(session_id);
+
+        // Attach network_shutdown_tx and network_task_handle to the session
+        let (tx, mut network_rx) = tokio::sync::watch::channel(false);
+        let task: tokio::task::JoinHandle<()> =
+            tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_secs(60)).await });
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.network_shutdown_tx = Some(std::sync::Arc::new(tx));
+            handle.network_task_handle = Some(task);
+        }
+
+        // Confirm handles are set before close
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert!(
+                handle.network_shutdown_tx.is_some(),
+                "network_shutdown_tx should be Some before close"
+            );
+            assert!(
+                handle.network_task_handle.is_some(),
+                "network_task_handle should be Some before close"
+            );
+        }
+
+        // Action: process CloseCurrentSession
+        super::session_lifecycle::handle_close_current_session(&mut state);
+
+        // Assert: network_shutdown_tx was signaled (receiver sees true) — this
+        // verifies the channel was sent `true` before being dropped/taken.
+        assert!(
+            *network_rx.borrow_and_update(),
+            "network_shutdown_tx should be signaled on CloseCurrentSession"
+        );
+
+        // Assert: session was removed from manager (close succeeded)
+        assert!(
+            state.session_manager.get(session_id).is_none(),
+            "closed session should be removed from manager after CloseCurrentSession"
+        );
+    });
+}
+
+#[test]
 fn test_session_exited_signals_perf_shutdown() {
     // Setup: create session with perf_shutdown_tx set
     let device = test_device("dev-1", "Device 1");
@@ -5079,5 +5135,280 @@ fn test_disconnect_clears_allocation_profile() {
     assert!(
         perf.allocation_profile.is_none(),
         "allocation_profile should be None after VmServiceConnected resets PerformanceState"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Network monitor duplicate-spawn prevention tests (Phase 4 Fixes, Task 01)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: attach a live `network_shutdown_tx` to a session, simulating a
+/// polling task that is already running.  Returns the watch receiver so callers
+/// can verify whether the sender was signalled.
+fn attach_network_shutdown(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = state.session_manager.get_mut(session_id).unwrap();
+    handle.network_shutdown_tx = Some(std::sync::Arc::new(tx));
+    rx
+}
+
+#[test]
+fn test_switch_panel_network_already_running_returns_no_action() {
+    // Arrange: session with vm_connected=true and network_shutdown_tx=Some(…)
+    // (i.e. a polling task is already running).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark VM as connected so the guard would normally fire.
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .vm_connected = true;
+
+    // Simulate an already-running polling task via a live shutdown sender.
+    let _rx = attach_network_shutdown(&mut state, session_id);
+
+    // Act: switch to the Network panel a second time.
+    let result = update(
+        &mut state,
+        Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Network),
+    );
+
+    // Assert: idempotency guard prevents a duplicate StartNetworkMonitoring action.
+    assert!(
+        result.action.is_none(),
+        "SwitchDevToolsPanel(Network) should return no action when a polling task is already running (got: {:?})",
+        result.action,
+    );
+}
+
+#[test]
+fn test_switch_panel_network_not_running_returns_start_action() {
+    // Arrange: session with vm_connected=true and network_shutdown_tx=None
+    // (no polling task running yet — normal first-switch case).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .vm_connected = true;
+
+    // Ensure network_shutdown_tx is None (the default).
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .network_shutdown_tx
+            .is_none(),
+        "Precondition: network_shutdown_tx must be None"
+    );
+
+    // Act: switch to the Network panel for the first time.
+    let result = update(
+        &mut state,
+        Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Network),
+    );
+
+    // Assert: StartNetworkMonitoring action is returned.
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartNetworkMonitoring { .. })
+        ),
+        "SwitchDevToolsPanel(Network) should return StartNetworkMonitoring when no task is running (got: {:?})",
+        result.action,
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recording toggle guard tests (Phase 4 Fixes, Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: build a minimal `HttpProfileEntry` for testing.
+fn make_test_http_entry(id: &str) -> fdemon_core::network::HttpProfileEntry {
+    fdemon_core::network::HttpProfileEntry {
+        id: id.to_string(),
+        method: "GET".to_string(),
+        uri: format!("https://example.com/{id}"),
+        status_code: Some(200),
+        content_type: Some("application/json".to_string()),
+        start_time_us: 1_000_000,
+        end_time_us: Some(1_050_000),
+        request_content_length: None,
+        response_content_length: Some(128),
+        error: None,
+    }
+}
+
+#[test]
+fn test_http_profile_received_merges_entries_when_recording_on() {
+    // Arrange: fresh session with recording=true (the default).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .network
+            .recording,
+        "Precondition: recording should be true by default"
+    );
+
+    // Act: deliver entries via the TEA update path.
+    update(
+        &mut state,
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp: 5000,
+            entries: vec![make_test_http_entry("req-1")],
+        },
+    );
+
+    // Assert: entry is stored and timestamp is advanced.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.network.entries.len(),
+        1,
+        "Entry should be merged when recording is on"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        Some(5000),
+        "Timestamp should be advanced"
+    );
+}
+
+#[test]
+fn test_http_profile_received_discards_entries_when_recording_off_but_advances_timestamp() {
+    // Arrange: fresh session, then toggle recording off.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    update(&mut state, Message::ToggleNetworkRecording);
+
+    assert!(
+        !state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .network
+            .recording,
+        "Precondition: recording should be false after toggle"
+    );
+
+    // Act: deliver entries while paused.
+    update(
+        &mut state,
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp: 9000,
+            entries: vec![make_test_http_entry("req-paused")],
+        },
+    );
+
+    // Assert: entries are NOT merged, but timestamp IS advanced.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.network.entries.len(),
+        0,
+        "Entries must NOT be merged when recording is off"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        Some(9000),
+        "Timestamp must still be advanced even when recording is off"
+    );
+}
+
+#[test]
+fn test_http_profile_received_only_shows_entries_after_recording_resumed() {
+    // Arrange: fresh session.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Deliver one entry while recording is on.
+    update(
+        &mut state,
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp: 1000,
+            entries: vec![make_test_http_entry("before-pause")],
+        },
+    );
+
+    // Toggle recording off.
+    update(&mut state, Message::ToggleNetworkRecording);
+
+    // Deliver entries that should be silently discarded.
+    update(
+        &mut state,
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp: 2000,
+            entries: vec![make_test_http_entry("during-pause")],
+        },
+    );
+
+    // Toggle recording back on.
+    update(&mut state, Message::ToggleNetworkRecording);
+
+    // Deliver a new entry — this one should be merged.
+    update(
+        &mut state,
+        Message::VmServiceHttpProfileReceived {
+            session_id,
+            timestamp: 3000,
+            entries: vec![make_test_http_entry("after-resume")],
+        },
+    );
+
+    // Assert: only the two entries delivered while recording was on are present.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.session.network.entries.len(),
+        2,
+        "Only entries sent while recording was on should be present"
+    );
+    let ids: Vec<&str> = handle
+        .session
+        .network
+        .entries
+        .iter()
+        .map(|e| e.id.as_str())
+        .collect();
+    assert!(
+        ids.contains(&"before-pause"),
+        "Entry before pause should be present"
+    );
+    assert!(
+        ids.contains(&"after-resume"),
+        "Entry after resume should be present"
+    );
+    assert!(
+        !ids.contains(&"during-pause"),
+        "Entry during pause must NOT be present"
+    );
+    assert_eq!(
+        handle.session.network.last_poll_timestamp,
+        Some(3000),
+        "Timestamp should reflect the last poll"
     );
 }

@@ -3,6 +3,11 @@
 //! Top-level widget for the Network tab in DevTools. Composes the request
 //! table (left/top) and request details (right/bottom) into a responsive
 //! split layout.
+//!
+//! Layout rules:
+//! - **Wide** (>= [`WIDE_THRESHOLD`]): horizontal split — table left (55%), details right (45%)
+//! - **Narrow** (< [`WIDE_THRESHOLD`]) **with selection**: vertical split — table top (50%), details bottom (50%)
+//! - **No selection**: full-width table (both wide and narrow)
 
 pub mod request_details;
 pub mod request_table;
@@ -27,14 +32,33 @@ use request_table::RequestTable;
 /// Terminal width threshold for horizontal vs vertical split.
 const WIDE_THRESHOLD: u16 = 100;
 
+/// Return a foreground [`Color`] for the given HTTP method string.
+///
+/// Provides a single authoritative color mapping used by both the request table
+/// and the request details panel, ensuring visual consistency across the
+/// Network Monitor.
+pub(super) fn http_method_color(method: &str) -> Color {
+    match method {
+        "GET" => Color::Green,
+        "POST" => Color::Blue,
+        "PUT" | "PATCH" => Color::Yellow,
+        "DELETE" => Color::Red,
+        "HEAD" => Color::Cyan,
+        "OPTIONS" => Color::Magenta,
+        _ => Color::White,
+    }
+}
+
 // ── NetworkMonitor ────────────────────────────────────────────────────────────
 
 /// Top-level Network Monitor widget for the DevTools mode.
 ///
 /// Composes the request table and request details panels into a responsive
 /// layout. On wide terminals (>= [`WIDE_THRESHOLD`] columns) the table and
-/// detail panel are shown side-by-side; on narrow terminals the detail panel
-/// occupies the full width when a request is selected.
+/// detail panel are shown side-by-side (horizontal split). On narrow terminals
+/// with a selection, both panels are shown in a vertical split (table top,
+/// details bottom). When nothing is selected the full area is used for the
+/// table.
 pub struct NetworkMonitor<'a> {
     network_state: &'a NetworkState,
     vm_connected: bool,
@@ -58,15 +82,11 @@ impl<'a> NetworkMonitor<'a> {
 
 impl Widget for NetworkMonitor<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Clear background
-        let bg_style = Style::default().bg(palette::DEEPEST_BG);
-        for y in area.y..area.bottom() {
-            for x in area.x..area.right() {
-                if let Some(cell) = buf.cell_mut((x, y)) {
-                    cell.set_style(bg_style).set_char(' ');
-                }
-            }
-        }
+        // Fill background using an unstyled Block — more idiomatic than a
+        // manual cell-by-cell loop and produces the same result.
+        Block::new()
+            .style(Style::default().bg(palette::DEEPEST_BG))
+            .render(area, buf);
 
         // Gate on VM connection
         if !self.vm_connected {
@@ -95,15 +115,16 @@ impl Widget for NetworkMonitor<'_> {
         let filtered = self.network_state.filtered_entries();
         let has_selection = self.network_state.selected_index.is_some();
 
-        if area.width >= WIDE_THRESHOLD && has_selection {
-            // Wide: horizontal split — table (55%) | details (45%)
-            self.render_wide_layout(usable, buf, &filtered);
-        } else if has_selection && area.width < WIDE_THRESHOLD {
-            // Narrow with selection: show details full-width
-            // User pressed Enter to view details, Esc to go back
-            self.render_narrow_detail(usable, buf);
+        if has_selection {
+            if area.width >= WIDE_THRESHOLD {
+                // Wide: horizontal split — table (55%) | details (45%)
+                self.render_wide_layout(usable, buf, &filtered);
+            } else {
+                // Narrow: vertical split — table top (50%) | details bottom (50%)
+                self.render_narrow_split(usable, buf, &filtered);
+            }
         } else {
-            // No selection or narrow without selection: full-width table
+            // No selection: full-width table
             self.render_table_only(usable, buf, &filtered);
         }
     }
@@ -146,8 +167,14 @@ impl NetworkMonitor<'_> {
         }
     }
 
-    fn render_narrow_detail(&self, area: Rect, buf: &mut Buffer) {
-        // Full-width detail view
+    fn render_narrow_split(&self, area: Rect, buf: &mut Buffer, filtered: &[&HttpProfileEntry]) {
+        let chunks =
+            Layout::vertical([Constraint::Percentage(50), Constraint::Percentage(50)]).split(area);
+
+        // Top: request table
+        self.render_table_only(chunks[0], buf, filtered);
+
+        // Bottom: request details
         if let Some(entry) = self.network_state.selected_entry() {
             let detail_widget = RequestDetails::new(
                 entry,
@@ -155,7 +182,7 @@ impl NetworkMonitor<'_> {
                 self.network_state.detail_tab,
                 self.network_state.loading_detail,
             );
-            detail_widget.render(area, buf);
+            detail_widget.render(chunks[1], buf);
         }
     }
 

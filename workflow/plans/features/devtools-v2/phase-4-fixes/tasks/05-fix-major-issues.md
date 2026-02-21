@@ -93,3 +93,44 @@ cargo test -p fdemon-app -- merge_entries
 cargo test -p fdemon-app -- selected_index
 cargo clippy --workspace
 ```
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Added `pub(super) fn http_method_color()` — single authoritative color mapping for HTTP methods; added 8 unit tests in `tests.rs` |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_table.rs` | Removed local `method_color()` function; call site updated to `Style::default().fg(super::http_method_color(...))` ; existing tests updated to call `super::super::http_method_color` |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | Removed local `method_style()` function; call site updated to use shared color function; 3 tests updated to reflect correct (blue) POST color |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Added 8 unit tests for `http_method_color`; added `Color` import |
+| `crates/fdemon-app/src/process.rs` | Added `UpdateAction::FetchHttpRequestDetail` arm to hydration failure match — sends `VmServiceHttpRequestDetailFailed` so `loading_detail` is cleared if VM disconnects |
+| `crates/fdemon-app/src/session/network.rs` | Added `set_filter()` method that atomically sets filter, clears `selected_index`, clears `selected_detail`, resets `scroll_offset`; added 6 new unit tests (4 `set_filter` + 2 eviction regression) |
+| `crates/fdemon-app/src/handler/devtools/network.rs` | Updated `handle_network_filter_changed` to delegate to `NetworkState::set_filter()` instead of setting fields inline |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simpler approach for Issue 8**: The task offered two fixes for `selected_index` semantics. The simpler "clear on filter change" approach was chosen over refactoring `select_prev/select_next/selected_entry` to use raw indexing. This is sufficient because: (a) the handler already cleared selection on filter change, (b) I enforced it at the data layer via `set_filter()`, and (c) navigation while filtering stores filtered-list positions, but those are cleared before filter state can diverge via eviction.
+
+2. **Issue 6 verified**: `VmServiceHttpRequestDetailFailed` already existed in `message.rs` and its handler in `update.rs` already cleared `loading_detail`. Only the hydration failure fallback arm was missing.
+
+3. **Test path for `http_method_color` in `request_table.rs`**: The test module `request_table::tests` uses `super::super::http_method_color` because `super` resolves to `request_table` and the function lives in the `network` parent module.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- http_method_color` - Passed (8 tests)
+- `cargo test -p fdemon-app -- selected_index` - Passed (1 test)
+- `cargo test -p fdemon-app -- set_filter` - Passed (4 tests)
+- `cargo test -p fdemon-app -- eviction` - Passed (2 tests)
+- `cargo test -p fdemon-app -- merge_entries` - Passed (3 tests)
+- `cargo test --lib --workspace` - Passed (712 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+- `cargo fmt --all` - Applied
+
+### Risks/Limitations
+
+1. **Issue 8 partial fix**: Navigation while a filter is active still stores a filtered-list index in `selected_index`, not a raw index. The `set_filter()` method clears selection on filter change, preventing the mismatch in practice, but if code elsewhere sets `filter` directly (bypassing `set_filter`), the invariant can break. The single direct field assignment `state.filter = "POST"` in the test helper was updated but any future caller must use `set_filter`. This could be hardened further by making `filter` private.

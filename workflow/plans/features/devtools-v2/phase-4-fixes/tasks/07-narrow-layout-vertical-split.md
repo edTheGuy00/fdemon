@@ -110,3 +110,38 @@ cargo test -p fdemon-tui -- network
 cargo test -p fdemon-tui -- narrow
 cargo clippy -p fdemon-tui
 ```
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Replaced `render_narrow_detail` with `render_narrow_split`; updated layout routing; updated module/struct doc comments |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Renamed `test_narrow_terminal_with_selection_shows_detail_only` to `test_narrow_terminal_with_selection_shows_vertical_split`; added `test_narrow_terminal_with_selection_shows_both_panels`; added `test_narrow_terminal_just_below_threshold_uses_vertical_split` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reused `render_table_only` in narrow split**: The task referenced a `render_table_panel` method name that does not exist. The existing `render_table_only` method is equivalent and was used directly. No column-hiding logic was added for the reduced height, as the `RequestTable` widget already handles small areas gracefully via its `height < 2` guard.
+
+2. **No border between narrow split panels**: The wide layout adds a `Borders::LEFT` border on the detail side. The narrow split uses no border (same pattern as the Inspector tab's vertical split), keeping the implementation simple.
+
+3. **`filtered` slice passed through to narrow split**: The signature of `render_narrow_split` mirrors `render_wide_layout` by taking `filtered: &[&HttpProfileEntry]`, avoiding a re-computation of filtered entries. This is consistent with the existing wide layout helper.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- network` — Passed (112 tests)
+- `cargo test -p fdemon-tui -- narrow` — Passed (6 tests, including 3 new narrow-specific tests)
+- `cargo clippy -p fdemon-tui` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed
+- `cargo test --lib --workspace` — Passed (716 unit tests)
+
+### Risks/Limitations
+
+1. **No column-hiding on narrow split**: The table in the top 50% shows all columns. On very narrow terminals (< ~50 cols), columns may appear truncated. This is the same behavior as the existing full-width table on narrow terminals without selection, so no regression was introduced.
+
+2. **E2E test failures are pre-existing**: 25 e2e integration tests under `tests/e2e/` fail in the workspace run; these require a running Flutter environment and are unrelated to this change.

@@ -6,14 +6,28 @@
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::NetworkNav;
+use crate::session::NetworkDetailTab;
 use crate::session::SessionId;
 use crate::state::AppState;
-use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, NetworkDetailTab};
+use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
+
+/// Number of entries to skip per page-up or page-down navigation.
+const NETWORK_PAGE_STEP: usize = 10;
+
+/// Shared, abort-able handle to a background monitoring task.
+///
+/// The `Arc<Mutex<Option<...>>>` wrapper lets the spawn site store the handle
+/// inside the `Arc` after the task is already running, then pass ownership to
+/// the session handle via a message.  The `Option` allows the handle to be
+/// moved out (`take()`) cleanly.
+type SharedTaskHandle = std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>;
 
 /// Handle incoming HTTP profile poll results.
 ///
-/// Merges new/updated entries into the session's network state and
-/// stores the timestamp for incremental polling.
+/// Always advances `last_poll_timestamp` so the poller's `updatedSince`
+/// cursor keeps moving. Entries are only merged into the session's network
+/// state when recording is active, so pausing recording does not flood the
+/// list with stale entries when recording is resumed.
 pub(crate) fn handle_http_profile_received(
     state: &mut AppState,
     session_id: SessionId,
@@ -21,8 +35,15 @@ pub(crate) fn handle_http_profile_received(
     entries: Vec<HttpProfileEntry>,
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
-        handle.session.network.merge_entries(entries);
+        // Always advance the timestamp so the poller stays incremental.
+        // This ensures that when recording resumes, only NEW requests appear
+        // (not a flood of everything that arrived during the pause).
         handle.session.network.last_poll_timestamp = Some(timestamp);
+
+        // Only merge entries when recording is active.
+        if handle.session.network.recording {
+            handle.session.network.merge_entries(entries);
+        }
     }
     UpdateResult::none()
 }
@@ -80,9 +101,21 @@ pub(crate) fn handle_network_monitoring_started(
     state: &mut AppState,
     session_id: SessionId,
     shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
-    task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    task_handle: SharedTaskHandle,
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
+        // Belt-and-suspenders: if a monitoring task is already running (e.g.
+        // due to a race between the idempotency guard and task dispatch), stop
+        // it before overwriting the handles so the old task does not become a
+        // zombie.  This mirrors the teardown pattern used in
+        // `VmServiceDisconnected` (update.rs).
+        if let Some(h) = handle.network_task_handle.take() {
+            h.abort();
+        }
+        if let Some(ref tx) = handle.network_shutdown_tx {
+            let _ = tx.send(true);
+        }
+
         handle.network_shutdown_tx = Some(shutdown_tx);
         handle.network_task_handle = task_handle.lock().ok().and_then(|mut g| g.take());
     }
@@ -102,12 +135,12 @@ pub(crate) fn handle_network_navigate(state: &mut AppState, nav: NetworkNav) -> 
         NetworkNav::Up => handle.session.network.select_prev(),
         NetworkNav::Down => handle.session.network.select_next(),
         NetworkNav::PageUp => {
-            for _ in 0..10 {
+            for _ in 0..NETWORK_PAGE_STEP {
                 handle.session.network.select_prev();
             }
         }
         NetworkNav::PageDown => {
-            for _ in 0..10 {
+            for _ in 0..NETWORK_PAGE_STEP {
                 handle.session.network.select_next();
             }
         }
@@ -154,8 +187,9 @@ pub(crate) fn handle_network_switch_detail_tab(
 
 /// Toggle recording on/off.
 ///
-/// Flips the `recording` flag. The polling task checks this flag each cycle
-/// and skips polls when false, so there is no need to restart the task.
+/// Flips the `recording` flag. When recording is off, the polling task
+/// continues but `handle_http_profile_received` discards incoming entries
+/// while still advancing the timestamp cursor.
 pub(crate) fn handle_toggle_network_recording(state: &mut AppState) -> UpdateResult {
     let Some(handle) = state.session_manager.selected_mut() else {
         return UpdateResult::none();
@@ -184,15 +218,13 @@ pub(crate) fn handle_clear_network_profile(
 
 /// Update filter text.
 ///
-/// Sets the filter string and resets selection and scroll offset so the
-/// list position reflects the new filter results.
+/// Delegates to [`NetworkState::set_filter`], which clears the active selection
+/// and scroll offset. This prevents the index domain mismatch between the
+/// filtered-entry index stored in `selected_index` and the raw-entry index
+/// assumed by the eviction loop in `merge_entries`.
 pub(crate) fn handle_network_filter_changed(state: &mut AppState, filter: String) -> UpdateResult {
     if let Some(handle) = state.session_manager.selected_mut() {
-        handle.session.network.filter = filter;
-        // Reset selection and scroll when filter changes.
-        handle.session.network.selected_index = None;
-        handle.session.network.selected_detail = None;
-        handle.session.network.scroll_offset = 0;
+        handle.session.network.set_filter(filter);
     }
     UpdateResult::none()
 }

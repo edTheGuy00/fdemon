@@ -3,9 +3,13 @@
 //! Renders detailed information about a selected HTTP request, with sub-tab
 //! switching between General, Headers, Request Body, Response Body, and Timing.
 
+use fdemon_app::session::NetworkDetailTab;
 use fdemon_core::network::{
-    format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail, NetworkDetailTab,
+    format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail,
 };
+
+/// Width of the label column in the General tab layout (characters).
+const LABEL_COL_WIDTH: u16 = 18;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -122,7 +126,7 @@ impl RequestDetails<'_> {
         let value_style = Style::default().fg(Color::White);
         let mut y = area.y;
         let x_label = area.x + 1;
-        let x_value = area.x + 18; // column for values
+        let x_value = area.x + LABEL_COL_WIDTH;
 
         if y >= area.bottom() {
             return;
@@ -134,7 +138,7 @@ impl RequestDetails<'_> {
             x_value,
             y,
             &self.entry.method,
-            method_style(&self.entry.method),
+            Style::default().fg(super::http_method_color(&self.entry.method)),
         );
         y += 1;
 
@@ -500,20 +504,6 @@ impl RequestDetails<'_> {
 
 // ── Style helpers ─────────────────────────────────────────────────────────────
 
-/// Choose a style for the HTTP method label.
-fn method_style(method: &str) -> Style {
-    match method {
-        "GET" => Style::default().fg(Color::Green),
-        "POST" => Style::default().fg(Color::Yellow),
-        "PUT" => Style::default().fg(Color::Cyan),
-        "PATCH" => Style::default().fg(Color::Cyan),
-        "DELETE" => Style::default().fg(Color::Red),
-        "HEAD" => Style::default().fg(Color::Green),
-        "OPTIONS" => Style::default().fg(Color::Gray),
-        _ => Style::default().fg(Color::White),
-    }
-}
-
 /// Choose a style for the HTTP status code.
 fn status_color(code: u16) -> Style {
     if code < 300 {
@@ -534,7 +524,6 @@ mod tests {
     use super::*;
     use fdemon_core::network::{
         ConnectionInfo, HttpProfileEntry, HttpProfileEntryDetail, HttpProfileEvent,
-        NetworkDetailTab,
     };
     use ratatui::{buffer::Buffer, layout::Rect};
 
@@ -1146,24 +1135,33 @@ mod tests {
         assert_eq!(style.fg, Some(Color::Red), "503 should be red");
     }
 
-    // ── Method style tests ────────────────────────────────────────────────────
+    // ── Method color tests (delegated to shared http_method_color) ───────────
 
     #[test]
-    fn test_method_style_get_green() {
-        let style = method_style("GET");
-        assert_eq!(style.fg, Some(Color::Green), "GET should be green");
+    fn test_method_color_get_green() {
+        assert_eq!(
+            super::super::http_method_color("GET"),
+            Color::Green,
+            "GET should be green"
+        );
     }
 
     #[test]
-    fn test_method_style_post_yellow() {
-        let style = method_style("POST");
-        assert_eq!(style.fg, Some(Color::Yellow), "POST should be yellow");
+    fn test_method_color_post_blue() {
+        assert_eq!(
+            super::super::http_method_color("POST"),
+            Color::Blue,
+            "POST should be blue (consistent with request table)"
+        );
     }
 
     #[test]
-    fn test_method_style_delete_red() {
-        let style = method_style("DELETE");
-        assert_eq!(style.fg, Some(Color::Red), "DELETE should be red");
+    fn test_method_color_delete_red() {
+        assert_eq!(
+            super::super::http_method_color("DELETE"),
+            Color::Red,
+            "DELETE should be red"
+        );
     }
 
     #[test]

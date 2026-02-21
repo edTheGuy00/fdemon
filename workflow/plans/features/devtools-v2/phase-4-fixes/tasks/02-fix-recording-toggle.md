@@ -71,3 +71,33 @@ cargo test -p fdemon-app -- recording
 cargo test -p fdemon-app -- http_profile_received
 cargo clippy -p fdemon-app
 ```
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/network.rs` | Fixed `handle_http_profile_received` to always advance `last_poll_timestamp` but only call `merge_entries` when `recording = true`. Fixed doc comment on `handle_toggle_network_recording` to accurately describe the guard-in-handler approach. |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 integration-level tests: `test_http_profile_received_merges_entries_when_recording_on`, `test_http_profile_received_discards_entries_when_recording_off_but_advances_timestamp`, `test_http_profile_received_only_shows_entries_after_recording_resumed`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard in TEA handler, not async task**: The fix checks `recording` inside `handle_http_profile_received` (pure, synchronous TEA handler) rather than inside the async polling task. This avoids any need for shared state or `Arc<AtomicBool>` across the async boundary, keeping the implementation within TEA constraints.
+2. **Timestamp always advances**: `last_poll_timestamp` is updated unconditionally so the poller's `updatedSince` cursor keeps moving during a pause. Without this, resuming recording would flood the list with all requests that arrived during the pause — a UX regression.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- recording` - Passed (4 tests: 1 pre-existing, 3 new)
+- `cargo test -p fdemon-app -- http_profile_received` - Passed (5 tests: 2 pre-existing, 3 new)
+- `cargo test -p fdemon-app` - Passed (998 unit tests + 1 doc test)
+- `cargo clippy -p fdemon-app` - Passed (no warnings)
+- `cargo fmt -p fdemon-app -- --check` - Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **Polling task still runs while paused**: Entries are discarded at the handler level, but the background polling task continues to call `getHttpProfile` at the normal interval. This is intentional (keeps the cursor moving) and matches the revised doc comment. A future optimization could add a short-circuit in the polling task to skip the RPC call entirely, but that would require sharing state across the async boundary and is outside the scope of this fix.

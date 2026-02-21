@@ -113,20 +113,26 @@ pub struct HttpProfileEntryDetail {
 }
 
 impl HttpProfileEntryDetail {
-    /// Request body as UTF-8 string, or None if empty or not valid UTF-8.
-    pub fn request_body_text(&self) -> Option<String> {
+    /// Request body as a UTF-8 string slice, or None if empty or not valid UTF-8.
+    ///
+    /// Returns a borrowed `&str` into the existing byte buffer to avoid an
+    /// allocation. Call `.to_string()` at the call site if an owned value is needed.
+    pub fn request_body_text(&self) -> Option<&str> {
         if self.request_body.is_empty() {
             return None;
         }
-        String::from_utf8(self.request_body.clone()).ok()
+        std::str::from_utf8(&self.request_body).ok()
     }
 
-    /// Response body as UTF-8 string, or None if empty or not valid UTF-8.
-    pub fn response_body_text(&self) -> Option<String> {
+    /// Response body as a UTF-8 string slice, or None if empty or not valid UTF-8.
+    ///
+    /// Returns a borrowed `&str` into the existing byte buffer to avoid an
+    /// allocation. Call `.to_string()` at the call site if an owned value is needed.
+    pub fn response_body_text(&self) -> Option<&str> {
         if self.response_body.is_empty() {
             return None;
         }
-        String::from_utf8(self.response_body.clone()).ok()
+        std::str::from_utf8(&self.response_body).ok()
     }
 
     /// Compute timing breakdown from events.
@@ -228,19 +234,6 @@ pub struct SocketEntry {
     pub read_bytes: u64,
     /// Total bytes written through this socket.
     pub write_bytes: u64,
-}
-
-// ── NetworkDetailTab ──────────────────────────────────────────────────────────
-
-/// Sub-tab selection for the network request detail panel.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum NetworkDetailTab {
-    #[default]
-    General,
-    Headers,
-    RequestBody,
-    ResponseBody,
-    Timing,
 }
 
 // ── Helper functions ──────────────────────────────────────────────────────────
@@ -365,11 +358,8 @@ mod tests {
             events: vec![],
             connection_info: None,
         };
-        assert_eq!(detail.request_body_text(), Some("hello".to_string()));
-        assert_eq!(
-            detail.response_body_text(),
-            Some("{\"ok\":true}".to_string())
-        );
+        assert_eq!(detail.request_body_text(), Some("hello"));
+        assert_eq!(detail.response_body_text(), Some("{\"ok\":true}"));
     }
 
     #[test]
@@ -432,11 +422,6 @@ mod tests {
         assert_eq!(format_duration_ms(0.5), "500us");
         assert_eq!(format_duration_ms(42.0), "42ms");
         assert_eq!(format_duration_ms(1500.0), "1.50s");
-    }
-
-    #[test]
-    fn test_network_detail_tab_default() {
-        assert_eq!(NetworkDetailTab::default(), NetworkDetailTab::General);
     }
 
     #[test]

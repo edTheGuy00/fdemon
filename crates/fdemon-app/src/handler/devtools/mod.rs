@@ -168,14 +168,19 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
         }
         DevToolsPanel::Performance => {}
         DevToolsPanel::Network => {
-            // Start network monitoring if the VM is connected and extensions
-            // are not known to be unavailable.
+            // Start network monitoring if the VM is connected, extensions are
+            // not known to be unavailable, and a polling task is not already
+            // running.  Checking `network_shutdown_tx.is_some()` is the
+            // idempotency guard: the sender is set by
+            // `handle_network_monitoring_started` and cleared on disconnect /
+            // session close, so its presence reliably indicates a live task.
             if let Some(handle) = state.session_manager.selected() {
                 let session_id = handle.session.id;
                 let vm_connected = handle.session.vm_connected;
                 let extensions_unavailable =
                     handle.session.network.extensions_available == Some(false);
-                if vm_connected && !extensions_unavailable {
+                let already_running = handle.network_shutdown_tx.is_some();
+                if vm_connected && !extensions_unavailable && !already_running {
                     return UpdateResult::action(UpdateAction::StartNetworkMonitoring {
                         session_id,
                         handle: None, // hydrated by process.rs

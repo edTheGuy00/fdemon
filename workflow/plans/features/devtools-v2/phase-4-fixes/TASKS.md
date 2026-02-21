@@ -44,13 +44,13 @@ Wave 3         │                                  │
 
 | # | Task | Status | Depends On | Crate | Severity |
 |---|------|--------|------------|-------|----------|
-| 1 | [01-fix-duplicate-polling-tasks](tasks/01-fix-duplicate-polling-tasks.md) | Pending | - | `fdemon-app` | CRITICAL |
-| 2 | [02-fix-recording-toggle](tasks/02-fix-recording-toggle.md) | Pending | - | `fdemon-app` | CRITICAL |
-| 3 | [03-fix-session-close-leak](tasks/03-fix-session-close-leak.md) | Pending | - | `fdemon-app` | HIGH |
-| 4 | [04-fix-truncate-utf8-panic](tasks/04-fix-truncate-utf8-panic.md) | Pending | - | `fdemon-tui` | HIGH |
-| 5 | [05-fix-major-issues](tasks/05-fix-major-issues.md) | Pending | - | multi-crate | MAJOR |
-| 6 | [06-fix-minor-issues](tasks/06-fix-minor-issues.md) | Pending | - | multi-crate | MINOR |
-| 7 | [07-narrow-layout-vertical-split](tasks/07-narrow-layout-vertical-split.md) | Pending | 4, 5 | `fdemon-tui` | MAJOR (UX) |
+| 1 | [01-fix-duplicate-polling-tasks](tasks/01-fix-duplicate-polling-tasks.md) | Done | - | `fdemon-app` | CRITICAL |
+| 2 | [02-fix-recording-toggle](tasks/02-fix-recording-toggle.md) | Done | - | `fdemon-app` | CRITICAL |
+| 3 | [03-fix-session-close-leak](tasks/03-fix-session-close-leak.md) | Done | - | `fdemon-app` | HIGH |
+| 4 | [04-fix-truncate-utf8-panic](tasks/04-fix-truncate-utf8-panic.md) | Done | - | `fdemon-tui` | HIGH |
+| 5 | [05-fix-major-issues](tasks/05-fix-major-issues.md) | Done | - | multi-crate | MAJOR |
+| 6 | [06-fix-minor-issues](tasks/06-fix-minor-issues.md) | Done | - | multi-crate | MINOR |
+| 7 | [07-narrow-layout-vertical-split](tasks/07-narrow-layout-vertical-split.md) | Done | 4, 5 | `fdemon-tui` | MAJOR (UX) |
 
 ## Dispatch Plan
 

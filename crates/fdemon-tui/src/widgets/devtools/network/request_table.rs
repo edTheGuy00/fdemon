@@ -208,7 +208,9 @@ impl RequestTable<'_> {
             x += COL_STATUS;
 
             // Method
-            let method_style = method_color(&entry.method).patch(row_style);
+            let method_style = Style::default()
+                .fg(super::http_method_color(&entry.method))
+                .patch(row_style);
             buf.set_string(
                 x,
                 y,
@@ -293,20 +295,6 @@ pub(super) fn status_display(entry: &HttpProfileEntry) -> (String, Style) {
     }
 }
 
-/// Return a foreground style for the given HTTP method.
-pub(super) fn method_color(method: &str) -> Style {
-    match method {
-        "GET" => Style::default().fg(Color::Green),
-        "POST" => Style::default().fg(Color::Blue),
-        "PUT" => Style::default().fg(Color::Yellow),
-        "PATCH" => Style::default().fg(Color::Yellow),
-        "DELETE" => Style::default().fg(Color::Red),
-        "HEAD" => Style::default().fg(Color::Cyan),
-        "OPTIONS" => Style::default().fg(Color::Magenta),
-        _ => Style::default().fg(Color::White),
-    }
-}
-
 /// Shorten a Content-Type header value to a one-word label.
 ///
 /// Examples:
@@ -314,8 +302,15 @@ pub(super) fn method_color(method: &str) -> Style {
 /// - `text/html; charset=utf-8` → `"html"`
 /// - `image/png` → `"image"`
 pub(super) fn short_content_type(ct: &str) -> String {
+    // More-specific checks must come before broader ones.
+    // "javascript" and "css" are checked before "text" so that
+    // "text/javascript" maps to "js" rather than "text".
     if ct.contains("json") {
         "json".to_string()
+    } else if ct.contains("javascript") {
+        "js".to_string()
+    } else if ct.contains("css") {
+        "css".to_string()
     } else if ct.contains("html") {
         "html".to_string()
     } else if ct.contains("xml") {
@@ -324,24 +319,23 @@ pub(super) fn short_content_type(ct: &str) -> String {
         "image".to_string()
     } else if ct.contains("text") {
         "text".to_string()
-    } else if ct.contains("javascript") {
-        "js".to_string()
-    } else if ct.contains("css") {
-        "css".to_string()
     } else {
         ct.split('/').next_back().unwrap_or(ct).to_string()
     }
 }
 
-/// Truncate `s` to at most `max` characters, appending `…` when truncated.
+/// Truncate `s` to at most `max` Unicode characters, appending `…` when truncated.
 ///
-/// Uses byte-level slicing for ASCII-dominant input (HTTP metadata). For
-/// entries with unicode URIs the slice is safe because we check `s.len()`.
+/// Delegates to [`super::super::truncate_str`] which uses `char_indices()` for
+/// Unicode-safe slicing. This prevents panics on multi-byte characters such as
+/// accented letters or CJK characters that may appear in URLs.
 pub(super) fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max.saturating_sub(1)])
+        // Truncate to max-1 chars, leaving room for the "…" ellipsis.
+        let truncated = super::super::truncate_str(s, max.saturating_sub(1));
+        format!("{truncated}…")
     }
 }
 
@@ -610,38 +604,38 @@ mod tests {
     #[test]
     fn test_method_colors() {
         assert_eq!(
-            method_color("GET").fg,
-            Some(Color::Green),
+            super::super::http_method_color("GET"),
+            Color::Green,
             "GET should be green"
         );
         assert_eq!(
-            method_color("POST").fg,
-            Some(Color::Blue),
+            super::super::http_method_color("POST"),
+            Color::Blue,
             "POST should be blue"
         );
         assert_eq!(
-            method_color("DELETE").fg,
-            Some(Color::Red),
+            super::super::http_method_color("DELETE"),
+            Color::Red,
             "DELETE should be red"
         );
         assert_eq!(
-            method_color("PUT").fg,
-            Some(Color::Yellow),
+            super::super::http_method_color("PUT"),
+            Color::Yellow,
             "PUT should be yellow"
         );
         assert_eq!(
-            method_color("PATCH").fg,
-            Some(Color::Yellow),
+            super::super::http_method_color("PATCH"),
+            Color::Yellow,
             "PATCH should be yellow"
         );
         assert_eq!(
-            method_color("HEAD").fg,
-            Some(Color::Cyan),
+            super::super::http_method_color("HEAD"),
+            Color::Cyan,
             "HEAD should be cyan"
         );
         assert_eq!(
-            method_color("OPTIONS").fg,
-            Some(Color::Magenta),
+            super::super::http_method_color("OPTIONS"),
+            Color::Magenta,
             "OPTIONS should be magenta"
         );
     }
@@ -681,6 +675,29 @@ mod tests {
         assert_eq!(short_content_type("application/css"), "css");
     }
 
+    #[test]
+    fn test_short_content_type_text_javascript_maps_to_js() {
+        // "text/javascript" contains both "text" and "javascript". The more
+        // specific "javascript" check must come first so the result is "js"
+        // and not "text". This is the regression test for Issue 15.
+        assert_eq!(
+            short_content_type("text/javascript"),
+            "js",
+            "text/javascript should map to 'js', not 'text'"
+        );
+    }
+
+    #[test]
+    fn test_short_content_type_text_css_maps_to_css() {
+        // "text/css" contains both "text" and "css". The more specific "css"
+        // check must come first.
+        assert_eq!(
+            short_content_type("text/css"),
+            "css",
+            "text/css should map to 'css', not 'text'"
+        );
+    }
+
     // ── Truncate unit tests ───────────────────────────────────────────────────
 
     #[test]
@@ -695,21 +712,94 @@ mod tests {
 
     #[test]
     fn test_truncate_adds_ellipsis() {
+        // "hello world" is 11 chars; max=5 → keep 4 chars + "…"
         assert_eq!(truncate("hello world", 5), "hell…");
     }
 
     #[test]
     fn test_truncate_max_zero_returns_ellipsis() {
-        // max=0: saturating_sub gives 0, so we format "" with "…" appended.
-        // The result may be just "…" — must not panic.
+        // max=0: saturating_sub(1) gives 0, truncate_str returns "",
+        // which is shorter than "hello", so we append "…".
         let result = truncate("hello", 0);
-        assert!(!result.is_empty());
+        assert_eq!(result, "…", "max=0 on non-empty string should return \"…\"");
     }
 
     #[test]
     fn test_truncate_max_one_returns_single_ellipsis() {
-        // max=1: s[..0] = "" → "…"
+        // max=1: truncate_str(s, 0) = "" → "" < "hello" → "…"
         let result = truncate("hello", 1);
         assert_eq!(result, "…");
+    }
+
+    #[test]
+    fn test_truncate_empty_string_unchanged() {
+        // Empty string is never longer than any max.
+        assert_eq!(truncate("", 5), "");
+        assert_eq!(truncate("", 0), "");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_ascii_accent_short_unchanged() {
+        // "héllo" fits in max=10 — must not panic and must be returned as-is.
+        assert_eq!(truncate("héllo", 10), "héllo");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_accent_truncated_safely() {
+        // "héllo" = 5 Unicode chars (é is 2 bytes).
+        // max=4 → keep 3 chars ("hél") + "…"
+        let result = truncate("héllo", 4);
+        assert_eq!(result, "hél…");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_boundary_mid_character() {
+        // "héllo" — byte length is 6 (é = 2 bytes), char length is 5.
+        // A byte-level slice at position 2 would land mid-character and panic.
+        // The Unicode-safe implementation must not panic.
+        let result = truncate("héllo", 3);
+        // max=3 → keep 2 chars + "…"
+        assert_eq!(result, "hé…");
+    }
+
+    #[test]
+    fn test_truncate_cjk_characters_safely() {
+        // "日本語テスト" = 6 CJK chars, each 3 bytes.
+        // max=4 → keep 3 chars ("日本語") + "…"
+        let result = truncate("日本語テスト", 4);
+        assert_eq!(result, "日本語…");
+    }
+
+    #[test]
+    fn test_truncate_cjk_short_unchanged() {
+        // String fits within max — must be returned unchanged.
+        assert_eq!(truncate("日本語", 10), "日本語");
+    }
+
+    #[test]
+    fn test_truncate_url_with_unicode_path() {
+        // Simulates a URL like "https://api.example.com/réservations"
+        let url = "https://api.example.com/réservations";
+        // Truncating to a width that would fall mid-byte on byte slicing must not panic.
+        let result = truncate(url, 28);
+        // 28 chars → keep 27 chars + "…"
+        let expected_prefix: String = url.chars().take(27).collect();
+        assert!(
+            result.starts_with(&expected_prefix[..expected_prefix.len().min(20)]),
+            "truncated URL should start with expected prefix; got: {result:?}"
+        );
+        assert!(
+            result.ends_with('…'),
+            "truncated URL should end with ellipsis"
+        );
+    }
+
+    #[test]
+    fn test_truncate_ellipsis_appended_only_when_truncated() {
+        // Exactly at boundary: no ellipsis.
+        let s = "hello";
+        assert_eq!(truncate(s, 5), "hello");
+        // One over: ellipsis appears.
+        assert!(truncate(s, 4).ends_with('…'));
     }
 }

@@ -3,14 +3,20 @@
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
-use crate::session::SessionId;
+use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::DevToolsPanel;
-use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail, NetworkDetailTab};
+use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
     IosSimulator, ToolAvailability,
 };
+
+/// Shared, abort-able handle to a background task.
+///
+/// Used in `Message` variants that transfer ownership of a spawned task to the
+/// session state so it can be cancelled on disconnect or session close.
+type SharedTaskHandle = std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>;
 
 /// The three debug overlay types that can be toggled from DevTools mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -734,7 +740,7 @@ pub enum Message {
         /// `Message`. The handler takes the handle out of the `Option` when
         /// storing it on `SessionHandle`, leaving `None` for any subsequent
         /// (unexpected) clone.
-        perf_task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+        perf_task_handle: SharedTaskHandle,
     },
 
     // ─────────────────────────────────────────────────────────
@@ -879,7 +885,7 @@ pub enum Message {
     VmServiceNetworkMonitoringStarted {
         session_id: SessionId,
         network_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
-        network_task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+        network_task_handle: SharedTaskHandle,
     },
 
     /// Network extensions not available (e.g., release mode).

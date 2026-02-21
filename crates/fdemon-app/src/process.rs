@@ -88,6 +88,12 @@ pub fn process_message(
                             error: "VM Service handle unavailable".to_string(),
                         });
                     }
+                    UpdateAction::FetchHttpRequestDetail { session_id, .. } => {
+                        let _ = msg_tx.try_send(Message::VmServiceHttpRequestDetailFailed {
+                            session_id: *session_id,
+                            error: "VM Service handle unavailable".to_string(),
+                        });
+                    }
                     _ => {}
                 }
             }

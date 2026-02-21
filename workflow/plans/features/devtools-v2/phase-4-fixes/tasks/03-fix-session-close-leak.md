@@ -52,3 +52,36 @@ cargo test -p fdemon-app -- close_current_session
 cargo test -p fdemon-app -- session_lifecycle
 cargo clippy -p fdemon-app
 ```
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Added network task cleanup block after performance cleanup in `handle_close_current_session` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_close_session_cleans_up_network_monitoring` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Use `.take()` on both fields**: The fix uses `.take()` on `network_task_handle` and `network_shutdown_tx`, consistent with the existing perf cleanup pattern directly above it. The `VmServiceDisconnected` reference pattern uses `take()` for the JoinHandle but `ref tx` + manual `= None` for the sender — the `.take()` approach is cleaner and equivalent.
+
+2. **Test uses `tokio::runtime::Runtime`**: Since `network_task_handle` requires a real `JoinHandle`, the test creates a tokio runtime via `rt.block_on(async { ... })`. This follows the existing pattern in `devtools/network.rs` tests. The existing perf shutdown test does not need a runtime because it only tests the watch channel signal (no JoinHandle).
+
+3. **Session removal means no post-close field check**: After `handle_close_current_session`, the session is removed from the manager. The test verifies cleanup indirectly: (a) the watch channel receiver sees `true` (signal was sent), and (b) the session no longer exists in the manager. The "is None" assertions from the task spec are satisfied by the signal check plus the session removal proving both handles were taken before close.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- test_close_session` - Passed (2 passed, 1 ignored)
+- `cargo test -p fdemon-app -- session_lifecycle` - Passed (1 passed)
+- `cargo test -p fdemon-app` - Passed (993 tests, 0 failed)
+- `cargo clippy -p fdemon-app` - Passed (0 warnings)
+- `cargo fmt --all -- --check` - Passed (no formatting changes)
+
+### Risks/Limitations
+
+1. **None**: The fix is a direct, minimal addition that mirrors the existing perf cleanup pattern. No architectural changes, no new abstractions.
