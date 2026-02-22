@@ -15,6 +15,7 @@ use braille_canvas::BrailleCanvas;
 use chart::{render_history_chart, render_legend, render_sample_chart, render_x_axis_labels};
 use table::render_allocation_table;
 
+use fdemon_app::session::AllocationSortColumn;
 use fdemon_core::performance::{AllocationProfile, GcEvent, MemorySample, MemoryUsage, RingBuffer};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
@@ -75,6 +76,7 @@ pub(crate) struct MemoryChart<'a> {
     memory_history: &'a RingBuffer<MemoryUsage>,
     gc_history: &'a RingBuffer<GcEvent>,
     allocation_profile: Option<&'a AllocationProfile>,
+    allocation_sort: AllocationSortColumn,
     icons: bool,
 }
 
@@ -85,6 +87,7 @@ impl<'a> MemoryChart<'a> {
         memory_history: &'a RingBuffer<MemoryUsage>,
         gc_history: &'a RingBuffer<GcEvent>,
         allocation_profile: Option<&'a AllocationProfile>,
+        allocation_sort: AllocationSortColumn,
         icons: bool,
     ) -> Self {
         Self {
@@ -92,6 +95,7 @@ impl<'a> MemoryChart<'a> {
             memory_history,
             gc_history,
             allocation_profile,
+            allocation_sort,
             icons,
         }
     }
@@ -139,7 +143,12 @@ impl Widget for MemoryChart<'_> {
                 chart_area,
                 buf,
             );
-            render_allocation_table(self.allocation_profile, table_area, buf);
+            render_allocation_table(
+                self.allocation_profile,
+                self.allocation_sort,
+                table_area,
+                buf,
+            );
         } else {
             render_chart_area(
                 self.memory_samples,

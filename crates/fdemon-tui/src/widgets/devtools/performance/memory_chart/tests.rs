@@ -124,7 +124,14 @@ fn test_renders_empty_samples_without_panic() {
     let samples: RingBuffer<MemorySample> = RingBuffer::new(120);
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(60);
     let gc_history: RingBuffer<GcEvent> = RingBuffer::new(50);
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -141,7 +148,14 @@ fn test_renders_with_memory_usage_fallback() {
         memory_history.push(make_memory_usage((i + 1) * 5_000_000, 128_000_000));
     }
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -162,7 +176,14 @@ fn test_renders_single_sample_without_panic() {
         200_000_000,
     ));
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -184,7 +205,14 @@ fn test_renders_full_buffer_without_panic() {
         ));
     }
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 24);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -294,7 +322,14 @@ fn test_gc_markers_positioned_correctly() {
         timestamp: old_ts + chrono::Duration::seconds(15),
     });
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -327,7 +362,7 @@ fn test_allocation_table_shows_top_classes() {
 
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
-    render_allocation_table(Some(&profile), area, &mut buf);
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
 
     // Collect all text from the buffer
     let content: String = (0..10u16)
@@ -343,7 +378,7 @@ fn test_allocation_table_shows_top_classes() {
 fn test_allocation_table_none_profile() {
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
-    render_allocation_table(None, area, &mut buf);
+    render_allocation_table(None, AllocationSortColumn::BySize, area, &mut buf);
 
     let content: String = (0..10u16)
         .flat_map(|y| (0..80u16).map(move |x| (x, y)))
@@ -363,7 +398,14 @@ fn test_compact_mode_small_height() {
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(60);
     let gc_history: RingBuffer<GcEvent> = RingBuffer::new(50);
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 5); // height = 5 < 6
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -376,7 +418,14 @@ fn test_very_small_area_no_panic() {
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(60);
     let gc_history: RingBuffer<GcEvent> = RingBuffer::new(50);
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 10, 3);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -388,7 +437,14 @@ fn test_zero_area_no_panic() {
     let memory_history: RingBuffer<MemoryUsage> = RingBuffer::new(60);
     let gc_history: RingBuffer<GcEvent> = RingBuffer::new(50);
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 0, 0);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -405,7 +461,14 @@ fn test_y_axis_auto_scaling() {
         samples.push(make_sample(i * 5_000_000, 0, 0, 60_000_000, 0));
     }
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     let area = Rect::new(0, 0, 80, 20);
     let mut buf = Buffer::empty(area);
     widget.render(area, &mut buf);
@@ -432,7 +495,14 @@ fn test_chart_only_mode_no_table() {
 
     samples.push(make_sample(50_000_000, 5_000_000, 0, 100_000_000, 0));
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     // height = 7 is >= MIN_CHART_HEIGHT(6) but < MIN_CHART_HEIGHT+MIN_TABLE_HEIGHT (8)
     let area = Rect::new(0, 0, 80, 7);
     let mut buf = Buffer::empty(area);
@@ -450,7 +520,14 @@ fn test_allocation_table_visible_at_threshold() {
 
     samples.push(make_sample(50_000_000, 5_000_000, 0, 100_000_000, 0));
 
-    let widget = MemoryChart::new(&samples, &memory_history, &gc_history, None, false);
+    let widget = MemoryChart::new(
+        &samples,
+        &memory_history,
+        &gc_history,
+        None,
+        AllocationSortColumn::BySize,
+        false,
+    );
     // height = 8 is exactly MIN_CHART_HEIGHT(6) + MIN_TABLE_HEIGHT(2)
     let area = Rect::new(0, 0, 80, 8);
     let mut buf = Buffer::empty(area);
@@ -537,7 +614,7 @@ fn test_class_name_truncation_with_cjk() {
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
     // Must not panic
-    render_allocation_table(Some(&profile), area, &mut buf);
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
 }
 
 #[test]
@@ -559,7 +636,7 @@ fn test_class_name_truncation_with_emoji() {
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
     // Must not panic
-    render_allocation_table(Some(&profile), area, &mut buf);
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
 }
 
 #[test]
@@ -580,7 +657,7 @@ fn test_class_name_truncation_result_ends_with_ellipsis() {
     };
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
-    render_allocation_table(Some(&profile), area, &mut buf);
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
     // The rendered row should contain "..." and the first 27 chars of the name
     let content: String = (0..10u16)
         .flat_map(|y| (0..80u16).map(move |x| (x, y)))
@@ -614,7 +691,7 @@ fn test_class_name_no_truncation_for_short_name() {
     };
     let area = Rect::new(0, 0, 80, 10);
     let mut buf = Buffer::empty(area);
-    render_allocation_table(Some(&profile), area, &mut buf);
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
     let content: String = (0..10u16)
         .flat_map(|y| (0..80u16).map(move |x| (x, y)))
         .filter_map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()))
@@ -622,5 +699,130 @@ fn test_class_name_no_truncation_for_short_name() {
     assert!(
         content.contains("dart:core/String"),
         "Short name should be rendered in full"
+    );
+}
+
+// ── Allocation table sorting tests ────────────────────────────────────────
+
+/// Build a two-class profile where `ClassA` has a larger size but fewer
+/// instances than `ClassB`, so BySize and ByInstances produce different orders.
+fn make_two_class_profile() -> AllocationProfile {
+    AllocationProfile {
+        members: vec![
+            // ClassA: bigger in bytes, fewer instances
+            ClassHeapStats {
+                class_name: "ClassA".to_string(),
+                library_uri: None,
+                new_space_instances: 10,
+                new_space_size: 1_000_000,
+                old_space_instances: 5,
+                old_space_size: 500_000,
+            },
+            // ClassB: smaller in bytes, more instances
+            ClassHeapStats {
+                class_name: "ClassB".to_string(),
+                library_uri: None,
+                new_space_instances: 5_000,
+                new_space_size: 10_000,
+                old_space_instances: 2_000,
+                old_space_size: 5_000,
+            },
+        ],
+        timestamp: chrono::Local::now(),
+    }
+}
+
+/// Collect all cell text from the buffer into a single string.
+fn buffer_content(buf: &Buffer, area: Rect) -> String {
+    (0..area.height)
+        .flat_map(|y| (0..area.width).map(move |x| (area.x + x, area.y + y)))
+        .filter_map(|(x, y)| buf.cell((x, y)).map(|c| c.symbol().to_string()))
+        .collect()
+}
+
+#[test]
+fn test_allocation_table_sort_by_size_renders_size_indicator() {
+    let profile = make_two_class_profile();
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
+
+    let content = buffer_content(&buf, area);
+    // The header should show the sort indicator (▼) near "Shallow Size"
+    assert!(
+        content.contains('\u{25bc}'),
+        "BySize sort should show ▼ indicator in header; content: {content:?}"
+    );
+}
+
+#[test]
+fn test_allocation_table_sort_by_instances_renders_instances_indicator() {
+    let profile = make_two_class_profile();
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+
+    render_allocation_table(
+        Some(&profile),
+        AllocationSortColumn::ByInstances,
+        area,
+        &mut buf,
+    );
+
+    let content = buffer_content(&buf, area);
+    assert!(
+        content.contains('\u{25bc}'),
+        "ByInstances sort should show ▼ indicator in header"
+    );
+}
+
+#[test]
+fn test_allocation_table_by_size_shows_class_a_first() {
+    // ClassA has larger total_size → should appear first in BySize sort.
+    let profile = make_two_class_profile();
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+
+    render_allocation_table(Some(&profile), AllocationSortColumn::BySize, area, &mut buf);
+
+    let content = buffer_content(&buf, area);
+    let pos_a = content.find("ClassA");
+    let pos_b = content.find("ClassB");
+
+    assert!(
+        pos_a.is_some() && pos_b.is_some(),
+        "Both classes should appear"
+    );
+    assert!(
+        pos_a.unwrap() < pos_b.unwrap(),
+        "BySize: ClassA (larger bytes) should appear before ClassB"
+    );
+}
+
+#[test]
+fn test_allocation_table_by_instances_shows_class_b_first() {
+    // ClassB has more total_instances → should appear first in ByInstances sort.
+    let profile = make_two_class_profile();
+    let area = Rect::new(0, 0, 80, 10);
+    let mut buf = Buffer::empty(area);
+
+    render_allocation_table(
+        Some(&profile),
+        AllocationSortColumn::ByInstances,
+        area,
+        &mut buf,
+    );
+
+    let content = buffer_content(&buf, area);
+    let pos_a = content.find("ClassA");
+    let pos_b = content.find("ClassB");
+
+    assert!(
+        pos_a.is_some() && pos_b.is_some(),
+        "Both classes should appear"
+    );
+    assert!(
+        pos_b.unwrap() < pos_a.unwrap(),
+        "ByInstances: ClassB (more instances) should appear before ClassA"
     );
 }

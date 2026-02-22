@@ -38,6 +38,14 @@ const DISCONNECTED_CONTENT_LINES: u16 = 6;
 /// Number of content lines in the error-state panel.
 const ERROR_CONTENT_LINES: u16 = 5;
 
+/// Minimum height required to render the full two-panel tree layout.
+/// Below this threshold a compact single-line summary is shown instead.
+const MIN_TREE_RENDER_HEIGHT: u16 = 4;
+
+/// Minimum height for each split panel (tree + layout) in the vertical split.
+/// If neither half would reach this height, show only the tree panel.
+const MIN_SPLIT_PANEL_HEIGHT: u16 = 3;
+
 // ── WidgetInspector ───────────────────────────────────────────────────────────
 
 /// Widget inspector panel for the DevTools mode.
@@ -142,8 +150,25 @@ impl WidgetInspector<'_> {
         let visible = self.inspector_state.visible_nodes();
         let selected = self.inspector_state.selected_index;
 
+        // Guard: if the area is too small for a two-panel layout, show a compact
+        // single-line summary instead of potentially garbled split output.
+        if area.height < MIN_TREE_RENDER_HEIGHT {
+            let node_count = visible.len();
+            let msg = if node_count == 0 {
+                "No widget tree".to_string()
+            } else {
+                format!("{} nodes", node_count)
+            };
+            let line = Line::from(Span::styled(msg, Style::default().fg(Color::DarkGray)));
+            buf.set_line(area.x, area.y, &line, area.width);
+            return;
+        }
+
         // Wide terminals (>= 100 cols): horizontal split — tree left | layout right.
         // Narrow terminals (< 100 cols): vertical split — tree top | layout bottom.
+        //
+        // For the vertical (narrow) case, only show the layout panel when each half
+        // would have at least MIN_SPLIT_PANEL_HEIGHT rows — otherwise show tree only.
         let (tree_area, layout_area) = if area.width >= WIDE_TERMINAL_THRESHOLD {
             let chunks = Layout::horizontal([
                 Constraint::Percentage(TREE_WIDTH_PCT),
@@ -152,12 +177,20 @@ impl WidgetInspector<'_> {
             .split(area);
             (chunks[0], Some(chunks[1]))
         } else {
-            let chunks = Layout::vertical([
-                Constraint::Percentage(TREE_WIDTH_PCT),
-                Constraint::Percentage(LAYOUT_WIDTH_PCT),
-            ])
-            .split(area);
-            (chunks[0], Some(chunks[1]))
+            // Each half gets ~50% of the height. If the resulting panels are too
+            // short to be useful, skip the layout panel entirely.
+            let half_height = area.height / 2;
+            if half_height >= MIN_SPLIT_PANEL_HEIGHT {
+                let chunks = Layout::vertical([
+                    Constraint::Percentage(TREE_WIDTH_PCT),
+                    Constraint::Percentage(LAYOUT_WIDTH_PCT),
+                ])
+                .split(area);
+                (chunks[0], Some(chunks[1]))
+            } else {
+                // Not enough vertical space for two panels — tree panel only.
+                (area, None)
+            }
         };
 
         self.render_tree_panel(tree_area, buf, &visible, selected);

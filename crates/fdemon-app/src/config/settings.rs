@@ -383,7 +383,15 @@ icons = "nerd_fonts"
 
 [devtools]
 auto_open = false
-browser = ""            # Empty = system default
+browser = ""                          # Empty = system default
+default_panel = "inspector"           # "inspector", "performance", or "network"
+performance_refresh_ms = 2000         # Memory polling interval (min 500ms)
+memory_history_size = 60              # Memory snapshots to retain
+tree_max_depth = 0                    # Widget tree depth (0 = unlimited)
+allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 1000ms)
+max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
+network_auto_record = true            # Auto-start recording when entering Network tab
+network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -567,7 +575,15 @@ icons = "nerd_fonts"
 
 [devtools]
 auto_open = false
-browser = ""            # Empty = system default
+browser = ""                          # Empty = system default
+default_panel = "inspector"           # "inspector", "performance", or "network"
+performance_refresh_ms = 2000         # Memory polling interval (min 500ms)
+memory_history_size = 60              # Memory snapshots to retain
+tree_max_depth = 0                    # Widget tree depth (0 = unlimited)
+allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 1000ms)
+max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
+network_auto_record = true            # Auto-start recording when entering Network tab
+network_poll_interval_ms = 1000       # HTTP profile poll interval (min 500ms)
 
 [editor]
 # Editor command (leave empty for auto-detection)
@@ -1499,6 +1515,14 @@ icons = "nerd_fonts"
         let content = generate_default_config();
         let _: Settings =
             toml::from_str(&content).expect("Generated default config should be valid TOML");
+    }
+
+    #[test]
+    fn test_default_config_includes_network_settings() {
+        let content = generate_default_config();
+        assert!(content.contains("max_network_entries"));
+        assert!(content.contains("network_auto_record"));
+        assert!(content.contains("network_poll_interval_ms"));
     }
 
     #[test]

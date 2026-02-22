@@ -808,12 +808,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     // Create session and spawn
                     let AutoLaunchSuccess { device, config } = success;
 
+                    let devtools = &state.settings.devtools.clone();
                     let session_result = if let Some(cfg) = &config {
+                        state.session_manager.create_session_with_config_configured(
+                            &device,
+                            cfg.clone(),
+                            devtools,
+                        )
+                    } else {
                         state
                             .session_manager
-                            .create_session_with_config(&device, cfg.clone())
-                    } else {
-                        state.session_manager.create_session(&device)
+                            .create_session_configured(&device, devtools)
                     };
 
                     match session_result {
@@ -1632,6 +1637,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::NetworkFilterChanged(filter) => {
             devtools::network::handle_network_filter_changed(state, filter)
+        }
+
+        Message::NetworkEnterFilterMode => devtools::network::handle_enter_filter_mode(state),
+
+        Message::NetworkExitFilterMode => devtools::network::handle_exit_filter_mode(state),
+
+        Message::NetworkCommitFilter => devtools::network::handle_commit_filter(state),
+
+        Message::NetworkFilterInput(c) => devtools::network::handle_filter_input(state, c),
+
+        Message::NetworkFilterBackspace => devtools::network::handle_filter_backspace(state),
+
+        // ── Performance Panel UI Messages ─────────────────────────────────────
+        Message::ToggleAllocationSort => {
+            devtools::performance::handle_toggle_allocation_sort(state)
         }
     }
 }

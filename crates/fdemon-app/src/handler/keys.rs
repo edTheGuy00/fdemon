@@ -313,6 +313,27 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
     let in_network = state.devtools_view_state.active_panel == DevToolsPanel::Network;
     let active_id = state.session_manager.selected().map(|h| h.session.id);
 
+    // ── Network filter input mode ─────────────────────────────────────────────
+    // When filter input is active, route keys to the filter buffer before any
+    // other Network panel binding so no regular network key leaks through.
+    if in_network {
+        let filter_active = state
+            .session_manager
+            .selected()
+            .map(|h| h.session.network.filter_input_active)
+            .unwrap_or(false);
+
+        if filter_active {
+            return match key {
+                InputKey::Esc => Some(Message::NetworkExitFilterMode),
+                InputKey::Enter => Some(Message::NetworkCommitFilter),
+                InputKey::Backspace => Some(Message::NetworkFilterBackspace),
+                InputKey::Char(c) if !c.is_control() => Some(Message::NetworkFilterInput(c)),
+                _ => None,
+            };
+        }
+    }
+
     match key {
         // ── Exit DevTools / deselect frame ────────────────────────────────────
         //
@@ -418,6 +439,9 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
             .selected_id()
             .map(|session_id| Message::ClearNetworkProfile { session_id }),
 
+        // ── Network panel — enter filter input mode ───────────────────────────
+        InputKey::Char('/') if in_network => Some(Message::NetworkEnterFilterMode),
+
         // ── Inspector navigation (only active in Inspector panel) ─────────────
         InputKey::Up | InputKey::Char('k') if in_inspector => {
             Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
@@ -435,6 +459,14 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Char('r') if in_inspector => {
             active_id.map(|session_id| Message::RequestWidgetTree { session_id })
         }
+
+        // ── Performance panel — allocation table sort ─────────────────────────
+        //
+        // 's' toggles the allocation table sort column between BySize and
+        // ByInstances. This binding is only active in the Performance panel;
+        // in the Network panel 's' switches to the ResponseBody sub-tab (handled
+        // above with the `in_network` guard), so there is no conflict.
+        InputKey::Char('s') if in_performance => Some(Message::ToggleAllocationSort),
 
         // ── Performance panel frame navigation ────────────────────────────────
         //
@@ -607,6 +639,9 @@ fn handle_key_new_session_dialog(key: InputKey, state: &AppState) -> Option<Mess
     match key {
         // Ctrl+C to quit (highest priority)
         InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // Settings accessible from startup dialog (comma key)
+        InputKey::Char(',') => Some(Message::ShowSettings),
 
         // Main dialog keys
         InputKey::Esc => Some(Message::NewSessionDialogEscape),
@@ -1045,6 +1080,30 @@ mod settings_key_tests {
     }
 
     #[test]
+    fn test_comma_opens_settings_from_startup_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Startup;
+
+        let msg = handle_key(&state, InputKey::Char(','));
+        assert!(
+            matches!(msg, Some(Message::ShowSettings)),
+            "Comma should open settings from Startup mode"
+        );
+    }
+
+    #[test]
+    fn test_comma_opens_settings_from_new_session_dialog_mode() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        let msg = handle_key(&state, InputKey::Char(','));
+        assert!(
+            matches!(msg, Some(Message::ShowSettings)),
+            "Comma should open settings from NewSessionDialog mode"
+        );
+    }
+
+    #[test]
     fn test_edit_mode_escape_exits() {
         let mut state = AppState::new();
         state.ui_mode = UiMode::Settings;
@@ -1182,5 +1241,212 @@ mod settings_view_state_tests {
         assert_eq!(state.selected_index, 0);
         assert!(!state.editing);
         assert!(state.edit_buffer.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod performance_sort_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    /// Create a state with one session in DevTools / Performance panel.
+    fn make_state_in_performance_panel() -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        state
+    }
+
+    /// Create a state with one session in DevTools / Network panel.
+    fn make_state_in_network_panel() -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        state
+    }
+
+    #[test]
+    fn test_s_in_performance_panel_emits_toggle_allocation_sort() {
+        let state = make_state_in_performance_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('s'));
+        assert!(
+            matches!(msg, Some(Message::ToggleAllocationSort)),
+            "'s' in Performance panel should emit ToggleAllocationSort"
+        );
+    }
+
+    #[test]
+    fn test_s_in_network_panel_emits_response_body_tab() {
+        let state = make_state_in_network_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('s'));
+        // In the Network panel 's' maps to NetworkSwitchDetailTab(ResponseBody), not ToggleAllocationSort.
+        assert!(
+            matches!(
+                msg,
+                Some(Message::NetworkSwitchDetailTab(
+                    crate::session::NetworkDetailTab::ResponseBody
+                ))
+            ),
+            "'s' in Network panel should still emit NetworkSwitchDetailTab(ResponseBody)"
+        );
+    }
+
+    #[test]
+    fn test_s_in_inspector_panel_returns_none() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        let msg = handle_key_devtools(&state, InputKey::Char('s'));
+        // 's' has no binding in the Inspector panel.
+        assert!(msg.is_none(), "'s' in Inspector panel should return None");
+    }
+}
+
+#[cfg(test)]
+mod network_filter_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    fn make_state_in_network_panel() -> AppState {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        state
+    }
+
+    fn make_state_in_network_filter_mode() -> AppState {
+        let mut state = make_state_in_network_panel();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .filter_input_active = true;
+        state
+    }
+
+    #[test]
+    fn test_slash_in_network_panel_enters_filter_mode() {
+        let state = make_state_in_network_panel();
+        let msg = handle_key_devtools(&state, InputKey::Char('/'));
+        assert!(
+            matches!(msg, Some(Message::NetworkEnterFilterMode)),
+            "'/' in Network panel should emit NetworkEnterFilterMode"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_escape_exits() {
+        let state = make_state_in_network_filter_mode();
+        let msg = handle_key_devtools(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::NetworkExitFilterMode)),
+            "Esc in filter mode should emit NetworkExitFilterMode"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_enter_commits() {
+        let state = make_state_in_network_filter_mode();
+        let msg = handle_key_devtools(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::NetworkCommitFilter)),
+            "Enter in filter mode should emit NetworkCommitFilter"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_backspace_removes_char() {
+        let state = make_state_in_network_filter_mode();
+        let msg = handle_key_devtools(&state, InputKey::Backspace);
+        assert!(
+            matches!(msg, Some(Message::NetworkFilterBackspace)),
+            "Backspace in filter mode should emit NetworkFilterBackspace"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_char_appends() {
+        let state = make_state_in_network_filter_mode();
+        let msg = handle_key_devtools(&state, InputKey::Char('a'));
+        assert!(
+            matches!(msg, Some(Message::NetworkFilterInput('a'))),
+            "Char in filter mode should emit NetworkFilterInput"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_keys_do_not_conflict_with_panel_bindings() {
+        // In filter mode, 'j'/'k' should emit NetworkFilterInput, not NetworkNavigate.
+        let state = make_state_in_network_filter_mode();
+        let msg_j = handle_key_devtools(&state, InputKey::Char('j'));
+        assert!(
+            matches!(msg_j, Some(Message::NetworkFilterInput('j'))),
+            "'j' in filter mode should be treated as text input, not navigation"
+        );
+        let msg_k = handle_key_devtools(&state, InputKey::Char('k'));
+        assert!(
+            matches!(msg_k, Some(Message::NetworkFilterInput('k'))),
+            "'k' in filter mode should be treated as text input, not navigation"
+        );
+    }
+
+    #[test]
+    fn test_slash_does_not_trigger_filter_mode_in_inspector() {
+        let mut state = AppState::new();
+        let device = test_device();
+        let _session_id = state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        let msg = handle_key_devtools(&state, InputKey::Char('/'));
+        // '/' has no binding in the Inspector panel.
+        assert!(
+            msg.is_none(),
+            "'/' in Inspector panel should not emit NetworkEnterFilterMode"
+        );
+    }
+
+    #[test]
+    fn test_filter_mode_unknown_key_returns_none() {
+        let state = make_state_in_network_filter_mode();
+        let msg = handle_key_devtools(&state, InputKey::Tab);
+        assert!(
+            msg.is_none(),
+            "Unknown key in filter mode should return None"
+        );
     }
 }

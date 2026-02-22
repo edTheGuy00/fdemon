@@ -47,14 +47,14 @@ Wave 3       └─────────────┬───────�
 
 | # | Task | Status | Depends On | Crate | Modules |
 |---|------|--------|------------|-------|---------|
-| 1 | [01-add-network-config-options](tasks/01-add-network-config-options.md) | Not Started | - | `fdemon-app` | `config/types.rs`, `config/settings.rs`, `session/network.rs` |
-| 2 | [02-wire-allocation-sort-interaction](tasks/02-wire-allocation-sort-interaction.md) | Not Started | - | `fdemon-app`, `fdemon-tui` | `session/performance.rs`, `handler/devtools/performance.rs`, `handler/keys.rs`, `widgets/devtools/performance/memory_chart/table.rs` |
-| 3 | [03-add-network-filter-input](tasks/03-add-network-filter-input.md) | Not Started | - | `fdemon-app` | `state.rs`, `message.rs`, `handler/keys.rs`, `handler/devtools/network.rs` |
-| 4 | [04-polish-small-terminal-rendering](tasks/04-polish-small-terminal-rendering.md) | Not Started | - | `fdemon-tui` | `widgets/devtools/network/mod.rs`, `widgets/devtools/inspector/mod.rs`, `widgets/devtools/mod.rs` |
-| 5 | [05-update-keybindings-docs](tasks/05-update-keybindings-docs.md) | Not Started | 1, 2, 3 | docs | `docs/KEYBINDINGS.md` |
-| 6 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | Not Started | 1 | docs | `docs/ARCHITECTURE.md` |
-| 7 | [07-update-project-metadata](tasks/07-update-project-metadata.md) | Not Started | 1 | docs | `CLAUDE.md` |
-| 8 | [08-final-test-and-cleanup](tasks/08-final-test-and-cleanup.md) | Not Started | 1–7 | workspace | All devtools modules |
+| 1 | [01-add-network-config-options](tasks/01-add-network-config-options.md) | Done | - | `fdemon-app` | `config/types.rs`, `config/settings.rs`, `session/network.rs` |
+| 2 | [02-wire-allocation-sort-interaction](tasks/02-wire-allocation-sort-interaction.md) | Done | - | `fdemon-app`, `fdemon-tui` | `session/performance.rs`, `handler/devtools/performance.rs`, `handler/keys.rs`, `widgets/devtools/performance/memory_chart/table.rs` |
+| 3 | [03-add-network-filter-input](tasks/03-add-network-filter-input.md) | Done | - | `fdemon-app` | `state.rs`, `message.rs`, `handler/keys.rs`, `handler/devtools/network.rs` |
+| 4 | [04-polish-small-terminal-rendering](tasks/04-polish-small-terminal-rendering.md) | Done | - | `fdemon-tui` | `widgets/devtools/network/mod.rs`, `widgets/devtools/inspector/mod.rs`, `widgets/devtools/mod.rs` |
+| 5 | [05-update-keybindings-docs](tasks/05-update-keybindings-docs.md) | Done | 1, 2, 3 | docs | `docs/KEYBINDINGS.md` |
+| 6 | [06-update-architecture-docs](tasks/06-update-architecture-docs.md) | Done | 1 | docs | `docs/ARCHITECTURE.md` |
+| 7 | [07-update-project-metadata](tasks/07-update-project-metadata.md) | Done | 1 | docs | `CLAUDE.md` |
+| 8 | [08-final-test-and-cleanup](tasks/08-final-test-and-cleanup.md) | Done | 1–7 | workspace | All devtools modules |
 
 ## Dispatch Plan
 

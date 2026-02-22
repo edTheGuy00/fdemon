@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use crate::config::LaunchConfig;
+use crate::config::{DevToolsSettings, LaunchConfig};
 use fdemon_core::prelude::*;
 use fdemon_daemon::{Device, FlutterProcess};
 
@@ -90,6 +90,80 @@ impl SessionManager {
             device.emulator,
         )
         .with_config(config);
+
+        let id = session.id;
+        let handle = SessionHandle::new(session);
+
+        self.sessions.insert(id, handle);
+        self.session_order.push(id);
+
+        if self.session_order.len() == 1 {
+            self.selected_index = 0;
+        }
+
+        Ok(id)
+    }
+
+    /// Create a new session for a device, applying DevTools configuration.
+    ///
+    /// Initialises `NetworkState` from the provided `devtools` settings so that
+    /// `max_entries` and the initial `recording` flag are sourced from config
+    /// rather than hard-coded defaults.
+    pub fn create_session_configured(
+        &mut self,
+        device: &Device,
+        devtools: &DevToolsSettings,
+    ) -> Result<SessionId> {
+        if self.sessions.len() >= MAX_SESSIONS {
+            return Err(Error::config(format!(
+                "Maximum of {} concurrent sessions reached",
+                MAX_SESSIONS
+            )));
+        }
+
+        let session = Session::new(
+            device.id.clone(),
+            device.name.clone(),
+            device.platform.clone(),
+            device.emulator,
+        )
+        .with_network_config(devtools.max_network_entries, devtools.network_auto_record);
+
+        let id = session.id;
+        let handle = SessionHandle::new(session);
+
+        self.sessions.insert(id, handle);
+        self.session_order.push(id);
+
+        if self.session_order.len() == 1 {
+            self.selected_index = 0;
+        }
+
+        Ok(id)
+    }
+
+    /// Create a session with a launch configuration and DevTools configuration.
+    pub fn create_session_with_config_configured(
+        &mut self,
+        device: &Device,
+        config: LaunchConfig,
+        devtools: &DevToolsSettings,
+    ) -> Result<SessionId> {
+        if self.sessions.len() >= MAX_SESSIONS {
+            return Err(Error::config(format!(
+                "Maximum of {} concurrent sessions reached",
+                MAX_SESSIONS
+            )));
+        }
+
+        let session = Session::new(
+            device.id.clone(),
+            device.name.clone(),
+            device.platform.clone(),
+            device.emulator,
+        )
+        .with_config(config)
+        .with_network_config(devtools.max_network_entries, devtools.network_auto_record);
 
         let id = session.id;
         let handle = SessionHandle::new(session);

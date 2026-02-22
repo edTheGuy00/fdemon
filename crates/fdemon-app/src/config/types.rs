@@ -318,6 +318,22 @@ pub struct DevToolsSettings {
     #[serde(default = "default_allocation_profile_interval_ms")]
     pub allocation_profile_interval_ms: u64,
 
+    /// Maximum number of network entries to keep per session (FIFO eviction).
+    /// Default: 500.
+    #[serde(default = "default_max_network_entries")]
+    pub max_network_entries: usize,
+
+    /// Whether to auto-start network recording when entering the Network tab.
+    /// Default: true.
+    #[serde(default = "default_network_auto_record")]
+    pub network_auto_record: bool,
+
+    /// Network profile polling interval in milliseconds.
+    /// Controls how often `getHttpProfile` is called when recording.
+    /// Clamped to minimum 500ms. Default: 1000.
+    #[serde(default = "default_network_poll_interval_ms")]
+    pub network_poll_interval_ms: u64,
+
     /// Logging sub-settings
     #[serde(default)]
     pub logging: DevToolsLoggingSettings,
@@ -335,6 +351,9 @@ impl Default for DevToolsSettings {
             auto_repaint_rainbow: false,
             auto_performance_overlay: false,
             allocation_profile_interval_ms: default_allocation_profile_interval_ms(),
+            max_network_entries: default_max_network_entries(),
+            network_auto_record: default_network_auto_record(),
+            network_poll_interval_ms: default_network_poll_interval_ms(),
             logging: DevToolsLoggingSettings::default(),
         }
     }
@@ -354,6 +373,18 @@ fn default_memory_history_size() -> usize {
 
 fn default_allocation_profile_interval_ms() -> u64 {
     5000
+}
+
+fn default_max_network_entries() -> usize {
+    500
+}
+
+fn default_network_auto_record() -> bool {
+    true
+}
+
+fn default_network_poll_interval_ms() -> u64 {
+    1000
 }
 
 /// Logging sub-settings for the hybrid VM Service + daemon log pipeline.
@@ -1077,6 +1108,10 @@ theme = "default"
         assert_eq!(settings.tree_max_depth, 0);
         assert!(!settings.auto_repaint_rainbow);
         assert!(!settings.auto_performance_overlay);
+        // Network settings defaults
+        assert_eq!(settings.max_network_entries, 500);
+        assert!(settings.network_auto_record);
+        assert_eq!(settings.network_poll_interval_ms, 1000);
     }
 
     #[test]
@@ -1092,6 +1127,10 @@ theme = "default"
         // New fields should have defaults
         assert_eq!(settings.default_panel, "inspector");
         assert_eq!(settings.performance_refresh_ms, 2000);
+        // Network fields should have defaults too
+        assert_eq!(settings.max_network_entries, 500);
+        assert!(settings.network_auto_record);
+        assert_eq!(settings.network_poll_interval_ms, 1000);
     }
 
     #[test]
@@ -1105,6 +1144,9 @@ theme = "default"
             tree_max_depth = 10
             auto_repaint_rainbow = true
             auto_performance_overlay = false
+            max_network_entries = 200
+            network_auto_record = false
+            network_poll_interval_ms = 2000
 
             [logging]
             hybrid_enabled = true
@@ -1120,6 +1162,10 @@ theme = "default"
         assert!(settings.auto_repaint_rainbow);
         assert!(settings.logging.show_source_indicator);
         assert_eq!(settings.logging.dedupe_threshold_ms, 200);
+        // Network fields
+        assert_eq!(settings.max_network_entries, 200);
+        assert!(!settings.network_auto_record);
+        assert_eq!(settings.network_poll_interval_ms, 2000);
     }
 
     #[test]

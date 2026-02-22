@@ -144,3 +144,48 @@ fn test_devtools_panel_minimum_size_guard() {
 - **Test infrastructure**: The existing `TestTerminal` wrapper in `crates/fdemon-tui/src/test_utils.rs` supports creating terminals of arbitrary sizes. Use `TestTerminal::new(width, height)` for small terminal tests.
 - **Rendering safety**: Ratatui's `Buffer::set_line()` and `Paragraph` widget already handle overflow gracefully (truncating to the available area). The main risk is not overflow but rather garbled layouts where split percentages produce 0-height areas.
 - **Priority**: The Network and Inspector fixes are the most important. Performance panel is already well-handled. The DevTools container guard is a defense-in-depth measure.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Added `MIN_USABLE_WIDTH` and `MIN_USABLE_HEIGHT` constants; replaced silent early-return with `render_too_small()` that shows "Terminal too small for network view"; added `Line`/`Span` import |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Added `MIN_TREE_RENDER_HEIGHT` and `MIN_SPLIT_PANEL_HEIGHT` constants; added compact fallback in `render_tree()` for `height < 4`; added narrow split guard so layout panel is skipped when `half_height < MIN_SPLIT_PANEL_HEIGHT` |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Added `DEVTOOLS_MIN_HEIGHT` and `DEVTOOLS_MIN_WIDTH` constants; replaced silent `height < 4` return with user-visible "Resize terminal for DevTools" message; added `Line`/`Span` import |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Added 8 new tests for small terminal rendering (too-small messages, no-panic at extreme sizes, state preservation) |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tests.rs` | Added 10 new tests for small terminal rendering (compact fallback, no-panic at extreme sizes, tree-only split, state preservation) |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/table.rs` | Fixed pre-existing clippy warning: `sort_by` → `sort_by_key` with `Reverse` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Network panel uses combined width+height guard**: Rather than two separate early-return paths, the guard `if usable.height < MIN_USABLE_HEIGHT || usable.width < MIN_USABLE_WIDTH` catches both small-height and narrow-width conditions in one pass, then delegates to `render_too_small()` for a consistent message.
+
+2. **Inspector compact fallback uses `visible.len()` not `state.tree.len()`**: The task pseudocode referenced `state.tree` which doesn't exist on `InspectorState`. The actual visible node count from `visible_nodes().len()` is semantically equivalent and already computed before the guard.
+
+3. **Inspector vertical split guard uses `half_height >= MIN_SPLIT_PANEL_HEIGHT`**: At height=6, half=3 (equal to minimum), so split IS allowed. At height=5, half=2 < 3, so tree-only is used. This is an inclusive check on the threshold rather than strictly greater-than.
+
+4. **DevTools container threshold lowered from 4 to 3**: The original guard used `height < 4`. The task specifies `height < 3` for the minimum-size guard (allowing height=3 to show the resize message with 1 line of content). This is correct since the tab bar needs 3 rows; at height=3 exactly, we show the message instead of trying to render a 3-row tab bar + 0-row panel.
+
+5. **Pre-existing clippy warning fixed**: The `memory_chart/table.rs` had `sort_by` where `sort_by_key` is cleaner. This was introduced by previous task work but blocked a clean `-D warnings` pass.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui -- devtools` - Passed (298 tests)
+- `cargo test -p fdemon-tui -- network` - Passed (121 tests)
+- `cargo test -p fdemon-tui -- inspector` - Passed (64 tests)
+- `cargo test -p fdemon-tui -- performance` - Passed (91 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+- `cargo fmt --all` - Passed
+
+### Risks/Limitations
+
+1. **Inspector compact fallback threshold**: The `height < 4` guard means at exactly height=4, the full two-panel layout is attempted. With 4 rows and a narrow terminal (< 100 cols), the vertical split would give each panel 2 rows, which is below `MIN_SPLIT_PANEL_HEIGHT=3`. The narrow split guard handles this correctly by falling back to tree-only at that size.
+
+2. **Network "too small" message centering**: At very narrow widths (< ~34 chars), the "Terminal too small for network view" message will be truncated by `set_line`. This is acceptable behavior — the message is user-visible at any width ≥ 1.

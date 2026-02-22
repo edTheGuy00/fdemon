@@ -18,8 +18,8 @@ pub use collapse::CollapseState;
 pub use handle::SessionHandle;
 pub use log_batcher::LogBatcher;
 pub use network::{NetworkDetailTab, NetworkState};
-pub use performance::PerformanceState;
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
+pub use performance::{AllocationSortColumn, PerformanceState};
 pub use session::Session;
 
 // SessionId and next_session_id live here in mod.rs

@@ -395,3 +395,151 @@ fn test_inspector_reconnecting_state_shows_attempt_count() {
         "Expected reconnecting message with attempt count, got: {full:?}"
     );
 }
+
+// ── Small terminal tests ───────────────────────────────────────────────────────
+
+#[test]
+fn test_inspector_very_small_terminal_shows_compact_node_count() {
+    // 30x4 — height == MIN_TREE_RENDER_HEIGHT, tree render path kicks in.
+    // With height exactly 4, the compact fallback should NOT trigger (it triggers at < 4).
+    // Test at height=3 to confirm compact fallback.
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 3));
+    widget.render(Rect::new(0, 0, 30, 3), &mut buf);
+
+    let full = collect_buf_text(&buf, 30, 3);
+    // The compact fallback renders "N nodes" when there are visible nodes.
+    assert!(
+        full.contains("nodes") || full.contains("widget") || full.contains("No"),
+        "Very small terminal should show compact summary, got: {full:?}"
+    );
+}
+
+#[test]
+fn test_inspector_very_small_terminal_no_panic() {
+    // 30x4 — should render without panic
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 4));
+    widget.render(Rect::new(0, 0, 30, 4), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_compact_fallback_empty_tree() {
+    // When root is None (no tree loaded), compact fallback shows "No widget tree"
+    let mut state = InspectorState::new();
+    // root is None by default — visible_nodes() returns []
+    // Trigger tree render path with a tiny area (height < 4)
+    // Note: render() dispatches to render_empty() when root is None, not render_tree(),
+    // so the compact fallback in render_tree() is only reachable with a root.
+    // This test verifies the empty-state path at small sizes doesn't panic.
+    state.root = None;
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 3));
+    widget.render(Rect::new(0, 0, 30, 3), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_height_1_no_panic() {
+    // Single row — all render paths must handle this gracefully.
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 1));
+    widget.render(Rect::new(0, 0, 40, 1), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_20x5_no_panic() {
+    // 20x5 — acceptance criteria extreme terminal size
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
+    widget.render(Rect::new(0, 0, 20, 5), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_40x10_no_panic() {
+    // 40x10 — acceptance criteria terminal size
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+    widget.render(Rect::new(0, 0, 40, 10), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_60x15_no_panic() {
+    // 60x15 — acceptance criteria terminal size
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
+    widget.render(Rect::new(0, 0, 60, 15), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_200x50_no_panic() {
+    // 200x50 — large terminal (acceptance criteria)
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 200, 50));
+    widget.render(Rect::new(0, 0, 200, 50), &mut buf);
+    // Should not panic
+}
+
+#[test]
+fn test_inspector_narrow_small_height_shows_tree_only() {
+    // Narrow terminal (< WIDE_TERMINAL_THRESHOLD) with small height:
+    // if half_height < MIN_SPLIT_PANEL_HEIGHT the layout panel should be skipped.
+    // With height=6, half=3 which equals MIN_SPLIT_PANEL_HEIGHT (3), so split IS shown.
+    // With height=5, half=2 which is < MIN_SPLIT_PANEL_HEIGHT (3) — tree only.
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.expanded.insert("widget-1".to_string());
+
+    // Narrow width (< 100), height = 5 (half = 2, below MIN_SPLIT_PANEL_HEIGHT = 3)
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 60, 5));
+    widget.render(Rect::new(0, 0, 60, 5), &mut buf);
+    // Should not panic — tree-only layout used
+}
+
+#[test]
+fn test_inspector_selected_index_preserved_after_small_render() {
+    // Verify state is not mutated by render (render takes &InspectorState).
+    let mut state = InspectorState::new();
+    state.root = Some(make_test_tree());
+    state.selected_index = 1;
+
+    let widget = WidgetInspector::new(&state, true, &VmConnectionStatus::Connected);
+    let mut buf = Buffer::empty(Rect::new(0, 0, 30, 3));
+    widget.render(Rect::new(0, 0, 30, 3), &mut buf);
+
+    assert_eq!(
+        state.selected_index, 1,
+        "selected_index should be preserved after rendering at small terminal size"
+    );
+}

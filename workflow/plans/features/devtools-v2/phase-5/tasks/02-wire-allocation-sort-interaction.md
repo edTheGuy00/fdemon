@@ -180,3 +180,46 @@ cargo clippy --workspace
 - **Sort column values**: `BySize` sorts by `new_size` (total bytes allocated since last GC), `ByInstances` sorts by `new_count` (total instances allocated since last GC). Both use descending order — largest first.
 - **Sort stability**: Since the allocation profile is replaced entirely on each fetch (not incrementally merged), re-sorting on each render is acceptable. No caching needed.
 - **Retained size**: The PLAN.md mentions a "Retained Size" column, but the `ClassHeapStats` struct in `fdemon-core` does not have a retained size field. Do not add one — retained size requires heap snapshots which are expensive. The table shows `new_size`, `new_count`, and `accumulated_size` columns.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/performance.rs` | Removed `#[allow(dead_code)]` from `AllocationSortColumn` and `allocation_sort`; changed both from `pub(crate)` to `pub` |
+| `crates/fdemon-app/src/session/mod.rs` | Added `AllocationSortColumn` to public re-exports alongside `PerformanceState` |
+| `crates/fdemon-app/src/message.rs` | Added `ToggleAllocationSort` variant to `Message` enum |
+| `crates/fdemon-app/src/handler/devtools/performance.rs` | Added `handle_toggle_allocation_sort()` function; added 4 tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added match arm for `Message::ToggleAllocationSort` |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `InputKey::Char('s') if in_performance => Some(Message::ToggleAllocationSort)` binding; added 3 key tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/table.rs` | Updated `render_allocation_table()` to accept `sort_column: AllocationSortColumn`; added sort indicator in header; added conditional sort logic |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/mod.rs` | Added `allocation_sort: AllocationSortColumn` field to `MemoryChart`; updated `new()` signature; passed sort to `render_allocation_table()` |
+| `crates/fdemon-tui/src/widgets/devtools/performance/mod.rs` | Updated `MemoryChart::new()` call to pass `self.performance.allocation_sort` |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/tests.rs` | Updated all `MemoryChart::new()` and `render_allocation_table()` call sites; added 4 new sort tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-export path for `AllocationSortColumn`**: The enum was `pub(crate)` inside `session/performance.rs`, which is a `pub(crate)` submodule. Making the enum `pub` and re-exporting it through `session/mod.rs` as `pub use performance::{AllocationSortColumn, PerformanceState}` gives `fdemon-tui` clean access via `fdemon_app::session::AllocationSortColumn` without exposing internal module structure.
+
+2. **Sort uses `total_instances()` / `total_size()`**: The task notes mention `new_count`/`new_size`, but the actual `AllocationProfile`/`ClassHeapStats` API in `fdemon-core` exposes `total_instances()` and `total_size()` methods (and `top_by_size()`). The implementation matches the existing `table.rs` patterns which already used these methods.
+
+3. **No re-export of `handle_toggle_allocation_sort` in `devtools/mod.rs`**: `update.rs` calls the function via the full path `devtools::performance::handle_toggle_allocation_sort(state)`, so no additional re-export was needed. Adding one would have produced an unused import warning.
+
+4. **`s` key conflict check**: The Network panel uses `s` under the `in_network` guard for `NetworkSwitchDetailTab(ResponseBody)`. Adding `s` under `in_performance` is orthogonal — guards are mutually exclusive because only one panel is active at a time.
+
+### Testing Performed
+
+- `cargo clippy --workspace` - Passed (no warnings)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app -- devtools` - Passed (118 tests)
+- `cargo test -p fdemon-tui -- allocation` - Passed (9 tests)
+- `cargo test --workspace --lib` - Passed (748 tests)
+
+### Risks/Limitations
+
+1. **E2E test suite**: 25 pre-existing failures in the integration test suite are unrelated to these changes (confirmed by checking test names and failure messages). All 748 unit tests pass.

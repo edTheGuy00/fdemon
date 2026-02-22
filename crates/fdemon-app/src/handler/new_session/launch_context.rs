@@ -461,13 +461,18 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
             None
         };
 
-        // Create session in manager
+        // Create session in manager (using devtools settings for network config)
+        let devtools = state.settings.devtools.clone();
         let session_result = if let Some(ref cfg) = config {
+            state.session_manager.create_session_with_config_configured(
+                &device,
+                cfg.clone(),
+                &devtools,
+            )
+        } else {
             state
                 .session_manager
-                .create_session_with_config(&device, cfg.clone())
-        } else {
-            state.session_manager.create_session(&device)
+                .create_session_configured(&device, &devtools)
         };
 
         match session_result {

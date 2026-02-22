@@ -179,6 +179,16 @@ impl Session {
         self
     }
 
+    /// Apply network configuration from DevTools settings.
+    ///
+    /// Sets `max_entries` and initial `recording` state on the session's
+    /// `NetworkState`. Call this after `Session::new()` when you have access
+    /// to [`crate::config::DevToolsSettings`].
+    pub fn with_network_config(mut self, max_entries: usize, auto_record: bool) -> Self {
+        self.network = NetworkState::with_config(max_entries, auto_record);
+        self
+    }
+
     /// Add a log entry
     ///
     /// Automatically detects Logger package blocks (from ┌ to └) and propagates

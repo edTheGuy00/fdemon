@@ -18,10 +18,19 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::Widget,
 };
 
 use crate::theme::{icons::IconSet, palette};
+
+// ── Minimum size thresholds ───────────────────────────────────────────────────
+
+/// Minimum terminal height required to render any DevTools panel.
+const DEVTOOLS_MIN_HEIGHT: u16 = 3;
+
+/// Minimum terminal width required to render any DevTools panel.
+const DEVTOOLS_MIN_WIDTH: u16 = 20;
 
 // ── DevToolsView ─────────────────────────────────────────────────────────────
 
@@ -63,8 +72,17 @@ impl Widget for DevToolsView<'_> {
             }
         }
 
-        if area.height < 4 {
-            // Too small for any useful display
+        // Global minimum size guard — show an informational message rather than
+        // silently rendering a blank or garbled panel.
+        if area.height < DEVTOOLS_MIN_HEIGHT || area.width < DEVTOOLS_MIN_WIDTH {
+            let msg = Line::from(Span::styled(
+                "Resize terminal for DevTools",
+                Style::default().fg(Color::DarkGray),
+            ));
+            let msg_width = msg.width() as u16;
+            let x = area.x + area.width.saturating_sub(msg_width) / 2;
+            let y = area.y;
+            buf.set_line(x, y, &msg, area.width);
             return;
         }
 
@@ -603,5 +621,130 @@ mod tests {
             !text.contains("Disconnected") && !text.contains("Reconnecting"),
             "Tab bar should not show connection indicator when connected, got: {text:?}"
         );
+    }
+
+    // ── Minimum size guard tests ───────────────────────────────────────────────
+
+    #[test]
+    fn test_devtools_panel_minimum_size_guard_shows_resize_message() {
+        // 15x2 — both height and width below thresholds — should show resize message
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 15, 2));
+        widget.render(Rect::new(0, 0, 15, 2), &mut buf);
+
+        let text = collect_buf_text(&buf, 15, 2);
+        assert!(
+            text.contains("Resize") || text.contains("resize") || text.contains("small"),
+            "Minimum size guard should show resize message at 15x2, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_devtools_panel_minimum_height_guard_shows_message() {
+        // Height < DEVTOOLS_MIN_HEIGHT (3) with adequate width
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 2));
+        widget.render(Rect::new(0, 0, 80, 2), &mut buf);
+
+        let text = collect_buf_text(&buf, 80, 2);
+        assert!(
+            text.contains("Resize") || text.contains("DevTools"),
+            "Below minimum height should show resize message, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_devtools_panel_minimum_width_guard_shows_message() {
+        // Width < DEVTOOLS_MIN_WIDTH (20) with adequate height
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 15, 10));
+        widget.render(Rect::new(0, 0, 15, 10), &mut buf);
+
+        let text = collect_buf_text(&buf, 15, 10);
+        assert!(
+            text.contains("Resize") || text.contains("DevTools"),
+            "Below minimum width should show resize message, got: {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_devtools_panel_at_minimum_size_threshold_renders_normally() {
+        // Exactly at the minimum thresholds (height=3, width=20) — should show tab bar
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 3));
+        widget.render(Rect::new(0, 0, 20, 3), &mut buf);
+        // Should not panic — minimum guard allows rendering at exactly the threshold
+    }
+
+    #[test]
+    fn test_devtools_panel_20x5_no_panic() {
+        // 20x5 — acceptance criteria extreme terminal size
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 20, 5));
+        widget.render(Rect::new(0, 0, 20, 5), &mut buf);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_devtools_panel_40x10_no_panic() {
+        // 40x10 — acceptance criteria terminal size
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        widget.render(Rect::new(0, 0, 40, 10), &mut buf);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_devtools_panel_60x15_no_panic() {
+        // 60x15 — acceptance criteria terminal size
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 60, 15));
+        widget.render(Rect::new(0, 0, 60, 15), &mut buf);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_devtools_panel_200x50_no_panic() {
+        // 200x50 — large terminal (acceptance criteria)
+        let state = DevToolsViewState::default();
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 200, 50));
+        widget.render(Rect::new(0, 0, 200, 50), &mut buf);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_devtools_panel_network_tab_small_terminal() {
+        // Network tab at small terminal size
+        let mut state = DevToolsViewState::default();
+        state.active_panel = DevToolsPanel::Network;
+
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
+        widget.render(Rect::new(0, 0, 40, 10), &mut buf);
+        // Should not panic
+    }
+
+    #[test]
+    fn test_devtools_panel_performance_tab_height_1() {
+        // Performance panel compact mode: height=1 after the header is consumed.
+        // At 6 total rows: 3 for tab bar, leaving 3 for the panel content.
+        // At the extreme: 4 total rows gives 1 row for the panel.
+        let mut state = DevToolsViewState::default();
+        state.active_panel = DevToolsPanel::Performance;
+
+        // 4 rows total: min-size guard passes (>= 3 height, >= 20 width).
+        // Tab bar takes 3 rows, panel gets 1 row → compact summary path.
+        let widget = DevToolsView::new(&state, None, IconSet::default());
+        let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4));
+        widget.render(Rect::new(0, 0, 40, 4), &mut buf);
+        // Should not panic
     }
 }

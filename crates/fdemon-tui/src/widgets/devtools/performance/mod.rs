@@ -201,6 +201,7 @@ impl PerformancePanel<'_> {
             &self.performance.memory_history,
             &self.performance.gc_history,
             self.performance.allocation_profile.as_ref(),
+            self.performance.allocation_sort,
             false,
         )
         .render(memory_inner, buf);

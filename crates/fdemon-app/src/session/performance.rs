@@ -20,8 +20,7 @@ pub(crate) const DEFAULT_MEMORY_SAMPLE_SIZE: usize = 120;
 
 /// Column by which the class allocation table is sorted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-#[allow(dead_code)] // TODO: wire to allocation table sort interaction
-pub(crate) enum AllocationSortColumn {
+pub enum AllocationSortColumn {
     /// Sort by total allocated bytes (descending).
     #[default]
     BySize,
@@ -68,9 +67,7 @@ pub struct PerformanceState {
     pub allocation_profile: Option<AllocationProfile>,
 
     /// Column by which the class allocation table is sorted.
-    // TODO: wire to allocation table sort interaction
-    #[allow(dead_code)]
-    pub(crate) allocation_sort: AllocationSortColumn,
+    pub allocation_sort: AllocationSortColumn,
 }
 
 impl Default for PerformanceState {

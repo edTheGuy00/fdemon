@@ -229,6 +229,57 @@ pub(crate) fn handle_network_filter_changed(state: &mut AppState, filter: String
     UpdateResult::none()
 }
 
+/// Enter filter input mode — copy the current active filter into the input buffer.
+///
+/// Seeding the buffer with the existing filter lets the user edit in place
+/// rather than always starting from an empty string.
+pub(crate) fn handle_enter_filter_mode(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.filter_input_buffer = handle.session.network.filter.clone();
+        handle.session.network.filter_input_active = true;
+    }
+    UpdateResult::none()
+}
+
+/// Exit filter input mode — discard the buffer, keep the existing filter.
+pub(crate) fn handle_exit_filter_mode(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.filter_input_active = false;
+        handle.session.network.filter_input_buffer.clear();
+    }
+    UpdateResult::none()
+}
+
+/// Commit the filter input — apply the buffer as the active filter and exit input mode.
+///
+/// Delegates to [`NetworkState::set_filter`] so the selection and scroll
+/// offset are reset consistently with the direct `NetworkFilterChanged` path.
+pub(crate) fn handle_commit_filter(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        let new_filter = handle.session.network.filter_input_buffer.clone();
+        handle.session.network.set_filter(new_filter);
+        handle.session.network.filter_input_active = false;
+        handle.session.network.filter_input_buffer.clear();
+    }
+    UpdateResult::none()
+}
+
+/// Append a character to the filter input buffer.
+pub(crate) fn handle_filter_input(state: &mut AppState, c: char) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.filter_input_buffer.push(c);
+    }
+    UpdateResult::none()
+}
+
+/// Delete the last character from the filter input buffer.
+pub(crate) fn handle_filter_backspace(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.network.filter_input_buffer.pop();
+    }
+    UpdateResult::none()
+}
+
 /// Build a `FetchHttpRequestDetail` action for the currently selected entry.
 ///
 /// Returns `UpdateResult::none()` when there is no active session, no
@@ -574,6 +625,136 @@ mod tests {
         // No selection set.
         let result = fetch_selected_detail_action(&state);
         assert!(result.action.is_none());
+    }
+
+    // ── Filter input mode tests ────────────────────────────────────────────────
+
+    #[test]
+    fn test_enter_filter_mode_copies_existing_filter() {
+        let mut state = make_devtools_state();
+        // Set a pre-existing filter.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .filter = "api".to_string();
+        handle_enter_filter_mode(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.network.filter_input_active);
+        assert_eq!(handle.session.network.filter_input_buffer, "api");
+    }
+
+    #[test]
+    fn test_enter_filter_mode_starts_with_empty_buffer_when_no_filter() {
+        let mut state = make_devtools_state();
+        handle_enter_filter_mode(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.network.filter_input_active);
+        assert!(handle.session.network.filter_input_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_exit_filter_mode_discards_buffer() {
+        let mut state = make_devtools_state();
+        // Enter filter mode and type something.
+        handle_enter_filter_mode(&mut state);
+        handle_filter_input(&mut state, 'a');
+        handle_filter_input(&mut state, 'p');
+        handle_filter_input(&mut state, 'i');
+        // Exit without committing.
+        handle_exit_filter_mode(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert!(!handle.session.network.filter_input_active);
+        assert!(handle.session.network.filter_input_buffer.is_empty());
+        // Active filter should remain unchanged (was empty).
+        assert!(handle.session.network.filter.is_empty());
+    }
+
+    #[test]
+    fn test_commit_filter_applies_buffer() {
+        let mut state = make_devtools_state_with_entries(5);
+        handle_enter_filter_mode(&mut state);
+        handle_filter_input(&mut state, 'G');
+        handle_filter_input(&mut state, 'E');
+        handle_filter_input(&mut state, 'T');
+        handle_commit_filter(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert!(!handle.session.network.filter_input_active);
+        assert!(handle.session.network.filter_input_buffer.is_empty());
+        assert_eq!(handle.session.network.filter, "GET");
+        // Selection and scroll should have been reset by set_filter.
+        assert!(handle.session.network.selected_index.is_none());
+        assert_eq!(handle.session.network.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_filter_input_appends_char() {
+        let mut state = make_devtools_state();
+        handle_enter_filter_mode(&mut state);
+        handle_filter_input(&mut state, 'a');
+        handle_filter_input(&mut state, 'p');
+        handle_filter_input(&mut state, 'i');
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.filter_input_buffer, "api");
+    }
+
+    #[test]
+    fn test_filter_backspace_removes_char() {
+        let mut state = make_devtools_state();
+        handle_enter_filter_mode(&mut state);
+        handle_filter_input(&mut state, 'a');
+        handle_filter_input(&mut state, 'p');
+        handle_filter_input(&mut state, 'i');
+        handle_filter_backspace(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.filter_input_buffer, "ap");
+    }
+
+    #[test]
+    fn test_filter_backspace_on_empty_is_noop() {
+        let mut state = make_devtools_state();
+        handle_enter_filter_mode(&mut state);
+        // Backspace on empty buffer should not panic.
+        let result = handle_filter_backspace(&mut state);
+        assert!(result.action.is_none());
+        let handle = state.session_manager.selected().unwrap();
+        assert!(handle.session.network.filter_input_buffer.is_empty());
+    }
+
+    #[test]
+    fn test_filter_mode_noop_without_session() {
+        let mut state = AppState::new(); // no sessions
+                                         // All filter-mode handlers should return UpdateResult::none() without panic.
+        assert!(handle_enter_filter_mode(&mut state).action.is_none());
+        assert!(handle_exit_filter_mode(&mut state).action.is_none());
+        assert!(handle_commit_filter(&mut state).action.is_none());
+        assert!(handle_filter_input(&mut state, 'x').action.is_none());
+        assert!(handle_filter_backspace(&mut state).action.is_none());
+    }
+
+    #[test]
+    fn test_enter_and_exit_leaves_filter_unchanged() {
+        let mut state = make_devtools_state();
+        // Set a pre-existing filter directly.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .set_filter("GET".to_string());
+        handle_enter_filter_mode(&mut state);
+        handle_filter_input(&mut state, 'P');
+        handle_filter_input(&mut state, 'O');
+        handle_filter_input(&mut state, 'S');
+        handle_filter_input(&mut state, 'T');
+        // Cancel — active filter should still be "GET".
+        handle_exit_filter_mode(&mut state);
+        let handle = state.session_manager.selected().unwrap();
+        assert_eq!(handle.session.network.filter, "GET");
+        assert!(!handle.session.network.filter_input_active);
     }
 
     #[test]

@@ -29,7 +29,9 @@ This document provides a comprehensive reference of all keyboard controls availa
 - [DevTools Mode](#devtools-mode)
   - [Panel Navigation](#panel-navigation)
   - [Debug Overlays](#debug-overlays)
-  - [Widget Inspector Navigation](#widget-inspector-navigation)
+  - [Widget Inspector Panel](#widget-inspector-panel)
+  - [Performance Panel](#performance-panel)
+  - [Network Panel](#network-panel)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -69,7 +71,7 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `x` | Close Session | Close the current session |
 | `Ctrl+W` | Close Session | Alternative binding to close current session |
 | `+` | Start New Session | Start a new session (shows Startup Dialog if no sessions, Device Selector if sessions exist) |
-| `d` | DevTools Mode | Enter DevTools mode (Inspector/Layout/Performance panels) |
+| `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
 
 ### App Control
 
@@ -170,7 +172,7 @@ Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `d` | DevTools Mode | Enter DevTools mode (Inspector/Layout/Performance panels) |
+| `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
 
 Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls.
 
@@ -394,10 +396,10 @@ Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connecti
 
 | Key | Action | Description |
 |-----|--------|-------------|
-| `Esc` | Exit DevTools | Return to Normal mode (log view) |
+| `Esc` | Exit DevTools | Return to Normal mode (log view). In Performance panel, deselects frame first. In Network panel, deselects request first. |
 | `i` | Inspector Panel | Switch to Widget Inspector panel |
-| `l` | Layout Panel | Switch to Layout Explorer panel |
 | `p` | Performance Panel | Switch to Performance monitoring panel |
+| `n` | Network Panel | Switch to Network monitor panel |
 | `b` | Browser DevTools | Open Flutter DevTools in system browser |
 | `q` | Quit | Quit the application |
 
@@ -409,7 +411,7 @@ Enter DevTools mode by pressing `d` in Normal mode (requires VM Service connecti
 | `Ctrl+p` | Performance Overlay | Toggle performance overlay on device |
 | `Ctrl+d` | Debug Paint | Toggle debug paint overlay on device |
 
-### Widget Inspector Navigation
+### Widget Inspector Panel
 
 When the Inspector panel is active:
 
@@ -420,6 +422,55 @@ When the Inspector panel is active:
 | `Enter` / `Right` | Expand | Expand selected tree node |
 | `Left` / `h` | Collapse | Collapse selected tree node |
 | `r` | Refresh | Refresh widget tree from VM Service |
+
+The Inspector panel shows a 50/50 split: widget tree on one side, layout explorer on the other. Layout data auto-fetches when a tree node is selected.
+
+### Performance Panel
+
+When the Performance panel is active:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Left` | Previous Frame | Select the previous frame in the bar chart |
+| `Right` | Next Frame | Select the next frame in the bar chart |
+| `Esc` | Deselect Frame | Clear frame selection (show summary instead of detail) |
+| `s` | Toggle Sort | Toggle allocation table sort (Size / Instances) |
+
+The Performance panel shows a frame timing bar chart (top) and memory time-series chart with class allocation table (bottom).
+
+### Network Panel
+
+When the Network panel is active:
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Up` / `k` | Navigate Up | Move up in request list |
+| `Down` / `j` | Navigate Down | Move down in request list |
+| `Page Up` | Page Up | Scroll request list up one page |
+| `Page Down` | Page Down | Scroll request list down one page |
+| `Enter` | Select / Refetch | Select request and fetch details (or refetch if already selected) |
+| `Esc` | Deselect | Clear request selection |
+| `Space` | Toggle Recording | Toggle network recording on/off |
+| `Ctrl+x` | Clear Requests | Clear all recorded network requests |
+| `/` | Filter | Enter filter mode to filter requests by text |
+| `g` | General Tab | Switch to General detail sub-tab |
+| `h` | Headers Tab | Switch to Headers detail sub-tab |
+| `q` | Request Body Tab | Switch to Request Body detail sub-tab |
+| `s` | Response Body Tab | Switch to Response Body detail sub-tab |
+| `t` | Timing Tab | Switch to Timing detail sub-tab |
+
+The Network panel shows HTTP/HTTPS requests in a scrollable table with detailed inspection.
+
+#### Network Filter Mode
+
+When filter input is active (after pressing `/`):
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| Type | Input | Type characters to build filter query |
+| `Enter` | Apply Filter | Apply the filter and return to normal Network panel |
+| `Esc` | Cancel | Discard filter input and return to normal Network panel |
+| `Backspace` | Delete | Remove last character from filter |
 
 ---
 

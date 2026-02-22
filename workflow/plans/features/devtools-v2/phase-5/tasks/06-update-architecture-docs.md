@@ -157,3 +157,37 @@ No code tests — documentation-only task. Verification:
 
 - **Scope control**: This task adds a focused DevTools section. A comprehensive rewrite of ARCHITECTURE.md is out of scope — only add new content and update the Project Structure tree.
 - **Diagram style**: Follow the existing ASCII diagram conventions already used in ARCHITECTURE.md (Unicode box-drawing characters, consistent indentation).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added DevTools files to Project Structure tree across all 4 crates; added "DevTools Subsystem" section with architecture diagram, panel state model, and VM Service data flow; added "DevTools Subsystem" entry to Table of Contents |
+
+### Notable Decisions/Tradeoffs
+
+1. **Accurate vm_service tree**: The task suggested the vm_service/ dir only had `mod.rs`, `network.rs`, `performance.rs`, `timeline.rs`, and `extensions/`. The actual directory also contains `client.rs`, `errors.rs`, `logging.rs`, and `protocol.rs`. All were added to the tree for completeness and accuracy per acceptance criterion 6.
+
+2. **session/ as directory**: The existing ARCHITECTURE.md incorrectly showed `session.rs` as a flat file entry. In reality `session/` is a directory. Updated entry reflects the real directory structure including `session.rs`, `handle.rs`, `network.rs`, `performance.rs`, and `mod.rs`.
+
+3. **handler/ expanded**: The existing tree showed `handler/` as a single line. Added the `devtools/` subdirectory with its four files while leaving the existing handler description unchanged.
+
+4. **new_session_dialog/ fixed**: The existing tree had `new_session_dialog/` as the last item under widgets without a branch connector. Corrected to use `├──` so `devtools/` could be added as the final `└──` entry.
+
+5. **Test files omitted from devtools tree**: Test files (e.g., `layout_panel_tests.rs`, `tests.rs` inside devtools submodules) are present but excluded from the structure tree to keep it focused on production modules, consistent with the existing tree convention.
+
+### Testing Performed
+
+- All file paths verified with Glob tool before adding to documentation — every path confirmed to exist in the repository
+- Document structure reviewed: no existing content removed or altered
+- Table of Contents updated to include new section
+
+### Risks/Limitations
+
+1. **No automated doc linting**: Documentation-only task with no build-system verification step. Correctness of file paths was verified manually via Glob at the time of writing; future file additions/renames will require manual updates.

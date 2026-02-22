@@ -4,6 +4,7 @@
 //! for the Performance panel's bar chart and time-series views.
 
 use crate::handler::UpdateResult;
+use crate::session::AllocationSortColumn;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::performance::{AllocationProfile, MemorySample};
@@ -62,12 +63,29 @@ pub(crate) fn handle_allocation_profile_received(
     UpdateResult::none()
 }
 
+/// Toggle the allocation table sort between [`AllocationSortColumn::BySize`]
+/// and [`AllocationSortColumn::ByInstances`].
+///
+/// No-op when no session is selected.
+pub(crate) fn handle_toggle_allocation_sort(state: &mut AppState) -> UpdateResult {
+    if let Some(handle) = state.session_manager.selected_mut() {
+        handle.session.performance.allocation_sort =
+            match handle.session.performance.allocation_sort {
+                AllocationSortColumn::BySize => AllocationSortColumn::ByInstances,
+                AllocationSortColumn::ByInstances => AllocationSortColumn::BySize,
+            };
+    }
+    UpdateResult::none()
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
+    use super::handle_toggle_allocation_sort;
     use crate::handler::update::update;
     use crate::message::Message;
+    use crate::session::AllocationSortColumn;
     use crate::session::SessionId;
     use crate::state::{AppState, DevToolsPanel, UiMode};
     use fdemon_core::performance::{AllocationProfile, FrameTiming, MemorySample};
@@ -565,6 +583,92 @@ mod tests {
                 session_id: unknown_session_id,
                 profile,
             },
+        );
+    }
+
+    // ── ToggleAllocationSort handler ──────────────────────────────────────────
+
+    #[test]
+    fn test_toggle_allocation_sort_size_to_instances() {
+        let (mut state, _) = make_state_in_performance_panel();
+        // Default is BySize.
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .allocation_sort,
+            AllocationSortColumn::BySize
+        );
+
+        handle_toggle_allocation_sort(&mut state);
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .allocation_sort,
+            AllocationSortColumn::ByInstances,
+            "Toggle from BySize should produce ByInstances"
+        );
+    }
+
+    #[test]
+    fn test_toggle_allocation_sort_instances_to_size() {
+        let (mut state, _) = make_state_in_performance_panel();
+        // Set to ByInstances first.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .performance
+            .allocation_sort = AllocationSortColumn::ByInstances;
+
+        handle_toggle_allocation_sort(&mut state);
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .allocation_sort,
+            AllocationSortColumn::BySize,
+            "Toggle from ByInstances should produce BySize"
+        );
+    }
+
+    #[test]
+    fn test_toggle_allocation_sort_no_session_is_noop() {
+        // State with no sessions: toggle should not panic.
+        let mut state = AppState::new();
+        // Should not panic.
+        handle_toggle_allocation_sort(&mut state);
+    }
+
+    #[test]
+    fn test_toggle_allocation_sort_via_message() {
+        let (mut state, _) = make_state_in_performance_panel();
+
+        update(&mut state, Message::ToggleAllocationSort);
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .allocation_sort,
+            AllocationSortColumn::ByInstances,
+            "ToggleAllocationSort message should toggle from BySize to ByInstances"
         );
     }
 }

@@ -1,15 +1,21 @@
 //! Allocation table renderer for the memory chart.
 //!
 //! Renders the class allocation table below the chart, showing
-//! the top classes by shallow heap size.
+//! the top classes sorted by either total size or total instance count.
+
+use fdemon_app::session::AllocationSortColumn;
 
 use super::*;
 
 // ── Allocation table ──────────────────────────────────────────────────────────
 
 /// Render the class allocation table below the chart.
+///
+/// The `sort_column` parameter controls which column is used for sorting and
+/// receives a `▼` indicator in the header.
 pub(super) fn render_allocation_table(
     allocation_profile: Option<&AllocationProfile>,
+    sort_column: AllocationSortColumn,
     area: Rect,
     buf: &mut Buffer,
 ) {
@@ -17,20 +23,28 @@ pub(super) fn render_allocation_table(
         return;
     }
 
-    // Header
+    // Build header spans with sort indicator on the active column.
+    let (instances_label, size_label) = match sort_column {
+        AllocationSortColumn::BySize => (
+            format!("{:>12}", "Instances"),
+            format!("{:>14}", "Shallow Size \u{25bc}"),
+        ),
+        AllocationSortColumn::ByInstances => (
+            format!("{:>12}", "Instances \u{25bc}"),
+            format!("{:>14}", "Shallow Size"),
+        ),
+    };
+
     let header_line = Line::from(vec![
         Span::styled(
             format!("{:<30}", "Class"),
             Style::default().fg(palette::TEXT_SECONDARY),
         ),
         Span::styled(
-            format!("{:>12}", "Instances"),
+            instances_label,
             Style::default().fg(palette::TEXT_SECONDARY),
         ),
-        Span::styled(
-            format!("{:>14}", "Shallow Size"),
-            Style::default().fg(palette::TEXT_SECONDARY),
-        ),
+        Span::styled(size_label, Style::default().fg(palette::TEXT_SECONDARY)),
     ]);
     buf.set_line(area.x, area.y, &header_line, area.width);
 
@@ -59,7 +73,17 @@ pub(super) fn render_allocation_table(
             buf.set_line(area.x, data_start_y, &msg, area.width);
         }
         Some(profile) => {
-            let classes = profile.top_by_size(MAX_TABLE_ROWS);
+            // Sort according to the active column.
+            let classes: Vec<_> = match sort_column {
+                AllocationSortColumn::BySize => profile.top_by_size(MAX_TABLE_ROWS),
+                AllocationSortColumn::ByInstances => {
+                    let mut sorted: Vec<_> = profile.members.iter().collect();
+                    sorted.sort_by_key(|b| std::cmp::Reverse(b.total_instances()));
+                    sorted.truncate(MAX_TABLE_ROWS);
+                    sorted
+                }
+            };
+
             if classes.is_empty() {
                 let msg = Line::from(Span::styled(
                     "No class allocations reported",

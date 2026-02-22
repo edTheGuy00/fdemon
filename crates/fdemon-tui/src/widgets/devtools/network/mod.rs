@@ -22,6 +22,7 @@ use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
+    text::{Line, Span},
     widgets::{Block, Borders, Widget},
 };
 
@@ -31,6 +32,12 @@ use request_table::RequestTable;
 
 /// Terminal width threshold for horizontal vs vertical split.
 const WIDE_THRESHOLD: u16 = 100;
+
+/// Minimum usable width required to render the network table meaningfully.
+const MIN_USABLE_WIDTH: u16 = 20;
+
+/// Minimum usable height required to render any network content.
+const MIN_USABLE_HEIGHT: u16 = 3;
 
 /// Return a foreground [`Color`] for the given HTTP method string.
 ///
@@ -106,8 +113,33 @@ impl Widget for NetworkMonitor<'_> {
             ..area
         };
 
-        if usable.height < 3 {
-            // Too small for any content
+        if usable.height < MIN_USABLE_HEIGHT || usable.width < MIN_USABLE_WIDTH {
+            // Too small for any content — show a user-visible message instead
+            // of silently rendering a blank panel.
+            self.render_too_small(usable, buf);
+            return;
+        }
+
+        // When filter input is active, reserve the top row for the filter bar.
+        let content_area = if self.network_state.filter_input_active {
+            self.render_filter_input_bar(
+                Rect {
+                    height: 1,
+                    ..usable
+                },
+                buf,
+            );
+            Rect {
+                y: usable.y + 1,
+                height: usable.height.saturating_sub(1),
+                ..usable
+            }
+        } else {
+            usable
+        };
+
+        // If the area shrank too small after the filter bar, bail out.
+        if content_area.height < MIN_USABLE_HEIGHT || content_area.width < MIN_USABLE_WIDTH {
             return;
         }
 
@@ -118,14 +150,14 @@ impl Widget for NetworkMonitor<'_> {
         if has_selection {
             if area.width >= WIDE_THRESHOLD {
                 // Wide: horizontal split — table (55%) | details (45%)
-                self.render_wide_layout(usable, buf, &filtered);
+                self.render_wide_layout(content_area, buf, &filtered);
             } else {
                 // Narrow: vertical split — table top (50%) | details bottom (50%)
-                self.render_narrow_split(usable, buf, &filtered);
+                self.render_narrow_split(content_area, buf, &filtered);
             }
         } else {
             // No selection: full-width table
-            self.render_table_only(usable, buf, &filtered);
+            self.render_table_only(content_area, buf, &filtered);
         }
     }
 }
@@ -195,6 +227,77 @@ impl NetworkMonitor<'_> {
             &self.network_state.filter,
         );
         table.render(area, buf);
+    }
+
+    // ── Filter input bar ──────────────────────────────────────────────────────
+
+    /// Render a single-row filter input bar at the top of the content area.
+    ///
+    /// Shows the current buffer contents with a cursor indicator and brief
+    /// instructions. Styled to be visually distinct from the request table header.
+    ///
+    /// ```text
+    /// Filter: api/users█   (Enter to apply, Esc to cancel)
+    /// ```
+    fn render_filter_input_bar(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+
+        let buffer = &self.network_state.filter_input_buffer;
+        let prompt = "Filter: ";
+        let cursor = "█";
+        let hint = "  (Enter to apply, Esc to cancel)";
+
+        let prompt_style = Style::default()
+            .fg(palette::STATUS_BLUE)
+            .add_modifier(Modifier::BOLD);
+        let buffer_style = Style::default().fg(Color::White);
+        let cursor_style = Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::REVERSED);
+        let hint_style = Style::default().fg(Color::DarkGray);
+
+        let mut x = area.x;
+
+        // Prompt label
+        buf.set_string(x, area.y, prompt, prompt_style);
+        x += prompt.len() as u16;
+
+        // Buffer contents
+        if x < area.x + area.width {
+            buf.set_string(x, area.y, buffer, buffer_style);
+            x += buffer.len() as u16;
+        }
+
+        // Cursor block
+        if x < area.x + area.width {
+            buf.set_string(x, area.y, cursor, cursor_style);
+            x += cursor.len() as u16;
+        }
+
+        // Keyboard hint (only if space remains)
+        if x < area.x + area.width {
+            buf.set_string(x, area.y, hint, hint_style);
+        }
+    }
+
+    // ── Too small state ────────────────────────────────────────────────────────
+
+    /// Render a centred "terminal too small" message when the available area
+    /// is below the minimum dimensions needed to display the network table.
+    fn render_too_small(&self, area: Rect, buf: &mut Buffer) {
+        if area.height == 0 || area.width == 0 {
+            return;
+        }
+        let msg = Line::from(Span::styled(
+            "Terminal too small for network view",
+            Style::default().fg(Color::DarkGray),
+        ));
+        let msg_width = msg.width() as u16;
+        let x = area.x + area.width.saturating_sub(msg_width) / 2;
+        let y = area.y + area.height / 2;
+        buf.set_line(x, y, &msg, area.width);
     }
 
     // ── Disconnected / unavailable states ─────────────────────────────────────

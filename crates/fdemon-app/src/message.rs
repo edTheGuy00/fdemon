@@ -909,4 +909,23 @@ pub enum Message {
 
     /// Update filter text.
     NetworkFilterChanged(String),
+
+    /// Enter network filter input mode (activates text input).
+    NetworkEnterFilterMode,
+
+    /// Exit network filter input mode (cancel, discard buffer).
+    NetworkExitFilterMode,
+
+    /// Commit the filter input buffer (apply filter and exit input mode).
+    NetworkCommitFilter,
+
+    /// Append a character to the filter input buffer.
+    NetworkFilterInput(char),
+
+    /// Delete last character from filter input buffer.
+    NetworkFilterBackspace,
+
+    // ── Performance Panel UI Messages ─────────────────────────────────────────
+    /// Toggle the allocation table sort column (Size ↔ Instances).
+    ToggleAllocationSort,
 }

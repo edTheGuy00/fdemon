@@ -184,7 +184,7 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                     return UpdateResult::action(UpdateAction::StartNetworkMonitoring {
                         session_id,
                         handle: None, // hydrated by process.rs
-                        poll_interval_ms: 1000,
+                        poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
                     });
                 }
             }

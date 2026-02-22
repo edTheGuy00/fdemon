@@ -10,6 +10,7 @@ This document describes the internal architecture of Flutter Demon, a high-perfo
 - [Project Structure](#project-structure)
 - [Module Reference](#module-reference)
 - [Key Patterns](#key-patterns)
+- [DevTools Subsystem](#devtools-subsystem)
 - [Data Flow](#data-flow)
 - [Key Types](#key-types)
 - [Future Considerations](#future-considerations)
@@ -234,7 +235,10 @@ flutter-demon/
 │   │       ├── ansi.rs           # ANSI escape sequence handling
 │   │       ├── error.rs          # Error types and Result alias
 │   │       ├── logging.rs        # File-based logging setup
-│   │       └── prelude.rs        # Common imports
+│   │       ├── prelude.rs        # Common imports
+│   │       ├── network.rs        # Network domain types (HttpProfileEntry, NetworkTiming, etc.)
+│   │       ├── performance.rs    # Performance domain types (FrameTiming, MemorySample, RingBuffer, etc.)
+│   │       └── widget_tree.rs    # Widget tree types (DiagnosticsNode, LayoutInfo, EdgeInsets)
 │   │
 │   ├── fdemon-daemon/            # Flutter process management
 │   │   ├── Cargo.toml            # depends: fdemon-core
@@ -248,7 +252,22 @@ flutter-demon/
 │   │       ├── avds.rs           # Android AVD utilities
 │   │       ├── simulators.rs     # iOS simulator utilities
 │   │       ├── tool_availability.rs  # Tool detection
-│   │       └── test_utils.rs     # Test helpers
+│   │       ├── test_utils.rs     # Test helpers
+│   │       └── vm_service/       # VM Service WebSocket client
+│   │           ├── mod.rs        # VmServiceHandle, connection management
+│   │           ├── client.rs     # WebSocket client transport
+│   │           ├── protocol.rs   # JSON-RPC protocol types
+│   │           ├── errors.rs     # VM Service error types
+│   │           ├── logging.rs    # VM Service logging utilities
+│   │           ├── network.rs    # ext.dart.io.* HTTP/socket profiling
+│   │           ├── performance.rs # Memory usage, allocation profiling
+│   │           ├── timeline.rs   # Frame timing from extension stream
+│   │           └── extensions/   # Inspector, layout, overlays, dumps
+│   │               ├── mod.rs
+│   │               ├── inspector.rs
+│   │               ├── layout.rs
+│   │               ├── overlays.rs
+│   │               └── dumps.rs
 │   │
 │   ├── fdemon-app/               # Application state and orchestration
 │   │   ├── Cargo.toml            # depends: fdemon-core, fdemon-daemon
@@ -260,7 +279,17 @@ flutter-demon/
 │   │       ├── message.rs        # Message enum (all events)
 │   │       ├── signals.rs        # SIGINT/SIGTERM handling
 │   │       ├── handler/          # TEA update function + helpers
-│   │       ├── session.rs        # Per-device session state
+│   │       │   └── devtools/     # DevTools mode handlers
+│   │       │       ├── mod.rs    # Panel switching, enter/exit, overlays
+│   │       │       ├── inspector.rs  # Widget tree fetch, layout data fetch
+│   │       │       ├── performance.rs # Frame selection, memory samples, allocations
+│   │       │       └── network.rs    # Network navigation, recording, filter, polling
+│   │       ├── session/          # Per-device session state
+│   │       │   ├── mod.rs
+│   │       │   ├── session.rs    # Session struct and core state
+│   │       │   ├── handle.rs     # SessionHandle
+│   │       │   ├── network.rs    # NetworkState — per-session network monitoring
+│   │       │   └── performance.rs # PerformanceState — per-session perf monitoring
 │   │       ├── session_manager.rs  # Multi-session coordination
 │   │       ├── watcher.rs        # File system watching
 │   │       ├── config/           # Configuration parsing
@@ -310,9 +339,31 @@ flutter-demon/
 │               │   ├── mod.rs
 │               │   └── styles.rs
 │               ├── confirm_dialog.rs
-│               └── new_session_dialog/
-│                   ├── mod.rs
-│                   └── target_selector.rs
+│               ├── new_session_dialog/
+│               │   ├── mod.rs
+│               │   └── target_selector.rs
+│               └── devtools/         # DevTools panels
+│                   ├── mod.rs        # Tab bar + panel dispatch
+│                   ├── inspector/    # Widget Inspector (tree + layout explorer)
+│                   │   ├── mod.rs
+│                   │   ├── tree_panel.rs
+│                   │   └── layout_panel.rs
+│                   ├── performance/  # Performance monitoring
+│                   │   ├── mod.rs
+│                   │   ├── styles.rs
+│                   │   ├── frame_chart/  # Frame timing bar chart
+│                   │   │   ├── mod.rs
+│                   │   │   ├── bars.rs
+│                   │   │   └── detail.rs
+│                   │   └── memory_chart/ # Memory time-series + allocation table
+│                   │       ├── mod.rs
+│                   │       ├── chart.rs
+│                   │       ├── table.rs
+│                   │       └── braille_canvas.rs
+│                   └── network/      # Network monitor
+│                       ├── mod.rs
+│                       ├── request_table.rs
+│                       └── request_details.rs
 │
 └── tests/                        # Integration tests (binary crate)
     ├── common/
@@ -581,6 +632,71 @@ stdout ─────────┴──▶ DaemonMessage::Response
                          ▼
                     RequestTracker.complete(id)
 ```
+
+---
+
+## DevTools Subsystem
+
+The DevTools mode provides three inspection panels — Inspector, Performance, and Network — accessible by pressing `d` when a Flutter session has a VM Service connection.
+
+### Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    DevTools View                          │
+│           (fdemon-tui/widgets/devtools/)                  │
+│  ┌────────────┐  ┌────────────────┐  ┌────────────────┐  │
+│  │ Inspector  │  │  Performance   │  │   Network      │  │
+│  │ tree_panel │  │  frame_chart   │  │ request_table  │  │
+│  │layout_panel│  │  memory_chart  │  │request_details │  │
+│  └──────┬─────┘  └──────┬─────────┘  └──────┬─────────┘  │
+└─────────┼───────────────┼───────────────────┼────────────┘
+          │               │                   │
+          ▼               ▼                   ▼
+┌──────────────────────────────────────────────────────────┐
+│               DevTools Handlers                          │
+│         (fdemon-app/handler/devtools/)                    │
+│  inspector.rs   performance.rs   network.rs   mod.rs     │
+└─────────┬───────────────┬───────────────────┬────────────┘
+          │               │                   │
+          ▼               ▼                   ▼
+┌──────────────────────────────────────────────────────────┐
+│              Per-Session State                            │
+│         (fdemon-app/session/)                             │
+│  InspectorState    PerformanceState    NetworkState       │
+│  (in state.rs)     (performance.rs)    (network.rs)      │
+└─────────┬───────────────┬───────────────────┬────────────┘
+          │               │                   │
+          ▼               ▼                   ▼
+┌──────────────────────────────────────────────────────────┐
+│              VM Service Client                           │
+│        (fdemon-daemon/vm_service/)                        │
+│  extensions/    performance.rs    network.rs   timeline  │
+└─────────┬───────────────┬───────────────────┬────────────┘
+          │               │                   │
+          ▼               ▼                   ▼
+┌──────────────────────────────────────────────────────────┐
+│              Domain Types                                │
+│            (fdemon-core/)                                 │
+│  widget_tree.rs    performance.rs    network.rs           │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Panel State Model
+
+DevTools state lives at two levels:
+
+- **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
+- **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
+
+### VM Service Data Flow
+
+1. Engine spawns background polling tasks (performance monitor, network monitor) when a session connects
+2. Polling tasks call VM Service extensions via `VmServiceHandle`
+3. Responses are parsed into domain types (`MemorySample`, `HttpProfileEntry`, etc.)
+4. Results sent as `Message` variants to the Engine message channel
+5. Handler functions update per-session state
+6. TUI renders the updated state on the next frame
 
 ---
 

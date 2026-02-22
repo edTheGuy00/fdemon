@@ -169,3 +169,34 @@ No code tests — this is a documentation-only task. Verification:
 
 - **`q` in Network panel**: The `q` key has dual meaning — it's "Request Body" tab in the Network detail view, and "Quit" elsewhere in DevTools. The documentation should reflect this nuance (the `q` Quit binding is listed in Panel Navigation, and the `q` Request Body binding is listed in the Network Panel section).
 - **`Esc` layered behavior**: In Performance panel, `Esc` deselects frame first, then exits DevTools on second press. In Network panel, `Esc` deselects request first. Document this "layered Esc" behavior.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Rewrote DevTools Mode section; updated Table of Contents; fixed two Session Management description strings |
+
+### Notable Decisions/Tradeoffs
+
+1. **Verified bindings against `handler/keys.rs` before writing**: Every key in the documentation was cross-checked against the actual match arms in `handle_key_devtools`. No discrepancies were found — the task file's proposed content was accurate.
+2. **`q` dual-meaning documented correctly**: `q` as Quit appears in Panel Navigation (applies when not in Network panel per the `in_network` guard in the code); `q` as Request Body Tab appears in the Network Panel section. This matches the guard logic in `keys.rs` at line 423 and 494.
+3. **`Enter` in Network panel**: The code only emits `NetworkSelectRequest` when a request is already selected (refetch behaviour). The description "Select / Refetch" captures this accurately.
+4. **`Esc` layered behaviour**: The Panel Navigation row description spells out both Performance and Network deselect-first semantics, matching the conditional logic at lines 347-368 in `keys.rs`.
+5. **Section heading rename**: "Widget Inspector Navigation" → "Widget Inspector Panel" to be consistent with the new "Performance Panel" and "Network Panel" headings and to match the ToC anchor.
+
+### Testing Performed
+
+- Manual grep for "Layout Panel" in `KEYBINDINGS.md` — no matches (stale reference removed)
+- Manual grep for "Inspector/Layout" in `KEYBINDINGS.md` — no matches (stale description removed)
+- Read full updated file and confirmed all six acceptance criteria are met
+- No code was changed; no build/test commands needed
+
+### Risks/Limitations
+
+1. **Documentation-only task**: There are no automated tests for documentation correctness; future key binding changes in `keys.rs` must be reflected here manually.

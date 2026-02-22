@@ -146,3 +146,46 @@ cargo test -p fdemon-app -- generate_default_config
 - **Backwards compatibility**: The `#[serde(default = "...")]` annotations ensure existing `config.toml` files without the new fields continue to work.
 - **Poll interval clamping**: The minimum 500ms clamp should happen at the polling task level (where the interval is used), not in the config type. This matches the existing pattern for `performance_refresh_ms`.
 - **`reset()` preservation**: `NetworkState::reset()` already preserves `max_entries`. Verify it also preserves the `recording` default or if it should reset to the configured `auto_record` value.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `max_network_entries`, `network_auto_record`, `network_poll_interval_ms` fields to `DevToolsSettings`; added 3 default functions; updated `Default` impl; updated tests |
+| `crates/fdemon-app/src/config/settings.rs` | Updated `generate_default_config()` and `init_config_dir()` templates to document all `[devtools]` fields; added `test_default_config_includes_network_settings` test |
+| `crates/fdemon-app/src/session/network.rs` | Added `NetworkState::with_config(max_entries, auto_record)` constructor; added 3 tests |
+| `crates/fdemon-app/src/session/session.rs` | Added `Session::with_network_config(max_entries, auto_record)` builder method |
+| `crates/fdemon-app/src/session_manager.rs` | Added `DevToolsSettings` import; added `create_session_configured()` and `create_session_with_config_configured()` methods that wire devtools settings through to `NetworkState` |
+| `crates/fdemon-app/src/handler/update.rs` | Updated auto-launch session creation to use `create_session_configured` / `create_session_with_config_configured` |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Updated new-session dialog session creation to use `create_session_configured` / `create_session_with_config_configured` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Replaced hardcoded `poll_interval_ms: 1000` with `state.settings.devtools.network_poll_interval_ms` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Non-breaking session_manager API**: Rather than changing the signatures of existing `create_session()` and `create_session_with_config()` (which have ~100+ test callers), added new `create_session_configured()` and `create_session_with_config_configured()` overloads. Only the 2 real production session-creation callers were updated to use these.
+
+2. **Builder pattern for Session**: Added `Session::with_network_config()` builder following the existing `Session::with_config()` pattern, rather than adding config parameters to `Session::new()`.
+
+3. **Poll interval clamping location**: The existing `NETWORK_POLL_MIN_MS = 500` constant in `actions.rs` already handles clamping at the task level — no change needed there, matching the task spec.
+
+4. **`reset()` preserves `max_entries` only**: Verified that `NetworkState::reset()` preserves `max_entries` but resets `recording` to the default (`true`). This is the existing behavior. Per the task notes this is acceptable — a full reset clears runtime recording state.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1020 unit tests + 1 doc test)
+- `cargo clippy -p fdemon-app` - Passed (pre-existing `handle_toggle_allocation_sort` unused import warning from external linter, unrelated to this task)
+- `cargo test -p fdemon-app -- devtools` - Passed (118 tests)
+- `cargo test -p fdemon-app -- config` - Passed (245 tests)
+- `cargo test -p fdemon-app -- network` - Passed (48 tests)
+- `cargo test -p fdemon-app -- generate_default_config` - Passed (1 test)
+
+### Risks/Limitations
+
+1. **`reset()` recording behavior**: `NetworkState::reset()` resets `recording` to `true` (the `Default` value), not back to `network_auto_record`. If a user sets `network_auto_record = false`, reconnecting/resetting will re-enable recording. This matches the existing behavior and the task notes indicate it is acceptable.

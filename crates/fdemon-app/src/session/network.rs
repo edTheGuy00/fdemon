@@ -59,6 +59,10 @@ pub struct NetworkState {
     pub extensions_available: Option<bool>,
     /// Error message from the last failed network operation.
     pub last_error: Option<String>,
+    /// Whether the filter text input is currently active.
+    pub filter_input_active: bool,
+    /// Buffer for the filter text being typed (committed on Enter).
+    pub filter_input_buffer: String,
 }
 
 impl Default for NetworkState {
@@ -77,15 +81,31 @@ impl Default for NetworkState {
             socket_entries: Vec::new(),
             extensions_available: None,
             last_error: None,
+            filter_input_active: false,
+            filter_input_buffer: String::new(),
         }
     }
 }
 
 impl NetworkState {
+    /// Create a new `NetworkState` with configurable settings.
+    ///
+    /// `max_entries` caps the rolling request history (FIFO eviction).
+    /// `auto_record` sets whether recording starts automatically.
+    pub fn with_config(max_entries: usize, auto_record: bool) -> Self {
+        Self {
+            max_entries,
+            recording: auto_record,
+            ..Self::default()
+        }
+    }
+
     /// Reset to initial state (used on session switch or disconnect).
     pub fn reset(&mut self) {
         *self = Self {
             max_entries: self.max_entries,
+            filter_input_active: false,
+            filter_input_buffer: String::new(),
             ..Self::default()
         };
     }
@@ -249,6 +269,32 @@ mod tests {
         assert!(state.recording);
         assert!(state.filter.is_empty());
         assert_eq!(state.detail_tab, NetworkDetailTab::General);
+    }
+
+    #[test]
+    fn test_with_config_sets_max_entries() {
+        let state = NetworkState::with_config(100, true);
+        assert_eq!(state.max_entries, 100);
+        assert!(state.recording);
+        assert!(state.entries.is_empty());
+    }
+
+    #[test]
+    fn test_with_config_sets_auto_record_false() {
+        let state = NetworkState::with_config(500, false);
+        assert_eq!(state.max_entries, 500);
+        assert!(!state.recording);
+    }
+
+    #[test]
+    fn test_with_config_preserves_other_defaults() {
+        let state = NetworkState::with_config(200, true);
+        assert!(state.filter.is_empty());
+        assert!(state.selected_index.is_none());
+        assert_eq!(state.detail_tab, NetworkDetailTab::General);
+        assert!(!state.loading_detail);
+        assert!(state.last_poll_timestamp.is_none());
+        assert_eq!(state.scroll_offset, 0);
     }
 
     #[test]

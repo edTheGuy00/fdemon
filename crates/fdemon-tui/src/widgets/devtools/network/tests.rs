@@ -446,3 +446,172 @@ fn test_active_filter_shown_in_header() {
         "Active filter should be shown in header"
     );
 }
+
+// ── Filter input bar tests ────────────────────────────────────────────────────
+
+#[test]
+fn test_filter_input_bar_shows_prompt_when_active() {
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = "api".to_string();
+    let buf = render_monitor(&state, true, 80, 24);
+    assert!(
+        buf_contains(&buf, 80, 24, "Filter:"),
+        "Filter input bar should show 'Filter:' prompt when active"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_shows_buffer_text() {
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = "api/users".to_string();
+    let buf = render_monitor(&state, true, 80, 24);
+    assert!(
+        buf_contains(&buf, 80, 24, "api/users"),
+        "Filter input bar should show the buffer text"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_shows_hint() {
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = String::new();
+    let buf = render_monitor(&state, true, 80, 24);
+    assert!(
+        buf_contains(&buf, 80, 24, "Enter"),
+        "Filter input bar should show 'Enter' in key hint"
+    );
+    assert!(
+        buf_contains(&buf, 80, 24, "Esc"),
+        "Filter input bar should show 'Esc' in key hint"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_inactive_does_not_show_prompt() {
+    let mut state = make_network_state_with_entries(3);
+    state.filter_input_active = false;
+    let buf = render_monitor(&state, true, 80, 24);
+    assert!(
+        !buf_contains(&buf, 80, 24, "Filter:"),
+        "Filter prompt should not appear when filter input is inactive"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_no_panic_on_tiny_terminal() {
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = "api".to_string();
+    // Should not panic even at tiny sizes
+    render_monitor(&state, true, 10, 5);
+    render_monitor(&state, true, 80, 4);
+}
+
+#[test]
+fn test_filter_input_bar_active_still_shows_requests() {
+    let mut state = make_network_state_with_entries(3);
+    state.filter_input_active = true;
+    state.filter_input_buffer = "GET".to_string();
+    let buf = render_monitor(&state, true, 80, 24);
+    // Filter bar takes one row but the table should still be visible below.
+    assert!(
+        buf_contains(&buf, 80, 24, "Filter:"),
+        "Filter bar should be shown"
+    );
+    // Table is still rendered (may show 'requests' count from table header).
+    // Note: the filter bar takes row 0, so the table starts from row 1.
+    assert!(
+        buf_contains(&buf, 80, 24, "requests"),
+        "Table with request count should still be visible below the filter bar"
+    );
+}
+
+// ── Small terminal / "too small" message tests ────────────────────────────────
+
+#[test]
+fn test_network_monitor_very_small_terminal_shows_too_small_message() {
+    // Height < MIN_USABLE_HEIGHT (3) — should show "too small" message, not crash
+    let state = make_network_state_with_entries(3);
+    let buf = render_monitor(&state, true, 20, 3);
+    // The usable area after subtracting the footer row is height-1 = 2, which
+    // is < MIN_USABLE_HEIGHT (3), so the "too small" message should appear.
+    assert!(
+        buf_contains(&buf, 20, 3, "small") || buf_contains(&buf, 20, 3, "Terminal"),
+        "Very small terminal should show 'too small' message"
+    );
+}
+
+#[test]
+fn test_network_monitor_narrow_width_shows_too_small_message() {
+    // Width < MIN_USABLE_WIDTH (20) — should show "too small" message
+    let state = make_network_state_with_entries(3);
+    // Use width 15, height 10 — height is fine but width is too small
+    let buf = render_monitor(&state, true, 15, 10);
+    assert!(
+        buf_contains(&buf, 15, 10, "small") || buf_contains(&buf, 15, 10, "Terminal"),
+        "Narrow width terminal should show 'too small' message"
+    );
+}
+
+#[test]
+fn test_network_monitor_20x5_no_panic() {
+    // 20x5 — one of the extreme terminal sizes from the acceptance criteria
+    let state = make_network_state_with_entries(3);
+    render_monitor(&state, true, 20, 5);
+    // Should not panic
+}
+
+#[test]
+fn test_network_monitor_40x10_no_panic() {
+    // 40x10 — acceptance criteria terminal size
+    let state = make_network_state_with_entries(5);
+    render_monitor(&state, true, 40, 10);
+    // Should not panic
+}
+
+#[test]
+fn test_network_monitor_60x15_no_panic() {
+    // 60x15 — acceptance criteria terminal size
+    let state = make_network_state_with_entries(5);
+    render_monitor(&state, true, 60, 15);
+    // Should not panic
+}
+
+#[test]
+fn test_network_monitor_200x50_no_panic() {
+    // 200x50 — large terminal (acceptance criteria)
+    let state = make_network_state_with_entries(10);
+    render_monitor(&state, true, 200, 50);
+    // Should not panic
+}
+
+#[test]
+fn test_network_monitor_height_2_shows_too_small() {
+    // height=2, usable=1 after footer reservation — below MIN_USABLE_HEIGHT
+    let state = make_network_state_with_entries(3);
+    // render at 60 wide so width is fine, only height is the constraint
+    let buf = render_monitor(&state, true, 60, 2);
+    assert!(
+        buf_contains(&buf, 60, 2, "small") || buf_contains(&buf, 60, 2, "Terminal"),
+        "Height-2 terminal should show 'too small' message"
+    );
+}
+
+#[test]
+fn test_network_monitor_state_preserved_across_sizes() {
+    // Verify selected_index state is not mutated when rendering at small sizes.
+    // This is a read-only render — state should be unaffected.
+    let mut state = make_network_state_with_entries(5);
+    state.selected_index = Some(2);
+    // Render at tiny size
+    render_monitor(&state, true, 15, 4);
+    // State should be unchanged (render takes &NetworkState, so it cannot mutate it)
+    assert_eq!(
+        state.selected_index,
+        Some(2),
+        "selected_index should be preserved after rendering at small terminal size"
+    );
+}

@@ -93,3 +93,33 @@ Verification: Run `cargo test --workspace 2>&1 | grep "test result"` to get accu
 
 - **Minimal changes**: CLAUDE.md serves as a concise project overview for Claude Code. Keep additions brief — point to ARCHITECTURE.md for detailed DevTools documentation.
 - **Test count accuracy**: The test count should be exact. Run the actual test suite rather than estimating.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `CLAUDE.md` | Updated Architecture, Testing, Configuration, and Key Patterns sections with DevTools V2 information |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test counts from `cargo test --lib`**: Used `--lib` flag per crate to isolate unit test counts, excluding doc tests and integration tests. Actual counts: fdemon-core 357, fdemon-daemon 375, fdemon-app 1,037, fdemon-tui 754 — total 2,523 unit tests (up from 1,532).
+2. **fdemon-app path updated**: Changed `crates/fdemon-app/src/handler/tests.rs` to `crates/fdemon-app/src/` since tests are now spread across handler, session, and other modules — more accurate after DevTools V2 additions.
+
+### Testing Performed
+
+- `cargo test --lib -p fdemon-core` — 357 tests, Passed
+- `cargo test --lib -p fdemon-daemon` — 375 tests, Passed
+- `cargo test --lib -p fdemon-app` — 1,037 tests, Passed
+- `cargo test --lib -p fdemon-tui` — 754 tests, Passed
+- All referenced file paths verified to exist in the codebase
+
+### Risks/Limitations
+
+1. **Integration test failures**: The `flutter-demon` binary e2e tests have 25 failures, but these are pre-existing and unrelated to this documentation task (no code was changed).
+2. **Path specificity**: The fdemon-app test path is now `crates/fdemon-app/src/` rather than the specific `handler/tests.rs` file, which is more accurate given the distributed test structure post-DevTools V2.
