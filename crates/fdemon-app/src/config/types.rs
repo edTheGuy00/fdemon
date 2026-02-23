@@ -301,6 +301,11 @@ pub struct DevToolsSettings {
     #[serde(default)]
     pub tree_max_depth: u32,
 
+    /// Widget tree fetch timeout in seconds (with readiness polling + retries).
+    /// Minimum effective value is 5 seconds.
+    #[serde(default = "default_inspector_fetch_timeout_secs")]
+    pub inspector_fetch_timeout_secs: u64,
+
     /// Auto-enable repaint rainbow on VM connect
     #[serde(default)]
     pub auto_repaint_rainbow: bool,
@@ -348,6 +353,7 @@ impl Default for DevToolsSettings {
             performance_refresh_ms: default_performance_refresh_ms(),
             memory_history_size: default_memory_history_size(),
             tree_max_depth: 0,
+            inspector_fetch_timeout_secs: default_inspector_fetch_timeout_secs(),
             auto_repaint_rainbow: false,
             auto_performance_overlay: false,
             allocation_profile_interval_ms: default_allocation_profile_interval_ms(),
@@ -385,6 +391,10 @@ fn default_network_auto_record() -> bool {
 
 fn default_network_poll_interval_ms() -> u64 {
     1000
+}
+
+fn default_inspector_fetch_timeout_secs() -> u64 {
+    30
 }
 
 /// Logging sub-settings for the hybrid VM Service + daemon log pipeline.
@@ -1106,6 +1116,7 @@ theme = "default"
         assert_eq!(settings.performance_refresh_ms, 2000);
         assert_eq!(settings.memory_history_size, 60);
         assert_eq!(settings.tree_max_depth, 0);
+        assert_eq!(settings.inspector_fetch_timeout_secs, 30);
         assert!(!settings.auto_repaint_rainbow);
         assert!(!settings.auto_performance_overlay);
         // Network settings defaults
@@ -1127,6 +1138,7 @@ theme = "default"
         // New fields should have defaults
         assert_eq!(settings.default_panel, "inspector");
         assert_eq!(settings.performance_refresh_ms, 2000);
+        assert_eq!(settings.inspector_fetch_timeout_secs, 30);
         // Network fields should have defaults too
         assert_eq!(settings.max_network_entries, 500);
         assert!(settings.network_auto_record);
@@ -1142,6 +1154,7 @@ theme = "default"
             performance_refresh_ms = 5000
             memory_history_size = 120
             tree_max_depth = 10
+            inspector_fetch_timeout_secs = 15
             auto_repaint_rainbow = true
             auto_performance_overlay = false
             max_network_entries = 200
@@ -1159,6 +1172,7 @@ theme = "default"
         assert_eq!(settings.performance_refresh_ms, 5000);
         assert_eq!(settings.memory_history_size, 120);
         assert_eq!(settings.tree_max_depth, 10);
+        assert_eq!(settings.inspector_fetch_timeout_secs, 15);
         assert!(settings.auto_repaint_rainbow);
         assert!(settings.logging.show_source_indicator);
         assert_eq!(settings.logging.dedupe_threshold_ms, 200);

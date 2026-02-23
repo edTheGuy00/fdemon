@@ -95,6 +95,14 @@ pub mod ext {
     /// Get the layout explorer node data for a widget.
     pub const GET_LAYOUT_EXPLORER_NODE: &str = "ext.flutter.inspector.getLayoutExplorerNode";
 
+    /// Check whether the widget tree is ready to be fetched.
+    ///
+    /// Returns `{"result": true}` when the framework has completed its first
+    /// frame and the widget tree can be safely introspected. Polling this
+    /// before `getRootWidgetTree` avoids transient null-check failures on
+    /// complex or freshly-reloaded widget trees.
+    pub const IS_WIDGET_TREE_READY: &str = "ext.flutter.inspector.isWidgetTreeReady";
+
     // ── Debug dumps ─────────────────────────────────────────────────────────
 
     /// Dump the widget tree to a string.
@@ -435,6 +443,7 @@ mod tests {
         assert!(ext::GET_SELECTED_WIDGET.starts_with("ext.flutter.inspector."));
         assert!(ext::DISPOSE_GROUP.starts_with("ext.flutter.inspector."));
         assert!(ext::GET_LAYOUT_EXPLORER_NODE.starts_with("ext.flutter.inspector."));
+        assert!(ext::IS_WIDGET_TREE_READY.starts_with("ext.flutter.inspector."));
     }
 
     // ── parse_bool_extension_response (task-specified tests) ────────────────

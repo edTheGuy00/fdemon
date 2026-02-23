@@ -160,6 +160,9 @@ pub enum UpdateAction {
         /// Max depth for widget tree fetch (0 = unlimited).
         /// From `settings.devtools.tree_max_depth`.
         tree_max_depth: u32,
+        /// Overall timeout for the fetch operation including readiness polling
+        /// and retries. From `settings.devtools.inspector_fetch_timeout_secs`.
+        fetch_timeout_secs: u64,
     },
 
     /// Fetch layout data for a specific widget node.

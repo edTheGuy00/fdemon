@@ -198,9 +198,16 @@ pub fn handle_action(
             session_id,
             vm_handle,
             tree_max_depth,
+            fetch_timeout_secs,
         } => {
             if let Some(handle) = vm_handle {
-                spawn_fetch_widget_tree(session_id, handle, msg_tx, tree_max_depth);
+                spawn_fetch_widget_tree(
+                    session_id,
+                    handle,
+                    msg_tx,
+                    tree_max_depth,
+                    fetch_timeout_secs,
+                );
             } else {
                 warn!(
                     "FetchWidgetTree reached handle_action with no VmRequestHandle \
@@ -1029,115 +1036,66 @@ async fn forward_vm_events(
 /// to the RPC call (if supported by the Flutter extension). If the parameter
 /// is not supported, the tree is returned at unlimited depth.
 ///
-/// Sends `Message::WidgetTreeFetched` on success or
-/// `Message::WidgetTreeFetchFailed` on failure.
+/// The fetch operation includes:
+/// 1. **Readiness polling** — calls `ext.flutter.inspector.isWidgetTreeReady`
+///    up to 12 times (500ms apart) before attempting the tree fetch.
+/// 2. **Retry with backoff** — up to 4 attempts (500ms/1s/2s backoff) for
+///    transient errors like the known Flutter null-check failure.
+/// 3. **Configurable outer timeout** — `fetch_timeout_secs` (min 5s) wraps the
+///    entire operation.
+///
+/// Sends `Message::WidgetTreeFetched` on success,
+/// `Message::WidgetTreeFetchFailed` on error, or
+/// `Message::WidgetTreeFetchTimeout` on timeout.
 fn spawn_fetch_widget_tree(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     tree_max_depth: u32,
+    fetch_timeout_secs: u64,
 ) {
     tokio::spawn(async move {
-        let isolate_id = match handle.main_isolate_id().await {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::warn!(
-                    "FetchWidgetTree: could not get isolate ID for session {}: {}",
-                    session_id,
-                    e
-                );
-                let _ = msg_tx
-                    .send(Message::WidgetTreeFetchFailed {
+        let timeout_dur = Duration::from_secs(fetch_timeout_secs.max(5));
+
+        let fetch_result = tokio::time::timeout(timeout_dur, async {
+            // Step 1: Get isolate ID.
+            let isolate_id = handle.main_isolate_id().await.map_err(|e| {
+                format!("Could not get isolate ID: {e}")
+            })?;
+
+            // Step 2: Poll widget tree readiness.
+            poll_widget_tree_ready(&handle, &isolate_id, session_id).await;
+
+            // Step 3: Dispose previous object group.
+            let object_group = "fdemon-inspector-1";
+            {
+                let mut dispose_args = HashMap::new();
+                dispose_args.insert("objectGroup".to_string(), object_group.to_string());
+                if let Err(e) = handle
+                    .call_extension(ext::DISPOSE_GROUP, &isolate_id, Some(dispose_args))
+                    .await
+                {
+                    tracing::debug!(
+                        "FetchWidgetTree: disposeGroup '{}' failed for session {} (non-fatal): {}",
+                        object_group,
                         session_id,
-                        error: format!("Could not get isolate ID: {e}"),
-                    })
-                    .await;
-                return;
-            }
-        };
-
-        // Use a fixed object group name for the initial tree fetch.
-        // A persistent ObjectGroupManager would be needed for multi-fetch
-        // workflows; for the initial inspector view one group is sufficient.
-        let object_group = "fdemon-inspector-1";
-
-        // Dispose the previous object group before creating a new one.
-        // This releases VM references from any prior tree fetch and prevents
-        // memory from accumulating on the Flutter VM during repeated refreshes.
-        // `disposeGroup` is idempotent — safe to call even on the first fetch.
-        // Failure is non-fatal: log at debug level and continue with the fetch.
-        {
-            let mut dispose_args = HashMap::new();
-            dispose_args.insert("objectGroup".to_string(), object_group.to_string());
-            if let Err(e) = handle
-                .call_extension(ext::DISPOSE_GROUP, &isolate_id, Some(dispose_args))
-                .await
-            {
-                tracing::debug!(
-                    "FetchWidgetTree: disposeGroup '{}' failed for session {} (non-fatal): {}",
-                    object_group,
-                    session_id,
-                    e
-                );
-            }
-        }
-
-        // Build args for the newer getRootWidgetTree API.
-        let mut newer_args = HashMap::new();
-        newer_args.insert("objectGroup".to_string(), object_group.to_string());
-        newer_args.insert("isSummaryTree".to_string(), "true".to_string());
-        newer_args.insert("withPreviews".to_string(), "false".to_string());
-        // Pass subtreeDepth when a limit is configured (0 = unlimited).
-        if tree_max_depth > 0 {
-            newer_args.insert("subtreeDepth".to_string(), tree_max_depth.to_string());
-        }
-
-        // Wrap the entire RPC call sequence in a 10-second timeout so that a
-        // hung or very slow VM Service does not leave the UI in a permanent
-        // loading state.
-        const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
-
-        let fetch_result = tokio::time::timeout(FETCH_TIMEOUT, async {
-            match handle
-                .call_extension(ext::GET_ROOT_WIDGET_TREE, &isolate_id, Some(newer_args))
-                .await
-            {
-                Ok(value) => parse_diagnostics_node_response(&value),
-                Err(e) => {
-                    // If the newer API is not registered, fall back to the older one.
-                    if matches!(&e, fdemon_core::Error::Protocol { .. }) {
-                        tracing::debug!(
-                            "getRootWidgetTree not available for session {}, \
-                             falling back to getRootWidgetSummaryTree: {}",
-                            session_id,
-                            e
-                        );
-                        let mut older_args = HashMap::new();
-                        older_args.insert("objectGroup".to_string(), object_group.to_string());
-                        match handle
-                            .call_extension(
-                                ext::GET_ROOT_WIDGET_SUMMARY_TREE,
-                                &isolate_id,
-                                Some(older_args),
-                            )
-                            .await
-                        {
-                            Ok(value) => parse_diagnostics_node_response(&value),
-                            Err(fallback_err) => Err(fallback_err),
-                        }
-                    } else {
-                        Err(e)
-                    }
+                        e
+                    );
                 }
             }
+
+            // Step 4: Retry loop — fetch the widget tree.
+            try_fetch_widget_tree(&handle, &isolate_id, object_group, tree_max_depth, session_id)
+                .await
+                .map_err(|e| e.to_string())
         })
         .await;
 
         let msg = match fetch_result {
             Err(_timeout) => {
-                // 10-second deadline exceeded.
                 tracing::warn!(
-                    "FetchWidgetTree timed out after 10s for session {}",
+                    "FetchWidgetTree timed out after {}s for session {}",
+                    fetch_timeout_secs.max(5),
                     session_id
                 );
                 Message::WidgetTreeFetchTimeout { session_id }
@@ -1146,16 +1104,194 @@ fn spawn_fetch_widget_tree(
                 session_id,
                 root: Box::new(root),
             },
-            Ok(Err(e)) => {
-                tracing::warn!("FetchWidgetTree failed for session {}: {}", session_id, e);
+            Ok(Err(error)) => {
+                tracing::warn!("FetchWidgetTree failed for session {}: {}", session_id, error);
                 Message::WidgetTreeFetchFailed {
                     session_id,
-                    error: e.to_string(),
+                    error,
                 }
             }
         };
         let _ = msg_tx.send(msg).await;
     });
+}
+
+// ---------------------------------------------------------------------------
+// Widget tree readiness + retry helpers
+// ---------------------------------------------------------------------------
+
+/// Poll `ext.flutter.inspector.isWidgetTreeReady` until it returns `true`,
+/// the extension is not available (older Flutter SDK), or we exhaust attempts.
+///
+/// This guards against the known Flutter bug where `getRootWidgetTree` throws
+/// a null-check failure on complex or freshly-reloaded widget trees.
+async fn poll_widget_tree_ready(
+    handle: &VmRequestHandle,
+    isolate_id: &str,
+    session_id: SessionId,
+) {
+    const MAX_POLLS: u32 = 12;
+    const POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+    for attempt in 1..=MAX_POLLS {
+        match handle
+            .call_extension(ext::IS_WIDGET_TREE_READY, isolate_id, None)
+            .await
+        {
+            Ok(value) => {
+                // The extension returns {"result": true/false} or {"result": "true"/"false"}.
+                let ready = value
+                    .get("result")
+                    .and_then(|v| v.as_bool().or_else(|| v.as_str().map(|s| s == "true")))
+                    .unwrap_or(false);
+                if ready {
+                    tracing::debug!(
+                        "Widget tree ready for session {} (poll {}/{})",
+                        session_id,
+                        attempt,
+                        MAX_POLLS,
+                    );
+                    return;
+                }
+                tracing::debug!(
+                    "Widget tree not ready for session {} (poll {}/{}), waiting…",
+                    session_id,
+                    attempt,
+                    MAX_POLLS,
+                );
+            }
+            Err(e) => {
+                if is_method_not_found(&e) {
+                    // Extension not available (older Flutter SDK) — skip polling.
+                    tracing::debug!(
+                        "isWidgetTreeReady not available for session {} — skipping readiness poll",
+                        session_id,
+                    );
+                    return;
+                }
+                if !is_transient_error(&e) {
+                    // Fatal error (channel closed, IO) — bail out.
+                    tracing::debug!(
+                        "isWidgetTreeReady fatal error for session {}: {} — skipping readiness poll",
+                        session_id,
+                        e,
+                    );
+                    return;
+                }
+                tracing::debug!(
+                    "isWidgetTreeReady transient error for session {} (poll {}/{}): {}",
+                    session_id,
+                    attempt,
+                    MAX_POLLS,
+                    e,
+                );
+            }
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+
+    tracing::debug!(
+        "Widget tree readiness polls exhausted for session {} — proceeding anyway",
+        session_id,
+    );
+}
+
+/// Fetch the widget tree, falling back across APIs on failure.
+///
+/// Strategy (no retry of the same failing call — each attempt triggers a
+/// Flutter-side exception that spams the user's log):
+///
+/// 1. Try `getRootWidgetTree` (newer API, supports `subtreeDepth`).
+/// 2. If "method not found" → permanent fallback to `getRootWidgetSummaryTree`.
+/// 3. If transient error (e.g. null-check failure on large trees) → fall back
+///    to `getRootWidgetSummaryTree` which uses a different code path
+///    (`_getRootWidgetSummaryTree`) and avoids the known null-check bug.
+/// 4. Fatal errors (ChannelClosed, Io) → fail immediately.
+async fn try_fetch_widget_tree(
+    handle: &VmRequestHandle,
+    isolate_id: &str,
+    object_group: &str,
+    tree_max_depth: u32,
+    session_id: SessionId,
+) -> fdemon_core::Result<fdemon_core::widget_tree::DiagnosticsNode> {
+    // --- Attempt 1: newer getRootWidgetTree ---
+    let mut newer_args = HashMap::new();
+    newer_args.insert("objectGroup".to_string(), object_group.to_string());
+    newer_args.insert("isSummaryTree".to_string(), "true".to_string());
+    newer_args.insert("withPreviews".to_string(), "false".to_string());
+    if tree_max_depth > 0 {
+        newer_args.insert("subtreeDepth".to_string(), tree_max_depth.to_string());
+    }
+
+    match handle
+        .call_extension(ext::GET_ROOT_WIDGET_TREE, isolate_id, Some(newer_args))
+        .await
+    {
+        Ok(value) => return parse_diagnostics_node_response(&value),
+        Err(e) => {
+            if !is_transient_error(&e) {
+                // Fatal error (ChannelClosed, Io) — no fallback will help.
+                return Err(e);
+            }
+
+            // Transient error — fall back to summary tree (different code path).
+            // This covers both "method not found" (older Flutter) and the
+            // null-check bug in _getRootWidgetTree on complex trees.
+            tracing::debug!(
+                "getRootWidgetTree failed for session {}, \
+                 falling back to getRootWidgetSummaryTree: {}",
+                session_id,
+                e,
+            );
+        }
+    }
+
+    // --- Attempt 2: older getRootWidgetSummaryTree ---
+    let mut older_args = HashMap::new();
+    older_args.insert("objectGroup".to_string(), object_group.to_string());
+
+    match handle
+        .call_extension(
+            ext::GET_ROOT_WIDGET_SUMMARY_TREE,
+            isolate_id,
+            Some(older_args),
+        )
+        .await
+    {
+        Ok(value) => parse_diagnostics_node_response(&value),
+        Err(e) => {
+            tracing::debug!(
+                "getRootWidgetSummaryTree also failed for session {}: {}",
+                session_id,
+                e,
+            );
+            Err(e)
+        }
+    }
+}
+
+/// Returns `true` if an error is transient and the operation should be retried.
+///
+/// Protocol errors (like the known Flutter null-check failure) and generic
+/// VmService errors are considered transient. Connection-level errors
+/// (ChannelClosed, Io, ChannelSend) are fatal and should not be retried.
+fn is_transient_error(error: &fdemon_core::Error) -> bool {
+    matches!(
+        error,
+        fdemon_core::Error::Protocol { .. } | fdemon_core::Error::VmService(_)
+    )
+}
+
+/// Returns `true` if the error indicates "method not found" (extension not
+/// registered). The VM Service error code `-32601` is embedded in the
+/// `Protocol` message by `vm_error_to_error`.
+fn is_method_not_found(error: &fdemon_core::Error) -> bool {
+    match error {
+        fdemon_core::Error::Protocol { message } => {
+            message.contains("-32601") || message.to_lowercase().contains("method not found")
+        }
+        _ => false,
+    }
 }
 
 /// Spawn a background task that flips a debug overlay extension via VM Service.

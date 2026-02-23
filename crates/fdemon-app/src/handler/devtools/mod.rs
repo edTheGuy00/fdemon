@@ -118,6 +118,7 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
+                    fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
                 });
             }
         }
@@ -161,6 +162,10 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                             session_id,
                             vm_handle: None, // hydrated by process.rs
                             tree_max_depth: state.settings.devtools.tree_max_depth,
+                            fetch_timeout_secs: state
+                                .settings
+                                .devtools
+                                .inspector_fetch_timeout_secs,
                         });
                     }
                 }

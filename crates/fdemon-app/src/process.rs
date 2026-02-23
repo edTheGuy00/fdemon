@@ -156,6 +156,7 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
         session_id,
         vm_handle,
         tree_max_depth,
+        fetch_timeout_secs,
     } = action
     {
         if vm_handle.is_some() {
@@ -163,6 +164,7 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
                 session_id,
                 vm_handle,
                 tree_max_depth,
+                fetch_timeout_secs,
             });
         }
         let handle = state
@@ -173,6 +175,7 @@ fn hydrate_fetch_widget_tree(action: UpdateAction, state: &AppState) -> Option<U
             session_id,
             vm_handle: Some(handle),
             tree_max_depth,
+            fetch_timeout_secs,
         });
     }
     Some(action)

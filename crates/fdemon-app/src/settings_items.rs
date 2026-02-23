@@ -207,6 +207,16 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             ))
             .default(SettingValue::Number(0))
             .section("DevTools"),
+        SettingItem::new(
+            "devtools.inspector_fetch_timeout_secs",
+            "Inspector Fetch Timeout (s)",
+        )
+        .description("Widget tree fetch timeout with retries (min 5s)")
+        .value(SettingValue::Number(
+            settings.devtools.inspector_fetch_timeout_secs as i64,
+        ))
+        .default(SettingValue::Number(30))
+        .section("DevTools"),
         SettingItem::new("devtools.auto_repaint_rainbow", "Auto Repaint Rainbow")
             .description("Enable repaint rainbow overlay on VM connect")
             .value(SettingValue::Bool(settings.devtools.auto_repaint_rainbow))

@@ -94,6 +94,11 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.devtools.browser = v.clone();
             }
         }
+        "devtools.inspector_fetch_timeout_secs" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.devtools.inspector_fetch_timeout_secs = *v as u64;
+            }
+        }
 
         // Editor
         "editor.command" => {

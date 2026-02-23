@@ -82,7 +82,7 @@ pub enum VmConnectionStatus {
     /// A specific VM RPC call timed out (e.g., FetchWidgetTree, FetchLayoutData).
     ///
     /// The connection itself may still be live; this indicates that a single
-    /// on-demand request did not complete within the 10-second deadline.
+    /// on-demand request did not complete within the configurable deadline.
     TimedOut,
 }
 

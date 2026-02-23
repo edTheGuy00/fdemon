@@ -1447,6 +1447,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     session_id,
                     vm_handle: None, // hydrated by process.rs
                     tree_max_depth: state.settings.devtools.tree_max_depth,
+                    fetch_timeout_secs: state.settings.devtools.inspector_fetch_timeout_secs,
                 })
             } else {
                 state.devtools_view_state.inspector.error = Some(DevToolsError::new(

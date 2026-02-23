@@ -388,6 +388,7 @@ default_panel = "inspector"           # "inspector", "performance", or "network"
 performance_refresh_ms = 2000         # Memory polling interval (min 500ms)
 memory_history_size = 60              # Memory snapshots to retain
 tree_max_depth = 0                    # Widget tree depth (0 = unlimited)
+inspector_fetch_timeout_secs = 30     # Widget tree fetch timeout with retries (min 5s)
 allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 1000ms)
 max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
 network_auto_record = true            # Auto-start recording when entering Network tab
@@ -580,6 +581,7 @@ default_panel = "inspector"           # "inspector", "performance", or "network"
 performance_refresh_ms = 2000         # Memory polling interval (min 500ms)
 memory_history_size = 60              # Memory snapshots to retain
 tree_max_depth = 0                    # Widget tree depth (0 = unlimited)
+inspector_fetch_timeout_secs = 30     # Widget tree fetch timeout with retries (min 5s)
 allocation_profile_interval_ms = 5000 # Class allocation fetch interval (min 1000ms)
 max_network_entries = 500             # Max HTTP entries per session (FIFO eviction)
 network_auto_record = true            # Auto-start recording when entering Network tab
