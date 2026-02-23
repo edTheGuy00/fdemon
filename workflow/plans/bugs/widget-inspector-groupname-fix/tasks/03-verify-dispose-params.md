@@ -64,4 +64,43 @@ This task is primarily an audit and verification step. No new code or tests to w
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Audit Results
+
+All 13 call sites audited. Every `objectGroup` / `groupName` usage matches the expected table exactly.
+
+| Call Site | File | Line | Extension | Key Used | Expected | Match |
+|-----------|------|------|-----------|----------|----------|-------|
+| `try_fetch_widget_tree` newer API | `actions.rs` | 1219 | `getRootWidgetTree` | `groupName` | `groupName` | YES |
+| `try_fetch_widget_tree` older API | `actions.rs` | 1251 | `getRootWidgetSummaryTree` | `objectGroup` | `objectGroup` | YES |
+| `spawn_fetch_widget_tree` dispose | `actions.rs` | 1073 | `disposeGroup` | `objectGroup` | `objectGroup` | YES |
+| `spawn_fetch_layout_data` dispose | `actions.rs` | 1439 | `disposeGroup` | `objectGroup` | `objectGroup` | YES |
+| `spawn_fetch_layout_data` fetch | `actions.rs` | 1456 | `getLayoutExplorerNode` | `groupName` | `groupName` | YES |
+| `spawn_dispose_devtools_groups` | `actions.rs` | 1555 | `disposeGroup` | `objectGroup` | `objectGroup` | YES |
+| `get_root_widget_tree` newer API | `inspector.rs` | 178 | `getRootWidgetTree` | `groupName` | `groupName` | YES |
+| `get_root_widget_tree` older API | `inspector.rs` | 198 | `getRootWidgetSummaryTree` | `objectGroup` | `objectGroup` | YES |
+| `get_details_subtree` | `inspector.rs` | 240 | `getDetailsSubtree` | `objectGroup` | `objectGroup` | YES |
+| `get_selected_widget` | `inspector.rs` | 267 | `getSelectedWidget` | `objectGroup` | `objectGroup` | YES |
+| `ObjectGroupManager::dispose_group` | `inspector.rs` | 107 | `disposeGroup` | `objectGroup` | `objectGroup` | YES |
+| `get_layout_node` | `layout.rs` | 52 | `getLayoutExplorerNode` | `groupName` | `groupName` | YES |
+| `fetch_layout_data` | `layout.rs` | 225 | `getLayoutExplorerNode` | `groupName` | `groupName` | YES |
+
+One additional occurrence found in `mod.rs:503` — this is a unit test for the generic `build_extension_params` helper function (not a Flutter extension call), so it is correct and expected.
+
+No additional call sites found that should use `groupName` but use `objectGroup`.
+
+### Files Modified
+
+No files modified — this is an audit-only task.
+
+### Notable Decisions/Tradeoffs
+
+1. **Audit scope**: Grepped all files under `crates/` for both `objectGroup` and `groupName` string literals to ensure completeness. The `mod.rs` test occurrence was confirmed to be a generic helper test, not a Flutter extension call.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (no changes needed)
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (1,061 + 360 + 375 + 763 = 2,559 unit tests passing; 80 integration tests passing, 62 ignored due to PTY timing issues)
+- `cargo clippy --workspace` — Passed (no warnings)

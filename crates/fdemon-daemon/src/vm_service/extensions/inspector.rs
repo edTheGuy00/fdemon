@@ -175,9 +175,9 @@ pub async fn get_root_widget_tree(
 ) -> Result<DiagnosticsNode> {
     // Build args for the newer getRootWidgetTree API.
     let mut newer_args = HashMap::new();
-    newer_args.insert("objectGroup".to_string(), object_group.to_string());
+    newer_args.insert("groupName".to_string(), object_group.to_string());
     newer_args.insert("isSummaryTree".to_string(), "true".to_string());
-    newer_args.insert("withPreviews".to_string(), "false".to_string());
+    newer_args.insert("withPreviews".to_string(), "true".to_string());
 
     let result = client
         .call_extension(ext::GET_ROOT_WIDGET_TREE, isolate_id, Some(newer_args))

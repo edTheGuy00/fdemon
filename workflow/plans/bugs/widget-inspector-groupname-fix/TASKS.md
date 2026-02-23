@@ -27,21 +27,21 @@ Fix the `getRootWidgetTree` VM Service call that crashes with "Null check operat
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-fix-actions-param-key](tasks/01-fix-actions-param-key.md) | Not Started | - | 15m | `fdemon-app/src/actions.rs` |
-| 2 | [02-fix-inspector-param-key](tasks/02-fix-inspector-param-key.md) | Not Started | - | 10m | `fdemon-daemon/src/vm_service/extensions/inspector.rs` |
-| 3 | [03-verify-dispose-params](tasks/03-verify-dispose-params.md) | Not Started | 1, 2 | 15m | Audit + tests |
+| 1 | [01-fix-actions-param-key](tasks/01-fix-actions-param-key.md) | Done | - | 15m | `fdemon-app/src/actions.rs` |
+| 2 | [02-fix-inspector-param-key](tasks/02-fix-inspector-param-key.md) | Done | - | 10m | `fdemon-daemon/src/vm_service/extensions/inspector.rs` |
+| 3 | [03-verify-dispose-params](tasks/03-verify-dispose-params.md) | Done | 1, 2 | 15m | Audit + tests |
 
 ## Success Criteria
 
 Bug fix is complete when:
 
-- [ ] `getRootWidgetTree` called with `groupName` parameter key (not `objectGroup`)
-- [ ] `withPreviews` set to `"true"` for `getRootWidgetTree`
-- [ ] Legacy `getRootWidgetSummaryTree` fallback still uses `objectGroup`
-- [ ] `disposeGroup` still uses `objectGroup` (unchanged)
-- [ ] `cargo build --workspace` compiles cleanly
-- [ ] `cargo test --workspace` passes
-- [ ] `cargo clippy --workspace` no new warnings
+- [x] `getRootWidgetTree` called with `groupName` parameter key (not `objectGroup`)
+- [x] `withPreviews` set to `"true"` for `getRootWidgetTree`
+- [x] Legacy `getRootWidgetSummaryTree` fallback still uses `objectGroup`
+- [x] `disposeGroup` still uses `objectGroup` (unchanged)
+- [x] `cargo build --workspace` compiles cleanly
+- [x] `cargo test --workspace` passes
+- [x] `cargo clippy --workspace` no new warnings
 
 ## Notes
 

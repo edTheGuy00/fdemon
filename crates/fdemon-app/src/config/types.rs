@@ -394,7 +394,7 @@ fn default_network_poll_interval_ms() -> u64 {
 }
 
 fn default_inspector_fetch_timeout_secs() -> u64 {
-    30
+    60
 }
 
 /// Logging sub-settings for the hybrid VM Service + daemon log pipeline.
@@ -1116,7 +1116,7 @@ theme = "default"
         assert_eq!(settings.performance_refresh_ms, 2000);
         assert_eq!(settings.memory_history_size, 60);
         assert_eq!(settings.tree_max_depth, 0);
-        assert_eq!(settings.inspector_fetch_timeout_secs, 30);
+        assert_eq!(settings.inspector_fetch_timeout_secs, 60);
         assert!(!settings.auto_repaint_rainbow);
         assert!(!settings.auto_performance_overlay);
         // Network settings defaults
@@ -1138,7 +1138,7 @@ theme = "default"
         // New fields should have defaults
         assert_eq!(settings.default_panel, "inspector");
         assert_eq!(settings.performance_refresh_ms, 2000);
-        assert_eq!(settings.inspector_fetch_timeout_secs, 30);
+        assert_eq!(settings.inspector_fetch_timeout_secs, 60);
         // Network fields should have defaults too
         assert_eq!(settings.max_network_entries, 500);
         assert!(settings.network_auto_record);

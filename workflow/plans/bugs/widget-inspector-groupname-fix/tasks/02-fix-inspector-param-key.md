@@ -64,4 +64,24 @@ No new tests needed — the function requires a live WebSocket connection to tes
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | Line 178: `"objectGroup"` → `"groupName"` in `newer_args`; Line 180: `"withPreviews"` value `"false"` → `"true"` in `newer_args` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal scope**: Only the two specified lines in `get_root_widget_tree`'s `newer_args` block were changed. The `older_args` fallback block (line 198), `get_details_subtree`, `get_selected_widget`, and `dispose_group` were all left untouched as required.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (375 passed; 0 failed; 3 ignored)
+- `cargo clippy -p fdemon-daemon` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Live WebSocket required**: The changed function cannot be exercised in unit tests without a running Flutter process. Correctness is validated by code review against the Flutter 3.22+ `getRootWidgetTree` API contract.

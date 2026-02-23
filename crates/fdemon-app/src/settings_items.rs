@@ -215,7 +215,7 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
         .value(SettingValue::Number(
             settings.devtools.inspector_fetch_timeout_secs as i64,
         ))
-        .default(SettingValue::Number(30))
+        .default(SettingValue::Number(60))
         .section("DevTools"),
         SettingItem::new("devtools.auto_repaint_rainbow", "Auto Repaint Rainbow")
             .description("Enable repaint rainbow overlay on VM connect")

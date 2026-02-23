@@ -62,4 +62,24 @@ No new tests needed — the change is a string literal fix. Existing tests cover
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Line 1219: `"objectGroup"` -> `"groupName"` in `newer_args`; Line 1221: `withPreviews` value `"false"` -> `"true"` in `newer_args` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal change scope**: Only the two string literals in the `newer_args` block were changed. The `older_args` block (line 1251) that uses `"objectGroup"` for `getRootWidgetSummaryTree` was intentionally left untouched as that API's registration helper uses that key name.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1,061 unit tests + 1 doc test, 0 failures)
+- `cargo clippy -p fdemon-app` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Manual verification required**: The fix resolves a wrong parameter key sent to the Flutter VM Service. End-to-end correctness against a live Flutter 3.22+ app requires manual testing, as no unit tests cover the actual VM Service protocol exchange.

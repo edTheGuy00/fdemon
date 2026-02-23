@@ -262,7 +262,9 @@ const RESUBSCRIBE_STREAMS: &[&str] = &["Extension", "Logging", "GC"];
 const STALE_REQUEST_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Timeout after which a pending request is considered stale and removed.
-const STALE_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+/// Set higher than any reasonable fetch timeout (e.g. inspector_fetch_timeout_secs)
+/// so that legitimate long-running requests are not prematurely cleaned up.
+const STALE_REQUEST_TIMEOUT: Duration = Duration::from_secs(120);
 
 // ---------------------------------------------------------------------------
 // Public types

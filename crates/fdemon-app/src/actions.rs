@@ -1038,9 +1038,10 @@ async fn forward_vm_events(
 ///
 /// The fetch operation includes:
 /// 1. **Readiness polling** — calls `ext.flutter.inspector.isWidgetTreeReady`
-///    up to 12 times (500ms apart) before attempting the tree fetch.
-/// 2. **Retry with backoff** — up to 4 attempts (500ms/1s/2s backoff) for
-///    transient errors like the known Flutter null-check failure.
+///    up to 8 times (500ms apart, 2s per-call timeout) before attempting the
+///    tree fetch. A timed-out poll is treated as "not ready".
+/// 2. **API fallback** — tries `getRootWidgetTree` first, falls back to
+///    `getRootWidgetSummaryTree` on "method not found".
 /// 3. **Configurable outer timeout** — `fetch_timeout_secs` (min 5s) wraps the
 ///    entire operation.
 ///
@@ -1059,9 +1060,10 @@ fn spawn_fetch_widget_tree(
 
         let fetch_result = tokio::time::timeout(timeout_dur, async {
             // Step 1: Get isolate ID.
-            let isolate_id = handle.main_isolate_id().await.map_err(|e| {
-                format!("Could not get isolate ID: {e}")
-            })?;
+            let isolate_id = handle
+                .main_isolate_id()
+                .await
+                .map_err(|e| format!("Could not get isolate ID: {e}"))?;
 
             // Step 2: Poll widget tree readiness.
             poll_widget_tree_ready(&handle, &isolate_id, session_id).await;
@@ -1085,9 +1087,15 @@ fn spawn_fetch_widget_tree(
             }
 
             // Step 4: Retry loop — fetch the widget tree.
-            try_fetch_widget_tree(&handle, &isolate_id, object_group, tree_max_depth, session_id)
-                .await
-                .map_err(|e| e.to_string())
+            try_fetch_widget_tree(
+                &handle,
+                &isolate_id,
+                object_group,
+                tree_max_depth,
+                session_id,
+            )
+            .await
+            .map_err(|e| e.to_string())
         })
         .await;
 
@@ -1105,11 +1113,12 @@ fn spawn_fetch_widget_tree(
                 root: Box::new(root),
             },
             Ok(Err(error)) => {
-                tracing::warn!("FetchWidgetTree failed for session {}: {}", session_id, error);
-                Message::WidgetTreeFetchFailed {
+                tracing::warn!(
+                    "FetchWidgetTree failed for session {}: {}",
                     session_id,
-                    error,
-                }
+                    error
+                );
+                Message::WidgetTreeFetchFailed { session_id, error }
             }
         };
         let _ = msg_tx.send(msg).await;
@@ -1123,22 +1132,35 @@ fn spawn_fetch_widget_tree(
 /// Poll `ext.flutter.inspector.isWidgetTreeReady` until it returns `true`,
 /// the extension is not available (older Flutter SDK), or we exhaust attempts.
 ///
+/// Each poll is wrapped in a 2-second timeout so that a slow VM isolate cannot
+/// consume the entire outer fetch budget. A timed-out poll counts as "not
+/// ready" and we continue to the next attempt.
+///
 /// This guards against the known Flutter bug where `getRootWidgetTree` throws
 /// a null-check failure on complex or freshly-reloaded widget trees.
-async fn poll_widget_tree_ready(
-    handle: &VmRequestHandle,
-    isolate_id: &str,
-    session_id: SessionId,
-) {
-    const MAX_POLLS: u32 = 12;
+async fn poll_widget_tree_ready(handle: &VmRequestHandle, isolate_id: &str, session_id: SessionId) {
+    const MAX_POLLS: u32 = 8;
     const POLL_INTERVAL: Duration = Duration::from_millis(500);
+    const POLL_CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
     for attempt in 1..=MAX_POLLS {
-        match handle
-            .call_extension(ext::IS_WIDGET_TREE_READY, isolate_id, None)
-            .await
-        {
-            Ok(value) => {
+        let call_result = tokio::time::timeout(
+            POLL_CALL_TIMEOUT,
+            handle.call_extension(ext::IS_WIDGET_TREE_READY, isolate_id, None),
+        )
+        .await;
+
+        match call_result {
+            Err(_timeout) => {
+                // Per-call timeout — treat as "not ready" and continue.
+                tracing::debug!(
+                    "isWidgetTreeReady timed out for session {} (poll {}/{}), treating as not ready",
+                    session_id,
+                    attempt,
+                    MAX_POLLS,
+                );
+            }
+            Ok(Ok(value)) => {
                 // The extension returns {"result": true/false} or {"result": "true"/"false"}.
                 let ready = value
                     .get("result")
@@ -1160,7 +1182,7 @@ async fn poll_widget_tree_ready(
                     MAX_POLLS,
                 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 if is_method_not_found(&e) {
                     // Extension not available (older Flutter SDK) — skip polling.
                     tracing::debug!(
@@ -1216,9 +1238,9 @@ async fn try_fetch_widget_tree(
 ) -> fdemon_core::Result<fdemon_core::widget_tree::DiagnosticsNode> {
     // --- Attempt 1: newer getRootWidgetTree ---
     let mut newer_args = HashMap::new();
-    newer_args.insert("objectGroup".to_string(), object_group.to_string());
+    newer_args.insert("groupName".to_string(), object_group.to_string());
     newer_args.insert("isSummaryTree".to_string(), "true".to_string());
-    newer_args.insert("withPreviews".to_string(), "false".to_string());
+    newer_args.insert("withPreviews".to_string(), "true".to_string());
     if tree_max_depth > 0 {
         newer_args.insert("subtreeDepth".to_string(), tree_max_depth.to_string());
     }
