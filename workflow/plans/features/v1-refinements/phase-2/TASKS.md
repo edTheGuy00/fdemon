@@ -40,12 +40,12 @@ Fix the "Add New Configuration" navigation bug, add dart defines key-value edito
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-add-config-bug](tasks/01-fix-add-config-bug.md) | Not Started | - | 2-3h | `settings_handlers.rs`, `settings_items.rs` |
-| 2 | [02-settings-modal-state](tasks/02-settings-modal-state.md) | Not Started | - | 2-3h | `state.rs`, `message.rs`, `types.rs`, `update.rs` |
-| 3 | [03-dart-defines-modal](tasks/03-dart-defines-modal.md) | Not Started | 2 | 3-4h | `settings_handlers.rs`, `keys.rs`, `settings.rs`, `update.rs` |
-| 4 | [04-extra-args-modal](tasks/04-extra-args-modal.md) | Not Started | 2 | 2-3h | `settings_handlers.rs`, `keys.rs`, `settings.rs`, `update.rs` |
-| 5 | [05-render-settings-modals](tasks/05-render-settings-modals.md) | Not Started | 2 | 2-3h | `widgets/settings_panel/mod.rs` |
-| 6 | [06-phase2-tests](tasks/06-phase2-tests.md) | Not Started | 1, 3, 4, 5 | 2-3h | Cross-crate integration tests |
+| 1 | [01-fix-add-config-bug](tasks/01-fix-add-config-bug.md) | Done | - | 2-3h | `settings_handlers.rs`, `settings_items.rs` |
+| 2 | [02-settings-modal-state](tasks/02-settings-modal-state.md) | Done | - | 2-3h | `state.rs`, `message.rs`, `types.rs`, `update.rs` |
+| 3 | [03-dart-defines-modal](tasks/03-dart-defines-modal.md) | Done | 2 | 3-4h | `settings_handlers.rs`, `keys.rs`, `settings.rs`, `update.rs` |
+| 4 | [04-extra-args-modal](tasks/04-extra-args-modal.md) | Done | 2 | 2-3h | `settings_handlers.rs`, `keys.rs`, `settings.rs`, `update.rs` |
+| 5 | [05-render-settings-modals](tasks/05-render-settings-modals.md) | Done | 2 | 2-3h | `widgets/settings_panel/mod.rs` |
+| 6 | [06-phase2-tests](tasks/06-phase2-tests.md) | Done | 1, 3, 4, 5 | 2-3h | Cross-crate integration tests |
 
 ## Success Criteria
 

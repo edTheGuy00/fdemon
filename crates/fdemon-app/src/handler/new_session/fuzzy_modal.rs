@@ -55,6 +55,11 @@ pub fn handle_open_fuzzy_modal(state: &mut AppState, modal_type: FuzzyModalType)
                 project_path: state.project_path.clone(),
             });
         }
+        FuzzyModalType::ExtraArgs => {
+            // ExtraArgs modal is owned by SettingsViewState, not NewSessionDialogState.
+            // Opening it from the new-session-dialog context is a no-op.
+            warn!("ExtraArgs fuzzy modal cannot be opened via NewSessionDialog handler");
+        }
     };
     UpdateResult::none()
 }
@@ -113,6 +118,12 @@ pub fn handle_fuzzy_confirm(
                             entry_point: if value.is_empty() { None } else { Some(value) },
                         },
                     );
+                }
+                FuzzyModalType::ExtraArgs => {
+                    // ExtraArgs is used by the settings panel, not the new session dialog.
+                    // Just close without doing anything in this context.
+                    state.new_session_dialog_state.close_modal();
+                    return UpdateResult::none();
                 }
             }
         }

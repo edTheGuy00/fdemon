@@ -508,6 +508,16 @@ fn handle_key_devtools(state: &AppState, key: InputKey) -> Option<Message> {
 
 /// Handle key events in settings mode (Phase 4)
 fn handle_key_settings(state: &AppState, key: InputKey) -> Option<Message> {
+    // If dart defines modal is open, route all keys to it
+    if state.settings_view_state.dart_defines_modal.is_some() {
+        return handle_key_settings_dart_defines(state, key);
+    }
+
+    // If extra args modal is open, route all keys to it
+    if state.settings_view_state.extra_args_modal.is_some() {
+        return handle_key_settings_extra_args(key);
+    }
+
     // If editing, handle text input
     if state.settings_view_state.editing {
         return handle_key_settings_edit(state, key);
@@ -621,6 +631,65 @@ fn handle_key_settings_edit(state: &AppState, key: InputKey) -> Option<Message> 
             InputKey::Backspace => Some(Message::SettingsBackspace),
             _ => None,
         },
+    }
+}
+
+/// Handle key events when the dart defines modal is open in settings mode.
+///
+/// Routes keys to the modal overlay messages.  The active pane (List vs Edit)
+/// and focused field determine which messages are emitted.
+fn handle_key_settings_dart_defines(state: &AppState, key: InputKey) -> Option<Message> {
+    use crate::new_session_dialog::{DartDefinesEditField, DartDefinesPane};
+
+    let modal = state.settings_view_state.dart_defines_modal.as_ref()?;
+
+    match modal.active_pane {
+        DartDefinesPane::List => match key {
+            InputKey::Up | InputKey::Char('k') => Some(Message::SettingsDartDefinesUp),
+            InputKey::Down | InputKey::Char('j') => Some(Message::SettingsDartDefinesDown),
+            InputKey::Enter => Some(Message::SettingsDartDefinesConfirm),
+            InputKey::Tab => Some(Message::SettingsDartDefinesSwitchPane),
+            InputKey::Esc => Some(Message::SettingsDartDefinesClose),
+            _ => None,
+        },
+        DartDefinesPane::Edit => match modal.edit_field {
+            DartDefinesEditField::Key | DartDefinesEditField::Value => match key {
+                InputKey::Char(c) => Some(Message::SettingsDartDefinesInput { c }),
+                InputKey::Backspace => Some(Message::SettingsDartDefinesBackspace),
+                InputKey::Tab => Some(Message::SettingsDartDefinesNextField),
+                InputKey::Enter => Some(Message::SettingsDartDefinesConfirm),
+                InputKey::Esc => Some(Message::SettingsDartDefinesSwitchPane),
+                _ => None,
+            },
+            DartDefinesEditField::Save => match key {
+                InputKey::Enter => Some(Message::SettingsDartDefinesSave),
+                InputKey::Tab => Some(Message::SettingsDartDefinesNextField),
+                InputKey::Esc => Some(Message::SettingsDartDefinesSwitchPane),
+                _ => None,
+            },
+            DartDefinesEditField::Delete => match key {
+                InputKey::Enter => Some(Message::SettingsDartDefinesDelete),
+                InputKey::Tab => Some(Message::SettingsDartDefinesNextField),
+                InputKey::Esc => Some(Message::SettingsDartDefinesSwitchPane),
+                _ => None,
+            },
+        },
+    }
+}
+
+/// Handle key events when the extra args fuzzy modal is open in settings mode.
+///
+/// Routes keys to the fuzzy modal overlay messages.
+fn handle_key_settings_extra_args(key: InputKey) -> Option<Message> {
+    match key {
+        InputKey::Char(c) => Some(Message::SettingsExtraArgsInput { c }),
+        InputKey::Backspace => Some(Message::SettingsExtraArgsBackspace),
+        InputKey::Up => Some(Message::SettingsExtraArgsUp),
+        InputKey::Down => Some(Message::SettingsExtraArgsDown),
+        InputKey::Enter => Some(Message::SettingsExtraArgsConfirm),
+        InputKey::Esc => Some(Message::SettingsExtraArgsClose),
+        InputKey::CharCtrl('u') => Some(Message::SettingsExtraArgsClear),
+        _ => None,
     }
 }
 
@@ -1130,6 +1199,209 @@ mod settings_key_tests {
         // Now returns SettingsCommitEdit or value-specific message
         // This depends on the value type, so just verify it returns something
         assert!(msg.is_some());
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Integration: key routing with modals open (Phase 2, Task 06)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod settings_modal_key_routing_tests {
+    use super::*;
+
+    // ── Dart defines modal intercepts keys ──────────────────────────────────
+
+    /// When the dart defines modal is open, Esc closes the modal (not settings).
+    #[test]
+    fn test_key_routing_dart_defines_modal_esc_closes_modal() {
+        use crate::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.dart_defines_modal =
+            Some(DartDefinesModalState::new(vec![DartDefine::new("K", "V")]));
+
+        let msg = handle_key_settings(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::SettingsDartDefinesClose)),
+            "Esc with dart defines modal open should emit SettingsDartDefinesClose, not HideSettings"
+        );
+    }
+
+    /// With no modal open, Esc closes the settings panel.
+    #[test]
+    fn test_key_routing_settings_normal_esc_closes_settings() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        // No modal open
+
+        let msg = handle_key_settings(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::HideSettings)),
+            "Esc without any modal should emit HideSettings"
+        );
+    }
+
+    /// Typed characters are routed to the dart defines modal, not to edit mode.
+    #[test]
+    fn test_key_routing_dart_defines_modal_intercepts_char_input() {
+        use crate::new_session_dialog::{DartDefinesModalState, DartDefinesPane};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        let mut modal = DartDefinesModalState::new(vec![]);
+        modal.active_pane = DartDefinesPane::Edit;
+        state.settings_view_state.dart_defines_modal = Some(modal);
+
+        let msg = handle_key_settings(&state, InputKey::Char('x'));
+        assert!(
+            matches!(msg, Some(Message::SettingsDartDefinesInput { c: 'x' })),
+            "Char with dart defines modal open in Edit pane should emit SettingsDartDefinesInput"
+        );
+    }
+
+    /// In the List pane, j/Down navigates in the dart defines list.
+    #[test]
+    fn test_key_routing_dart_defines_modal_list_pane_nav() {
+        use crate::new_session_dialog::DartDefinesModalState;
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        // Default active_pane is List
+        state.settings_view_state.dart_defines_modal = Some(DartDefinesModalState::new(vec![]));
+
+        let msg_j = handle_key_settings(&state, InputKey::Char('j'));
+        assert!(
+            matches!(msg_j, Some(Message::SettingsDartDefinesDown)),
+            "'j' in List pane should emit SettingsDartDefinesDown"
+        );
+
+        let msg_k = handle_key_settings(&state, InputKey::Char('k'));
+        assert!(
+            matches!(msg_k, Some(Message::SettingsDartDefinesUp)),
+            "'k' in List pane should emit SettingsDartDefinesUp"
+        );
+    }
+
+    // ── Extra args modal intercepts keys ────────────────────────────────────
+
+    /// When the extra args modal is open, Esc closes it (not settings).
+    #[test]
+    fn test_key_routing_extra_args_modal_esc_closes_modal() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.extra_args_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::ExtraArgs,
+            vec!["--verbose".to_string()],
+        ));
+
+        let msg = handle_key_settings(&state, InputKey::Esc);
+        assert!(
+            matches!(msg, Some(Message::SettingsExtraArgsClose)),
+            "Esc with extra args modal open should emit SettingsExtraArgsClose, not HideSettings"
+        );
+    }
+
+    /// Typed characters are routed to the extra args modal query.
+    #[test]
+    fn test_key_routing_extra_args_modal_intercepts_char_input() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.extra_args_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
+
+        let msg = handle_key_settings(&state, InputKey::Char('a'));
+        assert!(
+            matches!(msg, Some(Message::SettingsExtraArgsInput { c: 'a' })),
+            "Char with extra args modal open should emit SettingsExtraArgsInput"
+        );
+    }
+
+    /// Enter confirms the selection in the extra args modal.
+    #[test]
+    fn test_key_routing_extra_args_modal_enter_confirms() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.extra_args_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::ExtraArgs,
+            vec!["--verbose".to_string()],
+        ));
+
+        let msg = handle_key_settings(&state, InputKey::Enter);
+        assert!(
+            matches!(msg, Some(Message::SettingsExtraArgsConfirm)),
+            "Enter with extra args modal open should emit SettingsExtraArgsConfirm"
+        );
+    }
+
+    /// Up/Down navigate in the extra args modal.
+    #[test]
+    fn test_key_routing_extra_args_modal_nav() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.extra_args_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::ExtraArgs,
+            vec!["--verbose".to_string(), "--trace-startup".to_string()],
+        ));
+
+        let msg_down = handle_key_settings(&state, InputKey::Down);
+        assert!(
+            matches!(msg_down, Some(Message::SettingsExtraArgsDown)),
+            "Down with extra args modal open should emit SettingsExtraArgsDown"
+        );
+
+        let msg_up = handle_key_settings(&state, InputKey::Up);
+        assert!(
+            matches!(msg_up, Some(Message::SettingsExtraArgsUp)),
+            "Up with extra args modal open should emit SettingsExtraArgsUp"
+        );
+    }
+
+    /// Ctrl+U clears the extra args modal query.
+    #[test]
+    fn test_key_routing_extra_args_modal_ctrl_u_clears_query() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.extra_args_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
+
+        let msg = handle_key_settings(&state, InputKey::CharCtrl('u'));
+        assert!(
+            matches!(msg, Some(Message::SettingsExtraArgsClear)),
+            "Ctrl+U with extra args modal open should emit SettingsExtraArgsClear"
+        );
+    }
+
+    // ── Modal priority over edit mode ────────────────────────────────────────
+
+    /// When both editing=true and a modal is open, the modal takes priority.
+    #[test]
+    fn test_modal_takes_priority_over_edit_mode() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.editing = true; // edit mode is active
+        state.settings_view_state.extra_args_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::ExtraArgs, vec![]));
+
+        // Char input should go to modal, not edit buffer
+        let msg = handle_key_settings(&state, InputKey::Char('z'));
+        assert!(
+            matches!(msg, Some(Message::SettingsExtraArgsInput { c: 'z' })),
+            "When modal is open, char input must route to modal even if editing=true"
+        );
     }
 }
 

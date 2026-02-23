@@ -10,6 +10,8 @@
 //! - `new_session`: NewSessionDialog handlers
 //! - `settings`: Settings helpers
 //! - `settings_handlers`: Settings page handlers
+//! - `settings_dart_defines`: Dart defines modal handlers for the settings panel
+//! - `settings_extra_args`: Extra args fuzzy modal handlers for the settings panel
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
 
@@ -23,6 +25,8 @@ pub(crate) mod scroll;
 pub(crate) mod session;
 pub(crate) mod session_lifecycle;
 pub(crate) mod settings;
+pub(crate) mod settings_dart_defines;
+pub(crate) mod settings_extra_args;
 pub(crate) mod settings_handlers;
 pub(crate) mod update;
 

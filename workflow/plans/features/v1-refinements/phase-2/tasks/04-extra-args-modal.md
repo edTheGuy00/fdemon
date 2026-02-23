@@ -219,3 +219,38 @@ fn test_apply_launch_config_change_extra_args() {
 - The `editing_config_idx` field (added in task 03 or here) must be shared between dart defines and extra args — only one modal can be open at a time
 - Consider common Flutter args as preset items in the modal: `["--verbose", "--trace-startup", "--trace-skia", "--enable-software-rendering", "--dart-entrypoint-args"]` — or just use the current args list as items
 - The extra args flow is simpler than dart defines because it's a flat `Vec<String>` with no key-value structure
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_extra_args.rs` | New module: all extra args modal handlers (`open`, `close`, `input`, `backspace`, `clear`, `up`, `down`, `confirm`) plus inline tests |
+| `crates/fdemon-app/src/handler/mod.rs` | Declared new `settings_extra_args` module |
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Added routing for `.extra_args` items in `handle_settings_toggle_edit()` to dispatch `SettingsExtraArgsOpen` |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `extra_args_modal` check in `handle_key_settings()` and new `handle_key_settings_extra_args()` function |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced placeholder no-op arms with real `settings_extra_args::*` handler calls; added `settings_extra_args` to imports |
+| `crates/fdemon-app/src/handler/settings.rs` | Added `extra_args` arm in `apply_launch_config_change()` plus two new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Preset args when list is empty**: When the config's `extra_args` is empty, the modal shows common Flutter flag presets (`--verbose`, `--trace-startup`, etc.) so the user has something to pick from. When args already exist, only the existing args are shown as items (user can still type custom args via the query).
+2. **Confirm adds, close cancels**: Confirm appends the selected (or typed) value to the config's `extra_args` without duplicating. Esc/close discards without persisting. This matches the "add one arg" simplified approach from the task spec.
+3. **Shared `editing_config_idx`**: `editing_config_idx` is shared between the dart defines modal and the extra args modal — only one modal is ever open at a time, so this is safe.
+4. **Key routing order in `handle_key_settings()`**: Extra args modal check is placed after dart defines modal check, matching the task spec and ensuring only one modal intercepts keys at a time.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (1098 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Remove-from-list UX not implemented**: The task spec noted a simpler "add one arg" flow was recommended. Removing an arg from the list requires re-opening the modal and is not yet supported via a dedicated delete action. This is an acceptable scope boundary — the task spec explicitly recommends the simpler approach.

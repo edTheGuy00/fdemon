@@ -261,3 +261,44 @@ This task IS the testing task. The tests listed above are the deliverables.
 - The `DartDefinesModalState` methods (`navigate_up/down`, `load_selected_into_edit`, `save_edit`, etc.) are already tested in the new session dialog test suite — focus integration tests on the settings-specific wiring, not on re-testing the modal state machine
 - For rendering tests, use the existing `TestBackend` + `Terminal` pattern from `settings_panel/tests.rs`
 - If any test failures are found during this task, fix the root cause in the relevant task's code (01-05), not by working around it in tests
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Added 3 integration tests: `test_add_new_config_end_to_end`, `test_add_new_config_with_multiple_existing_configs`, `test_no_sentinel_when_no_configs` |
+| `crates/fdemon-app/src/handler/settings.rs` | Added 5 integration tests: `test_apply_launch_config_change_all_fields`, `test_apply_launch_config_change_dart_defines_with_equals_in_value`, `test_apply_launch_config_change_dart_defines_empty_list`, `test_apply_launch_config_change_unknown_field_is_noop`, `test_apply_launch_config_change_wrong_prefix_is_noop` |
+| `crates/fdemon-app/src/handler/keys.rs` | Added new `settings_modal_key_routing_tests` module with 10 tests covering: dart defines modal key interception, extra args modal key interception, modal priority over edit mode |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Added 5 rendering integration tests: `test_render_add_config_button_visible_with_configs`, `test_render_add_config_button_selected`, `test_render_add_config_button_absent_when_no_configs`, `test_render_dart_defines_modal_shows_define_key`, `test_render_extra_args_modal_shows_item` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Add-new button selection indicator**: The `render_add_config_option` uses `▶ ` (triangle) not `▎` (accent bar) as its selection indicator. The test checks for `▶` to match actual rendering behavior rather than assuming the standard accent bar pattern.
+
+2. **Test scope**: Dart defines and extra args lifecycle tests already have thorough unit test coverage in `settings_dart_defines.rs` and `settings_extra_args.rs` respectively (added in tasks 03/04). The integration tests in this task focus on new integration scenarios (add-new end-to-end, key routing with modals, all-fields `apply_launch_config_change`, render verification) rather than re-testing the state machine.
+
+3. **`apply_launch_config_change` coverage**: Added two edge-case tests (`unknown_field_is_noop`, `wrong_prefix_is_noop`) beyond what the task template specified since these defensive scenarios are important for robustness.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (formatted)
+- `cargo check --workspace` — Passed (0 errors)
+- `cargo test --workspace --lib` — Passed (1116 + 360 + 375 + 771 = 2622 unit tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+**Test count delta (lib tests only):**
+- `fdemon-app`: 1098 → 1116 (+18 new tests)
+- `fdemon-tui`: 766 → 771 (+5 new tests)
+- Total new tests: **+23**
+
+### Risks/Limitations
+
+1. **Rendering test fragility**: The `test_render_add_config_button_selected` test checks for the `▶` glyph. If the selection indicator changes in the TUI in future tasks, this test will need updating.
+
+2. **`test_apply_launch_config_change_all_fields` field count**: The test exercises all 7 current fields (name, device, mode, flavor, auto_start, dart_defines, extra_args). If new fields are added to `LaunchConfig`, this test will need updating to cover them.

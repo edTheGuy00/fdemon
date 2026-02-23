@@ -233,3 +233,41 @@ fn test_key_routing_when_dart_defines_modal_open() {
 - Consider extracting the dart defines handler functions into a dedicated `handler/settings_dart_defines.rs` module if `settings_handlers.rs` exceeds 500 lines (per CODE_STANDARDS.md)
 - The `editing_config_idx` field on `SettingsViewState` is needed to track which config is being edited — set on open, cleared on close
 - The `HashMap` → `Vec<DartDefine>` conversion on open and the reverse on close must handle the case where keys have `=` characters in values (use `splitn(2, '=')`)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `editing_config_idx: Option<usize>` field to `SettingsViewState` struct and its `Default` impl |
+| `crates/fdemon-app/src/handler/mod.rs` | Registered new `settings_dart_defines` submodule; updated doc comment |
+| `crates/fdemon-app/src/handler/settings_dart_defines.rs` | **New file** — 10 handler functions + 10 unit tests covering open/close/persist/CRUD/key-routing |
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Added early-exit branch in `handle_settings_toggle_edit()` to route dart_defines items to `SettingsDartDefinesOpen` message |
+| `crates/fdemon-app/src/handler/settings.rs` | Added `"dart_defines"` arm to `apply_launch_config_change()` using `splitn(2, '=')` for safe parsing; added 3 new tests |
+| `crates/fdemon-app/src/handler/keys.rs` | Added early-exit guard in `handle_key_settings()` to route keys to `handle_key_settings_dart_defines()`; added new `handle_key_settings_dart_defines()` function with pane-aware key routing |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced 11 no-op placeholder match arms with real calls into `settings_dart_defines`; added `settings_dart_defines` to imports |
+
+### Notable Decisions/Tradeoffs
+
+1. **Dedicated submodule**: Per CODE_STANDARDS.md guidance and task notes, handlers were placed in `handler/settings_dart_defines.rs` rather than growing `settings_handlers.rs`. This keeps all files under 500 lines.
+2. **editing_config_idx placement**: Added to `SettingsViewState` rather than `DartDefinesModalState` to keep the modal state reusable and consistent with the `NewSessionDialog` pattern.
+3. **HashMap ordering**: The open handler iterates the `HashMap` — defines may appear in an arbitrary order in the modal list. This is acceptable since dart defines are key→value pairs without semantic ordering.
+4. **`splitn(2, '=')` in apply_launch_config_change**: Values containing `=` (e.g. URLs) are preserved correctly. Entries without `=` are silently skipped.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — **1082 tests pass** (10 new in `settings_dart_defines`)
+- `cargo test --workspace` — All crates pass (2689+ tests total, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **HashMap ordering in modal list**: Dart defines loaded from disk appear in HashMap iteration order (arbitrary). If users care about ordering, a future `IndexMap` migration would be needed — but this matches the existing `NewSessionDialog` behaviour.
+2. **No modal dirty-tracking**: Closing the modal always attempts a save even if no changes were made. The save is idempotent (writes the same TOML), so this is safe but slightly inefficient.

@@ -934,4 +934,73 @@ pub enum Message {
     // ── Performance Panel UI Messages ─────────────────────────────────────────
     /// Toggle the allocation table sort column (Size ↔ Instances).
     ToggleAllocationSort,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 02)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Open the dart defines editor modal for the launch config at `config_idx`.
+    ///
+    /// `config_idx` is the 0-based index into the list of launch configs
+    /// loaded from `.fdemon/launch.toml`. It is extracted from the
+    /// `SettingItem.id` pattern `"launch.{idx}.dart_defines"`.
+    SettingsDartDefinesOpen { config_idx: usize },
+
+    /// Close the dart defines modal without saving changes.
+    SettingsDartDefinesClose,
+
+    /// Switch focus between the list pane and the edit pane.
+    SettingsDartDefinesSwitchPane,
+
+    /// Navigate up in the dart defines list.
+    SettingsDartDefinesUp,
+
+    /// Navigate down in the dart defines list.
+    SettingsDartDefinesDown,
+
+    /// Confirm selection / activate the focused button.
+    SettingsDartDefinesConfirm,
+
+    /// Move to the next field in the edit form (Tab).
+    SettingsDartDefinesNextField,
+
+    /// Input a character into the currently focused text field.
+    SettingsDartDefinesInput { c: char },
+
+    /// Backspace in the currently focused text field.
+    SettingsDartDefinesBackspace,
+
+    /// Save the current edit form entry to the defines list.
+    SettingsDartDefinesSave,
+
+    /// Delete the currently selected dart define from the list.
+    SettingsDartDefinesDelete,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Settings — Extra Args Fuzzy Modal (v1-refinements Phase 2, Task 02)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Open the extra args fuzzy picker for the launch config at `config_idx`.
+    ///
+    /// `config_idx` is the 0-based index into the list of launch configs.
+    SettingsExtraArgsOpen { config_idx: usize },
+
+    /// Close the extra args modal without saving changes.
+    SettingsExtraArgsClose,
+
+    /// Input a character into the extra args search field.
+    SettingsExtraArgsInput { c: char },
+
+    /// Backspace in the extra args search field.
+    SettingsExtraArgsBackspace,
+
+    /// Clear the extra args search query.
+    SettingsExtraArgsClear,
+
+    /// Navigate up in the extra args list.
+    SettingsExtraArgsUp,
+
+    /// Navigate down in the extra args list.
+    SettingsExtraArgsDown,
+
+    /// Confirm the selected extra args value.
+    SettingsExtraArgsConfirm,
 }

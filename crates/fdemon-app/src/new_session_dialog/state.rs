@@ -863,6 +863,11 @@ impl NewSessionDialogState {
                     });
                     self.launch_context.set_entry_point(entry_point);
                 }
+                FuzzyModalType::ExtraArgs => {
+                    // ExtraArgs is used by the settings panel, not the new session dialog.
+                    // Closing without action here is correct; the settings handler owns
+                    // the result from SettingsViewState::extra_args_modal directly.
+                }
             }
         }
         self.fuzzy_modal = None;

@@ -197,6 +197,26 @@ pub fn apply_launch_config_change(config: &mut LaunchConfig, item: &SettingItem)
                 config.auto_start = *v;
             }
         }
+        "dart_defines" => {
+            if let SettingValue::List(items) = &item.value {
+                config.dart_defines = items
+                    .iter()
+                    .filter_map(|s| {
+                        let parts: Vec<&str> = s.splitn(2, '=').collect();
+                        if parts.len() == 2 {
+                            Some((parts[0].to_string(), parts[1].to_string()))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+            }
+        }
+        "extra_args" => {
+            if let SettingValue::List(items) = &item.value {
+                config.extra_args = items.clone();
+            }
+        }
         _ => {
             tracing::warn!("Unknown launch config field: {}", field);
         }
@@ -358,5 +378,231 @@ mod tests {
 
         apply_launch_config_change(&mut config, &item);
         assert!(config.flavor.is_none());
+    }
+
+    #[test]
+    fn test_apply_launch_config_dart_defines() {
+        let mut config = LaunchConfig::default();
+        assert!(config.dart_defines.is_empty());
+
+        let item = SettingItem::new("launch.0.dart_defines", "Dart Defines").value(
+            SettingValue::List(vec!["KEY=VALUE".to_string(), "FOO=BAR".to_string()]),
+        );
+
+        apply_launch_config_change(&mut config, &item);
+        assert_eq!(config.dart_defines.get("KEY"), Some(&"VALUE".to_string()));
+        assert_eq!(config.dart_defines.get("FOO"), Some(&"BAR".to_string()));
+    }
+
+    #[test]
+    fn test_apply_launch_config_dart_defines_value_with_equals() {
+        let mut config = LaunchConfig::default();
+
+        // Value itself contains '=' — only split on first '='
+        let item = SettingItem::new("launch.0.dart_defines", "Dart Defines").value(
+            SettingValue::List(vec!["URL=https://x.com/a=b".to_string()]),
+        );
+
+        apply_launch_config_change(&mut config, &item);
+        assert_eq!(
+            config.dart_defines.get("URL"),
+            Some(&"https://x.com/a=b".to_string())
+        );
+    }
+
+    #[test]
+    fn test_apply_launch_config_dart_defines_missing_equals_skipped() {
+        let mut config = LaunchConfig::default();
+
+        // Entry with no '=' is silently skipped
+        let item =
+            SettingItem::new("launch.0.dart_defines", "Dart Defines").value(SettingValue::List(
+                vec!["VALID=yes".to_string(), "INVALID_NO_EQUALS".to_string()],
+            ));
+
+        apply_launch_config_change(&mut config, &item);
+        assert_eq!(config.dart_defines.len(), 1);
+        assert_eq!(config.dart_defines.get("VALID"), Some(&"yes".to_string()));
+    }
+
+    #[test]
+    fn test_apply_launch_config_extra_args() {
+        let mut config = LaunchConfig::default();
+        assert!(config.extra_args.is_empty());
+
+        let item =
+            SettingItem::new("launch.0.extra_args", "Extra Args").value(SettingValue::List(vec![
+                "--verbose".to_string(),
+                "--trace-startup".to_string(),
+            ]));
+
+        apply_launch_config_change(&mut config, &item);
+        assert_eq!(
+            config.extra_args,
+            vec!["--verbose", "--trace-startup"],
+            "apply_launch_config_change should set extra_args from List value"
+        );
+    }
+
+    #[test]
+    fn test_apply_launch_config_extra_args_empty_list() {
+        let mut config = LaunchConfig {
+            extra_args: vec!["--old-arg".to_string()],
+            ..Default::default()
+        };
+
+        let item =
+            SettingItem::new("launch.0.extra_args", "Extra Args").value(SettingValue::List(vec![]));
+
+        apply_launch_config_change(&mut config, &item);
+        assert!(
+            config.extra_args.is_empty(),
+            "apply_launch_config_change with empty list should clear extra_args"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Integration tests: all-fields coverage (Phase 2, Task 06)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Single test that touches all 7 fields of `apply_launch_config_change`
+    /// to guard against field additions being missed in the future.
+    #[test]
+    fn test_apply_launch_config_change_all_fields() {
+        use crate::config::FlutterMode;
+
+        let mut config = LaunchConfig::default();
+
+        // name
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.name", "Name")
+                .value(SettingValue::String("My Config".to_string())),
+        );
+        assert_eq!(config.name, "My Config");
+
+        // device
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.device", "Device")
+                .value(SettingValue::String("my-device".to_string())),
+        );
+        assert_eq!(config.device, "my-device");
+
+        // mode
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.mode", "Mode").value(SettingValue::Enum {
+                value: "profile".to_string(),
+                options: vec!["debug".into(), "profile".into(), "release".into()],
+            }),
+        );
+        assert_eq!(config.mode, FlutterMode::Profile);
+
+        // flavor
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.flavor", "Flavor")
+                .value(SettingValue::String("staging".to_string())),
+        );
+        assert_eq!(config.flavor, Some("staging".to_string()));
+
+        // auto_start
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.auto_start", "Auto Start").value(SettingValue::Bool(true)),
+        );
+        assert!(config.auto_start);
+
+        // dart_defines
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.dart_defines", "Dart Defines")
+                .value(SettingValue::List(vec!["KEY=VALUE".to_string()])),
+        );
+        assert_eq!(config.dart_defines.get("KEY"), Some(&"VALUE".to_string()));
+
+        // extra_args
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.extra_args", "Extra Args")
+                .value(SettingValue::List(vec!["--verbose".to_string()])),
+        );
+        assert_eq!(config.extra_args, vec!["--verbose"]);
+    }
+
+    /// URL with embedded `=` in the value must be split on the FIRST `=` only,
+    /// preserving the full URL in the value part.
+    #[test]
+    fn test_apply_launch_config_change_dart_defines_with_equals_in_value() {
+        let mut config = LaunchConfig::default();
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.dart_defines", "Dart Defines").value(SettingValue::List(
+                vec!["API_URL=https://api.example.com/v1?key=abc".to_string()],
+            )),
+        );
+        assert_eq!(
+            config.dart_defines.get("API_URL"),
+            Some(&"https://api.example.com/v1?key=abc".to_string()),
+            "value containing '=' must be preserved intact"
+        );
+    }
+
+    /// An empty list for dart_defines must clear the existing map.
+    #[test]
+    fn test_apply_launch_config_change_dart_defines_empty_list() {
+        let mut config = LaunchConfig::default();
+        config
+            .dart_defines
+            .insert("OLD_KEY".to_string(), "old_value".to_string());
+        assert!(!config.dart_defines.is_empty());
+
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.dart_defines", "Dart Defines")
+                .value(SettingValue::List(vec![])),
+        );
+        assert!(
+            config.dart_defines.is_empty(),
+            "dart_defines must be cleared when given an empty list"
+        );
+    }
+
+    /// An item with an unknown field ID should not panic and should leave the
+    /// config unchanged.
+    #[test]
+    fn test_apply_launch_config_change_unknown_field_is_noop() {
+        let mut config = LaunchConfig {
+            name: "original".to_string(),
+            ..Default::default()
+        };
+
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("launch.0.nonexistent_field", "Unknown")
+                .value(SettingValue::String("ignored".to_string())),
+        );
+
+        assert_eq!(config.name, "original", "unknown field should be a no-op");
+    }
+
+    /// An item whose ID does not start with "launch." is silently ignored.
+    #[test]
+    fn test_apply_launch_config_change_wrong_prefix_is_noop() {
+        let mut config = LaunchConfig {
+            name: "original".to_string(),
+            ..Default::default()
+        };
+
+        apply_launch_config_change(
+            &mut config,
+            &SettingItem::new("behavior.auto_start", "Auto Start").value(SettingValue::Bool(true)),
+        );
+
+        assert_eq!(
+            config.name, "original",
+            "wrong prefix item should be a no-op"
+        );
     }
 }

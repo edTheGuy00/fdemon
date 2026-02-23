@@ -38,6 +38,16 @@ pub fn get_selected_item(
             for (idx, resolved) in configs.iter().enumerate() {
                 all_items.extend(launch_config_items(&resolved.config, idx));
             }
+            // When selected_index == all_items.len() (the add-new slot) and there are
+            // configs present, return a sentinel item instead of None so the toggle-edit
+            // handler can dispatch LaunchConfigCreate.
+            if !all_items.is_empty() && view_state.selected_index == all_items.len() {
+                return Some(
+                    SettingItem::new("launch.__add_new__", "Add New Configuration")
+                        .value(SettingValue::Bool(false))
+                        .section("Actions".to_string()),
+                );
+            }
             all_items
         }
         SettingsTab::VSCodeConfig => {

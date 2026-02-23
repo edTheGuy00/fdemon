@@ -1320,3 +1320,325 @@ fn test_empty_state_not_vertically_centered() {
         icon_y
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// Modal Overlay Tests (Phase 2, Task 05)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_settings_panel_renders_dart_defines_modal_overlay() {
+    use fdemon_app::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    state.dart_defines_modal = Some(DartDefinesModalState::new(vec![DartDefine::new(
+        "API_KEY", "abc123",
+    )]));
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    // DartDefinesModal renders "Manage Dart Defines" as its title
+    assert!(
+        content.contains("Manage Dart Defines") || content.contains("Dart Defines"),
+        "DartDefinesModal overlay should be rendered"
+    );
+}
+
+#[test]
+fn test_settings_panel_renders_extra_args_modal_overlay() {
+    use fdemon_app::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    state.extra_args_modal = Some(FuzzyModalState::new(
+        FuzzyModalType::ExtraArgs,
+        vec!["--verbose".to_string()],
+    ));
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    // FuzzyModal renders its title from modal_type.title() which returns "Edit Extra Args"
+    assert!(
+        content.contains("Edit Extra Args"),
+        "FuzzyModal overlay for extra args should be rendered"
+    );
+}
+
+#[test]
+fn test_settings_panel_no_overlay_when_no_modal() {
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::Project;
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        !content.contains("Manage Dart Defines"),
+        "No dart defines overlay should appear when dart_defines_modal is None"
+    );
+    assert!(
+        !content.contains("Edit Extra Args"),
+        "No extra args overlay should appear when extra_args_modal is None"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Rendering integration tests (Phase 2, Task 06)
+// ─────────────────────────────────────────────────────────
+
+/// Verify the "Add New Configuration" button is rendered and visible when
+/// at least one launch config exists.
+#[test]
+fn test_render_add_config_button_visible_with_configs() {
+    use fdemon_app::config::launch::init_launch_file;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    init_launch_file(temp.path()).unwrap();
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        content.contains("Add New Configuration"),
+        "Add New Configuration button must be rendered when configs exist"
+    );
+}
+
+/// Verify that the "Add New Configuration" button row is visually selected
+/// (i.e., uses the accent bar indicator) when selected_index is set to its
+/// position.
+#[test]
+fn test_render_add_config_button_selected() {
+    use fdemon_app::config::launch::{init_launch_file, load_launch_configs};
+    use fdemon_app::settings_items::launch_config_items;
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    init_launch_file(temp.path()).unwrap();
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+
+    // Calculate the add-new button position (sum of all item counts = add-new index)
+    let configs = load_launch_configs(temp.path());
+    let item_count: usize = configs
+        .iter()
+        .enumerate()
+        .map(|(idx, r)| launch_config_items(&r.config, idx).len())
+        .sum();
+    // add-new is at index `item_count` (0-based), one past the last config item
+    state.selected_index = item_count;
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    // The add-new button text must be visible
+    assert!(
+        content.contains("Add New Configuration"),
+        "Add New Configuration should be rendered"
+    );
+    // When selected, the add-new row renders a "▶ " triangle indicator (not the regular "▎" bar).
+    // Verify that the selection indicator "▶" is present in the buffer.
+    assert!(
+        content.contains('▶'),
+        "The selection indicator '▶' must appear for the selected add-new row"
+    );
+}
+
+/// The "Add New Configuration" button must NOT be rendered when no launch
+/// config file exists (i.e., empty state).
+#[test]
+fn test_render_add_config_button_absent_when_no_configs() {
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    // No launch.toml created
+
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    assert!(
+        !content.contains("Add New Configuration"),
+        "Add New Configuration button must NOT appear when there are no configs"
+    );
+}
+
+/// Dart defines modal overlay shows the key from an existing define.
+#[test]
+fn test_render_dart_defines_modal_shows_define_key() {
+    use fdemon_app::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    state.dart_defines_modal = Some(DartDefinesModalState::new(vec![DartDefine::new(
+        "MY_API_KEY",
+        "secret",
+    )]));
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    // The modal title must be present
+    assert!(
+        content.contains("Dart Defines") || content.contains("Manage Dart"),
+        "Dart defines modal must be rendered"
+    );
+    // The key name must appear in the rendered output
+    assert!(
+        content.contains("MY_API_KEY"),
+        "Dart define key 'MY_API_KEY' must be visible in modal"
+    );
+}
+
+/// Extra args modal shows the item in the list.
+#[test]
+fn test_render_extra_args_modal_shows_item() {
+    use fdemon_app::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+    let settings = Settings::default();
+    let temp = tempdir().unwrap();
+    let mut state = SettingsViewState::new();
+    state.active_tab = SettingsTab::LaunchConfig;
+    state.extra_args_modal = Some(FuzzyModalState::new(
+        FuzzyModalType::ExtraArgs,
+        vec!["--trace-startup".to_string()],
+    ));
+
+    let backend = TestBackend::new(100, 30);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            let panel = SettingsPanel::new(&settings, temp.path());
+            frame.render_stateful_widget(panel, frame.area(), &mut state);
+        })
+        .unwrap();
+
+    let content: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+
+    // The modal title must be present
+    assert!(
+        content.contains("Edit Extra Args"),
+        "Extra args modal must be rendered with its title"
+    );
+    // The item in the list must be visible
+    assert!(
+        content.contains("--trace-startup"),
+        "'--trace-startup' must be visible in the extra args modal"
+    );
+}

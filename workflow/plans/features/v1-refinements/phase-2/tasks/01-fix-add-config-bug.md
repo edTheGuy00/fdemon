@@ -125,3 +125,37 @@ mod tests {
 - `LaunchConfigCreate` handler at `update.rs:710-726` sets `settings_view_state.error` on failure — this is already correct behavior
 - The TUI rendering at `settings_panel/mod.rs:884-897` already handles the visual rendering of the add-new button — no TUI changes needed for this task
 - Watch out for the `load_launch_configs()` disk read in both `get_item_count_for_tab()` and `get_selected_item()` — they should return consistent results since both read from the same file
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Fixed `get_item_count_for_tab()` to add `+1` for the "Add New Configuration" button when configs exist; added early-return sentinel check in `handle_settings_toggle_edit()` to dispatch `LaunchConfigCreate`; added 4 new tests |
+| `crates/fdemon-app/src/settings_items.rs` | Fixed `get_selected_item()` to return the `"launch.__add_new__"` sentinel `SettingItem` when `selected_index == items.len()` on the LaunchConfig tab with non-empty configs |
+| `crates/fdemon-app/src/state.rs` | Fixed pre-existing import: changed `crate::new_session_dialog::state::{...}` to `crate::new_session_dialog::{...}` to resolve private module access compile error |
+
+### Notable Decisions/Tradeoffs
+
+1. **Redundant condition removed**: The task spec included `view_state.active_tab == SettingsTab::LaunchConfig` inside the `LaunchConfig` match arm of `get_selected_item()`. This check is always true inside that arm, so it was removed to keep the code clean.
+
+2. **state.rs import fix**: A pre-existing compile error in `state.rs` used `crate::new_session_dialog::state::{DartDefinesModalState, FuzzyModalState}` where `state` is a private submodule. Fixed to use the public re-export path `crate::new_session_dialog::{...}`. This was blocking the compile and not part of the task spec, but necessary for compilation.
+
+3. **Test setup uses `init_launch_file`**: The tests that require configs to exist use `init_launch_file` (which creates one default "Debug" config with 7 items), confirming the item count of 8 (7 + 1 add-new button).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app settings_handlers` - Passed (9 tests, including 4 new)
+- `cargo test --workspace --lib` - Passed (2,563 tests: 1065 + 360 + 375 + 763)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Double disk read per keypress**: Both `get_item_count_for_tab()` and `get_selected_item()` call `load_launch_configs()` independently (each reads from disk). This was pre-existing behavior and not introduced by this fix, but means two disk reads per navigation key on the LaunchConfig tab. Acceptable for a settings UI that is rarely used.

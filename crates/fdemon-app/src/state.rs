@@ -9,6 +9,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::new_session_dialog::NewSessionDialogState;
+use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
@@ -500,6 +501,20 @@ pub struct SettingsViewState {
 
     /// Error message to display (if any)
     pub error: Option<String>,
+
+    /// Active dart defines modal overlay (if any).
+    ///
+    /// Set when the user opens the dart defines editor for a launch config.
+    pub dart_defines_modal: Option<DartDefinesModalState>,
+
+    /// The 0-based index of the launch config currently being edited in the
+    /// dart defines modal. Set on open, cleared on close.
+    pub editing_config_idx: Option<usize>,
+
+    /// Active extra args fuzzy modal overlay (if any).
+    ///
+    /// Set when the user opens the extra args picker for a launch config.
+    pub extra_args_modal: Option<FuzzyModalState>,
 }
 
 impl Default for SettingsViewState {
@@ -512,6 +527,9 @@ impl Default for SettingsViewState {
             dirty: false,
             user_prefs: UserPreferences::default(),
             error: None,
+            dart_defines_modal: None,
+            editing_config_idx: None,
+            extra_args_modal: None,
         }
     }
 }
@@ -519,6 +537,14 @@ impl Default for SettingsViewState {
 impl SettingsViewState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Returns `true` if any modal overlay is currently open.
+    ///
+    /// Used by the settings panel key handler to route input to the active modal
+    /// instead of the underlying settings list.
+    pub fn has_modal_open(&self) -> bool {
+        self.dart_defines_modal.is_some() || self.extra_args_modal.is_some()
     }
 
     /// Load user preferences from disk
@@ -1672,4 +1698,43 @@ mod tests {
     // Bootable cache tests have been moved to handler tests because
     // cache population is now done in handle_open_new_session_dialog(),
     // not in show_new_session_dialog(). This follows TEA principles.
+
+    // ─────────────────────────────────────────────────────────
+    // SettingsViewState modal tests (v1-refinements Phase 2, Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_settings_view_state_has_modal_open() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = SettingsViewState::new();
+        assert!(!state.has_modal_open());
+
+        state.extra_args_modal = Some(FuzzyModalState::new(
+            FuzzyModalType::ExtraArgs,
+            vec!["--verbose".to_string()],
+        ));
+        assert!(state.has_modal_open());
+    }
+
+    #[test]
+    fn test_settings_view_state_has_modal_open_dart_defines() {
+        use crate::new_session_dialog::{DartDefine, DartDefinesModalState};
+
+        let mut state = SettingsViewState::new();
+        assert!(!state.has_modal_open());
+
+        state.dart_defines_modal = Some(DartDefinesModalState::new(vec![DartDefine::new(
+            "ENV", "dev",
+        )]));
+        assert!(state.has_modal_open());
+    }
+
+    #[test]
+    fn test_settings_view_state_both_modals_none_by_default() {
+        let state = SettingsViewState::new();
+        assert!(state.dart_defines_modal.is_none());
+        assert!(state.extra_args_modal.is_none());
+        assert!(!state.has_modal_open());
+    }
 }

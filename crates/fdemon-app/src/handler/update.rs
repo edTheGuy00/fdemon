@@ -14,7 +14,8 @@ use tracing::warn;
 
 use super::{
     daemon::handle_session_daemon_event, devtools, keys::handle_key, log_view, new_session, scroll,
-    session_lifecycle, settings_handlers, Task, UpdateAction, UpdateResult,
+    session_lifecycle, settings_dart_defines, settings_extra_args, settings_handlers, Task,
+    UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state
@@ -1663,6 +1664,86 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ── Performance Panel UI Messages ─────────────────────────────────────
         Message::ToggleAllocationSort => {
             devtools::performance::handle_toggle_allocation_sort(state)
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Settings — Dart Defines Modal (v1-refinements Phase 2, Task 03)
+        // ─────────────────────────────────────────────────────────────────────
+        Message::SettingsDartDefinesOpen { config_idx } => {
+            settings_dart_defines::handle_settings_dart_defines_open(state, config_idx)
+        }
+
+        Message::SettingsDartDefinesClose => {
+            settings_dart_defines::handle_settings_dart_defines_close(state)
+        }
+
+        Message::SettingsDartDefinesSwitchPane => {
+            settings_dart_defines::handle_settings_dart_defines_switch_pane(state)
+        }
+
+        Message::SettingsDartDefinesUp => {
+            settings_dart_defines::handle_settings_dart_defines_up(state)
+        }
+
+        Message::SettingsDartDefinesDown => {
+            settings_dart_defines::handle_settings_dart_defines_down(state)
+        }
+
+        Message::SettingsDartDefinesConfirm => {
+            settings_dart_defines::handle_settings_dart_defines_confirm(state)
+        }
+
+        Message::SettingsDartDefinesNextField => {
+            settings_dart_defines::handle_settings_dart_defines_next_field(state)
+        }
+
+        Message::SettingsDartDefinesInput { c } => {
+            settings_dart_defines::handle_settings_dart_defines_input(state, c)
+        }
+
+        Message::SettingsDartDefinesBackspace => {
+            settings_dart_defines::handle_settings_dart_defines_backspace(state)
+        }
+
+        Message::SettingsDartDefinesSave => {
+            settings_dart_defines::handle_settings_dart_defines_save(state)
+        }
+
+        Message::SettingsDartDefinesDelete => {
+            settings_dart_defines::handle_settings_dart_defines_delete(state)
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Settings — Extra Args Fuzzy Modal (v1-refinements Phase 2, Task 04)
+        // ─────────────────────────────────────────────────────────────────────
+        Message::SettingsExtraArgsOpen { config_idx } => {
+            settings_extra_args::handle_settings_extra_args_open(state, config_idx)
+        }
+
+        Message::SettingsExtraArgsClose => {
+            settings_extra_args::handle_settings_extra_args_close(state)
+        }
+
+        Message::SettingsExtraArgsInput { c } => {
+            settings_extra_args::handle_settings_extra_args_input(state, c)
+        }
+
+        Message::SettingsExtraArgsBackspace => {
+            settings_extra_args::handle_settings_extra_args_backspace(state)
+        }
+
+        Message::SettingsExtraArgsClear => {
+            settings_extra_args::handle_settings_extra_args_clear(state)
+        }
+
+        Message::SettingsExtraArgsUp => settings_extra_args::handle_settings_extra_args_up(state),
+
+        Message::SettingsExtraArgsDown => {
+            settings_extra_args::handle_settings_extra_args_down(state)
+        }
+
+        Message::SettingsExtraArgsConfirm => {
+            settings_extra_args::handle_settings_extra_args_confirm(state)
         }
     }
 }

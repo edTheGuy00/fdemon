@@ -82,6 +82,37 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
             &state.project_path,
             &state.settings_view_state,
         ) {
+            // Dispatch LaunchConfigCreate when the add-new sentinel is selected
+            if item.id == "launch.__add_new__" {
+                return update(state, Message::LaunchConfigCreate);
+            }
+
+            // dart_defines items open the dedicated modal overlay instead of
+            // inline edit mode.  Extract config_idx from the item ID which has
+            // the format "launch.{idx}.dart_defines".
+            if item.id.ends_with(".dart_defines") {
+                let parts: Vec<&str> = item.id.split('.').collect();
+                if let Some(idx_str) = parts.get(1) {
+                    if let Ok(config_idx) = idx_str.parse::<usize>() {
+                        return update(state, Message::SettingsDartDefinesOpen { config_idx });
+                    }
+                }
+                return UpdateResult::none();
+            }
+
+            // extra_args items open the fuzzy modal overlay instead of inline
+            // edit mode.  Extract config_idx from the item ID which has the
+            // format "launch.{idx}.extra_args".
+            if item.id.ends_with(".extra_args") {
+                let parts: Vec<&str> = item.id.split('.').collect();
+                if let Some(idx_str) = parts.get(1) {
+                    if let Ok(config_idx) = idx_str.parse::<usize>() {
+                        return update(state, Message::SettingsExtraArgsOpen { config_idx });
+                    }
+                }
+                return UpdateResult::none();
+            }
+
             // Start editing based on value type
             match &item.value {
                 SettingValue::Bool(_) => {
@@ -361,11 +392,16 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
         }
         SettingsTab::LaunchConfig => {
             let configs = load_launch_configs(&state.project_path);
-            configs
+            let item_count: usize = configs
                 .iter()
                 .enumerate()
                 .map(|(idx, resolved)| launch_config_items(&resolved.config, idx).len())
-                .sum()
+                .sum();
+            if item_count > 0 {
+                item_count + 1 // +1 for "Add New Configuration" button
+            } else {
+                0
+            }
         }
         SettingsTab::VSCodeConfig => {
             let configs = load_vscode_configs(&state.project_path);
@@ -456,5 +492,205 @@ mod tests {
             count, 17,
             "Project tab count must not be the stale hardcoded value of 17"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Bug fix tests: "Add New Configuration" button navigation
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// When configs exist, the item count must include +1 for the add-new button.
+    #[test]
+    fn test_launch_config_item_count_includes_add_new_button() {
+        use crate::config::launch::init_launch_file;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        init_launch_file(temp.path()).unwrap();
+
+        let mut state = state_with_tab(SettingsTab::LaunchConfig);
+        state.project_path = temp.path().to_path_buf();
+
+        let count = get_item_count_for_tab(&state);
+        // 7 items per config + 1 for "Add New Configuration" button
+        assert_eq!(count, 8, "1 default config (7 items) + 1 add-new button");
+    }
+
+    /// When there are no configs, the count must be 0 (no add-new button in nav range).
+    #[test]
+    fn test_launch_config_item_count_zero_when_no_configs() {
+        let state = state_with_tab(SettingsTab::LaunchConfig);
+        // No project path means no launch.toml; count must be 0
+        assert_eq!(get_item_count_for_tab(&state), 0);
+    }
+
+    /// get_selected_item returns the add-new sentinel when selected_index == item count.
+    #[test]
+    fn test_get_selected_item_returns_add_new_sentinel() {
+        use crate::config::launch::init_launch_file;
+        use crate::settings_items::get_selected_item;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        init_launch_file(temp.path()).unwrap();
+
+        let mut state = state_with_tab(SettingsTab::LaunchConfig);
+        state.project_path = temp.path().to_path_buf();
+
+        // Select the add-new slot (index 7 = 7 items for 1 config)
+        state.settings_view_state.selected_index = 7;
+
+        let item = get_selected_item(
+            &state.settings,
+            &state.project_path,
+            &state.settings_view_state,
+        );
+        assert!(item.is_some(), "should return sentinel at add-new index");
+        assert_eq!(item.unwrap().id, "launch.__add_new__");
+    }
+
+    /// Pressing Enter on the add-new row dispatches LaunchConfigCreate.
+    #[test]
+    fn test_toggle_edit_on_add_new_dispatches_launch_config_create() {
+        use crate::config::launch::init_launch_file;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        init_launch_file(temp.path()).unwrap();
+
+        let mut state = state_with_tab(SettingsTab::LaunchConfig);
+        state.project_path = temp.path().to_path_buf();
+
+        // Count of existing configs before invoking toggle
+        let configs_before = crate::config::launch::load_launch_configs(temp.path()).len();
+
+        // Navigate to the add-new slot
+        state.settings_view_state.selected_index = 7;
+
+        // Trigger toggle-edit on the add-new row
+        handle_settings_toggle_edit(&mut state);
+
+        // A new config should have been written to disk
+        let configs_after = crate::config::launch::load_launch_configs(temp.path()).len();
+        assert_eq!(
+            configs_after,
+            configs_before + 1,
+            "LaunchConfigCreate should have created one new config"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Integration tests: Add New Configuration end-to-end (Phase 2, Task 06)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Full end-to-end test: navigate to the add-new button via item count, verify
+    /// `get_selected_item` returns the sentinel, and confirm that toggling edit
+    /// creates a new config on disk.
+    #[test]
+    fn test_add_new_config_end_to_end() {
+        use crate::config::launch::{init_launch_file, load_launch_configs};
+        use crate::settings_items::get_selected_item;
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        init_launch_file(temp.path()).unwrap();
+
+        let mut state = state_with_tab(SettingsTab::LaunchConfig);
+        state.project_path = temp.path().to_path_buf();
+
+        // Determine navigation range
+        let item_count = get_item_count_for_tab(&state);
+        assert!(item_count > 0, "should have items after init_launch_file");
+
+        // Navigate to the last slot (add-new button)
+        state.settings_view_state.selected_index = item_count - 1;
+
+        // Verify the sentinel is returned by get_selected_item
+        let selected = get_selected_item(
+            &state.settings,
+            &state.project_path,
+            &state.settings_view_state,
+        );
+        assert!(selected.is_some(), "sentinel item should be returned");
+        assert_eq!(
+            selected.unwrap().id,
+            "launch.__add_new__",
+            "last item must be the add-new sentinel"
+        );
+
+        // Count configs before creation
+        let configs_before = load_launch_configs(temp.path()).len();
+
+        // Toggle edit triggers LaunchConfigCreate → new config written to disk
+        handle_settings_toggle_edit(&mut state);
+
+        let configs_after = load_launch_configs(temp.path()).len();
+        assert_eq!(
+            configs_after,
+            configs_before + 1,
+            "toggling edit on the sentinel should create exactly one new config"
+        );
+    }
+
+    /// Verify that pressing Enter on the add-new sentinel with multiple existing
+    /// configs still creates exactly one new config.
+    #[test]
+    fn test_add_new_config_with_multiple_existing_configs() {
+        use crate::config::launch::{init_launch_file, load_launch_configs};
+        use tempfile::tempdir;
+
+        let temp = tempdir().unwrap();
+        // Create two configs
+        init_launch_file(temp.path()).unwrap();
+
+        let mut state = state_with_tab(SettingsTab::LaunchConfig);
+        state.project_path = temp.path().to_path_buf();
+
+        // Add a second config by simulating add-new twice
+        let item_count = get_item_count_for_tab(&state);
+        state.settings_view_state.selected_index = item_count - 1;
+        handle_settings_toggle_edit(&mut state);
+
+        let configs_after_first = load_launch_configs(temp.path()).len();
+        assert_eq!(
+            configs_after_first, 2,
+            "should have 2 configs after first add"
+        );
+
+        // Navigate to add-new again and create a third
+        let item_count2 = get_item_count_for_tab(&state);
+        state.settings_view_state.selected_index = item_count2 - 1;
+        handle_settings_toggle_edit(&mut state);
+
+        let configs_after_second = load_launch_configs(temp.path()).len();
+        assert_eq!(
+            configs_after_second, 3,
+            "should have 3 configs after second add"
+        );
+    }
+
+    /// When item_count is 0 (no configs), the add-new sentinel is not navigable.
+    #[test]
+    fn test_no_sentinel_when_no_configs() {
+        use crate::settings_items::get_selected_item;
+
+        let state = state_with_tab(SettingsTab::LaunchConfig);
+        // No project_path means no launch.toml: count = 0
+
+        let item_count = get_item_count_for_tab(&state);
+        assert_eq!(item_count, 0, "count must be 0 without a project path");
+
+        // selected_index=0 with count=0 should not return the sentinel
+        let selected = get_selected_item(
+            &state.settings,
+            &state.project_path,
+            &state.settings_view_state,
+        );
+        // Either None or not the add-new sentinel
+        if let Some(item) = selected {
+            assert_ne!(
+                item.id, "launch.__add_new__",
+                "sentinel must not appear when there are no configs"
+            );
+        }
     }
 }

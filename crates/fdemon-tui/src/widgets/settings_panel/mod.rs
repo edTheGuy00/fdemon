@@ -18,10 +18,13 @@ use ratatui::{
 };
 
 use crate::theme::{icons::IconSet, palette};
+use crate::widgets::modal_overlay;
+use crate::widgets::new_session_dialog::{DartDefinesModal, FuzzyModal};
 
 use std::path::Path;
 
 use fdemon_app::config::{SettingItem, Settings, SettingsTab, UserPreferences};
+use fdemon_app::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_app::settings_items::{
     launch_config_items, project_settings_items, user_prefs_items, vscode_config_items,
 };
@@ -90,6 +93,14 @@ impl StatefulWidget for SettingsPanel<'_> {
 
         // Render footer with keyboard shortcuts
         self.render_footer(chunks[2], buf, state);
+
+        // Modal overlays (rendered last to appear on top).
+        // Only one modal is open at a time (enforced by has_modal_open() check on open handlers).
+        if let Some(dart_defines_modal) = &state.dart_defines_modal {
+            self.render_dart_defines_modal_overlay(area, buf, dart_defines_modal);
+        } else if let Some(extra_args_modal) = &state.extra_args_modal {
+            self.render_extra_args_modal_overlay(area, buf, extra_args_modal);
+        }
     }
 }
 
@@ -317,6 +328,45 @@ impl SettingsPanel<'_> {
             Span::styled(key, key_style),
             Span::styled(format!(" {}", label), label_style),
         ])
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // Modal Overlay Rendering
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    /// Render the dart defines modal overlay on top of the settings panel.
+    ///
+    /// Dims the background and then renders the `DartDefinesModal` widget over
+    /// the full area.  The widget self-computes its position (full-screen minus
+    /// margins) and calls `Clear` on its area internally, so settings content
+    /// behind it is properly overwritten.
+    fn render_dart_defines_modal_overlay(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        modal_state: &DartDefinesModalState,
+    ) {
+        modal_overlay::dim_background(buf, area);
+
+        let modal = DartDefinesModal::new(modal_state);
+        modal.render(area, buf);
+    }
+
+    /// Render the extra args fuzzy modal overlay on top of the settings panel.
+    ///
+    /// Dims the background and then renders the `FuzzyModal` widget over the
+    /// full area.  The widget self-positions at the bottom ~50% of the given
+    /// area and calls `Clear` on its area internally.
+    fn render_extra_args_modal_overlay(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        modal_state: &FuzzyModalState,
+    ) {
+        modal_overlay::dim_background(buf, area);
+
+        let modal = FuzzyModal::new(modal_state);
+        modal.render(area, buf);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

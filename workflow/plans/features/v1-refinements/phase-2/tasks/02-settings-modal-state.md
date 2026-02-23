@@ -170,3 +170,42 @@ fn test_extra_args_fuzzy_modal_type() {
 - The placeholder no-op match arms in `update()` are intentional — they will be replaced with real handler calls in tasks 03 and 04
 - The `config_idx` on `Open` messages allows the handlers to load the correct config from disk and populate the modal with the right data
 - Keep the `ExtraArgs` variant on `FuzzyModalType` rather than creating a separate enum — this allows full reuse of the `FuzzyModal` TUI widget without any changes to it
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/types.rs` | Added `ExtraArgs` variant to `FuzzyModalType` with `title() = "Edit Extra Args"` and `allows_custom() = true`; added test `test_extra_args_fuzzy_modal_type` |
+| `crates/fdemon-app/src/new_session_dialog/state.rs` | Added `ExtraArgs` arm to `close_fuzzy_modal_with_selection()` match (no-op, settings panel owns the result) |
+| `crates/fdemon-app/src/handler/new_session/fuzzy_modal.rs` | Added `ExtraArgs` arms to `handle_open_fuzzy_modal()` (warn + no-op) and `handle_fuzzy_confirm()` (close + no-op) |
+| `crates/fdemon-app/src/state.rs` | Added `dart_defines_modal: Option<DartDefinesModalState>` and `extra_args_modal: Option<FuzzyModalState>` fields to `SettingsViewState`; added `has_modal_open()` method; updated `Default` impl; added import; added 3 tests |
+| `crates/fdemon-app/src/message.rs` | Added 19 new `Message` variants: 11 `SettingsDartDefines*` + 8 `SettingsExtraArgs*` |
+| `crates/fdemon-app/src/handler/update.rs` | Added placeholder no-op match arms for all 19 new message variants |
+
+### Notable Decisions/Tradeoffs
+
+1. **ExtraArgs arms in NewSessionDialog handlers**: Added no-op arms to `handle_open_fuzzy_modal`, `handle_fuzzy_confirm`, and `close_fuzzy_modal_with_selection` in the new-session-dialog handlers. This is correct because `ExtraArgs` is owned by `SettingsViewState::extra_args_modal`, not `NewSessionDialogState::fuzzy_modal`. The new session dialog's fuzzy modal must remain exhaustive over all `FuzzyModalType` variants to satisfy Rust's match exhaustiveness.
+
+2. **Import path for modal types in state.rs**: Used `crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState}` (via `pub use state::*` re-export in mod.rs) rather than the longer `crate::new_session_dialog::state::` path, consistent with how other types from this module are imported.
+
+3. **Placeholder no-ops over unimplemented!()**: The placeholder match arms use `UpdateResult::none()` rather than `todo!()` or `unimplemented!()` to keep the app runnable while the handlers are developed in Tasks 03 and 04.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (no compilation errors)
+- `cargo test --workspace` - Passed (all tests pass, count increased by new tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no new warnings)
+- Targeted: `cargo test -p fdemon-app -- test_settings_view_state` - 9 tests passed
+- Targeted: `cargo test -p fdemon-app -- test_extra_args_fuzzy_modal_type` - 1 test passed
+
+### Risks/Limitations
+
+1. **Exhaustiveness in new session dialog**: The `ExtraArgs` variant must be handled in new-session-dialog match arms. These arms are no-ops by design but must exist. If future variants are added to `FuzzyModalType`, both the new-session-dialog handlers and the settings handlers need updating.
+2. **config_idx not yet used**: The `config_idx` field on `SettingsDartDefinesOpen` and `SettingsExtraArgsOpen` is declared but not consumed (placeholder no-ops). This is intentional — Tasks 03 and 04 implement the real handlers.

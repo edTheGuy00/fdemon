@@ -117,6 +117,8 @@ pub enum FuzzyModalType {
     Flavor,
     /// Entry point selection (discovered Dart files with main())
     EntryPoint,
+    /// Extra args editing (for settings panel extra args picker)
+    ExtraArgs,
 }
 
 impl FuzzyModalType {
@@ -126,6 +128,7 @@ impl FuzzyModalType {
             Self::Config => "Select Configuration",
             Self::Flavor => "Select Flavor",
             Self::EntryPoint => "Select Entry Point",
+            Self::ExtraArgs => "Edit Extra Args",
         }
     }
 
@@ -135,6 +138,7 @@ impl FuzzyModalType {
             Self::Config => false,    // Must select from list
             Self::Flavor => true,     // Can type custom flavor
             Self::EntryPoint => true, // Can type custom path
+            Self::ExtraArgs => true,  // Users can type arbitrary args
         }
     }
 }
@@ -246,5 +250,11 @@ mod tests {
         // Verify other types for consistency
         assert!(!FuzzyModalType::Config.allows_custom());
         assert!(FuzzyModalType::Flavor.allows_custom());
+    }
+
+    #[test]
+    fn test_extra_args_fuzzy_modal_type() {
+        assert_eq!(FuzzyModalType::ExtraArgs.title(), "Edit Extra Args");
+        assert!(FuzzyModalType::ExtraArgs.allows_custom());
     }
 }

@@ -195,3 +195,33 @@ fn test_settings_panel_no_overlay_when_no_modal() {
 - The `modal_overlay::dim_background` function iterates all cells in the area and applies a dim modifier — this creates the visual effect of the background being "behind" the modal.
 - Make sure the `DartDefinesModal` and `FuzzyModal` types are accessible from the `settings_panel` module. They are `pub` in the `new_session_dialog` widget module.
 - The `DartDefinesModal::new()` takes `&DartDefinesModalState`; `FuzzyModal::new()` takes `&FuzzyModalState` — both are borrowed, matching the `&SettingsViewState` reference in the render method.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` | Added modal overlay imports, two overlay render helper methods, and modal overlay rendering calls at end of `StatefulWidget::render()` |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Added 3 new tests for dart defines modal overlay, extra args modal overlay, and no-overlay baseline |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import path for widget types**: The `dart_defines_modal` and `fuzzy_modal` submodules in `new_session_dialog` are private (`mod`), so imported via the re-export `crate::widgets::new_session_dialog::{DartDefinesModal, FuzzyModal}` and `fdemon_app::new_session_dialog::{DartDefinesModalState, FuzzyModalState}`.
+2. **Pre-existing dead code in fdemon-app**: Task 02 scaffolded `settings_dart_defines.rs` handler functions that are not yet wired into `update()`, causing clippy `-D warnings` to fail for `fdemon-app`. These are out of scope for Task 05 and not introduced by this task.
+3. **`else if` branching**: Used `else if` (not `if`+`if`) for the two modal checks since `has_modal_open()` enforces mutual exclusivity — only one modal can be open at a time.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (766 tests)
+- `cargo clippy -p fdemon-tui` - Passed (no fdemon-tui warnings; pre-existing fdemon-app dead-code warnings from Task 02 are out of scope)
+
+### Risks/Limitations
+
+1. **Pre-existing clippy failure**: `cargo clippy -p fdemon-tui -- -D warnings` fails due to 11 dead-code warnings in `fdemon-app/src/handler/settings_dart_defines.rs` from Task 02's placeholder scaffolding. These will be resolved when a subsequent task wires those handlers into `update()`.
