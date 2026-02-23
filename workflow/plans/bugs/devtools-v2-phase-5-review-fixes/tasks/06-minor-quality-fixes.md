@@ -110,4 +110,31 @@ Note: `buf.set_style` sets the style but does not clear the char to `' '`. If th
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/mod.rs` | Changed `pub mod network` to `pub(crate) mod network` to match `performance` visibility |
+| `crates/fdemon-core/src/performance.rs` | Added `top_by_instances()` method to `AllocationProfile`; added `test_top_by_size_returns_sorted`, `test_top_by_instances_returns_sorted`, `test_top_by_instances_limit_larger_than_members` tests |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/table.rs` | Replaced inline sort/truncate for `ByInstances` with `profile.top_by_instances(MAX_TABLE_ROWS)` |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Replaced manual `for y/for x/cell_mut` background loop with `Block::new().style(bg_style).render(area, buf)`; added `Block` to ratatui widget imports |
+| `crates/fdemon-tui/src/widgets/devtools/inspector/mod.rs` | Replaced manual `for y/for x/cell_mut` background loop with `Block::new().style(bg_style).render(area, buf)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Block::new() instead of buf.set_style()**: Used `Block::new().style(bg_style).render()` rather than `buf.set_style(area, bg_style)` to match the Network panel pattern and to ensure cell characters are also reset to `' '`, matching the original loop behavior exactly.
+2. **Added test_top_by_size_returns_sorted**: The task referenced a "mirroring" test but `test_top_by_size` didn't exist yet. Added it alongside the new `test_top_by_instances_returns_sorted` to satisfy the symmetry intent and provide coverage for both methods.
+3. **Helper function in tests**: Extracted `make_class()` helper in the test module to avoid struct literal repetition across the three new `AllocationProfile` tests.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (1047 fdemon-app + 360 fdemon-core + 375 fdemon-daemon + 757 fdemon-tui + all integration tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: All three fixes are pure internal improvements — no API surface changes, no behavioral changes to the rendered output.

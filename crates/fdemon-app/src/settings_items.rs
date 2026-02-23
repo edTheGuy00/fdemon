@@ -173,16 +173,16 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
                 value: settings.devtools.default_panel.clone(),
                 options: vec![
                     "inspector".to_string(),
-                    "layout".to_string(),
                     "performance".to_string(),
+                    "network".to_string(),
                 ],
             })
             .default(SettingValue::Enum {
                 value: "inspector".to_string(),
                 options: vec![
                     "inspector".to_string(),
-                    "layout".to_string(),
                     "performance".to_string(),
+                    "network".to_string(),
                 ],
             })
             .section("DevTools"),
@@ -437,4 +437,46 @@ pub fn vscode_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
             .section(format!("Configuration {}", idx + 1))
             .readonly(),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Settings;
+
+    #[test]
+    fn test_default_panel_options_match_enum_variants() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+        let panel_item = items
+            .iter()
+            .find(|i| i.id == "devtools.default_panel")
+            .unwrap();
+        if let SettingValue::Enum { options, .. } = &panel_item.value {
+            assert!(options.contains(&"inspector".to_string()));
+            assert!(options.contains(&"performance".to_string()));
+            assert!(options.contains(&"network".to_string()));
+            assert!(!options.contains(&"layout".to_string()));
+        } else {
+            panic!("devtools.default_panel value should be SettingValue::Enum");
+        }
+    }
+
+    #[test]
+    fn test_default_panel_default_options_match_enum_variants() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+        let panel_item = items
+            .iter()
+            .find(|i| i.id == "devtools.default_panel")
+            .unwrap();
+        if let SettingValue::Enum { options, .. } = &panel_item.default {
+            assert!(options.contains(&"inspector".to_string()));
+            assert!(options.contains(&"performance".to_string()));
+            assert!(options.contains(&"network".to_string()));
+            assert!(!options.contains(&"layout".to_string()));
+        } else {
+            panic!("devtools.default_panel default should be SettingValue::Enum");
+        }
+    }
 }

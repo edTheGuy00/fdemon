@@ -4,7 +4,7 @@ mod block_state;
 mod collapse;
 mod handle;
 pub(crate) mod log_batcher;
-pub mod network;
+pub(crate) mod network;
 pub(crate) mod performance;
 #[allow(clippy::module_inception)]
 mod session;

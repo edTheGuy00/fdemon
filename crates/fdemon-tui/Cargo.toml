@@ -13,6 +13,7 @@ crossterm.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true
+unicode-width = "0.2"
 
 [dev-dependencies]
 tempfile.workspace = true

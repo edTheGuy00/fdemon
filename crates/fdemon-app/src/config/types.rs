@@ -285,7 +285,7 @@ pub struct DevToolsSettings {
     #[serde(default)]
     pub browser: String,
 
-    /// Default panel when entering DevTools mode ("inspector", "layout", "performance")
+    /// Default panel when entering DevTools mode ("inspector", "performance", "network")
     #[serde(default = "default_devtools_panel")]
     pub default_panel: String,
 

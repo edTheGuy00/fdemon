@@ -80,4 +80,29 @@ For the dynamic tabs, test with empty configs (0 items) and verify count is 0 ra
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_handlers.rs` | Rewrote `get_item_count_for_tab()` to accept `&AppState` and call actual item builder functions; updated both call sites; removed stale hardcoded values and comments; added 5 regression tests in inline `#[cfg(test)]` block |
+
+### Notable Decisions/Tradeoffs
+
+1. **`&AppState` over `&Settings + &Path`**: Accepting the full `&AppState` is the cleanest approach because both call sites already hold `&mut AppState`, the function needs `settings`, `settings_view_state.user_prefs`, and `project_path` simultaneously, and extracting all three from the same `AppState` avoids threading multiple parameters through internal functions.
+
+2. **Tests in inline `#[cfg(test)]` block**: The `get_item_count_for_tab` function is private (`fn`, not `pub fn`), so tests must live in the same module. Following the project's existing pattern of both inline tests (where the tested function is private) and `tests.rs` (for cross-module integration tests), the inline block is the correct placement here.
+
+3. **Stale comments removed**: The comment `// behavior (2) + watcher (4) + ui (7) + devtools (2) + editor (2) = 17` was removed because dynamic computation makes it redundant and incorrect. Stale arithmetic comments are a maintenance hazard.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (1046 tests, 5 ignored; all new tests in `handler::settings_handlers::tests::*` pass)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-app -- --check` — Passed (formatting clean)
+
+### Risks/Limitations
+
+1. **Config loading on every keypress**: `get_item_count_for_tab` now calls `load_launch_configs` / `load_vscode_configs` on every j/k navigation keypress when those tabs are active. This reads from disk. In practice this is acceptable (the task notes this is unlikely to be a performance concern), and the existing `get_selected_item` function already does the same load on the same keypresses. A future optimisation could cache the count alongside the item list.

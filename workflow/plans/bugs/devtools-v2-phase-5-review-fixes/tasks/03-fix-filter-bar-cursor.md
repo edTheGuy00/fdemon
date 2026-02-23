@@ -86,4 +86,31 @@ Also verify the existing 6 ASCII tests still pass unchanged.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/Cargo.toml` | Added `unicode-width = "0.2"` as direct dependency |
+| `crates/fdemon-tui/src/widgets/devtools/network/mod.rs` | Added `use unicode_width::UnicodeWidthStr;` import; replaced all three `.len() as u16` calls with `.width() as u16` in `render_filter_input_bar` |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Added `find_cursor_x` helper and three new tests: `test_filter_input_bar_cursor_position_with_multibyte` (CJK "日本"), `test_filter_input_bar_cursor_position_ascii_input`, `test_filter_input_bar_cursor_position_empty_buffer` |
+
+### Notable Decisions/Tradeoffs
+
+1. **No workspace-level dep entry**: `unicode-width = "0.2"` was added directly in `crates/fdemon-tui/Cargo.toml` (not as a workspace dependency) because it is only needed by `fdemon-tui`. The version `0.2` matches the transitive dep already in `Cargo.lock` (0.2.2), so no new package is introduced.
+2. **`find_cursor_x` helper**: The test helper scans the buffer for any cell with the `REVERSED` modifier on row 0 (the filter bar row). This is robust because only the cursor `"█"` uses `REVERSED` in that row; it does not hard-code the cursor character itself.
+3. **Minimal change**: The task described an alternative refactor to `Paragraph`/`Line`/`Span` (matching `SearchInput`) but specified the `.width()` fix as the correct minimal approach. The refactor was not performed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` — Passed
+- `cargo test -p fdemon-tui` — Passed (757 tests: 754 existing + 3 new)
+  - `test_filter_input_bar_cursor_position_with_multibyte` — Passed (cursor at col 12, not 14)
+  - `test_filter_input_bar_cursor_position_ascii_input` — Passed (cursor at col 11)
+  - `test_filter_input_bar_cursor_position_empty_buffer` — Passed (cursor at col 8)
+
+### Risks/Limitations
+
+1. **`find_cursor_x` assumes filter bar is row 0**: The test helper scans y=0 of the rendered buffer. `render_monitor` renders into `Rect::new(0, 0, w, h)`, and when `filter_input_active = true` the bar is the first rendered row, so this assumption holds for these tests.

@@ -101,11 +101,14 @@ impl NetworkState {
     }
 
     /// Reset to initial state (used on session switch or disconnect).
+    ///
+    /// Preserves config-derived fields (`max_entries`, `recording`) so that
+    /// settings from `.fdemon/config.toml` (e.g. `network_auto_record = false`)
+    /// survive a session reset. All other fields revert to their defaults.
     pub fn reset(&mut self) {
         *self = Self {
             max_entries: self.max_entries,
-            filter_input_active: false,
-            filter_input_buffer: String::new(),
+            recording: self.recording,
             ..Self::default()
         };
     }
@@ -394,6 +397,24 @@ mod tests {
         state.reset();
         assert!(state.entries.is_empty());
         assert_eq!(state.max_entries, 100);
+    }
+
+    #[test]
+    fn test_reset_preserves_recording() {
+        let mut state = NetworkState::default();
+        // Simulate network_auto_record = false set from config.
+        state.recording = false;
+        state.merge_entries(vec![make_entry("1", "GET", Some(200))]);
+        state.selected_index = Some(3);
+
+        state.reset();
+
+        assert!(
+            !state.recording,
+            "recording should be preserved across reset"
+        );
+        assert!(state.entries.is_empty(), "entries should be cleared");
+        assert_eq!(state.selected_index, None, "selected_index should be reset");
     }
 
     // ── set_filter / selected_index semantics ─────────────────────────────────

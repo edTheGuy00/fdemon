@@ -181,6 +181,14 @@ impl AllocationProfile {
         sorted.truncate(limit);
         sorted
     }
+
+    /// Return classes sorted by total instance count (descending).
+    pub fn top_by_instances(&self, limit: usize) -> Vec<&ClassHeapStats> {
+        let mut sorted: Vec<_> = self.members.iter().collect();
+        sorted.sort_by_key(|s| Reverse(s.total_instances()));
+        sorted.truncate(limit);
+        sorted
+    }
 }
 
 // ── FrameTiming ──────────────────────────────────────────────────────────────
@@ -474,6 +482,61 @@ mod tests {
         };
         assert_eq!(stats.total_size(), 10_000);
         assert_eq!(stats.total_instances(), 150);
+    }
+
+    // ── AllocationProfile ───────────────────────────
+    fn make_class(name: &str, instances: u64, size: u64) -> ClassHeapStats {
+        ClassHeapStats {
+            class_name: name.to_string(),
+            library_uri: None,
+            new_space_instances: instances,
+            new_space_size: size,
+            old_space_instances: 0,
+            old_space_size: 0,
+        }
+    }
+
+    #[test]
+    fn test_top_by_size_returns_sorted() {
+        let profile = AllocationProfile {
+            members: vec![
+                make_class("Small", 10, 100),
+                make_class("Large", 5, 5000),
+                make_class("Medium", 8, 1000),
+            ],
+            timestamp: chrono::Local::now(),
+        };
+        let result = profile.top_by_size(2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].class_name, "Large");
+        assert_eq!(result[1].class_name, "Medium");
+    }
+
+    #[test]
+    fn test_top_by_instances_returns_sorted() {
+        let profile = AllocationProfile {
+            members: vec![
+                make_class("Few", 5, 1000),
+                make_class("Many", 100, 200),
+                make_class("Some", 30, 500),
+            ],
+            timestamp: chrono::Local::now(),
+        };
+        let result = profile.top_by_instances(2);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].class_name, "Many");
+        assert_eq!(result[1].class_name, "Some");
+    }
+
+    #[test]
+    fn test_top_by_instances_limit_larger_than_members() {
+        let profile = AllocationProfile {
+            members: vec![make_class("A", 10, 100), make_class("B", 5, 50)],
+            timestamp: chrono::Local::now(),
+        };
+        let result = profile.top_by_instances(100);
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].class_name, "A");
     }
 
     // ── FrameTiming ─────────────────────────────────

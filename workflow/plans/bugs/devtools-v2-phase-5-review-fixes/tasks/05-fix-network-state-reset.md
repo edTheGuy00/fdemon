@@ -77,4 +77,27 @@ fn test_reset_preserves_recording() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/network.rs` | Fixed `reset()` to preserve `recording` alongside `max_entries`; removed redundant `filter_input_active` and `filter_input_buffer` fields; added doc comment explaining which fields are preserved; added `test_reset_preserves_recording` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Doc comment on `reset()`**: Added an explicit doc comment explaining that `max_entries` and `recording` are preserved because they are config-derived. This makes the intent obvious to future readers and prevents the bug from being reintroduced when wiring `reset()` into session lifecycle handlers.
+
+2. **No structural changes**: The fix is minimal — only the two-line diff in `reset()` itself, plus the new test. No refactoring of unrelated code.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app session::network` — Passed (25 tests, including both `test_reset_preserves_max_entries` and new `test_reset_preserves_recording`)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-app` — Applied (reformatted long assert message); re-ran tests to confirm still passing
+
+### Risks/Limitations
+
+1. **`reset()` is still dead code**: The method is not yet called by any handler. This fix is preventive — it ensures the correct behaviour when the method is eventually wired into session switch or disconnect handlers. No risk of regression since the method is currently unused.

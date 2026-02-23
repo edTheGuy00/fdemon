@@ -76,12 +76,7 @@ pub(super) fn render_allocation_table(
             // Sort according to the active column.
             let classes: Vec<_> = match sort_column {
                 AllocationSortColumn::BySize => profile.top_by_size(MAX_TABLE_ROWS),
-                AllocationSortColumn::ByInstances => {
-                    let mut sorted: Vec<_> = profile.members.iter().collect();
-                    sorted.sort_by_key(|b| std::cmp::Reverse(b.total_instances()));
-                    sorted.truncate(MAX_TABLE_ROWS);
-                    sorted
-                }
+                AllocationSortColumn::ByInstances => profile.top_by_instances(MAX_TABLE_ROWS),
             };
 
             if classes.is_empty() {

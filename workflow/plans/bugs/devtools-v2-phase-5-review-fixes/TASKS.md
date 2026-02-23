@@ -33,12 +33,12 @@ Wave 2 (after Wave 1)
 
 | # | Task | Status | Depends On | Crate(s) | Severity |
 |---|------|--------|------------|----------|----------|
-| 1 | [01-fix-settings-item-count](tasks/01-fix-settings-item-count.md) | Not Started | - | fdemon-app | CRITICAL |
-| 2 | [02-fix-default-panel-options](tasks/02-fix-default-panel-options.md) | Not Started | - | fdemon-app | HIGH |
-| 3 | [03-fix-filter-bar-cursor](tasks/03-fix-filter-bar-cursor.md) | Not Started | - | fdemon-tui | MAJOR |
-| 4 | [04-deduplicate-session-api](tasks/04-deduplicate-session-api.md) | Not Started | - | fdemon-app | MEDIUM |
-| 5 | [05-fix-network-state-reset](tasks/05-fix-network-state-reset.md) | Not Started | - | fdemon-app | MEDIUM |
-| 6 | [06-minor-quality-fixes](tasks/06-minor-quality-fixes.md) | Not Started | 1-5 | fdemon-core, fdemon-app, fdemon-tui | LOW |
+| 1 | [01-fix-settings-item-count](tasks/01-fix-settings-item-count.md) | Done | - | fdemon-app | CRITICAL |
+| 2 | [02-fix-default-panel-options](tasks/02-fix-default-panel-options.md) | Done | - | fdemon-app | HIGH |
+| 3 | [03-fix-filter-bar-cursor](tasks/03-fix-filter-bar-cursor.md) | Done | - | fdemon-tui | MAJOR |
+| 4 | [04-deduplicate-session-api](tasks/04-deduplicate-session-api.md) | Done | - | fdemon-app | MEDIUM |
+| 5 | [05-fix-network-state-reset](tasks/05-fix-network-state-reset.md) | Done | - | fdemon-app | MEDIUM |
+| 6 | [06-minor-quality-fixes](tasks/06-minor-quality-fixes.md) | Done | 1-5 | fdemon-core, fdemon-app, fdemon-tui | LOW |
 
 ## Success Criteria
 

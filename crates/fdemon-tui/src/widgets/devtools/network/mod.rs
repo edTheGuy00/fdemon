@@ -26,6 +26,8 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use unicode_width::UnicodeWidthStr;
+
 use crate::theme::palette;
 use request_details::RequestDetails;
 use request_table::RequestTable;
@@ -262,18 +264,18 @@ impl NetworkMonitor<'_> {
 
         // Prompt label
         buf.set_string(x, area.y, prompt, prompt_style);
-        x += prompt.len() as u16;
+        x += prompt.width() as u16;
 
         // Buffer contents
         if x < area.x + area.width {
             buf.set_string(x, area.y, buffer, buffer_style);
-            x += buffer.len() as u16;
+            x += buffer.width() as u16;
         }
 
         // Cursor block
         if x < area.x + area.width {
             buf.set_string(x, area.y, cursor, cursor_style);
-            x += cursor.len() as u16;
+            x += cursor.width() as u16;
         }
 
         // Keyboard hint (only if space remains)

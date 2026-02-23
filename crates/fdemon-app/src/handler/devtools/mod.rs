@@ -317,6 +317,8 @@ mod tests {
             parse_default_panel("performance"),
             DevToolsPanel::Performance
         );
+        assert_eq!(parse_default_panel("network"), DevToolsPanel::Network);
+        assert_eq!(parse_default_panel("net"), DevToolsPanel::Network);
         assert_eq!(parse_default_panel("invalid"), DevToolsPanel::Inspector); // fallback
         assert_eq!(parse_default_panel(""), DevToolsPanel::Inspector); // empty fallback
     }

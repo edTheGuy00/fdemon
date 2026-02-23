@@ -58,14 +58,14 @@ pub fn handle_settings_goto_tab(state: &mut AppState, idx: usize) -> UpdateResul
 
 /// Handle settings next item message
 pub fn handle_settings_next_item(state: &mut AppState) -> UpdateResult {
-    let item_count = get_item_count_for_tab(&state.settings, state.settings_view_state.active_tab);
+    let item_count = get_item_count_for_tab(state);
     state.settings_view_state.select_next(item_count);
     UpdateResult::none()
 }
 
 /// Handle settings previous item message
 pub fn handle_settings_prev_item(state: &mut AppState) -> UpdateResult {
-    let item_count = get_item_count_for_tab(&state.settings, state.settings_view_state.active_tab);
+    let item_count = get_item_count_for_tab(state);
     state.settings_view_state.select_previous(item_count);
     UpdateResult::none()
 }
@@ -344,25 +344,117 @@ pub fn handle_force_hide_settings(state: &mut AppState) -> UpdateResult {
     UpdateResult::none()
 }
 
-/// Get the number of items in a settings tab
-fn get_item_count_for_tab(_settings: &crate::config::Settings, tab: SettingsTab) -> usize {
-    match tab {
-        SettingsTab::Project => {
-            // behavior (2) + watcher (4) + ui (7) + devtools (2) + editor (2) = 17
-            17
-        }
+/// Get the number of items in the currently active settings tab.
+///
+/// Counts are derived by calling the same item builder functions used for
+/// rendering, guaranteeing that navigation and display always agree.
+fn get_item_count_for_tab(state: &AppState) -> usize {
+    use crate::config::{launch::load_launch_configs, load_vscode_configs};
+    use crate::settings_items::{
+        launch_config_items, project_settings_items, user_prefs_items, vscode_config_items,
+    };
+
+    match state.settings_view_state.active_tab {
+        SettingsTab::Project => project_settings_items(&state.settings).len(),
         SettingsTab::UserPrefs => {
-            // editor (2) + theme (1) + last_device (1) + last_config (1) = 5
-            5
+            user_prefs_items(&state.settings_view_state.user_prefs, &state.settings).len()
         }
         SettingsTab::LaunchConfig => {
-            // Dynamic based on loaded configs
-            // For now, estimate
-            10
+            let configs = load_launch_configs(&state.project_path);
+            configs
+                .iter()
+                .enumerate()
+                .map(|(idx, resolved)| launch_config_items(&resolved.config, idx).len())
+                .sum()
         }
         SettingsTab::VSCodeConfig => {
-            // Dynamic based on loaded configs
-            5
+            let configs = load_vscode_configs(&state.project_path);
+            configs
+                .iter()
+                .enumerate()
+                .map(|(idx, resolved)| vscode_config_items(&resolved.config, idx).len())
+                .sum()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::SettingsTab;
+    use crate::state::AppState;
+
+    /// Helper: create AppState with a given active settings tab
+    fn state_with_tab(tab: SettingsTab) -> AppState {
+        let mut state = AppState::new();
+        state.settings_view_state.active_tab = tab;
+        state
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Regression tests: count must always match the item builder output
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_project_tab_count_matches_actual_items() {
+        let state = state_with_tab(SettingsTab::Project);
+        let count = get_item_count_for_tab(&state);
+        let items = crate::settings_items::project_settings_items(&state.settings);
+        assert_eq!(
+            count,
+            items.len(),
+            "Project tab count drifted from actual items"
+        );
+    }
+
+    #[test]
+    fn test_user_prefs_tab_count_matches_actual_items() {
+        let state = state_with_tab(SettingsTab::UserPrefs);
+        let count = get_item_count_for_tab(&state);
+        let items = crate::settings_items::user_prefs_items(
+            &state.settings_view_state.user_prefs,
+            &state.settings,
+        );
+        assert_eq!(
+            count,
+            items.len(),
+            "UserPrefs tab count drifted from actual items"
+        );
+    }
+
+    /// With no project path set (PathBuf::new()), no launch config file exists,
+    /// so the count must be 0, not the old hardcoded estimate.
+    #[test]
+    fn test_launch_config_tab_count_is_zero_when_no_configs_exist() {
+        let state = state_with_tab(SettingsTab::LaunchConfig);
+        let count = get_item_count_for_tab(&state);
+        assert_eq!(
+            count, 0,
+            "LaunchConfig tab should return 0 when no configs are loaded"
+        );
+    }
+
+    /// With no project path set (PathBuf::new()), no VSCode config file exists,
+    /// so the count must be 0, not the old hardcoded estimate.
+    #[test]
+    fn test_vscode_config_tab_count_is_zero_when_no_configs_exist() {
+        let state = state_with_tab(SettingsTab::VSCodeConfig);
+        let count = get_item_count_for_tab(&state);
+        assert_eq!(
+            count, 0,
+            "VSCodeConfig tab should return 0 when no configs are loaded"
+        );
+    }
+
+    /// Verify that the project tab no longer returns the stale hardcoded value
+    /// of 17 when the actual item count has grown.
+    #[test]
+    fn test_project_tab_count_is_not_stale_hardcoded_17() {
+        let state = state_with_tab(SettingsTab::Project);
+        let count = get_item_count_for_tab(&state);
+        assert_ne!(
+            count, 17,
+            "Project tab count must not be the stale hardcoded value of 17"
+        );
     }
 }

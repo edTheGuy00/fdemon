@@ -65,4 +65,28 @@ fn test_default_panel_options_match_enum_variants() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/settings_items.rs` | Replaced "layout" with "network" in both `.value()` and `.default()` options for `devtools.default_panel`; added `#[cfg(test)]` module with two tests verifying the correct options in both value and default builders |
+| `crates/fdemon-app/src/config/types.rs` | Updated doc comment on `default_panel` field from `("inspector", "layout", "performance")` to `("inspector", "performance", "network")` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added "network" and "net" assertions to `test_default_panel_maps_to_devtools_panel_enum` test to cover those parser branches; backward-compat "layout" fallback left intact |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test module placement**: Added the test module at the end of `settings_items.rs` (after `vscode_config_items`) rather than before the `vscode_config_items` doc comment, consistent with Rust convention of `#[cfg(test)]` at end of file.
+2. **Two tests instead of one**: Split the task-suggested test into two — one for `.value` options and one for `.default` options — to give more precise failure messages if either list drifts.
+3. **Parser unchanged**: `parse_default_panel()` in `handler/devtools/mod.rs` was not modified; the backward-compat "layout" → Inspector fallback is preserved exactly as required.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1046 unit tests + 1 doc test; up from 1039 with 7 new tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Stale options in other locations**: The task notes that `website/src/pages/docs/devtools.rs` also references stale panel names — that is explicitly out of scope and should be tracked separately.

@@ -119,7 +119,8 @@ impl<'a> WidgetInspector<'a> {
 
 impl Widget for WidgetInspector<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        // Clear background
+        // Clear background — set every cell to ' ' with the background style
+        // so the log view underneath is fully occluded.
         let bg_style = Style::default().bg(palette::DEEPEST_BG);
         for y in area.y..area.bottom() {
             for x in area.x..area.right() {

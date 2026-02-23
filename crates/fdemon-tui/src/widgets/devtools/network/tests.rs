@@ -529,6 +529,83 @@ fn test_filter_input_bar_active_still_shows_requests() {
     );
 }
 
+// ── Cursor position: display width vs byte length ─────────────────────────────
+
+/// Helper: returns the x column of the cursor cell (rendered with REVERSED
+/// modifier) in the filter bar row (y == 0 of the rendered buffer).
+fn find_cursor_x(buf: &Buffer, w: u16) -> Option<u16> {
+    use ratatui::style::Modifier;
+    for x in 0..w {
+        if let Some(cell) = buf.cell((x, 0u16)) {
+            if cell.style().add_modifier.contains(Modifier::REVERSED) {
+                return Some(x);
+            }
+        }
+    }
+    None
+}
+
+#[test]
+fn test_filter_input_bar_cursor_position_with_multibyte() {
+    // "日本" is 6 bytes but 4 display columns (each CJK char is 2 columns wide).
+    // prompt "Filter: " is 8 bytes and 8 display columns (ASCII only).
+    // Expected cursor x = 0 (area.x) + 8 (prompt) + 4 (display width of "日本") = 12.
+    // Before the fix, .len() would give 8 + 6 = 14 — two columns too far right.
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = "日本".to_string();
+
+    let buf = render_monitor(&state, true, 80, 24);
+
+    let cursor_x = find_cursor_x(&buf, 80)
+        .expect("cursor cell (REVERSED style) should be present in the filter bar row");
+
+    // prompt width = 8, "日本" display width = 4  ->  expected x = 12
+    assert_eq!(
+        cursor_x, 12,
+        "cursor should be at column 12 (prompt 8 + display width 4 of '日本'), \
+         not column 14 (which byte-length would give)"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_cursor_position_ascii_input() {
+    // ASCII only: byte length == display width, so both approaches give the same result.
+    // "api" is 3 bytes and 3 display columns.
+    // Expected cursor x = 0 + 8 (prompt) + 3 (display of "api") = 11.
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = "api".to_string();
+
+    let buf = render_monitor(&state, true, 80, 24);
+
+    let cursor_x = find_cursor_x(&buf, 80)
+        .expect("cursor cell (REVERSED style) should be present in the filter bar row");
+
+    assert_eq!(
+        cursor_x, 11,
+        "cursor should be at column 11 (prompt 8 + display width 3 of 'api')"
+    );
+}
+
+#[test]
+fn test_filter_input_bar_cursor_position_empty_buffer() {
+    // Empty buffer: cursor should be immediately after the prompt (column 8).
+    let mut state = make_network_state();
+    state.filter_input_active = true;
+    state.filter_input_buffer = String::new();
+
+    let buf = render_monitor(&state, true, 80, 24);
+
+    let cursor_x = find_cursor_x(&buf, 80)
+        .expect("cursor cell (REVERSED style) should be present in the filter bar row");
+
+    assert_eq!(
+        cursor_x, 8,
+        "cursor should be immediately after the prompt (column 8) for an empty buffer"
+    );
+}
+
 // ── Small terminal / "too small" message tests ────────────────────────────────
 
 #[test]
