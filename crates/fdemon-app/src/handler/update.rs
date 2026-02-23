@@ -593,6 +593,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
+        // Wrap Mode (v1-refinements Phase 1)
+        // ─────────────────────────────────────────────────────────
+        Message::ToggleWrapMode => {
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle.session.log_view_state.toggle_wrap_mode();
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
         // Link Highlight Mode (Phase 3.1)
         // ─────────────────────────────────────────────────────────
         Message::EnterLinkMode => {

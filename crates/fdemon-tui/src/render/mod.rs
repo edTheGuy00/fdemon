@@ -72,7 +72,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
         let mut log_view = widgets::LogView::new(&handle.session.logs, icons)
-            .filter_state(&handle.session.filter_state);
+            .filter_state(&handle.session.filter_state)
+            .wrap_mode(handle.session.log_view_state.wrap_mode);
 
         // Add search state if there's an active search
         if !handle.session.search_state.query.is_empty() {

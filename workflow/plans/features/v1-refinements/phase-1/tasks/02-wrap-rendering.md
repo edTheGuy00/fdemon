@@ -163,3 +163,32 @@ The `wrap_mode` value comes from `handle.session.log_view_state.wrap_mode` (set 
 - **Scroll accuracy tradeoff**: In wrap mode, the scroll offset operates on logical lines, not terminal rows. This means scrolling up/down by 1 still moves by 1 logical line (which may be multiple terminal rows if wrapped). This is the same behavior as `less` and most editors, so it's intuitive.
 - **Performance**: `apply_horizontal_scroll()` is skipped entirely in wrap mode, so there's no per-line character decomposition overhead. The `Paragraph::wrap()` handles wrapping internally in ratatui's render pass.
 - **The `all_lines` vec is still built the same way** — `format_entry()` produces logical lines. The only difference is whether they pass through `apply_horizontal_scroll()` or go directly to a wrapping `Paragraph`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `wrap_mode: bool` field to `LogView` struct; added `Wrap` to ratatui widget imports; initialized `wrap_mode: false` in `new()`; added `wrap_mode()` builder method; added `wrap`/`nowrap` indicator to `render_metadata_bar()` `indicator_parts`; replaced unconditional `apply_horizontal_scroll()` path with conditional branch — wrap mode passes raw lines to `Paragraph::new().wrap(Wrap { trim: false })`, nowrap applies scroll as before |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `.wrap_mode(handle.session.log_view_state.wrap_mode)` to `LogView` builder chain |
+
+### Notable Decisions/Tradeoffs
+
+1. **`indicator_parts` always has at least `wrap`/`nowrap`**: The wrap indicator is unconditionally appended to `indicator_parts`, so the metadata bar always shows either `wrap` or `nowrap`. This ensures the user always knows the current mode.
+2. **`update_horizontal_size()` called in both modes**: `max_line_width` and `visible_width` are still computed and stored even in wrap mode. This preserves state needed to toggle back to nowrap without losing horizontal bounds information, and avoids special-casing the horizontal state update.
+3. **`calculate_entry_lines()` unchanged**: Scroll offset/skip logic continues to operate on logical lines. Ratatui handles visual wrapping internally via `Paragraph::wrap()`. The scrollbar may be slightly imprecise for very long wrapped lines, but this is acceptable per the task spec.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (757 unit tests + 7 doc tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Scrollbar imprecision in wrap mode**: The scrollbar uses `total_lines` (logical lines), not rendered terminal rows. For log lines that wrap to multiple terminal rows, the scrollbar thumb position will be slightly off. This is the documented acceptable tradeoff.

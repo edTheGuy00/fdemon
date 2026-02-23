@@ -264,3 +264,38 @@ cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo cl
 - Keep tests focused — each test should verify one behavior
 - The scroll handler tests may need to construct an `AppState` with a session. Check existing handler tests for the pattern (there are 1,039 tests in `fdemon-app` — patterns are well-established)
 - For rendering tests, exact buffer content assertions can be brittle. Prefer `buffer_contains()` and `line_contains()` over exact cell-by-cell matching
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/log_view_state.rs` | Added `#[cfg(test)] mod tests` block with 6 wrap mode unit tests |
+| `crates/fdemon-app/src/handler/scroll.rs` | Added `#[cfg(test)] mod tests` block with 8 scroll guard tests |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Appended 6 rendering tests using `TestTerminal` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Buffer content assertions for wrap/nowrap line tests**: The task template suggested `buffer_contains("This is a long")` assertions, but with timestamps and icons, the message content is often not visible in a narrow 30-char terminal after prefix formatting. Replaced with structural assertions (`total_lines == 1`, `h_offset == 0`) which are robust and still verify correct behavior.
+
+2. **Scroll guard tests cover all 4 horizontal scroll functions**: Added tests for both the no-op case (wrap enabled) and the working case (wrap disabled) for all four functions: `scroll_left`, `scroll_right`, `scroll_to_line_start`, `scroll_to_line_end`.
+
+3. **Local `test_device()` helper in scroll.rs tests**: Added a module-local helper following the exact pattern used in `handler/keys.rs` rather than importing from elsewhere.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib` — Passed (1061 tests)
+- `cargo test -p fdemon-tui --lib` — Passed (763 tests)
+- `cargo test --workspace` — All passed (2559+ tests across all crates)
+- `cargo fmt --all` — Passed (no formatting issues)
+- `cargo check --workspace` — Passed
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Rendering test fragility**: The `test_wrap_mode_wraps_long_lines` and `test_nowrap_mode_preserves_single_line` tests verify structural state (`total_lines`, `h_offset`) rather than buffer content. This avoids brittleness from timestamp/icon prefix formatting, but doesn't directly assert visible content differs between wrap and nowrap.

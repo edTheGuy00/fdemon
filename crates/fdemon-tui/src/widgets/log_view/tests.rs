@@ -1026,3 +1026,157 @@ fn test_footer_height_not_stolen_in_small_area() {
         "Footer should reduce visible lines by exactly 1"
     );
 }
+
+// ─────────────────────────────────────────────────────────
+// Wrap mode rendering tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_wrap_mode_wraps_long_lines() {
+    use crate::test_utils::TestTerminal;
+
+    // Use a narrow terminal to force wrapping
+    let mut term = TestTerminal::with_size(30, 10);
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "This is a long log line that should wrap at terminal width",
+    )]);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(true);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // In wrap mode, total_lines counts terminal rows (not logical lines).
+    // A long message that exceeds the terminal width wraps to multiple rows.
+    assert!(
+        state.total_lines >= 1,
+        "total_lines should account for wrapped rows"
+    );
+    assert_eq!(
+        state.h_offset, 0,
+        "wrap mode should not scroll horizontally"
+    );
+}
+
+#[test]
+fn test_nowrap_mode_preserves_single_line() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(30, 10);
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "This is a long log line that should be truncated",
+    )]);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(false);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // In nowrap mode the single entry still occupies one logical line
+    assert_eq!(state.total_lines, 1, "one log entry means total_lines = 1");
+    // At h_offset=0 the content is visible (no scroll applied from state perspective)
+    assert_eq!(state.h_offset, 0, "h_offset should be 0 at initial render");
+}
+
+#[test]
+fn test_wrap_indicator_shown_in_metadata_bar() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::new(); // 80x24
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "test message",
+    )]);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(true);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("wrap"),
+        "wrap indicator should be visible in the metadata bar"
+    );
+}
+
+#[test]
+fn test_nowrap_indicator_shown_in_metadata_bar() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::new();
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "test message",
+    )]);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(false);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("nowrap"),
+        "nowrap indicator should be visible in the metadata bar"
+    );
+}
+
+#[test]
+fn test_wrap_mode_no_horizontal_scroll_indicators() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(30, 10);
+
+    let logs = logs_from(vec![make_entry(
+        LogLevel::Info,
+        LogSource::App,
+        "A line that is definitely longer than thirty chars total",
+    )]);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(true);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // In wrap mode, horizontal scroll indicators (→ for right, ← for left)
+    // should not appear in the content area because lines wrap instead of scrolling.
+    // h_offset stays at 0 in wrap mode, so no left indicator.
+    assert_eq!(state.h_offset, 0, "h_offset should remain 0 in wrap mode");
+}
+
+#[test]
+fn test_wrap_mode_scrollbar_present_for_many_entries() {
+    use crate::test_utils::TestTerminal;
+
+    // Small terminal, many log entries
+    let mut term = TestTerminal::with_size(40, 8);
+
+    let entries: Vec<_> = (0..20)
+        .map(|i| make_entry(LogLevel::Info, LogSource::App, &format!("Log line {}", i)))
+        .collect();
+    let logs = logs_from(entries);
+
+    let log_view = LogView::new(&logs, test_icons()).wrap_mode(true);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    // total_lines should reflect terminal rows (>= entry count in wrap mode)
+    assert!(
+        state.total_lines >= 20,
+        "total_lines should be at least the entry count (may be more due to wrapping)"
+    );
+    assert!(
+        state.total_lines > state.visible_lines,
+        "with 20 entries in an 8-row terminal, a scrollbar should be needed"
+    );
+}

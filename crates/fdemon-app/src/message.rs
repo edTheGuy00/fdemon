@@ -265,6 +265,12 @@ pub enum Message {
     ScrollToLineEnd,
 
     // ─────────────────────────────────────────────────────────
+    // Wrap Mode (v1-refinements Phase 1)
+    // ─────────────────────────────────────────────────────────
+    /// Toggle line wrap mode on/off
+    ToggleWrapMode,
+
+    // ─────────────────────────────────────────────────────────
     // Link Highlight Mode (Phase 3.1)
     // ─────────────────────────────────────────────────────────
     /// Enter link highlight mode - scan viewport for file references

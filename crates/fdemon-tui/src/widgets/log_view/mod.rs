@@ -17,7 +17,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        StatefulWidget, Widget,
+        StatefulWidget, Widget, Wrap,
     },
 };
 
@@ -66,6 +66,8 @@ pub struct LogView<'a> {
     status_info: Option<StatusInfo<'a>>,
     /// Icon set for rendering icons
     icons: IconSet,
+    /// Whether line wrap mode is enabled. When true, horizontal scroll is skipped.
+    wrap_mode: bool,
 }
 
 impl<'a> LogView<'a> {
@@ -83,6 +85,7 @@ impl<'a> LogView<'a> {
             link_highlight_state: None,
             status_info: None,
             icons,
+            wrap_mode: false,
         }
     }
 
@@ -142,6 +145,12 @@ impl<'a> LogView<'a> {
     /// Set status info for bottom metadata bar (Phase 2 Task 4)
     pub fn with_status(mut self, status: StatusInfo<'a>) -> Self {
         self.status_info = Some(status);
+        self
+    }
+
+    /// Set wrap mode. When enabled, long lines wrap at terminal width instead of scrolling.
+    pub fn wrap_mode(mut self, enabled: bool) -> Self {
+        self.wrap_mode = enabled;
         self
     }
 
@@ -613,6 +622,51 @@ impl<'a> LogView<'a> {
         }
     }
 
+    /// Calculate how many terminal rows a line occupies when wrapped.
+    fn wrapped_row_count(char_width: usize, visible_width: usize) -> usize {
+        if visible_width == 0 || char_width <= visible_width {
+            return 1;
+        }
+        char_width.div_ceil(visible_width)
+    }
+
+    /// Estimate the character width of a formatted message line (without full formatting).
+    /// Used to compute wrapped row counts for scroll bounds.
+    fn estimate_message_width(&self, entry: &LogEntry) -> usize {
+        let mut w = 0;
+        // Timestamp: "HH:MM:SS" = 8 chars
+        if self.show_timestamps {
+            w += 8;
+        }
+        // Bullet separator: " • " = 3 chars (when both timestamp and source shown)
+        if self.show_timestamps && self.show_source {
+            w += 3;
+        } else if self.show_timestamps {
+            w += 1; // just a space
+        }
+        // Source: "[app] " or "[flutter] " etc — bracket + prefix + bracket + space
+        if self.show_source {
+            w += 1 + entry.source.prefix().len() + 2; // "[" + prefix + "] "
+        }
+        // Message content
+        w += entry.message.chars().count();
+        w
+    }
+
+    /// Calculate terminal rows for an entry in wrap mode.
+    /// Accounts for wrapped message lines; stack frame lines assumed to be 1 row each.
+    fn calculate_entry_display_rows(&self, entry: &LogEntry, visible_width: usize) -> usize {
+        if visible_width == 0 {
+            return self.calculate_entry_lines(entry);
+        }
+        let msg_width = self.estimate_message_width(entry);
+        let msg_rows = Self::wrapped_row_count(msg_width, visible_width);
+        // Stack frame lines rarely exceed terminal width, count as 1 row each
+        let logical_lines = self.calculate_entry_lines(entry);
+        let frame_lines = logical_lines.saturating_sub(1);
+        msg_rows + frame_lines
+    }
+
     /// Render empty state with centered message
     fn render_empty(&self, area: Rect, buf: &mut Buffer) {
         let block = Block::default()
@@ -682,6 +736,13 @@ impl<'a> LogView<'a> {
                     indicator_parts.push(status);
                 }
             }
+        }
+
+        // Wrap mode indicator
+        if self.wrap_mode {
+            indicator_parts.push("wrap".to_string());
+        } else {
+            indicator_parts.push("nowrap".to_string());
         }
 
         if !indicator_parts.is_empty() {
@@ -1032,42 +1093,76 @@ impl<'a> StatefulWidget for LogView<'a> {
                 .saturating_sub(1 + top_gap + footer_height + bottom_gap),
         );
 
-        // Calculate total lines including stack traces (accounting for collapse state)
-        let total_lines: usize = filtered_indices
-            .iter()
-            .map(|&idx| self.calculate_entry_lines(&self.logs[idx]))
-            .sum();
+        let visible_width = content_area.width as usize;
         let visible_lines = content_area.height as usize;
 
-        // Update state with content dimensions (now using total lines, not entry count)
+        // Calculate total lines including stack traces (accounting for collapse state).
+        // In wrap mode, total_lines counts terminal rows (wrapped); in nowrap, logical lines.
+        let total_lines: usize = if self.wrap_mode {
+            filtered_indices
+                .iter()
+                .map(|&idx| self.calculate_entry_display_rows(&self.logs[idx], visible_width))
+                .sum()
+        } else {
+            filtered_indices
+                .iter()
+                .map(|&idx| self.calculate_entry_lines(&self.logs[idx]))
+                .sum()
+        };
+
+        // Update state with content dimensions
         state.update_content_size(total_lines, visible_lines);
 
         // Build a flat list of all lines (entry messages + stack frames)
-        // We need to skip `offset` lines and take `visible_lines` lines
+        // We need to skip `offset` units and take `visible_lines` units.
+        // In wrap mode, units are terminal rows; in nowrap, logical lines.
         let mut all_lines: Vec<Line> = Vec::new();
-        let mut lines_added = 0;
-        let mut lines_skipped = 0;
+        let mut units_added = 0;
+        let mut units_skipped = 0;
+        // In wrap mode, tracks how many terminal rows to scroll past at the top
+        // of the first visible entry (handled by Paragraph::scroll)
+        let mut wrap_intra_offset: usize = 0;
 
         // Track focus info for the first visible line (Phase 3 Task 03)
         let mut focus_captured = false;
 
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
-            let entry_line_count = self.calculate_entry_lines(entry);
+            let entry_units = if self.wrap_mode {
+                self.calculate_entry_display_rows(entry, visible_width)
+            } else {
+                self.calculate_entry_lines(entry)
+            };
 
             // Skip entries that are entirely before the offset
-            if lines_skipped + entry_line_count <= state.offset {
-                lines_skipped += entry_line_count;
+            if units_skipped + entry_units <= state.offset {
+                units_skipped += entry_units;
                 continue;
             }
 
-            // Check if we've added enough lines
-            if lines_added >= visible_lines {
+            // In wrap mode, collect enough to fill visible_lines + intra_offset;
+            // in nowrap mode, collect visible_lines logical lines
+            let target = if self.wrap_mode {
+                visible_lines + wrap_intra_offset
+            } else {
+                visible_lines
+            };
+            if units_added >= target {
                 break;
             }
 
-            // Determine how many lines of this entry to skip (partial entry at start)
-            let skip_in_entry = state.offset.saturating_sub(lines_skipped);
+            // In wrap mode, don't skip logical lines within an entry —
+            // include all lines and use Paragraph::scroll for the row offset.
+            // In nowrap mode, skip logical lines as before.
+            let skip_in_entry = if self.wrap_mode {
+                // Compute intra-offset for the first visible entry
+                if units_skipped < state.offset {
+                    wrap_intra_offset = state.offset - units_skipped;
+                }
+                0
+            } else {
+                state.offset.saturating_sub(units_skipped)
+            };
 
             // Add the main log line if not skipped
             if skip_in_entry == 0 {
@@ -1079,8 +1174,13 @@ impl<'a> StatefulWidget for LogView<'a> {
                     focus_captured = true;
                 }
 
-                all_lines.push(self.format_entry(entry, idx));
-                lines_added += 1;
+                let line = self.format_entry(entry, idx);
+                if self.wrap_mode {
+                    units_added += Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                } else {
+                    units_added += 1;
+                }
+                all_lines.push(line);
             }
 
             // Add stack trace frames (respecting collapse state)
@@ -1091,11 +1191,16 @@ impl<'a> StatefulWidget for LogView<'a> {
                 if is_expanded {
                     // Expanded: show all frames
                     for (frame_idx, frame) in trace.frames.iter().enumerate() {
-                        if lines_added >= visible_lines {
+                        let target = if self.wrap_mode {
+                            visible_lines + wrap_intra_offset
+                        } else {
+                            visible_lines
+                        };
+                        if units_added >= target {
                             break;
                         }
 
-                        // Skip frames if we're starting mid-entry
+                        // Skip frames if we're starting mid-entry (nowrap only)
                         let frame_position = 1 + frame_idx; // +1 for the message line
                         if frame_position <= skip_in_entry {
                             continue;
@@ -1110,9 +1215,14 @@ impl<'a> StatefulWidget for LogView<'a> {
                         }
 
                         // Use link-aware formatting (Phase 3.1)
-                        all_lines
-                            .push(self.format_stack_frame_line_with_links(frame, idx, frame_idx));
-                        lines_added += 1;
+                        let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
+                        if self.wrap_mode {
+                            units_added +=
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        } else {
+                            units_added += 1;
+                        }
+                        all_lines.push(line);
                     }
                 } else {
                     // Collapsed: show max_collapsed_frames + indicator if more
@@ -1120,11 +1230,16 @@ impl<'a> StatefulWidget for LogView<'a> {
                     let hidden_count = frame_count.saturating_sub(self.max_collapsed_frames);
 
                     for (frame_idx, frame) in trace.frames.iter().take(visible_count).enumerate() {
-                        if lines_added >= visible_lines {
+                        let target = if self.wrap_mode {
+                            visible_lines + wrap_intra_offset
+                        } else {
+                            visible_lines
+                        };
+                        if units_added >= target {
                             break;
                         }
 
-                        // Skip frames if we're starting mid-entry
+                        // Skip frames if we're starting mid-entry (nowrap only)
                         let frame_position = 1 + frame_idx; // +1 for the message line
                         if frame_position <= skip_in_entry {
                             continue;
@@ -1139,23 +1254,33 @@ impl<'a> StatefulWidget for LogView<'a> {
                         }
 
                         // Use link-aware formatting (Phase 3.1)
-                        all_lines
-                            .push(self.format_stack_frame_line_with_links(frame, idx, frame_idx));
-                        lines_added += 1;
+                        let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
+                        if self.wrap_mode {
+                            units_added +=
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        } else {
+                            units_added += 1;
+                        }
+                        all_lines.push(line);
                     }
 
                     // Add collapsed indicator if there are hidden frames
-                    if hidden_count > 0 && lines_added < visible_lines {
+                    let target = if self.wrap_mode {
+                        visible_lines + wrap_intra_offset
+                    } else {
+                        visible_lines
+                    };
+                    if hidden_count > 0 && units_added < target {
                         let indicator_position = 1 + visible_count;
                         if indicator_position > skip_in_entry {
                             all_lines.push(Self::format_collapsed_indicator(hidden_count));
-                            lines_added += 1;
+                            units_added += 1; // collapsed indicator is always short
                         }
                     }
                 }
             }
 
-            lines_skipped += entry_line_count;
+            units_skipped += entry_units;
         }
 
         // Clear focus info if nothing was captured (empty view)
@@ -1169,19 +1294,24 @@ impl<'a> StatefulWidget for LogView<'a> {
             .map(|l| Self::line_width(l))
             .max()
             .unwrap_or(0);
-        let visible_width = content_area.width as usize;
 
         // Update horizontal dimensions in state
         state.update_horizontal_size(max_line_width, visible_width);
 
-        // Apply horizontal scroll to each line
-        let scrolled_lines: Vec<Line> = all_lines
-            .into_iter()
-            .map(|line| Self::apply_horizontal_scroll(line, state.h_offset, visible_width))
-            .collect();
+        // Build final lines: in wrap mode skip horizontal scroll, in nowrap apply it
+        let final_lines_base: Vec<Line> = if self.wrap_mode {
+            // Wrap mode: pass raw lines directly to ratatui's wrapping paragraph
+            all_lines
+        } else {
+            // No-wrap mode: apply horizontal scroll truncation as before
+            all_lines
+                .into_iter()
+                .map(|line| Self::apply_horizontal_scroll(line, state.h_offset, visible_width))
+                .collect()
+        };
 
         // Add blinking cursor at end if auto-scroll is active
-        let mut final_lines = scrolled_lines;
+        let mut final_lines = final_lines_base;
         if state.auto_scroll && !final_lines.is_empty() {
             // Add cursor to a new line after the last entry
             let cursor_line = Line::from(vec![Span::styled(
@@ -1193,8 +1323,16 @@ impl<'a> StatefulWidget for LogView<'a> {
             final_lines.push(cursor_line);
         }
 
-        // Render log content WITHOUT wrapping (lines are truncated/scrolled)
-        Paragraph::new(final_lines).render(content_area, buf);
+        // Render log content: wrap mode uses ratatui wrapping with scroll offset,
+        // no-wrap uses truncation
+        if self.wrap_mode {
+            Paragraph::new(final_lines)
+                .wrap(Wrap { trim: false })
+                .scroll((wrap_intra_offset as u16, 0))
+                .render(content_area, buf);
+        } else {
+            Paragraph::new(final_lines).render(content_area, buf);
+        }
 
         // Render scrollbar if content exceeds visible area
         if total_lines > visible_lines {

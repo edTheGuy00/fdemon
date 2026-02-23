@@ -125,3 +125,35 @@ Apply the same guard to:
 - `wrap_mode` is per-session (on `LogViewState`) rather than global (on `UiSettings`). This allows different sessions to have independent wrap preferences. Each session starts with wrap enabled.
 - The `h_offset` reset on wrap enable is critical — otherwise stale horizontal offsets would cause confusion when toggling back to nowrap mode.
 - No need to guard the `update_horizontal_size()` call — it still updates `max_line_width` and `visible_width` even when wrap is on, so the values are correct when toggling back to nowrap.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/log_view_state.rs` | Added `wrap_mode: bool` field (default `true`), set in `new()`, added `toggle_wrap_mode()` method |
+| `crates/fdemon-app/src/message.rs` | Added `ToggleWrapMode` variant in new "Wrap Mode" section after horizontal scroll messages |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `InputKey::Char('w') => Some(Message::ToggleWrapMode)` in `handle_key_normal()` after horizontal scroll bindings |
+| `crates/fdemon-app/src/handler/update.rs` | Added `Message::ToggleWrapMode` match arm after `ToggleStackTrace`, calling `toggle_wrap_mode()` on selected session |
+| `crates/fdemon-app/src/handler/scroll.rs` | Added `wrap_mode` guard to all 4 horizontal scroll handlers: `handle_scroll_left`, `handle_scroll_right`, `handle_scroll_to_line_start`, `handle_scroll_to_line_end` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Inline guard, no pre-extract**: The borrow checker allowed reading `wrap_mode` through the mutable borrow (`handle.session.log_view_state.wrap_mode`) without needing to extract it first, since both reads and the conditional call are inside the same `if let` block. This keeps the code compact with no additional let binding needed.
+2. **Section placement in message.rs**: Added a dedicated "Wrap Mode" section header after the horizontal scroll section rather than appending to the scroll section, keeping future wrap-related messages grouped.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1047 tests, 5 ignored, 1 doc-test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo check --workspace` - Passed (entire workspace unaffected)
+
+### Risks/Limitations
+
+1. **TUI rendering not updated**: This task only adds the state/message layer. The TUI log_view widget still needs to be updated to actually wrap lines when `wrap_mode` is `true`. That is out of scope for this task and expected to follow in a subsequent task.

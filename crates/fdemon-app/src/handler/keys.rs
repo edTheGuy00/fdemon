@@ -248,6 +248,12 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         InputKey::Char('$') => Some(Message::ScrollToLineEnd),
 
         // ─────────────────────────────────────────────────────────
+        // Wrap Mode (v1-refinements Phase 1)
+        // ─────────────────────────────────────────────────────────
+        // 'w' - Toggle line wrap mode
+        InputKey::Char('w') => Some(Message::ToggleWrapMode),
+
+        // ─────────────────────────────────────────────────────────
         // Link Highlight Mode (Phase 3.1)
         // ─────────────────────────────────────────────────────────
         // 'L' - Enter link highlight mode

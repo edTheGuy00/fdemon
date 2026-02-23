@@ -61,6 +61,8 @@ pub struct LogViewState {
     pub buffer_lines: usize,
     /// Information about the currently focused element (Phase 3 Task 03)
     pub focus_info: FocusInfo,
+    /// Whether line wrap is enabled. When true, horizontal scroll is a no-op.
+    pub wrap_mode: bool,
 }
 
 impl Default for LogViewState {
@@ -81,6 +83,15 @@ impl LogViewState {
             visible_width: 0,
             buffer_lines: DEFAULT_BUFFER_LINES,
             focus_info: FocusInfo::default(),
+            wrap_mode: true,
+        }
+    }
+
+    /// Toggle line wrap mode. When enabling wrap, resets horizontal offset to 0.
+    pub fn toggle_wrap_mode(&mut self) {
+        self.wrap_mode = !self.wrap_mode;
+        if self.wrap_mode {
+            self.h_offset = 0;
         }
     }
 
@@ -198,5 +209,77 @@ impl LogViewState {
             .iter()
             .map(|&idx| 1 + logs[idx].stack_trace_frame_count())
             .sum()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Wrap mode tests ---
+
+    #[test]
+    fn test_wrap_mode_defaults_to_true() {
+        let state = LogViewState::new();
+        assert!(state.wrap_mode);
+    }
+
+    #[test]
+    fn test_toggle_wrap_mode_disables() {
+        let mut state = LogViewState::new();
+        assert!(state.wrap_mode); // default true
+        state.toggle_wrap_mode();
+        assert!(!state.wrap_mode);
+    }
+
+    #[test]
+    fn test_toggle_wrap_mode_enables_and_resets_h_offset() {
+        let mut state = LogViewState::new();
+        state.wrap_mode = false;
+        state.h_offset = 42; // simulate horizontal scroll position
+        state.toggle_wrap_mode();
+        assert!(state.wrap_mode);
+        assert_eq!(
+            state.h_offset, 0,
+            "h_offset should reset to 0 when wrap enabled"
+        );
+    }
+
+    #[test]
+    fn test_toggle_wrap_mode_does_not_reset_h_offset_when_disabling() {
+        let mut state = LogViewState::new();
+        // wrap is on by default, h_offset should be 0
+        state.toggle_wrap_mode(); // disable wrap
+        assert!(!state.wrap_mode);
+        // h_offset stays at whatever it was (0 in this case, but point is no reset)
+        assert_eq!(state.h_offset, 0);
+    }
+
+    #[test]
+    fn test_toggle_wrap_mode_roundtrip() {
+        let mut state = LogViewState::new();
+        assert!(state.wrap_mode); // start: wrap on
+        state.toggle_wrap_mode(); // wrap off
+        assert!(!state.wrap_mode);
+        state.toggle_wrap_mode(); // wrap on again
+        assert!(state.wrap_mode);
+        assert_eq!(state.h_offset, 0);
+    }
+
+    #[test]
+    fn test_wrap_mode_h_offset_unchanged_when_disabling_from_nonzero() {
+        let mut state = LogViewState::new();
+        // Enable nowrap, set some horizontal scroll
+        state.wrap_mode = true;
+        state.toggle_wrap_mode(); // now nowrap
+        state.h_offset = 20;
+        // Disabling again (re-enabling wrap) should reset h_offset
+        state.toggle_wrap_mode(); // back to wrap
+        assert!(state.wrap_mode);
+        assert_eq!(state.h_offset, 0, "Re-enabling wrap resets h_offset");
     }
 }

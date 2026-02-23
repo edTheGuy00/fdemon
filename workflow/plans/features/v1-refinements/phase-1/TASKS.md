@@ -40,9 +40,9 @@ Add word wrap mode to the log view, eliminating horizontal scrolling by default.
 
 | # | Task | Status | Depends On | Crates | Key Files |
 |---|------|--------|------------|--------|-----------|
-| 1 | [01-wrap-state](tasks/01-wrap-state.md) | Not Started | - | `fdemon-app` | `log_view_state.rs`, `message.rs`, `keys.rs`, `update.rs`, `scroll.rs` |
-| 2 | [02-wrap-rendering](tasks/02-wrap-rendering.md) | Not Started | 1 | `fdemon-tui` | `log_view/mod.rs`, `render/mod.rs` |
-| 3 | [03-wrap-tests](tasks/03-wrap-tests.md) | Not Started | 2 | `fdemon-app`, `fdemon-tui` | `log_view_state.rs` tests, `log_view/tests.rs` |
+| 1 | [01-wrap-state](tasks/01-wrap-state.md) | Done | - | `fdemon-app` | `log_view_state.rs`, `message.rs`, `keys.rs`, `update.rs`, `scroll.rs` |
+| 2 | [02-wrap-rendering](tasks/02-wrap-rendering.md) | Done | 1 | `fdemon-tui` | `log_view/mod.rs`, `render/mod.rs` |
+| 3 | [03-wrap-tests](tasks/03-wrap-tests.md) | Done | 2 | `fdemon-app`, `fdemon-tui` | `log_view_state.rs` tests, `log_view/tests.rs` |
 
 ## Success Criteria
 
