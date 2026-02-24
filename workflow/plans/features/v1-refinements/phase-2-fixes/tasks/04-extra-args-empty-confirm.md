@@ -84,3 +84,27 @@ fn test_confirm_with_selection_closes_modal() {
 
 - The borrow checker requires extracting `selected_value()` before mutating `state` for the save logic, since `modal` borrows `state` immutably. The code structure above uses a temporary scope to drop the borrow.
 - An alternative approach would be to clone the selected value: `let selected = modal.selected_value().cloned()` then match outside the borrow.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_extra_args.rs` | Restructured `handle_settings_extra_args_confirm()` to extract `selected_value()` in a temporary scope, returning early with `UpdateResult::none()` when it is `None` (keeping modal open). The cleanup block (setting modal and idx to `None`) now only runs after a successful selection is processed. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Temporary scope pattern**: Used a temporary scope (`let selected = { ... }`) to extract the owned `String` from `selected_value()` before mutating `state`, satisfying the borrow checker without cloning.
+2. **Save error still closes modal**: If `save_launch_configs` fails, the error is captured but the modal still closes. This is pre-existing behavior and not changed by this task.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1122 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- 2 confirm tests: `test_extra_args_confirm_with_no_selection_keeps_modal_open`, `test_confirm_adds_selected_arg_to_config` (pre-existing)

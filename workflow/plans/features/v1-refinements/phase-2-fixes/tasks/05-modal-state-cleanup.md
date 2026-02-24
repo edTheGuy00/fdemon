@@ -82,3 +82,41 @@ fn test_hide_settings_clears_modal_state() {
 - `show_settings()` already replaces the entire `SettingsViewState`, so this cleanup in `hide_settings()` is technically redundant for the hide → show cycle. However, it makes `hide_settings()` self-consistent and prevents any code that checks modal state between hide and the next show from getting confused.
 - The `handle_force_hide_settings()` handler calls `state.hide_settings()`, so it will also benefit from this fix.
 - Splitting `editing_config_idx` into per-modal fields is deferred as over-engineering given the guard added in task 02.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `dart_defines_modal`, `editing_config_idx`, `extra_args_modal` fields to `SettingsViewState`; added `has_modal_open()` method; updated `hide_settings()` to clear all three modal fields; added import for `DartDefinesModalState` and `FuzzyModalState`; added 4 tests |
+| `crates/fdemon-app/src/new_session_dialog/types.rs` | Added `ExtraArgs` variant to `FuzzyModalType` with `title() = "Edit Extra Args"` and `allows_custom() = true` |
+| `crates/fdemon-app/src/new_session_dialog/state.rs` | Added `ExtraArgs` no-op arm to `close_fuzzy_modal_with_selection()` match |
+| `crates/fdemon-app/src/handler/new_session/fuzzy_modal.rs` | Added `ExtraArgs` no-op/warn arms to `handle_open_fuzzy_modal()` and `handle_fuzzy_confirm()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Prerequisite modal state added**: The worktree branch predated the phase-2 modal state work. The task assumed the modal fields already existed in `SettingsViewState`, but they did not. Added all prerequisite work (fields, `has_modal_open()`, `FuzzyModalType::ExtraArgs`) inline as part of this task to satisfy the acceptance criteria.
+
+2. **`AppState::test_default()` replaced with `AppState::new()`**: The task test spec used `AppState::test_default()` which does not exist in the codebase. Used `AppState::new()` instead, which is consistent with other tests in `state.rs`.
+
+3. **`editing_config_idx` doc comment**: Added the full SHARED invariant doc comment as specified, documenting that only one modal may be open at a time and that `has_modal_open()` guards enforce this.
+
+4. **No-op ExtraArgs arms**: Added `ExtraArgs` arms to `NewSessionDialog`-owned fuzzy modal handlers. These are no-ops by design — `ExtraArgs` modals are owned by `SettingsViewState::extra_args_modal`, not `NewSessionDialogState::fuzzy_modal`. Needed to satisfy Rust match exhaustiveness.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed (no compilation errors)
+- `cargo test -p fdemon-app -- hide_settings` - Passed (1 test)
+- `cargo test -p fdemon-app -- settings` - Passed (108 tests)
+- `cargo test -p fdemon-app` - Passed (910 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Worktree divergence**: The worktree was missing all phase-2 settings modal infrastructure (committed in `854a05a` on develop). Required adding prerequisite fields and `FuzzyModalType::ExtraArgs` as part of this task. When this branch is merged back to develop, these changes will need to be reconciled with the existing develop code to avoid duplication.

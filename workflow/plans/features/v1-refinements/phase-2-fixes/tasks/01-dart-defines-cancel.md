@@ -137,3 +137,30 @@ fn test_defines_sorted_alphabetically_on_open() {
 - The existing `SettingsDartDefinesClose` handler remains the "save and exit" path — it should be triggered by an explicit save action (e.g., a "Save" button or Ctrl+S if added later)
 - The extra args modal already has correct Esc-as-cancel semantics via `SettingsExtraArgsClose` — this task brings dart defines in line
 - After this change, both modals have consistent behavior: Esc = discard, explicit action = save
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `SettingsDartDefinesCancel` variant with doc comment. Fixed doc comment on `SettingsDartDefinesClose` to say "persist". Added `NewSessionDialogCancelDartDefinesModal` variant with doc comment for the new session dialog equivalent. |
+| `crates/fdemon-app/src/handler/settings_dart_defines.rs` | Added `handle_settings_dart_defines_cancel()` (clears modal without disk write). Added `tracing::warn!` in close handler's else branch when `editing_config_idx` is None. Added `defines.sort_by()` in open handler for alphabetical order. Added guard from task 02 and 4 regression tests from task 06. |
+| `crates/fdemon-app/src/handler/keys.rs` | Changed Esc in `DartDefinesPane::List` from `SettingsDartDefinesClose` to `SettingsDartDefinesCancel`. Made `handle_dart_defines_modal_key` (new session dialog) pane-aware: Esc in List -> Cancel, Esc in Edit -> SwitchPane. |
+| `crates/fdemon-app/src/handler/update.rs` | Routed `SettingsDartDefinesCancel` to `handle_settings_dart_defines_cancel`. Routed `NewSessionDialogCancelDartDefinesModal` to `handle_cancel_dart_defines_modal`. |
+| `crates/fdemon-app/src/handler/new_session/dart_defines_modal.rs` | Added `handle_cancel_dart_defines_modal()`, `tracing::warn!` in close handler, alphabetical sort on open (equivalent changes for the new session dialog modal). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Both modal systems updated**: The settings panel and new session dialog have separate dart defines modals. Both were updated for consistency, though the task only specified the settings panel.
+2. **Esc in Edit pane unchanged**: Esc in the Edit pane maps to SwitchPane (back to List), not Cancel. This preserves the ability to navigate between panes without losing edits.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1122 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed

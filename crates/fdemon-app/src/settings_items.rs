@@ -12,6 +12,20 @@ use crate::config::{
 };
 use crate::state::SettingsViewState;
 
+/// Field suffix for dart defines items in launch config settings.
+/// Used in item IDs with format: `launch.{idx}.dart_defines`
+pub const FIELD_DART_DEFINES: &str = "dart_defines";
+
+/// Field suffix for extra args items in launch config settings.
+/// Used in item IDs with format: `launch.{idx}.extra_args`
+pub const FIELD_EXTRA_ARGS: &str = "extra_args";
+
+/// Sentinel item ID for the "Add New Configuration" button in launch config settings.
+pub const SENTINEL_ADD_NEW: &str = "launch.__add_new__";
+
+/// Number of virtual items appended after real launch config items (the "Add New" button).
+pub const ADD_NEW_BUTTON_COUNT: usize = 1;
+
 /// Get the currently selected setting item for editing
 ///
 /// This function builds the list of settings items for the active tab
@@ -43,7 +57,7 @@ pub fn get_selected_item(
             // handler can dispatch LaunchConfigCreate.
             if !all_items.is_empty() && view_state.selected_index == all_items.len() {
                 return Some(
-                    SettingItem::new("launch.__add_new__", "Add New Configuration")
+                    SettingItem::new(SENTINEL_ADD_NEW, "Add New Configuration")
                         .value(SettingValue::Bool(false))
                         .section("Actions".to_string()),
                 );
@@ -394,7 +408,7 @@ pub fn launch_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
             .value(SettingValue::Bool(config.auto_start))
             .default(SettingValue::Bool(false))
             .section(format!("Configuration {}", idx + 1)),
-        SettingItem::new(format!("{}.dart_defines", prefix), "Dart Defines")
+        SettingItem::new(format!("{}.{}", prefix, FIELD_DART_DEFINES), "Dart Defines")
             .description("--dart-define values")
             .value(SettingValue::List(
                 config
@@ -405,7 +419,7 @@ pub fn launch_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
             ))
             .default(SettingValue::List(vec![]))
             .section(format!("Configuration {}", idx + 1)),
-        SettingItem::new(format!("{}.extra_args", prefix), "Extra Args")
+        SettingItem::new(format!("{}.{}", prefix, FIELD_EXTRA_ARGS), "Extra Args")
             .description("Additional flutter run arguments")
             .value(SettingValue::List(config.extra_args.clone()))
             .default(SettingValue::List(vec![]))
@@ -451,7 +465,7 @@ pub fn vscode_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
             ))
             .section(format!("Configuration {}", idx + 1))
             .readonly(),
-        SettingItem::new(format!("{}.extra_args", prefix), "Arguments")
+        SettingItem::new(format!("{}.{}", prefix, FIELD_EXTRA_ARGS), "Arguments")
             .description("Additional arguments")
             .value(SettingValue::List(config.extra_args.clone()))
             .section(format!("Configuration {}", idx + 1))

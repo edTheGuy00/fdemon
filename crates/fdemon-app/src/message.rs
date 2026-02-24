@@ -582,8 +582,19 @@ pub enum Message {
     /// Open dart defines modal
     NewSessionDialogOpenDartDefinesModal,
 
-    /// Close dart defines modal (saves changes)
+    /// Close dart defines modal and persist changes to the launch context.
+    ///
+    /// Reads the current working copy from the modal, applies it to
+    /// `launch_context.dart_defines`, triggers auto-save if a FDemon config
+    /// is selected, then dismisses the modal.
     NewSessionDialogCloseDartDefinesModal,
+
+    /// Cancel dart defines modal and discard all unsaved edits.
+    ///
+    /// Closes the modal without applying any changes to the launch context.
+    /// No auto-save is triggered. Used when the user presses Esc from the
+    /// List pane.
+    NewSessionDialogCancelDartDefinesModal,
 
     /// Switch between list and edit panes
     NewSessionDialogDartDefinesSwitchPane,
@@ -945,8 +956,11 @@ pub enum Message {
     /// `SettingItem.id` pattern `"launch.{idx}.dart_defines"`.
     SettingsDartDefinesOpen { config_idx: usize },
 
-    /// Close the dart defines modal without saving changes.
+    /// Close the dart defines modal and persist all changes to disk.
     SettingsDartDefinesClose,
+
+    /// Cancel the dart defines modal, discarding any unsaved changes.
+    SettingsDartDefinesCancel,
 
     /// Switch focus between the list pane and the edit pane.
     SettingsDartDefinesSwitchPane,

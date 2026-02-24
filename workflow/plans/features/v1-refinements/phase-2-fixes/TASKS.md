@@ -41,12 +41,12 @@ Address 2 critical, 4 major, and 6 minor issues identified during the phase-2 co
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-dart-defines-cancel](tasks/01-dart-defines-cancel.md) | Not Started | - | 2-3h | `settings_dart_defines.rs`, `keys.rs`, `message.rs` |
-| 2 | [02-modal-open-guard](tasks/02-modal-open-guard.md) | Not Started | - | 0.5-1h | `settings_dart_defines.rs`, `settings_extra_args.rs` |
-| 3 | [03-magic-string-constants](tasks/03-magic-string-constants.md) | Not Started | - | 1-2h | `settings_items.rs`, `settings_handlers.rs`, `settings.rs` |
-| 4 | [04-extra-args-empty-confirm](tasks/04-extra-args-empty-confirm.md) | Not Started | - | 0.5-1h | `settings_extra_args.rs` |
-| 5 | [05-modal-state-cleanup](tasks/05-modal-state-cleanup.md) | Not Started | - | 1-2h | `state.rs` |
-| 6 | [06-review-fix-tests](tasks/06-review-fix-tests.md) | Not Started | 1, 2, 3, 4, 5 | 1.5-2h | Cross-module tests |
+| 1 | [01-dart-defines-cancel](tasks/01-dart-defines-cancel.md) | Done | - | 2-3h | `settings_dart_defines.rs`, `keys.rs`, `message.rs` |
+| 2 | [02-modal-open-guard](tasks/02-modal-open-guard.md) | Done | - | 0.5-1h | `settings_dart_defines.rs`, `settings_extra_args.rs` |
+| 3 | [03-magic-string-constants](tasks/03-magic-string-constants.md) | Done | - | 1-2h | `settings_items.rs`, `settings_handlers.rs`, `settings.rs` |
+| 4 | [04-extra-args-empty-confirm](tasks/04-extra-args-empty-confirm.md) | Done | - | 0.5-1h | `settings_extra_args.rs` |
+| 5 | [05-modal-state-cleanup](tasks/05-modal-state-cleanup.md) | Done | - | 1-2h | `state.rs` |
+| 6 | [06-review-fix-tests](tasks/06-review-fix-tests.md) | Done | 1, 2, 3, 4, 5 | 1.5-2h | Cross-module tests |
 
 ## Review Issue Mapping
 

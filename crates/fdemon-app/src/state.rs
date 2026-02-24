@@ -507,8 +507,13 @@ pub struct SettingsViewState {
     /// Set when the user opens the dart defines editor for a launch config.
     pub dart_defines_modal: Option<DartDefinesModalState>,
 
-    /// The 0-based index of the launch config currently being edited in the
-    /// dart defines modal. Set on open, cleared on close.
+    /// The 0-based index of the launch config currently being edited.
+    ///
+    /// **SHARED** between `dart_defines_modal` and `extra_args_modal` —
+    /// only one modal may be open at a time. The `has_modal_open()` guard
+    /// in each open handler enforces this invariant.
+    ///
+    /// Set on modal open, cleared on modal close/cancel.
     pub editing_config_idx: Option<usize>,
 
     /// Active extra args fuzzy modal overlay (if any).
@@ -865,7 +870,12 @@ impl AppState {
     }
 
     /// Hide settings panel
+    /// Clears all modal overlay state in addition to resetting the UI mode so
+    /// that stale modal data cannot leak between open/close cycles.
     pub fn hide_settings(&mut self) {
+        self.settings_view_state.dart_defines_modal = None;
+        self.settings_view_state.extra_args_modal = None;
+        self.settings_view_state.editing_config_idx = None;
         self.ui_mode = UiMode::Normal;
     }
 
@@ -1736,5 +1746,19 @@ mod tests {
         assert!(state.dart_defines_modal.is_none());
         assert!(state.extra_args_modal.is_none());
         assert!(!state.has_modal_open());
+    }
+
+    #[test]
+    fn test_hide_settings_clears_modal_state() {
+        use crate::new_session_dialog::DartDefinesModalState;
+
+        let mut state = AppState::new();
+        state.show_settings();
+        state.settings_view_state.dart_defines_modal = Some(DartDefinesModalState::new(vec![]));
+        state.settings_view_state.editing_config_idx = Some(0);
+        state.hide_settings();
+        assert!(state.settings_view_state.dart_defines_modal.is_none());
+        assert!(state.settings_view_state.editing_config_idx.is_none());
+        assert!(!state.settings_view_state.has_modal_open());
     }
 }

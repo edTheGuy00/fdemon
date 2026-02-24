@@ -82,15 +82,17 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
             &state.project_path,
             &state.settings_view_state,
         ) {
+            use crate::settings_items::{FIELD_DART_DEFINES, FIELD_EXTRA_ARGS, SENTINEL_ADD_NEW};
+
             // Dispatch LaunchConfigCreate when the add-new sentinel is selected
-            if item.id == "launch.__add_new__" {
+            if item.id == SENTINEL_ADD_NEW {
                 return update(state, Message::LaunchConfigCreate);
             }
 
             // dart_defines items open the dedicated modal overlay instead of
             // inline edit mode.  Extract config_idx from the item ID which has
             // the format "launch.{idx}.dart_defines".
-            if item.id.ends_with(".dart_defines") {
+            if item.id.ends_with(&format!(".{}", FIELD_DART_DEFINES)) {
                 let parts: Vec<&str> = item.id.split('.').collect();
                 if let Some(idx_str) = parts.get(1) {
                     if let Ok(config_idx) = idx_str.parse::<usize>() {
@@ -103,7 +105,7 @@ pub fn handle_settings_toggle_edit(state: &mut AppState) -> UpdateResult {
             // extra_args items open the fuzzy modal overlay instead of inline
             // edit mode.  Extract config_idx from the item ID which has the
             // format "launch.{idx}.extra_args".
-            if item.id.ends_with(".extra_args") {
+            if item.id.ends_with(&format!(".{}", FIELD_EXTRA_ARGS)) {
                 let parts: Vec<&str> = item.id.split('.').collect();
                 if let Some(idx_str) = parts.get(1) {
                     if let Ok(config_idx) = idx_str.parse::<usize>() {
@@ -398,7 +400,7 @@ fn get_item_count_for_tab(state: &AppState) -> usize {
                 .map(|(idx, resolved)| launch_config_items(&resolved.config, idx).len())
                 .sum();
             if item_count > 0 {
-                item_count + 1 // +1 for "Add New Configuration" button
+                item_count + crate::settings_items::ADD_NEW_BUTTON_COUNT
             } else {
                 0
             }

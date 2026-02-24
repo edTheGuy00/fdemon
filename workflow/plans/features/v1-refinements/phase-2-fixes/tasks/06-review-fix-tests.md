@@ -122,3 +122,40 @@ cargo test --workspace
 - Each test should be minimal — test one behavior, not an entire flow
 - Tests in this task may overlap with tests written inline by tasks 01-05. Deduplicate if needed — the goal is coverage, not duplication.
 - The magic string constants task (03) is pure refactoring with no behavioral change, so it does not need dedicated new tests — existing tests serve as regression anchors.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_dart_defines.rs` | Added 2 tests: `test_dart_defines_cancel_does_not_persist`, `test_dart_defines_sorted_alphabetically_on_open` |
+| `crates/fdemon-app/src/handler/settings_extra_args.rs` | Added 3 tests: `test_dart_defines_open_noop_when_extra_args_modal_active`, `test_extra_args_open_noop_when_dart_defines_modal_active`, `test_extra_args_confirm_with_no_selection_keeps_modal_open` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Deduplication**: Several tests were already present from tasks 01-05. Specifically:
+   - `test_esc_in_dart_defines_list_sends_cancel_not_close` — already covered by `test_key_routing_dart_defines_modal_esc_in_list_cancels` in `keys.rs`
+   - `test_dart_defines_close_still_persists` — already covered by `test_close_modal_persists_defines_to_disk` in `settings_dart_defines.rs`
+   - `test_hide_settings_clears_all_modal_state` — already covered by `test_hide_settings_clears_modal_state` in `state.rs` (which checks all three assertions: `dart_defines_modal.is_none()`, `editing_config_idx.is_none()`, and `!has_modal_open()`)
+   These were not duplicated per the task's guidance: "Read the existing test modules first and ONLY add tests that are missing."
+
+2. **Guard test placement**: The two modal open-guard tests (`test_dart_defines_open_noop_when_extra_args_modal_active` and `test_extra_args_open_noop_when_dart_defines_modal_active`) were placed in `settings_extra_args.rs` since that file's tests import both handler functions. Both tests use `crate::handler::settings_dart_defines::handle_settings_dart_defines_open` via fully-qualified path to avoid naming conflicts.
+
+3. **Empty confirm setup**: `test_extra_args_confirm_with_no_selection_keeps_modal_open` directly clears `filtered_indices` and `query` on the modal after opening it. This is the most direct way to force `selected_value()` to return `None` since `FuzzyModalType::ExtraArgs` allows custom input (which only kicks in when query is non-empty).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- settings_dart_defines settings_extra_args` - Passed (29 tests)
+- `cargo test -p fdemon-app` - Passed (1122 passed; 0 failed; 5 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No workspace-wide run**: The full `cargo test --workspace` was not run since the workspace has integration tests that require a real Flutter environment. The `fdemon-app` crate tests (the scope of this task) all pass cleanly.

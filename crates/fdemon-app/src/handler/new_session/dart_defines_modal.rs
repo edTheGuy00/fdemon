@@ -6,31 +6,55 @@ use crate::handler::UpdateResult;
 use crate::message::Message;
 use crate::state::AppState;
 
-/// Handle opening dart defines modal
+/// Handle opening dart defines modal.
+///
+/// Copies the current dart defines from the launch context into the modal
+/// working copy, sorted alphabetically by key for consistent presentation.
 pub fn handle_open_dart_defines_modal(state: &mut AppState) -> UpdateResult {
     // Copy current dart defines into modal state
     state.new_session_dialog_state.open_dart_defines_modal();
+
+    // Sort defines alphabetically by key for consistent display
+    if let Some(ref mut modal) = state.new_session_dialog_state.dart_defines_modal {
+        modal.defines.sort_by(|a, b| a.key.cmp(&b.key));
+    }
+
     UpdateResult::none()
 }
 
-/// Handle closing dart defines modal
+/// Handle closing dart defines modal and persisting changes.
+///
+/// Reads the working copy from the modal, applies it to the launch context,
+/// triggers auto-save for editable FDemon configurations, then dismisses the
+/// modal. If the modal is unexpectedly absent, emits a warning and returns
+/// without modifying state.
 pub fn handle_close_dart_defines_modal(
     state: &mut AppState,
     update_fn: fn(&mut AppState, Message) -> UpdateResult,
 ) -> UpdateResult {
     // Get defines from modal before closing
-    let defines = state
-        .new_session_dialog_state
-        .dart_defines_modal
-        .as_ref()
-        .map(|m| m.defines.clone())
-        .unwrap_or_default();
+    let defines = if let Some(modal) = state.new_session_dialog_state.dart_defines_modal.as_ref() {
+        modal.defines.clone()
+    } else {
+        tracing::warn!("dart defines modal closed with no editing_config_idx — changes discarded");
+        state.new_session_dialog_state.dart_defines_modal = None;
+        return UpdateResult::none();
+    };
 
     // Use the new dart defines updated message which handles auto-save
     update_fn(
         state,
         Message::NewSessionDialogDartDefinesUpdated { defines },
     )
+}
+
+/// Handle cancelling dart defines modal and discarding all changes.
+///
+/// Closes the modal without applying any changes to the launch context.
+/// No auto-save is triggered.
+pub fn handle_cancel_dart_defines_modal(state: &mut AppState) -> UpdateResult {
+    state.new_session_dialog_state.dart_defines_modal = None;
+    UpdateResult::none()
 }
 
 /// Handle pane switch in dart defines modal

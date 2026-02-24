@@ -18,21 +18,25 @@ use crate::state::AppState;
 /// `settings_view_state.editing_config_idx` so that the close handler knows
 /// which config to update.
 pub fn handle_settings_dart_defines_open(state: &mut AppState, config_idx: usize) -> UpdateResult {
+    if state.settings_view_state.has_modal_open() {
+        return UpdateResult::none();
+    }
     let configs = load_launch_configs(&state.project_path);
     if let Some(resolved) = configs.get(config_idx) {
-        let defines: Vec<DartDefine> = resolved
+        let mut defines: Vec<DartDefine> = resolved
             .config
             .dart_defines
             .iter()
             .map(|(k, v)| DartDefine::new(k.clone(), v.clone()))
             .collect();
+        defines.sort_by(|a, b| a.key.cmp(&b.key));
         state.settings_view_state.dart_defines_modal = Some(DartDefinesModalState::new(defines));
         state.settings_view_state.editing_config_idx = Some(config_idx);
     }
     UpdateResult::none()
 }
 
-/// Close the dart defines modal and persist any changes to `.fdemon/launch.toml`.
+/// Close the dart defines modal and persist all changes to `.fdemon/launch.toml`.
 ///
 /// Takes the defines from the modal, converts them to a `HashMap<String,
 /// String>`, and saves the updated launch configs to disk.  The
@@ -52,8 +56,19 @@ pub fn handle_settings_dart_defines_close(state: &mut AppState) -> UpdateResult 
                     state.settings_view_state.error = Some(format!("Failed to save: {}", e));
                 }
             }
+        } else {
+            tracing::warn!(
+                "dart defines modal closed with no editing_config_idx — changes discarded"
+            );
         }
     }
+    UpdateResult::none()
+}
+
+/// Cancel the dart defines modal without persisting changes.
+pub fn handle_settings_dart_defines_cancel(state: &mut AppState) -> UpdateResult {
+    state.settings_view_state.dart_defines_modal = None;
+    state.settings_view_state.editing_config_idx = None;
     UpdateResult::none()
 }
 
@@ -405,6 +420,113 @@ mod tests {
         assert!(
             modal.defines.iter().any(|d| d.key == "PERSIST"),
             "Expected PERSIST define to be loaded from disk"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase-2 review regression anchors (Task 06)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Cancel discards in-flight edits — no data reaches disk.
+    ///
+    /// Regression anchor for Critical #1: `SettingsDartDefinesCancel` must
+    /// discard all working-copy changes and leave the on-disk launch config
+    /// untouched.
+    #[test]
+    fn test_dart_defines_cancel_does_not_persist() {
+        let (mut state, temp) = state_with_launch_config();
+
+        // Open the modal and append a define to the working copy.
+        handle_settings_dart_defines_open(&mut state, 0);
+        if let Some(ref mut modal) = state.settings_view_state.dart_defines_modal {
+            modal
+                .defines
+                .push(DartDefine::new("SHOULD_NOT_SAVE", "true"));
+        }
+
+        // Cancel — must NOT persist changes.
+        handle_settings_dart_defines_cancel(&mut state);
+
+        // Modal and editing index are cleared.
+        assert!(state.settings_view_state.dart_defines_modal.is_none());
+        assert!(state.settings_view_state.editing_config_idx.is_none());
+
+        // Disk state is unchanged — the added define must NOT be present.
+        let configs = load_launch_configs(temp.path());
+        assert!(!configs.is_empty());
+        assert!(
+            configs[0]
+                .config
+                .dart_defines
+                .get("SHOULD_NOT_SAVE")
+                .is_none(),
+            "Cancel must not persist in-flight changes to disk"
+        );
+    }
+
+    /// Defines are sorted alphabetically when the modal is opened.
+    ///
+    /// Regression anchor for Minor #9: `handle_settings_dart_defines_open`
+    /// must sort the loaded defines by key before populating the modal so the
+    /// list is always in a deterministic order.
+    #[test]
+    fn test_dart_defines_sorted_alphabetically_on_open() {
+        let temp = tempdir().unwrap();
+
+        // Write a launch config that intentionally has out-of-order dart defines.
+        let mut dart_defines = std::collections::HashMap::new();
+        dart_defines.insert("zebra".to_string(), "1".to_string());
+        dart_defines.insert("apple".to_string(), "2".to_string());
+        dart_defines.insert("mango".to_string(), "3".to_string());
+
+        let configs = vec![crate::config::LaunchConfig {
+            name: "Sorted Test".to_string(),
+            device: "auto".to_string(),
+            dart_defines,
+            ..Default::default()
+        }];
+        crate::config::launch::save_launch_configs(temp.path(), &configs).unwrap();
+
+        let mut state = crate::state::AppState::new();
+        state.project_path = temp.path().to_path_buf();
+
+        handle_settings_dart_defines_open(&mut state, 0);
+
+        let modal = state
+            .settings_view_state
+            .dart_defines_modal
+            .as_ref()
+            .expect("modal should be open");
+
+        let keys: Vec<&str> = modal.defines.iter().map(|d| d.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            vec!["apple", "mango", "zebra"],
+            "Dart defines must be sorted alphabetically by key on open"
+        );
+    }
+
+    /// Re-opening the dart defines modal when it is already open is a no-op.
+    ///
+    /// Regression anchor for Critical #2: the `has_modal_open()` guard must
+    /// prevent a second `handle_settings_dart_defines_open` call from
+    /// overwriting the `editing_config_idx` of the first open.
+    #[test]
+    fn test_dart_defines_open_blocked_when_already_open() {
+        let (mut state, _temp) = state_with_launch_config();
+
+        // Open the dart defines modal for config 0.
+        handle_settings_dart_defines_open(&mut state, 0);
+        assert!(state.settings_view_state.dart_defines_modal.is_some());
+        assert_eq!(state.settings_view_state.editing_config_idx, Some(0));
+
+        // Attempt to re-open for a different index — must be blocked.
+        handle_settings_dart_defines_open(&mut state, 1);
+
+        assert_eq!(
+            state.settings_view_state.editing_config_idx,
+            Some(0),
+            "editing_config_idx must not be overwritten by a second open"
         );
     }
 

@@ -547,6 +547,13 @@ fn handle_key_settings(state: &AppState, key: InputKey) -> Option<Message> {
         // Save
         InputKey::CharCtrl('s') => Some(Message::SettingsSave),
 
+        // Create new launch config ('n' on Launch Config tab)
+        InputKey::Char('n')
+            if state.settings_view_state.active_tab == crate::config::SettingsTab::LaunchConfig =>
+        {
+            Some(Message::LaunchConfigCreate)
+        }
+
         // Force quit with Ctrl+C
         InputKey::CharCtrl('c') => Some(Message::Quit),
 
@@ -649,7 +656,7 @@ fn handle_key_settings_dart_defines(state: &AppState, key: InputKey) -> Option<M
             InputKey::Down | InputKey::Char('j') => Some(Message::SettingsDartDefinesDown),
             InputKey::Enter => Some(Message::SettingsDartDefinesConfirm),
             InputKey::Tab => Some(Message::SettingsDartDefinesSwitchPane),
-            InputKey::Esc => Some(Message::SettingsDartDefinesClose),
+            InputKey::Esc => Some(Message::SettingsDartDefinesCancel),
             _ => None,
         },
         DartDefinesPane::Edit => match modal.edit_field {
@@ -708,7 +715,7 @@ fn handle_key_new_session_dialog(key: InputKey, state: &AppState) -> Option<Mess
         return handle_fuzzy_modal_key(key);
     }
     if dialog.is_dart_defines_modal_open() {
-        return handle_dart_defines_modal_key(key);
+        return handle_dart_defines_modal_key(key, dialog);
     }
 
     match key {
@@ -744,13 +751,29 @@ fn handle_fuzzy_modal_key(key: InputKey) -> Option<Message> {
     }
 }
 
-fn handle_dart_defines_modal_key(key: InputKey) -> Option<Message> {
+fn handle_dart_defines_modal_key(
+    key: InputKey,
+    dialog: &crate::new_session_dialog::NewSessionDialogState,
+) -> Option<Message> {
+    use crate::new_session_dialog::DartDefinesPane;
+
+    let active_pane = dialog
+        .dart_defines_modal
+        .as_ref()
+        .map(|m| m.active_pane)
+        .unwrap_or(DartDefinesPane::List);
+
     match key {
         InputKey::Tab => Some(Message::NewSessionDialogDartDefinesSwitchPane),
         InputKey::Up => Some(Message::NewSessionDialogDartDefinesUp),
         InputKey::Down => Some(Message::NewSessionDialogDartDefinesDown),
         InputKey::Enter => Some(Message::NewSessionDialogDartDefinesConfirm),
-        InputKey::Esc => Some(Message::NewSessionDialogCloseDartDefinesModal),
+        InputKey::Esc => match active_pane {
+            // Esc in List pane → cancel (discard changes, close modal)
+            DartDefinesPane::List => Some(Message::NewSessionDialogCancelDartDefinesModal),
+            // Esc in Edit pane → switch back to List pane (don't close)
+            DartDefinesPane::Edit => Some(Message::NewSessionDialogDartDefinesSwitchPane),
+        },
         InputKey::Backspace => Some(Message::NewSessionDialogDartDefinesBackspace),
         InputKey::Char(c) => Some(Message::NewSessionDialogDartDefinesInput { c }),
         _ => None,
@@ -1214,7 +1237,7 @@ mod settings_modal_key_routing_tests {
 
     /// When the dart defines modal is open, Esc closes the modal (not settings).
     #[test]
-    fn test_key_routing_dart_defines_modal_esc_closes_modal() {
+    fn test_key_routing_dart_defines_modal_esc_in_list_cancels() {
         use crate::new_session_dialog::{DartDefine, DartDefinesModalState};
 
         let mut state = AppState::new();
@@ -1224,8 +1247,8 @@ mod settings_modal_key_routing_tests {
 
         let msg = handle_key_settings(&state, InputKey::Esc);
         assert!(
-            matches!(msg, Some(Message::SettingsDartDefinesClose)),
-            "Esc with dart defines modal open should emit SettingsDartDefinesClose, not HideSettings"
+            matches!(msg, Some(Message::SettingsDartDefinesCancel)),
+            "Esc in List pane should emit SettingsDartDefinesCancel, not Close or HideSettings"
         );
     }
 

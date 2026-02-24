@@ -13,7 +13,9 @@ use crate::new_session_dialog::fuzzy::fuzzy_filter;
 use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
 use crate::state::AppState;
 
-/// Preset extra-args offered in the modal when the user has no existing args.
+/// Preset Flutter CLI flags shown in the extra args fuzzy picker when
+/// the launch config has no existing extra args. Users can always type
+/// custom flags via the modal's custom input support.
 const PRESET_EXTRA_ARGS: &[&str] = &[
     "--verbose",
     "--trace-startup",
@@ -30,6 +32,9 @@ const PRESET_EXTRA_ARGS: &[&str] = &[
 /// The config index is stored on `settings_view_state.editing_config_idx` so
 /// that the confirm/close handlers know which config to update.
 pub fn handle_settings_extra_args_open(state: &mut AppState, config_idx: usize) -> UpdateResult {
+    if state.settings_view_state.has_modal_open() {
+        return UpdateResult::none();
+    }
     let configs = load_launch_configs(&state.project_path);
     if let Some(resolved) = configs.get(config_idx) {
         let items: Vec<String> = if resolved.config.extra_args.is_empty() {
@@ -111,25 +116,42 @@ pub fn handle_settings_extra_args_down(state: &mut AppState) -> UpdateResult {
 /// no items match) is appended to the config's `extra_args` list if it is not
 /// already present.  The updated configs are persisted to
 /// `.fdemon/launch.toml`.  The modal is closed after a successful confirm.
+///
+/// When `selected_value()` returns `None` (empty filter with no typed query),
+/// the function returns early so the modal stays open — the user retains their
+/// context without losing the modal unexpectedly.
 pub fn handle_settings_extra_args_confirm(state: &mut AppState) -> UpdateResult {
-    if let Some(ref modal) = state.settings_view_state.extra_args_modal {
-        if let Some(selected) = modal.selected_value() {
-            if let Some(config_idx) = state.settings_view_state.editing_config_idx {
-                let mut configs = load_launch_configs(&state.project_path);
-                if let Some(resolved) = configs.get_mut(config_idx) {
-                    // Add the arg if not already present
-                    if !resolved.config.extra_args.contains(&selected) {
-                        resolved.config.extra_args.push(selected);
-                    }
-                    let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
-                    if let Err(e) = save_launch_configs(&state.project_path, &config_vec) {
-                        state.settings_view_state.error = Some(format!("Failed to save: {}", e));
-                    }
-                }
+    // Extract selected value in a temporary scope to satisfy the borrow checker:
+    // `modal` borrows `state` immutably, so we must drop that borrow before we
+    // can mutate `state` below (saving configs, closing the modal, etc.).
+    let selected = {
+        let modal = match state.settings_view_state.extra_args_modal.as_ref() {
+            Some(m) => m,
+            None => return UpdateResult::none(),
+        };
+        match modal.selected_value() {
+            Some(v) => v,
+            // No selection and no custom query — keep the modal open so the
+            // user doesn't silently lose their context.
+            None => return UpdateResult::none(),
+        }
+    };
+
+    if let Some(config_idx) = state.settings_view_state.editing_config_idx {
+        let mut configs = load_launch_configs(&state.project_path);
+        if let Some(resolved) = configs.get_mut(config_idx) {
+            // Add the arg if not already present
+            if !resolved.config.extra_args.contains(&selected) {
+                resolved.config.extra_args.push(selected);
+            }
+            let config_vec: Vec<_> = configs.iter().map(|r| r.config.clone()).collect();
+            if let Err(e) = save_launch_configs(&state.project_path, &config_vec) {
+                state.settings_view_state.error = Some(format!("Failed to save: {}", e));
             }
         }
     }
-    // Close the modal after confirm (regardless of whether save succeeded)
+
+    // Only close the modal after a successful selection was processed
     state.settings_view_state.extra_args_modal = None;
     state.settings_view_state.editing_config_idx = None;
     UpdateResult::none()
@@ -408,6 +430,84 @@ mod tests {
         let (mut state, _temp) = state_with_launch_config();
         // No modal open — should not panic
         handle_settings_extra_args_confirm(&mut state);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase-2 review regression anchors (Task 06)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Opening the dart defines modal is a no-op when the extra args modal is
+    /// already open.
+    ///
+    /// Regression anchor for Critical #2: the `has_modal_open()` guard in
+    /// `handle_settings_dart_defines_open` must prevent a second modal from
+    /// being opened while the extra args modal is active.
+    #[test]
+    fn test_dart_defines_open_noop_when_extra_args_modal_active() {
+        let (mut state, _temp) = state_with_launch_config();
+
+        // Open the extra args modal first.
+        handle_settings_extra_args_open(&mut state, 0);
+        assert!(state.settings_view_state.extra_args_modal.is_some());
+        assert_eq!(state.settings_view_state.editing_config_idx, Some(0));
+
+        // Attempting to open the dart defines modal must be a no-op.
+        crate::handler::settings_dart_defines::handle_settings_dart_defines_open(&mut state, 0);
+
+        assert!(
+            state.settings_view_state.dart_defines_modal.is_none(),
+            "dart_defines_modal must remain None while extra_args_modal is open"
+        );
+    }
+
+    /// Opening the extra args modal is a no-op when the dart defines modal is
+    /// already open.
+    ///
+    /// Regression anchor for Critical #2: the `has_modal_open()` guard in
+    /// `handle_settings_extra_args_open` must prevent a second modal from
+    /// being opened while the dart defines modal is active.
+    #[test]
+    fn test_extra_args_open_noop_when_dart_defines_modal_active() {
+        let (mut state, _temp) = state_with_launch_config();
+
+        // Open the dart defines modal first.
+        crate::handler::settings_dart_defines::handle_settings_dart_defines_open(&mut state, 0);
+        assert!(state.settings_view_state.dart_defines_modal.is_some());
+        assert_eq!(state.settings_view_state.editing_config_idx, Some(0));
+
+        // Attempting to open the extra args modal must be a no-op.
+        handle_settings_extra_args_open(&mut state, 0);
+
+        assert!(
+            state.settings_view_state.extra_args_modal.is_none(),
+            "extra_args_modal must remain None while dart_defines_modal is open"
+        );
+    }
+
+    /// Confirming with no selection (empty filter, no query) keeps the modal open.
+    ///
+    /// Regression anchor for Major #6: when `selected_value()` returns `None`
+    /// the handler must return early without closing the modal so the user
+    /// does not silently lose their context.
+    #[test]
+    fn test_extra_args_confirm_with_no_selection_keeps_modal_open() {
+        let (mut state, _temp) = state_with_launch_config();
+        handle_settings_extra_args_open(&mut state, 0);
+
+        // Force the filtered list to be empty and the query to be empty so
+        // that `selected_value()` returns `None`.
+        if let Some(ref mut modal) = state.settings_view_state.extra_args_modal {
+            modal.filtered_indices.clear();
+            modal.query.clear();
+        }
+
+        // Confirm with nothing selected — modal must stay open.
+        handle_settings_extra_args_confirm(&mut state);
+
+        assert!(
+            state.settings_view_state.extra_args_modal.is_some(),
+            "Modal must remain open when confirm is called with no selection"
+        );
     }
 
     // ─────────────────────────────────────────────────────────────────────────

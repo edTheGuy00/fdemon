@@ -1021,6 +1021,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             new_session::handle_close_dart_defines_modal(state, update)
         }
 
+        Message::NewSessionDialogCancelDartDefinesModal => {
+            new_session::handle_cancel_dart_defines_modal(state)
+        }
+
         Message::NewSessionDialogDartDefinesSwitchPane => {
             new_session::handle_dart_defines_switch_pane(state)
         }
@@ -1675,6 +1679,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::SettingsDartDefinesClose => {
             settings_dart_defines::handle_settings_dart_defines_close(state)
+        }
+
+        Message::SettingsDartDefinesCancel => {
+            settings_dart_defines::handle_settings_dart_defines_cancel(state)
         }
 
         Message::SettingsDartDefinesSwitchPane => {

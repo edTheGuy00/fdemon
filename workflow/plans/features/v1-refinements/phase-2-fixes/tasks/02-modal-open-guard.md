@@ -76,3 +76,27 @@ fn test_dart_defines_open_blocked_when_already_open() {
 - `has_modal_open()` is already defined on `SettingsViewState` at `state.rs:546-548`
 - While key routing currently prevents simultaneous modals in practice (modal keys are consumed before reaching the other modal's open dispatch), this guard protects against programmatic `Message` dispatch
 - The shared `editing_config_idx` field is the reason this matters — without the guard, a second open would overwrite the index used by the first modal's close handler
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/settings_dart_defines.rs` | Added `if state.settings_view_state.has_modal_open() { return UpdateResult::none(); }` as the first line of `handle_settings_dart_defines_open()`, before `load_launch_configs()`. |
+| `crates/fdemon-app/src/handler/settings_extra_args.rs` | Added the same `has_modal_open()` guard as the first line of `handle_settings_extra_args_open()`, before `load_launch_configs()`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard placement**: The guard is the very first statement in both functions, ensuring no unnecessary disk I/O (`load_launch_configs`) when a modal is already open.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1122 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- 3 guard tests: `test_dart_defines_open_noop_when_extra_args_modal_active`, `test_extra_args_open_noop_when_dart_defines_modal_active`, `test_dart_defines_open_blocked_when_already_open`

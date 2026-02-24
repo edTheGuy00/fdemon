@@ -197,7 +197,7 @@ pub fn apply_launch_config_change(config: &mut LaunchConfig, item: &SettingItem)
                 config.auto_start = *v;
             }
         }
-        "dart_defines" => {
+        field if field == crate::settings_items::FIELD_DART_DEFINES => {
             if let SettingValue::List(items) = &item.value {
                 config.dart_defines = items
                     .iter()
@@ -212,7 +212,7 @@ pub fn apply_launch_config_change(config: &mut LaunchConfig, item: &SettingItem)
                     .collect();
             }
         }
-        "extra_args" => {
+        field if field == crate::settings_items::FIELD_EXTRA_ARGS => {
             if let SettingValue::List(items) = &item.value {
                 config.extra_args = items.clone();
             }
