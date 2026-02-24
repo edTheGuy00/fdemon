@@ -1,4 +1,5 @@
 pub mod architecture;
+pub mod changelog;
 pub mod configuration;
 pub mod devtools;
 pub mod installation;
@@ -9,7 +10,7 @@ use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
 use leptos_router::hooks::use_location;
 
-use crate::components::icons::{Cpu, Download, Eye, FileText, Keyboard, Menu, Settings};
+use crate::components::icons::{Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings};
 
 struct DocItem {
     href: &'static str,
@@ -48,6 +49,11 @@ fn doc_items() -> Vec<DocItem> {
             href: "/docs/architecture",
             label: "Architecture",
             icon: || view! { <Cpu class="w-4 h-4 mr-3" /> }.into_any(),
+        },
+        DocItem {
+            href: "/docs/changelog",
+            label: "Changelog",
+            icon: || view! { <ScrollText class="w-4 h-4 mr-3" /> }.into_any(),
         },
     ]
 }

@@ -182,3 +182,35 @@ lucide_icon!(History,
 - Future enhancement: a `build.rs` script could parse `CHANGELOG.md` and auto-generate the Rust data at compile time. This is deferred for now.
 - Keep the initial implementation simple — just structured data rendered as HTML. No need for markdown parsing.
 - Consider how this will scale: as releases accumulate, the page will grow. For now this is fine, but eventually a "show older" pattern or year grouping could be added.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/components/icons.rs` | Added `ScrollText` lucide icon |
+| `website/src/data.rs` | Added `ChangelogChange`, `ChangelogGroup`, `ChangelogEntry` structs and `changelog_entries()` function populated from CHANGELOG.md highlights |
+| `website/src/pages/docs/changelog.rs` | NEW — `Changelog` page component with `VersionEntry` and `GroupSection` sub-components, color-coded group badges |
+| `website/src/pages/docs/mod.rs` | Added `pub mod changelog;`, imported `ScrollText`, added "Changelog" sidebar entry (last position) |
+| `website/src/lib.rs` | Imported `Changelog`, added `<Route path=path!("/changelog") view=Changelog />` inside docs ParentRoute |
+
+### Notable Decisions/Tradeoffs
+
+1. **Static data from CHANGELOG.md**: Populated `changelog_entries()` with representative highlights from each group (Features, Bug Fixes, Refactoring, Documentation) rather than every commit, keeping the page readable. The CHANGELOG.md entries are very numerous commit messages, so key milestones were selected.
+2. **`group_colors()` helper**: Returns `(badge_class, label_class)` tuple matching group name to Tailwind color scheme (green=Features, red=Bug Fixes, blue=Documentation, purple=Refactoring, cyan=Testing, yellow=Performance, gray=others). This matches the design spec exactly.
+3. **Version card layout**: Each version entry is wrapped in a `border border-slate-800 rounded-xl` card with a blue indicator bar, matching the Section helper pattern from other doc pages without duplicating it.
+4. **`ScrollText` icon**: Used the `ScrollText` Lucide icon (scroll with text lines) as suggested in the task — semantically fits "changelog" well.
+
+### Testing Performed
+
+- `cd website && trunk build` — Passed (3.05s, `✅ success`)
+
+### Risks/Limitations
+
+1. **Static data**: The `changelog_entries()` function must be manually updated for each new release. A future `build.rs` script could automate this from CHANGELOG.md.
+2. **Selective entries**: Not every commit from CHANGELOG.md was transcribed — only representative highlights per group. All groups from the CHANGELOG (Features, Bug Fixes, Refactoring, Documentation) are represented.

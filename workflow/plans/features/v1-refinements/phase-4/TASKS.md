@@ -32,28 +32,28 @@ Independent (any wave)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-keybindings-data](tasks/01-fix-keybindings-data.md) | Not Started | - | `website/src/data.rs` |
-| 2 | [02-devtools-network-docs](tasks/02-devtools-network-docs.md) | Not Started | 1 | `website/src/pages/docs/devtools.rs` |
-| 3 | [03-update-installation-page](tasks/03-update-installation-page.md) | Not Started | - | `website/src/pages/docs/installation.rs` |
-| 4 | [04-changelog-setup](tasks/04-changelog-setup.md) | Not Started | - | `cliff.toml`, `.github/workflows/release.yml` |
-| 5 | [05-changelog-page](tasks/05-changelog-page.md) | Not Started | 4 | `website/src/data.rs`, `website/src/pages/docs/changelog.rs`, `website/src/pages/docs/mod.rs`, `website/src/lib.rs` |
-| 6 | [06-ghcr-publish-workflow](tasks/06-ghcr-publish-workflow.md) | Not Started | - | `.github/workflows/publish-site.yml` |
+| 1 | [01-fix-keybindings-data](tasks/01-fix-keybindings-data.md) | [x] Done | - | `website/src/data.rs` |
+| 2 | [02-devtools-network-docs](tasks/02-devtools-network-docs.md) | [x] Done | 1 | `website/src/pages/docs/devtools.rs` |
+| 3 | [03-update-installation-page](tasks/03-update-installation-page.md) | [x] Done | - | `website/src/pages/docs/installation.rs` |
+| 4 | [04-changelog-setup](tasks/04-changelog-setup.md) | [x] Done | - | `cliff.toml`, `.github/workflows/release.yml` |
+| 5 | [05-changelog-page](tasks/05-changelog-page.md) | [x] Done | 4 | `website/src/data.rs`, `website/src/pages/docs/changelog.rs`, `website/src/pages/docs/mod.rs`, `website/src/lib.rs` |
+| 6 | [06-ghcr-publish-workflow](tasks/06-ghcr-publish-workflow.md) | [x] Done | - | `.github/workflows/publish-site.yml` |
 
 ## Success Criteria
 
 Phase 4 is complete when:
 
-- [ ] DevTools page documents the Network Monitor panel with full keybindings
-- [ ] Phantom `l` → "Layout Panel" keybinding removed from `data.rs`
-- [ ] `n` → "Network Panel" keybinding added to `data.rs`
-- [ ] All Network panel keybindings documented (14+ bindings across 2 sections)
-- [ ] Missing Performance panel keybindings added (3 bindings)
-- [ ] Installation page updated with curl install command + platform instructions
-- [ ] `cliff.toml` configured for conventional commits
-- [ ] `release.yml` generates changelog on release
-- [ ] Changelog page exists at `/docs/changelog` on the website
-- [ ] `publish-site.yml` workflow builds website Docker image and pushes to `ghcr.io`
-- [ ] Website builds successfully (`trunk build` in `website/`)
+- [x] DevTools page documents the Network Monitor panel with full keybindings
+- [x] Phantom `l` → "Layout Panel" keybinding removed from `data.rs`
+- [x] `n` → "Network Panel" keybinding added to `data.rs`
+- [x] All Network panel keybindings documented (14+ bindings across 2 sections)
+- [x] Missing Performance panel keybindings added (3 bindings)
+- [x] Installation page updated with curl install command + platform instructions
+- [x] `cliff.toml` configured for conventional commits
+- [x] `release.yml` generates changelog on release
+- [x] Changelog page exists at `/docs/changelog` on the website
+- [x] `publish-site.yml` workflow builds website Docker image and pushes to `ghcr.io`
+- [x] Website builds successfully (`trunk build` in `website/`)
 
 ## Notes
 

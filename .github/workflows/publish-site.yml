@@ -1,0 +1,70 @@
+# Builds the fdemon.dev website (Leptos WASM app) and pushes to GHCR.
+#
+# To deploy on your server:
+#   docker pull ghcr.io/edtheguy00/flutter-demon-site:latest
+#   docker run -d -p 80:80 ghcr.io/edtheguy00/flutter-demon-site:latest
+#
+# Note: Images pushed to GHCR are private by default. After the first push,
+# change visibility to public in GitHub repo settings:
+# Settings → Packages → flutter-demon-site → Package settings → Change visibility
+
+name: Publish Website
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+    branches:
+      - develop
+    paths:
+      - 'website/**'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: edtheguy00/flutter-demon-site
+
+jobs:
+  build-and-push:
+    name: Build & Push Website Image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=ref,event=branch
+            type=sha
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./website
+          file: ./website/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -9,6 +9,7 @@ use leptos_router::components::{ParentRoute, Route, Router, Routes};
 use leptos_router::hooks::use_location;
 use leptos_router::path;
 use pages::docs::architecture::Architecture;
+use pages::docs::changelog::Changelog;
 use pages::docs::configuration::Configuration;
 use pages::docs::devtools::Devtools;
 use pages::docs::installation::Installation;
@@ -33,6 +34,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/devtools") view=Devtools />
                         <Route path=path!("/configuration") view=Configuration />
                         <Route path=path!("/architecture") view=Architecture />
+                        <Route path=path!("/changelog") view=Changelog />
                     </ParentRoute>
                 </Routes>
                 <Footer />

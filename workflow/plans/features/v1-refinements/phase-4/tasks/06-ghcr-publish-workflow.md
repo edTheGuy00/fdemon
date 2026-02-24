@@ -145,3 +145,34 @@ The user deploys to fdemon.dev from their own server. Add a comment in the workf
 - Images pushed to GHCR are **private by default**. After the first push, the package visibility must be changed to "public" in GitHub repo settings (Settings → Packages → flutter-demon-site → Package settings → Change visibility)
 - The existing `release.yml` workflow runs on the same `v*` tags. Both workflows will trigger simultaneously, which is fine — they are independent jobs
 - The `REGISTRY` and `IMAGE_NAME` env vars match the pattern `ghcr.io/<owner>/<image-name>`. Adjust `edtheguy00` if the GitHub username differs
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/publish-site.yml` | New workflow file created — builds and pushes website Docker image to GHCR |
+
+### Notable Decisions/Tradeoffs
+
+1. **paths filter applies to branch pushes only**: The `paths: ['website/**']` filter is placed under the `push` trigger alongside `branches`. GitHub Actions applies the paths filter to all push events (both tags and branches). However, the task spec notes tag pushes should always trigger — this matches the actual GitHub Actions behavior where tag pushes always match (path filters don't apply to tag ref pushes, only branch pushes). The resulting behavior is correct: tag pushes always build, develop branch pushes only build when website/ files change.
+
+2. **Deployment note in file header**: The deployment pull command was added as a block comment at the top of the file (before `name:`) rather than inline near the build step. This makes it immediately visible to operators opening the file and doesn't clutter the step definitions.
+
+3. **No `latest` tag rule needed**: The `docker/metadata-action` with `type=semver,pattern={{version}}` automatically adds a `latest` tag on semver-matching pushes, so no explicit `latest` tag rule was needed.
+
+### Testing Performed
+
+- YAML structure manually verified against all 8 acceptance criteria — Passed
+- Python YAML parse attempted (Bash permission denied) — verified by structure review
+- All required fields confirmed present: triggers, permissions, registry auth, build context, tags, cache config, deployment comment
+
+### Risks/Limitations
+
+1. **First CI build will be slow**: The Dockerfile installs nightly Rust and compiles Leptos WASM — expect 10-15 minutes on first run. Subsequent runs benefit from GHA BuildKit cache.
+2. **GHCR package visibility**: Images are private by default after first push. Manual step required to make public: Settings → Packages → flutter-demon-site → Package settings → Change visibility.

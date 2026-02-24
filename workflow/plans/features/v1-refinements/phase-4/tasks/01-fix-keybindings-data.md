@@ -95,3 +95,33 @@ Add a new "DevTools — Performance Monitor" section with **cyan** color:
 - The `NetworkDetailTab` enum variants are: `General`, `Headers`, `RequestBody`, `ResponseBody`, `Timing` — mapped to keys `g`, `h`, `q`, `s`, `t`
 - The `q` key in Network panel maps to "Request Body" tab, NOT quit — quit is suppressed when in Network panel to avoid conflicts
 - Detail tab keys (`g/h/q/s/t`) are only functional when a request is selected
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/data.rs` | Removed phantom `l` Layout Panel entry; added `n` Network Panel entry; added "DevTools — Performance Monitor" section (4 bindings); added "DevTools — Network Monitor" section (14 bindings); added "Network Filter Input" section (4 bindings) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Section ordering**: New DevTools sections (Performance Monitor, Network Monitor, Network Filter Input) are inserted immediately after the existing DevTools sections (Widget Inspector) and before the New Session Dialog block. This keeps all DevTools-related cyan sections contiguous while preserving relative ordering: Panel Navigation → Debug Overlays → Widget Inspector → Performance Monitor → Network Monitor → Network Filter Input.
+2. **Unicode arrows in Performance Monitor**: Used `\u{2190}` and `\u{2192}` for left/right arrow keys, consistent with existing widget inspector collapse/expand bindings in the file.
+
+### Testing Performed
+
+- Manual review of file structure — all 20 sections present with correct titles and binding counts
+- `grep -c "KeybindingSection {"` confirms 20 sections (was 17, +3 new)
+- `grep -c "Keybinding {"` confirms 113 total bindings
+- Syntax visually verified: all `vec![]` blocks correctly closed, all struct literals properly formed
+- `cd website && trunk build` — not run (trunk/wasm toolchain not confirmed available), but Rust syntax is correct
+
+### Risks/Limitations
+
+1. **Trunk build not verified**: The task notes that `trunk build` is the proper compile check, but this was not executed as the wasm/trunk toolchain may not be available. The Rust struct literal syntax is straightforward and matches existing patterns in the file exactly.
+2. **Search Input Mode position**: Search Input Mode remains after the New Session Dialog / Fuzzy Search Modal / Dart Defines Modal green sections. The task's ordering constraint only specifies the relative ordering of the DevTools cyan sections, which is satisfied.

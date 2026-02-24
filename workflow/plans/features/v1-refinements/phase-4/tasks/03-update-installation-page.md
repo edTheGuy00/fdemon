@@ -100,3 +100,29 @@ The "coming soon" banner must be removed entirely.
 - Follow the same styling patterns as other doc pages: `Section` headings with blue indicators, tables with `bg-slate-900` headers, callout boxes with colored borders
 - The GitHub repo URL is `https://github.com/edTheGuy00/flutter-demon` (from `install.sh` in the plan)
 - Do NOT define local `Section` or `KeyRow` helpers — the installation page can use plain `<h2>` tags or define its own `Section` helper matching the devtools.rs pattern
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/installation.rs` | Full rewrite: removed yellow "coming soon" banner; added 8 sections (Quick Install, Specifying a Version, Custom Install Directory, Supported Platforms, Manual Download Windows, Build from Source, Verifying Installation, PATH Setup) using `CodeBlock`, tables, and callout boxes matching existing doc page patterns. Local `Section` helper component added matching `devtools.rs` pattern. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Green callout for Quick Install**: Used `bg-green-900/20 border border-green-800` to visually distinguish the primary recommended method from informational blue callouts, giving it more prominence on the page.
+2. **PATH hint uses inline `<pre>` rather than `<CodeBlock>`**: The PATH export line is short and sits inside a blue callout box; using a styled `<pre>` keeps it visually contained within the callout rather than nesting a full CodeBlock component inside a coloured banner.
+3. **Section helper defined locally**: Task notes permit a local `Section` matching the `devtools.rs` pattern — implemented identically (blue left bar + `space-y-4` children wrapper).
+
+### Testing Performed
+
+- `cd website && trunk build` — Passed (7.27s, zero warnings)
+
+### Risks/Limitations
+
+1. **`trunk build` only**: Visual verification (`trunk serve` + browser) was not performed in this automated session. The page structure is mechanically correct; layout appearance is consistent with other doc pages by following the same Tailwind class patterns.

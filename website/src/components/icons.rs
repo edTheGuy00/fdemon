@@ -169,3 +169,11 @@ lucide_icon!(BoxIcon,
     <path d="m3.3 7 8.7 5 8.7-5" />
     <path d="M12 22V12" />
 );
+
+lucide_icon!(ScrollText,
+    <path d="M15 12h-5" />
+    <path d="M15 8h-5" />
+    <path d="M19 17V5a2 2 0 0 0-2-2H4" />
+    <path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 0 0 2 2Z" />
+    <path d="M5 21a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3" />
+);

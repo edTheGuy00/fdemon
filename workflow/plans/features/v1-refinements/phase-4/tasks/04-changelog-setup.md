@@ -139,3 +139,40 @@ After the release, the full CHANGELOG.md should be regenerated and committed. Th
 - The existing `release.yml` uses `generate_release_notes: true` — this must be replaced with `body_path: CHANGES.md`
 - The `fetch-depth: 0` is critical — git-cliff needs the full git history to resolve tags and commit ranges
 - Ensure the `release` job in the existing workflow already has `fetch-depth: 0` or add it
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `cliff.toml` | **NEW** — git-cliff configuration with conventional commit parsers at workspace root |
+| `CHANGELOG.md` | **NEW** — Bootstrap changelog with Unreleased section based on recent git history |
+| `.github/workflows/release.yml` | Added `fetch-depth: 0` to release job checkout; added `orhun/git-cliff-action@v4` step; replaced `generate_release_notes: true` with `body_path: CHANGES.md` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Bootstrap CHANGELOG.md**: Bash is unavailable in this environment so `git-cliff -o CHANGELOG.md` could not be run automatically. A bootstrap file was created manually using the recent commit history visible from git status/log context. The file includes a footer note instructing to regenerate with `git-cliff -o CHANGELOG.md` once the tool is installed locally. The full history-based changelog should be regenerated before the first release.
+
+2. **cliff.toml matches task spec exactly**: All commit parsers, template body, header, and git settings are copied verbatim from the task specification to ensure deterministic output.
+
+3. **release.yml: git-cliff step placed before Get version**: The changelog generation step is placed immediately after checkout so it has access to the full git history before any other steps run. This is the correct ordering per the orhun/git-cliff-action documentation.
+
+### Testing Performed
+
+- Manual review of `cliff.toml` TOML syntax — Passed (well-formed TOML with correct escape sequences)
+- Manual review of `release.yml` YAML syntax and step ordering — Passed
+- Verified `fetch-depth: 0` is present in the release job checkout step — Passed
+- Verified `generate_release_notes: true` is replaced with `body_path: CHANGES.md` — Passed
+- Verified `orhun/git-cliff-action@v4` step has correct `id: changelog`, `config: cliff.toml`, `args: --latest --strip header`, and `OUTPUT: CHANGES.md` env — Passed
+- `cargo check/test/clippy` not applicable (no Rust code changes)
+
+### Risks/Limitations
+
+1. **Bootstrap CHANGELOG.md is incomplete**: The initial CHANGELOG.md was created manually without running git-cliff. It should be regenerated with `git-cliff -o CHANGELOG.md` after installing git-cliff (`cargo install git-cliff --locked`) to capture the full commit history with correct grouping.
+
+2. **No git tags yet**: The project currently has no version tags (all commits are unreleased). Once `v1.0.0` (or any semver tag) is pushed, git-cliff will generate a properly structured versioned changelog section.

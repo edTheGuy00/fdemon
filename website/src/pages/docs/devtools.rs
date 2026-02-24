@@ -23,15 +23,15 @@ pub fn Devtools() -> impl IntoView {
                 <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mt-4">
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Widget Inspector"</h4>
-                        <p class="text-sm text-slate-400">"Browse the live widget tree with expandable nodes and detailed properties."</p>
-                    </div>
-                    <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
-                        <h4 class="font-bold text-white mb-1">"Layout Explorer"</h4>
-                        <p class="text-sm text-slate-400">"Visualize flex constraints, sizes, and alignment for any selected widget."</p>
+                        <p class="text-sm text-slate-400">"Browse the live widget tree with expandable nodes, detailed properties, and flex layout data."</p>
                     </div>
                     <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
                         <h4 class="font-bold text-white mb-1">"Performance Monitor"</h4>
                         <p class="text-sm text-slate-400">"Real-time FPS sparkline, memory gauge, jank percentage, and GC history."</p>
+                    </div>
+                    <div class="p-4 bg-slate-900 rounded-lg border border-slate-800">
+                        <h4 class="font-bold text-white mb-1">"Network Monitor"</h4>
+                        <p class="text-sm text-slate-400">"Capture and inspect HTTP requests made by the app, with full headers, bodies, and timing breakdowns."</p>
                     </div>
                 </div>
                 <p class="text-slate-400 mt-4">
@@ -65,8 +65,8 @@ pub fn Devtools() -> impl IntoView {
                             <KeyRow key="d" action="Enter DevTools mode (from Normal mode)" />
                             <KeyRow key="Esc" action="Return to log view" />
                             <KeyRow key="i" action="Switch to Widget Inspector panel" />
-                            <KeyRow key="l" action="Switch to Layout Explorer panel" />
                             <KeyRow key="p" action="Switch to Performance Monitor panel" />
+                            <KeyRow key="n" action="Switch to Network Monitor panel" />
                         </tbody>
                     </table>
                 </div>
@@ -249,6 +249,102 @@ pub fn Devtools() -> impl IntoView {
                     " in the "<code class="text-blue-400">"[devtools]"</code>" config section. Frame timing and GC events \
                      are always streamed in real time regardless of this setting."
                 </p>
+            </Section>
+
+            // ── Network Monitor ───────────────────────────────────────
+            <Section title="Network Monitor (n)">
+                <p class="text-slate-400">
+                    "Press "<code class="text-blue-400">"n"</code>" while in DevTools mode to open the Network \
+                     Monitor. It captures HTTP requests made by the Flutter app via the VM Service \
+                     "<code class="text-blue-400">"ext.dart.io.getHttpProfile"</code>" extension. Recording \
+                     must be enabled to capture new requests."
+                </p>
+
+                <h3 class="text-lg font-bold text-white mt-4">"Request Table"</h3>
+                <p class="text-slate-400">
+                    "The main view shows a table of captured HTTP requests with the following columns: \
+                     Method, URL (truncated to fit), Status Code, Duration, and Size. Navigate rows with \
+                     "<code class="text-blue-400">"j/k"</code>" or the arrow keys (single row), or "
+                    <code class="text-blue-400">"PgUp/PgDn"</code>" to jump a page of 10 at a time. \
+                     Status codes are color-coded: "
+                    <span class="text-green-400">"green"</span>" for 2xx, "
+                    <span class="text-yellow-400">"yellow"</span>" for 3xx, "
+                    <span class="text-red-400">"red"</span>" for 4xx and 5xx."
+                </p>
+                <div class="bg-slate-900 rounded-lg border border-slate-800 p-4 font-mono text-xs text-slate-400 overflow-x-auto mt-2">
+                    <pre class="leading-relaxed">{"\
+\u{250c}\u{2500} Network Monitor \u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2510}
+\u{2502} \u{25cf} Recording   12 requests   Filter: none                          \u{2502}
+\u{2502}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2502}
+\u{2502} GET  /api/users           200  45ms   1.2 KB                      \u{2502}
+\u{2502} POST /api/login           200  120ms  0.3 KB                      \u{2502}
+\u{2502} GET  /api/posts?page=1    200  89ms   4.5 KB                      \u{2502}
+\u{2502}\u{25b6}GET  /api/posts/42        404  23ms   0.1 KB                      \u{2502}
+\u{2502} GET  /api/config          200  12ms   0.8 KB                      \u{2502}
+\u{2514}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2500}\u{2518}"}</pre>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Request Detail View"</h3>
+                <p class="text-slate-400">
+                    "Press "<code class="text-blue-400">"Enter"</code>" on any request to open the detail \
+                     view. Five sub-tabs are accessible via single-key shortcuts:"
+                </p>
+                <div class="overflow-hidden rounded-lg border border-slate-800 mt-2">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Tab"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="g" action="General \u{2014} method, URL, status, start time, duration, content type" />
+                            <KeyRow key="h" action="Headers \u{2014} request and response headers in key-value format" />
+                            <KeyRow key="q" action="Request Body \u{2014} payload sent with the request (if any)" />
+                            <KeyRow key="s" action="Response Body \u{2014} response content" />
+                            <KeyRow key="t" action="Timing \u{2014} connection timing breakdown (DNS, connect, TLS, first byte, transfer)" />
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-slate-400 mt-3">
+                    "Press "<code class="text-blue-400">"Esc"</code>" to deselect the request and return \
+                     to the list view. Note that in the Network panel, "<code class="text-blue-400">"q"</code>
+                    " switches to the Request Body tab rather than quitting \u{2014} use "
+                    <code class="text-blue-400">"Esc"</code>" then "<code class="text-blue-400">"q"</code>
+                    " (or "<code class="text-blue-400">"Esc"</code>" twice) to exit DevTools mode."
+                </p>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Recording and Controls"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="Space" action="Toggle recording on/off. When recording is off, no new requests are captured." />
+                            <KeyRow key="Ctrl+X" action="Clear all recorded requests from history." />
+                            <KeyRow key="/" action="Enter filter mode to filter requests by URL substring." />
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Filter Mode"</h3>
+                <p class="text-slate-400">
+                    "Press "<code class="text-blue-400">"/"</code>" to enter a text input mode at the top \
+                     of the panel. Type to filter requests \u{2014} only URLs that contain the typed substring \
+                     are shown in the table. Press "<code class="text-blue-400">"Enter"</code>" to apply the \
+                     filter or "<code class="text-blue-400">"Esc"</code>" to cancel. The filter persists \
+                     until cleared."
+                </p>
+
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-4">
+                    <strong>"Requirement:"</strong>
+                    " Network profiling requires a "<strong>"debug-mode"</strong>" app with an active VM Service \
+                     connection. The HTTP profile extension is not available in profile or release builds."
+                </div>
             </Section>
 
             // ── Debug Overlays ────────────────────────────────────────
@@ -475,8 +571,8 @@ dedupe_threshold_ms = 100" />
                             <KeyRow key="d" action="Enter DevTools mode (from Normal mode)" />
                             <KeyRow key="Esc" action="Exit DevTools mode, return to log view" />
                             <KeyRow key="i" action="Open Widget Inspector panel" />
-                            <KeyRow key="l" action="Open Layout Explorer panel" />
                             <KeyRow key="p" action="Open Performance Monitor panel" />
+                            <KeyRow key="n" action="Open Network Monitor panel" />
                         </tbody>
                     </table>
                 </div>
@@ -496,6 +592,51 @@ dedupe_threshold_ms = 100" />
                             <KeyRow key="\u{2192} / Enter" action="Expand selected node" />
                             <KeyRow key="\u{2190} / h" action="Collapse selected node" />
                             <KeyRow key="r" action="Refresh widget tree from VM" />
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Performance Monitor"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="j / \u{2193}" action="Scroll frame list down" />
+                            <KeyRow key="k / \u{2191}" action="Scroll frame list up" />
+                            <KeyRow key="s" action="Sort frames by duration" />
+                        </tbody>
+                    </table>
+                </div>
+
+                <h3 class="text-lg font-bold text-white mt-6">"Network Monitor"</h3>
+                <div class="overflow-hidden rounded-lg border border-slate-800">
+                    <table class="w-full text-left text-sm">
+                        <thead class="bg-slate-900 text-slate-200">
+                            <tr>
+                                <th class="p-4 font-medium">"Key"</th>
+                                <th class="p-4 font-medium">"Action"</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800 bg-slate-950">
+                            <KeyRow key="j / \u{2193}" action="Move selection down in request list" />
+                            <KeyRow key="k / \u{2191}" action="Move selection up in request list" />
+                            <KeyRow key="PgDn" action="Page down (10 rows)" />
+                            <KeyRow key="PgUp" action="Page up (10 rows)" />
+                            <KeyRow key="Enter" action="Open request detail view" />
+                            <KeyRow key="Esc" action="Close request detail, return to list" />
+                            <KeyRow key="g" action="Detail: General tab" />
+                            <KeyRow key="h" action="Detail: Headers tab" />
+                            <KeyRow key="q" action="Detail: Request Body tab" />
+                            <KeyRow key="s" action="Detail: Response Body tab" />
+                            <KeyRow key="t" action="Detail: Timing tab" />
+                            <KeyRow key="Space" action="Toggle recording on/off" />
+                            <KeyRow key="Ctrl+X" action="Clear all request history" />
+                            <KeyRow key="/" action="Enter URL filter mode" />
                         </tbody>
                     </table>
                 </div>

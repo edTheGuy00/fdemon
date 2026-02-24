@@ -123,3 +123,29 @@ Update the **Panel Navigation** table to replace `l` with `n`.
 - Match the existing documentation style: opening paragraph, keybinding tables, callout boxes
 - The Layout Explorer section can remain — it describes a sub-feature of the Inspector. But panel navigation references must not list `l` as a panel key
 - The `q` key quirk: in Network panel, `q` switches to Request Body tab instead of quitting. This should be noted
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/devtools.rs` | Added Network Monitor (n) section; updated Overview grid (3-panel: Inspector/Performance/Network); updated "Entering and Exiting" table (`l` -> `n`); added Performance Monitor and Network Monitor sub-tables to Keybindings Quick Reference; updated Panel Navigation quick reference to use `n` instead of `l` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Layout Explorer section retained**: Per task notes, the Layout Explorer section (`Section title="Layout Explorer (l)"`) was kept intact — it documents a sub-feature of the Inspector panel. Only the panel navigation key references were updated to remove `l` and add `n`.
+2. **Performance Monitor quick-ref bindings**: The task specified "sort, frame navigation (3 bindings)" — added j/k scroll and `s` sort as reasonable bindings matching the documentation style.
+3. **Overview grid description**: Updated Widget Inspector card text to mention flex layout data (since Layout Explorer is now described as an Inspector sub-feature rather than a separate panel card).
+
+### Testing Performed
+
+- `cd website && trunk build` - Passed (✅ success, 4.76s compile)
+
+### Risks/Limitations
+
+1. **Performance Monitor bindings**: The 3 bindings added (j/k scroll, s sort) are inferred from context — the task did not specify exact Performance Monitor navigation keys. These match what is documented in the Performance Monitor section itself.

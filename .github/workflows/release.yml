@@ -170,6 +170,17 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # Required for git-cliff to access full history
+
+      - name: Generate release changelog
+        uses: orhun/git-cliff-action@v4
+        id: changelog
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: CHANGES.md
 
       - name: Get version
         id: version
@@ -190,7 +201,7 @@ jobs:
         with:
           draft: false
           prerelease: false
-          generate_release_notes: true
+          body_path: CHANGES.md
           files: |
             artifacts/fdemon-v*.tar.gz
             artifacts/fdemon-v*.zip
