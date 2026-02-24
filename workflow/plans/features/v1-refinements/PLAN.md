@@ -30,9 +30,11 @@ The app is feature-complete but needs polish before public release. Users curren
 - `crates/fdemon-app/src/config/settings.rs` — Add dart_defines/extra_args to `apply_launch_config_change()`
 - `crates/fdemon-tui/src/widgets/settings_panel/mod.rs` — Render fuzzy modal overlay
 
-### Phase 3: GitHub Actions & Install Script
+### Phase 3: Version, GitHub Actions & Install Script
+- `src/main.rs` — Add `--version` CLI flag via clap
+- `crates/fdemon-tui/src/widgets/header.rs` — Show version in title bar next to "Flutter Demon"
 - `.github/workflows/release.yml` — **NEW** Release workflow
-- `install.sh` — **NEW** Install script
+- `install.sh` — **NEW** Install script with version-aware update support
 - `Cross.toml` — **NEW** Cross-compilation config
 
 ### Phase 4: Website Updates
@@ -146,13 +148,19 @@ Ratatui's `Paragraph` natively supports `.wrap(Wrap { trim: false })` which hand
 
 ---
 
-### Phase 3: GitHub Actions Release Workflow & Install Script
+### Phase 3: Version, GitHub Actions Release Workflow & Install Script
 
-**Goal**: Automated cross-platform binary releases on git tags with a one-line install command.
+**Goal**: Surface the app version in the CLI and TUI, automate cross-platform binary releases on git tags, and provide a version-aware install/update script.
 
 #### Research Findings
 
 The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No release workflow exists. The binary is named `fdemon` (Cargo.toml `[[bin]]`), version `0.1.0`. The website installation page explicitly says "Pre-built binaries are coming soon."
+
+**Version surfacing**: The workspace version `0.1.0` is set in `Cargo.toml:7` via `[workspace.package]`. All crates inherit it with `version.workspace = true`. However, the version is **never surfaced** at runtime — no `--version` CLI flag, no `env!("CARGO_PKG_VERSION")` usage, no version in the TUI. The title bar in `header.rs:142-147` hard-codes `"Flutter Demon"` with no version suffix.
+
+**CLI**: The binary uses `clap` (v4 derive API) in `src/main.rs:17-29`. The `#[command(...)]` attributes set `name` and `about` but NOT `version`. Adding `version` to the command attribute auto-reads `CARGO_PKG_VERSION` at compile time. Running `fdemon --version` currently produces a clap error.
+
+**Install script version checking**: With `fdemon --version` working, the install script can check the currently installed version, compare against the latest release, and skip downloading if already up to date. This supports both fresh install and update workflows.
 
 #### Target Matrix
 
@@ -168,31 +176,42 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 
 #### Steps
 
-1. **Create release workflow** (`.github/workflows/release.yml`)
+1. **Add `--version` CLI flag** (`src/main.rs`)
+   - Add `version` to `#[command(name = "fdemon", version)]` — clap auto-reads `CARGO_PKG_VERSION`
+   - `fdemon --version` now prints `fdemon 0.1.0`
+   - Required by install script for version checking
+
+2. **Show version in title bar** (`crates/fdemon-tui/src/widgets/header.rs`)
+   - Add `const APP_VERSION: &str = env!("CARGO_PKG_VERSION");` in `header.rs`
+   - Modify left_spans in `render_title_row` to display `"Flutter Demon v0.1.0"` (version in muted style)
+   - Update existing header tests
+
+3. **Create Cross.toml** (workspace root)
+   - Pin Docker image for `aarch64-unknown-linux-gnu`
+   - Passthrough `RUST_BACKTRACE` and `CARGO_TERM_COLOR` env vars
+
+4. **Create release workflow** (`.github/workflows/release.yml`)
    - Trigger on tags matching `v[0-9]+.[0-9]+.[0-9]+`
    - 3 build jobs: `build-macos` (matrix: x86_64 + aarch64), `build-linux` (matrix: x86_64 native + aarch64 cross), `build-windows` (x86_64 only)
    - Each job: checkout, install rust, cache cargo, build `--release`, package artifact
    - `release` job: download all artifacts, generate SHA256 checksums, create GitHub Release via `softprops/action-gh-release@v2`
    - Artifact naming: `fdemon-v{VERSION}-{TARGET}.{tar.gz|zip}`
 
-2. **Create Cross.toml** (workspace root)
-   - Pin Docker image for `aarch64-unknown-linux-gnu`
-   - Passthrough `RUST_BACKTRACE` and `CARGO_TERM_COLOR` env vars
-
-3. **Create install script** (`install.sh`)
+5. **Create install script** (`install.sh`)
    - One-liner: `curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash`
    - Detects OS (`uname -s`) and architecture (`uname -m`)
    - Maps to correct Rust target triple
    - Resolves latest version from GitHub API (or accepts explicit version arg)
+   - **Version-aware update**: checks installed `fdemon --version`, compares with target version, skips if already up to date
    - Downloads from GitHub Releases, extracts, installs to `$HOME/.local/bin` (override via `$FDEMON_INSTALL_DIR`)
    - Shows PATH setup hint if install dir not in PATH
    - Uses `set -euo pipefail`, `mktemp -d` with trap cleanup, `install -m755`
 
-4. **Update website installation page**
+6. **Update website installation page** (deferred to Phase 4)
    - Replace "coming soon" placeholder with install command and platform download links
    - Show one-liner for macOS/Linux, direct download links for Windows
 
-**Milestone**: Pushing a `v0.1.0` tag triggers automated builds across 5 targets, creates a GitHub Release with binaries + checksums, and users can install with a single curl command.
+**Milestone**: `fdemon --version` prints the version. The title bar shows `"Flutter Demon v0.1.0"`. Pushing a `v0.1.0` tag triggers automated builds across 5 targets, creates a GitHub Release with binaries + checksums, and users can install or update with a single curl command.
 
 ---
 
@@ -315,11 +334,15 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 - [ ] `cargo test --workspace` passes
 
 ### Phase 3 Complete When:
+- [ ] `fdemon --version` prints `fdemon 0.1.0`
+- [ ] Title bar shows `Flutter Demon v0.1.0` next to status dot
 - [ ] `release.yml` workflow exists and is syntactically valid
 - [ ] Workflow builds for all 5 targets (macOS x86_64/aarch64, Linux x86_64/aarch64, Windows x86_64)
 - [ ] Release creates artifacts with correct naming and checksums
 - [ ] `install.sh` detects OS/arch and installs the correct binary
+- [ ] Install script checks installed version and skips if already up to date
 - [ ] Install script handles missing PATH gracefully
+- [ ] `cargo test --workspace` passes (version + header tests)
 
 ### Phase 4 Complete When:
 - [ ] DevTools page documents the Network Monitor panel
@@ -335,12 +358,14 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 ## Task Dependency Graph
 
 ```
-Phase 1 (Log Wrap)           Phase 3 (CI/CD)
-├── 01-wrap-state             ├── 07-release-workflow
-├── 02-wrap-rendering         ├── 08-install-script
-│   └── depends on: 01        │   └── depends on: 07
-└── 03-wrap-tests             └── 09-cross-config
-    └── depends on: 02
+Phase 1 (Log Wrap)           Phase 3 (Version + CI/CD)
+├── 01-wrap-state             ├── 07-version-cli-flag
+├── 02-wrap-rendering         ├── 08-version-title-bar
+│   └── depends on: 01        ├── 09-cross-config
+└── 03-wrap-tests             ├── 10-release-workflow
+    └── depends on: 02        │   └── depends on: 09
+                              └── 11-install-script
+                                  └── depends on: 07, 10
 
 Phase 2 (Settings)           Phase 4 (Website)
 ├── 04-fix-add-config-bug     ├── 10-devtools-network-page
