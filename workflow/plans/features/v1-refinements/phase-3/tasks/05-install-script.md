@@ -191,3 +191,35 @@ shellcheck install.sh
 - No dependency on `jq`, `python`, or other optional tools — just `curl`, `tar`, `grep`, `sed`, `awk`
 - The script should work in both `bash` and when piped via `curl ... | bash` (no interactive prompts)
 - The artifact naming must exactly match what the release workflow produces (task 04): `fdemon-v{VERSION}-{TARGET}.tar.gz`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `install.sh` | **NEW** — 297-line version-aware install/update script |
+
+### Notable Decisions/Tradeoffs
+
+1. **No jq dependency**: Uses `grep` + `sed` + `awk` for JSON parsing and version extraction — maximizes portability at the cost of fragility if GitHub API response format changes.
+2. **`install -m755`**: Uses `install` command instead of `cp` + `chmod` — atomic permission-setting in a single operation.
+3. **Windows rejection at two points**: Early `uname -s` check in `main()` before any work, plus the `detect_os()` function — belt and suspenders for Windows detection under MSYS/Git Bash.
+4. **`find` fallback for binary extraction**: After `tar -xzf`, checks for the binary at the expected flat path first, then falls back to `find` — handles both flat and nested archive layouts.
+
+### Testing Performed
+
+- `bash -n install.sh` — Syntax check passed
+- `bash install.sh --help` — Prints usage information
+- `bash install.sh --version` (no arg) — Prints error requesting argument
+- Script is executable (`-rwxr-xr-x`)
+
+### Risks/Limitations
+
+1. **GitHub API rate limiting**: Unauthenticated requests limited to 60/hour — the `--version` flag bypasses the API call entirely as a workaround.
+2. **No checksum verification**: The script downloads and installs without verifying SHA256 checksums against `checksums-sha256.txt` — acceptable for v1 but could be added later.
+3. **grep+sed JSON parsing**: Fragile if GitHub changes their API response format — unlikely but not impossible.

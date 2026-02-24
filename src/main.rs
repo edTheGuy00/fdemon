@@ -16,7 +16,7 @@ use fdemon_tui::{select_project, SelectionResult};
 
 /// Flutter Demon - A high-performance TUI for Flutter development
 #[derive(Parser, Debug)]
-#[command(name = "fdemon")]
+#[command(name = "fdemon", version)]
 #[command(about = "A high-performance TUI for Flutter development", long_about = None)]
 struct Args {
     /// Path to Flutter project

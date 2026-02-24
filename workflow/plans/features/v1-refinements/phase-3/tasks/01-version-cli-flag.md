@@ -75,3 +75,31 @@ No unit test changes needed — the existing integration tests in `tests/` don't
 - This is a one-line change but it's a prerequisite for task 05 (install script), which parses `fdemon --version` output to detect the installed version
 - The `version` attribute with no value is equivalent to `version = env!("CARGO_PKG_VERSION")` — clap handles this automatically
 - No `build.rs` is needed for this — `CARGO_PKG_VERSION` is a built-in Cargo compile-time variable
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/main.rs` | Changed `#[command(name = "fdemon")]` to `#[command(name = "fdemon", version)]` on line 19 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single-attribute merge**: Combined `name` and `version` into one `#[command(...)]` attribute rather than adding a separate `#[command(version)]` line — keeps the derive block compact.
+
+### Testing Performed
+
+- `cargo run -- --version` — Prints `fdemon 0.1.0`
+- `cargo run -- -V` — Prints `fdemon 0.1.0`
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (all 2,132 unit tests)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+None — this is a one-line additive change with no behavioral impact on existing functionality.

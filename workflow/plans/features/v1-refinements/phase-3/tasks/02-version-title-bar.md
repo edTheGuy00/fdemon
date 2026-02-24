@@ -139,3 +139,36 @@ fn test_header_version_visible_in_narrow_terminal() {
 - The version string adds ~7 characters to the left section width (`" v0.1.0"`), which slightly reduces space for shortcuts in narrow terminals — acceptable since shortcuts already degrade gracefully (lines 221-233 handle the fallback)
 - The project selector modal at `selector.rs:172` also uses `" Flutter Demon "` as a block title — this is a border decoration and does NOT need the version added
 - The loading screen at `render/mod.rs:289` uses `"Flutter Demon"` as a fallback project name — this also does NOT need the version
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `APP_VERSION` constant; inserted version span after "Flutter Demon" in `left_spans`; added 2 new tests |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_initializing.snap` | Updated snapshot to include `v0.1.0` in header line |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_reloading.snap` | Updated snapshot to include `v0.1.0` in header line |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_running.snap` | Updated snapshot to include `v0.1.0` in header line |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_stopped.snap` | Updated snapshot to include `v0.1.0` in header line |
+
+### Notable Decisions/Tradeoffs
+
+1. **Snapshot updates required**: Four existing insta snapshot tests captured the old header line `Flutter Demon / flutter_app`. These were updated via `cargo insta test --accept` to reflect `Flutter Demon v0.1.0 / flutter_app`. This is correct behaviour — snapshots document the expected rendered output and must be updated when intentional rendering changes are made.
+2. **`format!` string ownership**: The version span uses `format!("v{}", APP_VERSION)` which creates an owned `String`. This is accepted by `Span::styled` via `Into<Cow<'_, str>>` and is the approach specified by the task.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (no formatting changes needed)
+- `cargo check --workspace` — Passed
+- `cargo insta test -p fdemon-tui --accept` — 4 snapshots accepted, all tests pass
+- `cargo test -p fdemon-tui` — Passed (536 tests: 532 existing + 2 new + 4 snapshot recoveries + 7 doc tests)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Narrow terminal truncation**: Adding `v0.1.0` (~7 characters) to the left section slightly reduces available width for shortcuts. The existing graceful degradation logic at lines 221-233 handles this correctly — shortcuts are dropped before the left section is truncated.

@@ -37,11 +37,11 @@ Surface the app version in the CLI (`--version`) and TUI title bar, create a Git
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-version-cli-flag](tasks/01-version-cli-flag.md) | Not Started | - | 0.5-1h | `src/main.rs` |
-| 2 | [02-version-title-bar](tasks/02-version-title-bar.md) | Not Started | - | 1-2h | `header.rs` |
-| 3 | [03-cross-config](tasks/03-cross-config.md) | Not Started | - | 0.5h | `Cross.toml` |
-| 4 | [04-release-workflow](tasks/04-release-workflow.md) | Not Started | 3 | 4-5h | `release.yml` |
-| 5 | [05-install-script](tasks/05-install-script.md) | Not Started | 1, 4 | 3-4h | `install.sh` |
+| 1 | [01-version-cli-flag](tasks/01-version-cli-flag.md) | Done | - | 0.5-1h | `src/main.rs` |
+| 2 | [02-version-title-bar](tasks/02-version-title-bar.md) | Done | - | 1-2h | `header.rs` |
+| 3 | [03-cross-config](tasks/03-cross-config.md) | Done | - | 0.5h | `Cross.toml` |
+| 4 | [04-release-workflow](tasks/04-release-workflow.md) | Done | 3 | 4-5h | `release.yml` |
+| 5 | [05-install-script](tasks/05-install-script.md) | Done | 1, 4 | 3-4h | `install.sh` |
 
 ## Success Criteria
 

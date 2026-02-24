@@ -61,3 +61,28 @@ cat Cross.toml | python3 -c "import sys, tomllib; tomllib.load(sys.stdin.buffer)
 - This file is only used by the `build-linux` job's `aarch64-unknown-linux-gnu` matrix entry
 - macOS targets cannot use `cross` (Docker can't target macOS)
 - Windows uses `msvc` toolchain (not `gnu`), so `cross` is not applicable
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cross.toml` | New file — cross-compilation config at workspace root |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact content match**: The file content matches the task spec verbatim, including all comments. No deviations.
+
+### Testing Performed
+
+- TOML validation via `python3 -c "import tomllib; ..."` — Valid TOML, parsed successfully
+- `cargo check --workspace` — Passed (all 5 crates checked, no errors)
+
+### Risks/Limitations
+
+1. **CI-only file**: `Cross.toml` is consumed exclusively by the `cross` tool during GitHub Actions release builds. It has no effect on local development or `cargo check`/`cargo build` invocations.

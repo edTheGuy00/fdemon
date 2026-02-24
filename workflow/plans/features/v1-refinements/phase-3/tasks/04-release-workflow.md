@@ -196,3 +196,32 @@ git tag v0.1.0 && git push origin v0.1.0
 - The binary name is `fdemon` (not `flutter-demon`) — located at `target/{target}/release/fdemon` (or `fdemon.exe` on Windows)
 - For macOS, `strip` works natively. For Linux x86_64, use `strip`. For Linux aarch64 (cross-compiled), skip strip — the cross container's strip may not be in PATH
 - Windows binary does not need stripping (MSVC linker handles it)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/release.yml` | New file — multi-platform GitHub Actions release workflow |
+
+### Notable Decisions/Tradeoffs
+
+1. **`merge-multiple: true` on download-artifact**: Used in the release job so all artifacts are merged into a flat `artifacts/` directory, making the `sha256sum` glob and `softprops/action-gh-release@v2` file globs work without per-artifact subdirectory traversal.
+2. **`retention-days: 1` on build artifacts**: Artifacts are only needed within the same workflow run; keeping retention short avoids unnecessary storage costs.
+3. **Windows `Get version` step uses `shell: bash`**: Allows the same bash `${GITHUB_REF_NAME#v}` syntax across all platforms without needing a PowerShell equivalent.
+4. **`shared-key` per target in Swatinem/rust-cache**: Prevents cache collisions across different build targets sharing the same runner OS.
+
+### Testing Performed
+
+- YAML syntax validation via `python3 -c "import yaml; yaml.safe_load(...)"` — Valid YAML
+
+### Risks/Limitations
+
+1. **CI-only validation**: Full validation requires pushing a semver tag. Deferred to manual testing after merge per task spec.
+2. **cross install time**: `cargo install cross --git https://github.com/cross-rs/cross` can take several minutes in CI. This is the approach specified in the task notes (crates.io version may lag).
+3. **Linux aarch64 strip skipped**: As specified, `strip` is not invoked for the cross-compiled aarch64 binary since the host strip is not available in the cross container PATH.

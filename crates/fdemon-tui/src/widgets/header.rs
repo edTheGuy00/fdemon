@@ -16,6 +16,9 @@ use crate::theme::{icons::IconSet, palette, styles};
 
 use super::SessionTabs;
 
+/// App version from Cargo.toml, surfaced in the title bar
+const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
 /// Padding around header sections for layout calculations
 const HEADER_SECTION_PADDING: u16 = 4;
 
@@ -134,7 +137,7 @@ impl MainHeader<'_> {
                 )
             };
 
-        // Build left section: status dot + "Flutter Demon" + "/" + project name
+        // Build left section: status dot + "Flutter Demon" + version + "/" + project name
         let left_spans = vec![
             Span::raw(" "),
             Span::styled(status_icon, status_style),
@@ -144,6 +147,11 @@ impl MainHeader<'_> {
                 Style::default()
                     .fg(palette::ACCENT)
                     .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                format!("v{}", APP_VERSION),
+                Style::default().fg(palette::TEXT_MUTED),
             ),
             Span::raw(" "),
             Span::styled("/", Style::default().fg(palette::TEXT_MUTED)),
@@ -473,5 +481,32 @@ mod tests {
             device_icon_for_platform(Some("macos"), &icons),
             icons.monitor()
         );
+    }
+
+    #[test]
+    fn test_header_renders_version() {
+        let mut term = TestTerminal::new();
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(None, icons);
+        term.render_widget(header, term.area());
+
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        assert!(
+            term.buffer_contains(&version),
+            "Header should contain version string"
+        );
+    }
+
+    #[test]
+    fn test_header_version_visible_in_narrow_terminal() {
+        // Version is part of the left section which is always rendered
+        let mut term = TestTerminal::with_size(50, 5);
+        let icons = IconSet::new(IconMode::Unicode);
+        let header = MainHeader::new(Some("app"), icons);
+        term.render_widget(header, term.area());
+
+        assert!(term.buffer_contains("Flutter Demon"), "Title should show");
+        let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+        assert!(term.buffer_contains(&version), "Version should show");
     }
 }
