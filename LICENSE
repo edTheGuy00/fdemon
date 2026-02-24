@@ -254,7 +254,7 @@ run the following command in the project directory:
     cargo license --authors
 
 Or visit the project's Cargo.toml file and repository at:
-https://github.com/edTheGuy00/flutter-demon
+https://github.com/edTheGuy00/fdemon
 
 -----------------------------------------------------------------------------
 

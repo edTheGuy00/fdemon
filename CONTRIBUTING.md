@@ -44,7 +44,7 @@ If you have concerns about these terms, please open an issue to discuss before c
 
 ```bash
 # Clone the repository
-git clone https://github.com/edTheGuy00/flutter-demon.git
+git clone https://github.com/edTheGuy00/fdemon.git
 cd flutter-demon
 
 # Build the project
@@ -267,8 +267,8 @@ Contributors will be:
 
 ## Questions?
 
-- 💬 Open a [Discussion](https://github.com/edTheGuy00/flutter-demon/discussions)
-- 🐛 Report bugs via [Issues](https://github.com/edTheGuy00/flutter-demon/issues)
+- 💬 Open a [Discussion](https://github.com/edTheGuy00/fdemon/discussions)
+- 🐛 Report bugs via [Issues](https://github.com/edTheGuy00/fdemon/issues)
 - 📧 Contact maintainers (see README.md)
 
 ## Resources

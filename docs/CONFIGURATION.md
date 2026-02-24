@@ -1014,4 +1014,4 @@ VSCode allows comments, but invalid JSON structure will fail parsing.
 
 ## Feedback
 
-Have suggestions for configuration options? [Open an issue](https://github.com/edTheGuy00/flutter-demon/issues) on GitHub!
+Have suggestions for configuration options? [Open an issue](https://github.com/edTheGuy00/fdemon/issues) on GitHub!

@@ -16,9 +16,7 @@ pub fn Home() -> impl IntoView {
                 <div class="absolute top-0 left-1/2 -translate-x-1/2 w-[800px] h-[500px] bg-blue-600/10 blur-[120px] rounded-full pointer-events-none"></div>
 
                 <div class="relative z-10 flex flex-col items-center">
-                    <div class="w-24 h-24 bg-gradient-to-br from-blue-600 to-purple-600 rounded-2xl flex items-center justify-center mb-8 shadow-lg shadow-blue-500/20">
-                        <span class="text-5xl">"\u{1F608}"</span>
-                    </div>
+                    <img src="/public/logo.png" alt="Flutter Demon" class="w-24 h-24 rounded-2xl mb-8 shadow-lg shadow-blue-500/20" />
 
                     <h1 class="text-5xl md:text-7xl font-black text-white tracking-tight mb-6">
                         "Flutter "

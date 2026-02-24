@@ -16,9 +16,7 @@ pub fn Navbar() -> impl IntoView {
         <header class="fixed top-0 left-0 right-0 z-50 bg-slate-950/80 backdrop-blur-md border-b border-slate-800">
             <div class="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
                 <A href="/" attr:class="flex items-center space-x-2 group">
-                    <div class="w-8 h-8 rounded-lg bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center text-lg group-hover:scale-110 transition-transform">
-                        "\u{1F608}"
-                    </div>
+                    <img src="/public/logo.png" alt="Flutter Demon" class="w-8 h-8 rounded-lg group-hover:scale-110 transition-transform" />
                     <span class="font-bold text-white text-lg tracking-tight">
                         "Flutter Demon"
                     </span>
@@ -50,7 +48,7 @@ pub fn Navbar() -> impl IntoView {
                         "Documentation"
                     </A>
                     <a
-                        href="https://github.com/edTheGuy00/flutter-demon"
+                        href="https://github.com/edTheGuy00/fdemon"
                         target="_blank"
                         rel="noreferrer"
                         class="text-slate-400 hover:text-white transition-colors"
