@@ -37,11 +37,19 @@ The app is feature-complete but needs polish before public release. Users curren
 - `install.sh` — **NEW** Install script with version-aware update support
 - `Cross.toml` — **NEW** Cross-compilation config
 
-### Phase 4: Website Updates
-- `website/src/pages/docs/devtools.rs` — Add Network Monitor section
-- `website/src/data.rs` — Add Network keybindings, fix phantom `l` binding, add Performance extras
-- `website/src/pages/docs/keybindings.rs` — May need minor layout adjustments for new sections
-- `website/src/pages/docs/installation.rs` — Update with install command
+### Phase 4: Website Updates, Changelog & GHCR Publishing
+- `website/src/pages/docs/devtools.rs` — Add Network Monitor section, fix panel navigation refs
+- `website/src/data.rs` — Add Network keybindings, fix phantom `l` binding, add Performance extras, add changelog data types
+- `website/src/pages/docs/keybindings.rs` — Renders new sections automatically from `data.rs`
+- `website/src/pages/docs/installation.rs` — Replace "coming soon" with real install instructions
+- `website/src/pages/docs/changelog.rs` — **NEW** Changelog page with version history
+- `website/src/pages/docs/mod.rs` — Register changelog module, add sidebar entry
+- `website/src/lib.rs` — Add `/docs/changelog` route
+- `website/src/components/icons.rs` — Add icon for changelog sidebar entry
+- `cliff.toml` — **NEW** git-cliff configuration for automated changelog generation
+- `CHANGELOG.md` — **NEW** Generated changelog from git history
+- `.github/workflows/release.yml` — Add git-cliff changelog generation step
+- `.github/workflows/publish-site.yml` — **NEW** Build & push website Docker image to GHCR
 
 ---
 
@@ -215,51 +223,67 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 
 ---
 
-### Phase 4: Website Updates
+### Phase 4: Website Updates, Changelog & GHCR Publishing
 
-**Goal**: Add Network Monitor documentation to DevTools page, fix phantom keybindings, add all missing keybinding entries.
+**Goal**: Add Network Monitor documentation to DevTools page, fix phantom keybindings, add all missing keybinding entries, update installation page with real instructions, add a changelog page tracking every release, and create a GitHub Actions workflow to containerize the website and publish to GHCR for deployment to fdemon.dev.
 
 #### Research Findings
 
 **DevTools page (`devtools.rs`)**: Comprehensive coverage of Inspector, Layout Explorer, Performance Monitor, Debug Overlays, Browser DevTools, Connection States, Configuration. **Missing entirely: Network Monitor panel.** The Network panel is fully implemented in the codebase with its own panel, request table, request details, sub-tab switching, recording toggle, filter input mode, and history clearing.
 
-**Keybindings data (`data.rs`)**: 16 sections covering all modes. **Issues found:**
+**Keybindings data (`data.rs`)**: 14 sections covering all modes. **Issues found:**
 - **Phantom binding**: `l` → "Layout Panel" in DevTools Panel Navigation — this does NOT exist in the codebase. The `DevToolsPanel` enum has only `Inspector`, `Performance`, `Network`. No Layout variant.
 - **Missing `n` key**: Network panel switch (`n`) is not listed in Panel Navigation
 - **Missing section**: No "DevTools — Network Monitor" keybinding section (14+ bindings)
 - **Missing Performance bindings**: `s` (toggle allocation sort), `Left`/`Right` (frame navigation)
 - **Missing filter input bindings** for Network panel (`/`, type, Backspace, Enter, Esc)
 
+**Website infrastructure**: The website is a Leptos 0.8 CSR WASM app built with Trunk, served via nginx in a Docker container. The existing `website/Dockerfile` (multi-stage: `rust:slim` builder → `nginx:alpine`) is production-ready. No CI/CD pipeline exists for the website — only the binary release workflow (`release.yml`) and E2E tests (`e2e.yml`) are automated.
+
+**Changelog**: No changelog exists anywhere in the project. The project uses conventional commits (`feat:`, `fix:`, `chore:`, etc.) which are parseable by `git-cliff` for automated changelog generation.
+
+**Deployment**: The website is hosted on the user's own server at fdemon.dev. GHCR is used as a container registry — the user pulls images from `ghcr.io` to their server. No GitHub Pages deployment.
+
 #### Steps
 
-1. **Add Network Monitor section to DevTools page** (`devtools.rs`)
-   - Add a new `<Section title="Network Monitor (n)">` between Performance Monitor and Debug Overlays
-   - Document: request table layout, navigation, detail view with sub-tabs (General, Headers, Request Body, Response Body, Timing)
+1. **Fix keybindings data** (`data.rs`)
+   - Remove phantom `l` → "Layout Panel" entry
+   - Add `n` → "Network Panel"
+   - Add "DevTools — Network Monitor" section (14 bindings)
+   - Add "Network Filter Input" section (4 bindings)
+   - Add "DevTools — Performance Monitor" section (4 bindings)
+
+2. **Add Network Monitor documentation** (`devtools.rs`)
+   - New section: request table, navigation, detail sub-tabs (General/Headers/RequestBody/ResponseBody/Timing)
    - Document: recording toggle (Space), clear history (Ctrl+X), filter mode (/)
-   - Add keybinding quick reference table for Network panel at the bottom section
+   - Update panel navigation references (replace `l` with `n`)
+   - Add Network + Performance to Keybindings Quick Reference
 
-2. **Fix DevTools Panel Navigation keybindings** (`data.rs`)
-   - **Remove** phantom `l` → "Layout Panel" entry (doesn't exist in code)
-   - **Add** `n` → "Network Panel" → "Switch to Network monitoring panel"
-   - Update the section to match actual `DevToolsPanel` enum: Inspector (`i`), Performance (`p`), Network (`n`)
+3. **Update installation page** (`installation.rs`)
+   - Replace "coming soon" placeholder with curl install one-liner
+   - Add version-specific and custom directory install options
+   - Supported platforms table (5 targets)
+   - Windows download instructions
+   - Enhanced build-from-source section
 
-3. **Add "DevTools — Network Monitor" keybinding section** (`data.rs`)
-   - New `KeybindingSection` with cyan color
-   - Include all 14+ bindings: navigation (j/k/Up/Down, PgUp/PgDn, Enter, Esc), detail tabs (g/h/q/s/t), recording (Space), clear (Ctrl+X), filter (/)
-   - Add separate "Network Filter Input" sub-section with Type/Backspace/Enter/Esc bindings
+4. **Set up git-cliff and release changelog integration**
+   - Create `cliff.toml` with conventional commit parsers
+   - Generate initial `CHANGELOG.md` from git history
+   - Integrate `orhun/git-cliff-action@v4` into `release.yml`
 
-4. **Add missing Performance bindings** (`data.rs`)
-   - Add `s` → "Sort Allocations" → "Toggle allocation table sort between BySize and ByInstances"
-   - Add `Left` → "Previous Frame" → "Select previous frame in bar chart"
-   - Add `Right` → "Next Frame" → "Select next frame in bar chart"
+5. **Add changelog page to website**
+   - New `/docs/changelog` route with `ChangelogEntry` data types in `data.rs`
+   - Sidebar entry (last position, after Architecture)
+   - Version-grouped display with categorized changes
 
-5. **Update installation page** (`installation.rs`)
-   - Replace "Pre-built binaries are coming soon" with actual install instructions
-   - Show the `curl | bash` one-liner for macOS/Linux
-   - Show download links to GitHub Releases for Windows
-   - Include `FDEMON_INSTALL_DIR` override documentation
+6. **Create GHCR publish workflow** (`.github/workflows/publish-site.yml`)
+   - Triggers on version tags + manual dispatch + develop branch (website changes only)
+   - Builds `website/Dockerfile` and pushes to `ghcr.io/edtheguy00/flutter-demon-site`
+   - Tags: semver, branch name, short SHA
+   - Uses `docker/login-action@v3` with `GITHUB_TOKEN`
+   - BuildKit caching via `cache-from: type=gha`
 
-**Milestone**: Website accurately documents all DevTools panels (including Network), all keybindings match the actual codebase, and installation instructions are live.
+**Milestone**: Website accurately documents all DevTools panels (including Network), all keybindings match the actual codebase, installation instructions are live, a changelog page tracks every release, and the website Docker image is automatically published to GHCR on every version tag.
 
 ---
 
@@ -286,6 +310,20 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 ### Website
 - **Risk:** Removing phantom `l` → "Layout Panel" keybinding may confuse users who read old docs
 - **Mitigation:** The binding never worked in code. Removing it corrects the documentation.
+
+### GHCR Publishing
+- **Risk:** First Docker build in CI is slow (~10-15 min) due to Rust nightly + Trunk compilation inside Docker
+- **Mitigation:** BuildKit layer caching via `cache-from: type=gha` preserves layers across runs. Subsequent builds are much faster.
+
+- **Risk:** Images pushed to GHCR are private by default
+- **Mitigation:** After first push, change package visibility to public in GitHub repo settings (Settings → Packages → flutter-demon-site → Change visibility).
+
+### Changelog
+- **Risk:** Changelog data in the website is static Rust code — requires manual update per release
+- **Mitigation:** Acceptable for v1. Future enhancement: build script to auto-parse `CHANGELOG.md` into Rust types at compile time.
+
+- **Risk:** `git-cliff` requires `fetch-depth: 0` (full git history) in CI checkout
+- **Mitigation:** Explicitly set in the release workflow. Shallow clones would produce empty changelogs.
 
 ---
 
@@ -348,9 +386,14 @@ The repo has one existing workflow (`e2e.yml`) for Docker-based E2E tests. No re
 - [ ] DevTools page documents the Network Monitor panel
 - [ ] Phantom `l` → "Layout Panel" keybinding removed from `data.rs`
 - [ ] `n` → "Network Panel" keybinding added
-- [ ] All Network panel keybindings documented (14+ bindings)
-- [ ] Missing Performance panel keybindings added (3 bindings)
-- [ ] Installation page updated with install command
+- [ ] All Network panel keybindings documented (14+ bindings across 2 sections)
+- [ ] Missing Performance panel keybindings added (4 bindings)
+- [ ] Installation page updated with curl install command + platform instructions
+- [ ] `cliff.toml` configured for conventional commits
+- [ ] `CHANGELOG.md` generated from git history
+- [ ] `release.yml` generates changelog on release via git-cliff
+- [ ] Changelog page exists at `/docs/changelog` on the website
+- [ ] `publish-site.yml` builds website Docker image and pushes to `ghcr.io`
 - [ ] Website builds successfully (`trunk build`)
 
 ---
@@ -367,12 +410,15 @@ Phase 1 (Log Wrap)           Phase 3 (Version + CI/CD)
                               └── 11-install-script
                                   └── depends on: 07, 10
 
-Phase 2 (Settings)           Phase 4 (Website)
-├── 04-fix-add-config-bug     ├── 10-devtools-network-page
-├── 05-settings-fuzzy-modal   ├── 11-fix-keybindings-data
-│   └── depends on: 04        └── 12-update-installation-page
-└── 06-persist-dart-defines        └── depends on: 08
-    └── depends on: 05
+Phase 2 (Settings)           Phase 4 (Website + Changelog + GHCR)
+├── 04-fix-add-config-bug     ├── 01-fix-keybindings-data
+├── 05-settings-fuzzy-modal   ├── 02-devtools-network-docs
+│   └── depends on: 04        │   └── depends on: 01
+└── 06-persist-dart-defines   ├── 03-update-installation-page
+    └── depends on: 05        ├── 04-changelog-setup
+                              ├── 05-changelog-page
+                              │   └── depends on: 04
+                              └── 06-ghcr-publish-workflow
 ```
 
 Phases 1-4 are independent of each other and can be worked on in parallel.
