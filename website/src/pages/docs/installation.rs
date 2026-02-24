@@ -19,7 +19,7 @@ pub fn Installation() -> impl IntoView {
                     <p>"This downloads the latest release binary for your platform and installs it to "
                     <code class="text-green-300">"$HOME/.local/bin"</code>"."</p>
                 </div>
-                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash" />
+                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash" />
             </Section>
 
             // ── Specifying a Version ──────────────────────────────────
@@ -28,7 +28,7 @@ pub fn Installation() -> impl IntoView {
                     "To install a specific release, pass the "<code class="text-blue-400">"--version"</code>
                     " flag to the script:"
                 </p>
-                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version 0.1.0" />
+                <CodeBlock code="curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash -s -- --version 0.1.0" />
             </Section>
 
             // ── Custom Install Directory ──────────────────────────────
@@ -37,7 +37,7 @@ pub fn Installation() -> impl IntoView {
                     "Set the "<code class="text-blue-400">"FDEMON_INSTALL_DIR"</code>
                     " environment variable to install to a different directory:"
                 </p>
-                <CodeBlock code="FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash" />
+                <CodeBlock code="FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash" />
             </Section>
 
             // ── Supported Platforms ───────────────────────────────────
