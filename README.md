@@ -111,6 +111,82 @@ Full reference: [fdemon.dev/docs/configuration](https://fdemon.dev/docs/configur
 - **Flutter SDK** in your PATH
 - A terminal with Unicode support
 
+## Development Process and Workflow
+
+Flutter Demon was built using **[Claude Code](https://claude.ai/code)** with a structured AI-assisted workflow. It follows a structured development process that ensures high code quality through distinct phases. Each feature goes through planning, phased implementation, testing, and review:
+
+```mermaid
+flowchart TB
+    Research["🔍 Research"] --> Plan["📋 Plan"]
+    Plan --> Breakdown["📑 Break into Phases"]
+    Breakdown --> Phase1["Phase 1"]
+    Breakdown --> Phase2["Phase 2"]
+    Breakdown --> PhaseN["Phase N"]
+
+    Phase1 --> Tasks1["📝 Break into Tasks"]
+    Tasks1 --> Task1A["Task 1"]
+    Tasks1 --> Task1B["Task 2"]
+    Tasks1 --> Task1C["Task N"]
+
+    Task1A --> Impl1A["⚙️ Implement"]
+    Task1B --> Impl1B["⚙️ Implement"]
+    Task1C --> Impl1C["⚙️ Implement"]
+
+    Impl1A --> PhaseTest1["🧪 Test Phase"]
+    Impl1B --> PhaseTest1
+    Impl1C --> PhaseTest1
+
+    PhaseTest1 --> PhaseReview1["🔎 Review Phase"]
+    PhaseReview1 -->|"✅ Pass"| Phase2
+    PhaseReview1 -->|"❌ Issues"| Task1A
+
+    Phase2 --> NextPhase["Continue..."]
+    PhaseN --> FinalReview["🔎 Final Review"]
+    FinalReview -->|"✅ Approved"| Done["✅ Done"]
+    FinalReview -->|"❌ Needs Work"| PhaseN
+
+    style Research fill:#e1f5ff
+    style Plan fill:#fff4e1
+    style Breakdown fill:#fff4e1
+    style PhaseTest1 fill:#e8f5e9
+    style PhaseReview1 fill:#f3e5f5
+    style FinalReview fill:#f3e5f5
+    style Done fill:#c8e6c9
+```
+
+| Phase | Description |
+|-------|-------------|
+| **Research** | Gather information on APIs, libraries, and best practices |
+| **Plan** | Design features, document architecture, identify affected modules |
+| **Break into Phases** | Divide feature into logical implementation phases with dependencies |
+| **Break into Tasks** | Decompose each phase into concrete, testable tasks (3-6h each) |
+| **Implement** | Execute individual tasks following architectural guidelines |
+| **Test Phase** | After all phase tasks complete, run full test suite and verify integration |
+| **Review Phase** | Validate architecture, code quality, logic, and risks for the phase |
+| **Final Review** | Comprehensive review after all phases complete |
+
+### Workflow Artifacts
+
+Complete AI-assisted development history is maintained in [workflow](./workflow/) with the following structure:
+
+```
+workflow/
+├── plans/
+│   ├── features/          # Feature plans with phases and tasks
+│   └── bugs/              # Bug reports and fix tasks
+└── reviews/
+    ├── features/          # Feature implementation reviews
+    └── bugs/              # Bug fix reviews
+```
+
+Each task file includes a **Completion Summary** with:
+- Files modified and changes made
+- Notable decisions and tradeoffs
+- Testing performed and results
+- Risks and limitations identified
+
+This transparent development process demonstrates how AI can augment software development while maintaining high code quality, comprehensive testing, and thorough documentation.
+
 ## Contributing
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
