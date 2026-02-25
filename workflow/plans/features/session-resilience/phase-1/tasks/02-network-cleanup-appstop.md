@@ -68,4 +68,24 @@ Covered by task 03. No test changes in this task.
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Added network cleanup block (4 lines) to the `AppStop` branch in `handle_session_message_state`, immediately after the existing performance cleanup block |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact mirror of perf pattern**: The network cleanup block follows the identical structure as the performance cleanup block — abort the task handle, then send the shutdown signal. No `monitoring_active` flag reset is needed (as noted in the task) since `NetworkState` has no equivalent flag.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1123 unit tests + 1 doc test, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: This is a minimal, low-risk addition mirroring an existing pattern. The new code is inside the same `app_id` guard as the perf cleanup, ensuring it only fires when the stop event matches the session's current app.

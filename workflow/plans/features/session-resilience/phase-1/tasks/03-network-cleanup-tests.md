@@ -134,4 +134,22 @@ fn test_app_stop_cleans_up_network_monitoring() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_session_exited_cleans_up_network_monitoring` (after line 4333) and `test_app_stop_cleans_up_network_monitoring` (after line 4408) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Synchronous tests only**: Both new tests are synchronous (no `rt.block_on`), consistent with the task spec. The `network_task_handle` is `None` by default (initialized that way in `SessionHandle::new()`), and the assertions confirm no panic occurs when the cleanup code calls `.take()` on a `None` handle. The signal-send path is fully verified via `attach_network_shutdown`.
+
+2. **Placement**: Tests placed immediately after their perf counterparts (`test_session_exited_signals_perf_shutdown` and `test_app_stop_signals_perf_shutdown`) to keep related tests grouped as specified.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app cleans_up_network` - Passed (3 tests: both new + existing CloseCurrentSession test)
+- `cargo test -p fdemon-app` - Passed (1125 passed, 5 ignored, 0 failed out of 1130)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (clean)

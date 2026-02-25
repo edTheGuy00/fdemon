@@ -4333,6 +4333,35 @@ fn test_session_exited_signals_perf_shutdown() {
 }
 
 #[test]
+fn test_session_exited_cleans_up_network_monitoring() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let mut network_rx = attach_network_shutdown(&mut state, session_id);
+
+    // Action
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+
+    // Assert: shutdown signal was sent
+    assert!(
+        *network_rx.borrow_and_update(),
+        "network_shutdown_tx should be signaled on handle_session_exited"
+    );
+
+    // Assert: field was cleared
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after process exit"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be None after process exit"
+    );
+}
+
+#[test]
 fn test_app_stop_signals_perf_shutdown() {
     use fdemon_core::{AppStart, AppStop, DaemonMessage};
 
@@ -4375,6 +4404,51 @@ fn test_app_stop_signals_perf_shutdown() {
     assert!(
         handle.perf_shutdown_tx.is_none(),
         "perf_shutdown_tx should be cleared after AppStop"
+    );
+}
+
+#[test]
+fn test_app_stop_cleans_up_network_monitoring() {
+    use fdemon_core::{AppStart, AppStop, DaemonMessage};
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark session as started with a known app_id
+    let start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "dev-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &start_msg);
+
+    let mut network_rx = attach_network_shutdown(&mut state, session_id);
+
+    // Action
+    let stop_msg = DaemonMessage::AppStop(AppStop {
+        app_id: "test-app".to_string(),
+        error: None,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &stop_msg);
+
+    // Assert: shutdown signal was sent
+    assert!(
+        *network_rx.borrow_and_update(),
+        "network_shutdown_tx should be signaled on AppStop"
+    );
+
+    // Assert: field was cleared
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after AppStop"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be None after AppStop"
     );
 }
 

@@ -74,4 +74,24 @@ Covered by task 03. No test changes in this task.
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Added network cleanup block (12 lines) to `handle_session_exited` after the performance cleanup block, mirroring the existing `perf_task_handle`/`perf_shutdown_tx` pattern for `network_task_handle`/`network_shutdown_tx` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement after perf cleanup**: The network cleanup block is inserted immediately after `handle.session.performance.monitoring_active = false;` (line 135), before the "Don't auto-quit" comment. This mirrors the task specification exactly and keeps related cleanup code grouped.
+2. **No `monitoring_active` equivalent**: As noted in the task, `NetworkState` has no `monitoring_active` flag, so no flag reset is added. Only the task handle abort and cooperative shutdown signal are needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1123 unit tests + 1 doc test; 0 failed; 5 ignored)
+
+### Risks/Limitations
+
+1. **Minimal risk**: This is a ~12-line addition mirroring an existing pattern. The `.take()` pattern atomically extracts and clears the `Option`, preventing double-cleanup. No existing behavior is changed.
