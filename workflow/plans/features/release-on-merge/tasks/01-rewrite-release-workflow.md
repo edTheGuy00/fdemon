@@ -67,4 +67,26 @@ The current `release.yml` triggers on `push: tags: v[0-9]+.[0-9]+.[0-9]+`. It ne
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/release.yml` | Full rewrite: replaced tag-triggered workflow with `workflow_dispatch` workflow including `version`, `build-macos`, `build-linux`, `build-windows`, `release`, and `publish-site` jobs |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact copy from PLAN.md**: The YAML was copied verbatim from the "REWRITE" section in PLAN.md (lines 84-379), ensuring the implementation matches the specification exactly without interpretation drift.
+2. **`publish-site` job absorbed**: The website deploy job is now the final step in the unified release workflow rather than a separate `publish-site.yml` file. The separate `publish-site.yml` still exists as an ad-hoc manual deploy option.
+
+### Testing Performed
+
+- YAML syntax validation via `ruby -c` / `YAML.load_file` - Passed
+- All 8 acceptance criteria verified via grep checks - Passed
+- No Rust compilation involved (GitHub Actions YAML only)
+
+### Risks/Limitations
+
+1. **GitHub Actions only**: The workflow cannot be tested locally — it will be validated on first dispatch run in CI.
+2. **`GITHUB_TOKEN` tag push**: The `version` job pushes a tag using `GITHUB_TOKEN`. This works for `workflow_dispatch` but will not re-trigger other tag-based workflows (by design — no cross-workflow triggers required).

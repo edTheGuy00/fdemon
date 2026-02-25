@@ -87,4 +87,27 @@ All three `CodeBlock` components embed `master` in the install URL:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `install.sh` | Lines 5-6: changed `master` to `main` in header comment URLs |
+| `README.md` | Line 35: changed `master` to `main` in install URL |
+| `website/src/pages/docs/installation.rs` | Lines 22, 31, 40: changed `master` to `main` in three `CodeBlock` URLs |
+
+### Notable Decisions/Tradeoffs
+
+1. **Scope strictly limited**: Only the six line edits specified in the task were made. No other content was touched in any of the three files.
+2. **No unintended replacements**: The `replace_all` flag was not used; each substitution was targeted to avoid touching unrelated occurrences.
+
+### Testing Performed
+
+- `grep master install.sh` - No matches (clean)
+- `grep master README.md` - No matches (clean)
+- `grep master website/src/pages/docs/installation.rs` - No matches (clean)
+
+### Risks/Limitations
+
+1. **No build verification for website crate**: The task notes that `cargo check -p flutter-demon-site` is excluded from the workspace, so visual inspection confirms the Rust syntax is unchanged.

@@ -1,19 +1,76 @@
 name: Release
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version override (e.g. 0.3.0). Leave empty for auto-bump from conventional commits.'
+        required: false
+        type: string
 
 permissions:
-  contents: write  # For creating releases
+  contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # ── Step 1: Compute version and create tag ──────────────────────────
+  version:
+    name: Compute Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.compute.outputs.version }}
+      tag: ${{ steps.compute.outputs.tag }}
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Compute next version
+        id: compute
+        run: |
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+            TAG="v${VERSION}"
+            echo "Using manual version: $TAG"
+          else
+            TAG=$(git cliff --bumped-version 2>/dev/null || true)
+            if [ -z "$TAG" ]; then
+              echo "::error::No releasable conventional commits found since last tag."
+              exit 1
+            fi
+            LAST=$(git describe --tags --abbrev=0 2>/dev/null || echo "none")
+            if [ "$TAG" = "$LAST" ]; then
+              echo "::error::No version bump needed ($TAG already tagged)."
+              exit 1
+            fi
+            VERSION="${TAG#v}"
+            echo "Auto-computed version: $TAG (was $LAST)"
+          fi
+
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.compute.outputs.tag }}"
+          git push origin "${{ steps.compute.outputs.tag }}"
+
+  # ── Step 2: Build binaries ──────────────────────────────────────────
   build-macos:
     name: Build macOS (${{ matrix.target }})
+    needs: [version]
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -37,10 +94,6 @@ jobs:
         with:
           shared-key: ${{ matrix.target }}
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
@@ -49,7 +102,8 @@ jobs:
 
       - name: Package
         run: |
-          ARCHIVE="fdemon-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz"
+          VERSION="${{ needs.version.outputs.version }}"
+          ARCHIVE="fdemon-v${VERSION}-${{ matrix.target }}.tar.gz"
           cp target/${{ matrix.target }}/release/fdemon ./fdemon
           tar czf "$ARCHIVE" fdemon
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
@@ -57,12 +111,13 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fdemon-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}
+          name: fdemon-v${{ needs.version.outputs.version }}-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
           retention-days: 1
 
   build-linux:
     name: Build Linux (${{ matrix.target }})
+    needs: [version]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -90,10 +145,6 @@ jobs:
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build (cargo)
         if: ${{ !matrix.use_cross }}
         run: cargo build --release --target ${{ matrix.target }}
@@ -108,7 +159,8 @@ jobs:
 
       - name: Package
         run: |
-          ARCHIVE="fdemon-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}.tar.gz"
+          VERSION="${{ needs.version.outputs.version }}"
+          ARCHIVE="fdemon-v${VERSION}-${{ matrix.target }}.tar.gz"
           cp target/${{ matrix.target }}/release/fdemon ./fdemon
           tar czf "$ARCHIVE" fdemon
           echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
@@ -116,12 +168,13 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fdemon-v${{ steps.version.outputs.VERSION }}-${{ matrix.target }}
+          name: fdemon-v${{ needs.version.outputs.version }}-${{ matrix.target }}
           path: ${{ env.ARCHIVE }}
           retention-days: 1
 
   build-windows:
     name: Build Windows (x86_64)
+    needs: [version]
     runs-on: windows-latest
 
     steps:
@@ -138,18 +191,13 @@ jobs:
         with:
           shared-key: x86_64-pc-windows-msvc
 
-      - name: Get version
-        id: version
-        shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-
       - name: Build
         run: cargo build --release --target x86_64-pc-windows-msvc
 
       - name: Package
         shell: pwsh
         run: |
-          $version = "${{ steps.version.outputs.VERSION }}"
+          $version = "${{ needs.version.outputs.version }}"
           $archive = "fdemon-v${version}-x86_64-pc-windows-msvc.zip"
           Copy-Item "target\x86_64-pc-windows-msvc\release\fdemon.exe" -Destination "fdemon.exe"
           Compress-Archive -Path fdemon.exe -DestinationPath $archive
@@ -158,20 +206,21 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: fdemon-v${{ steps.version.outputs.VERSION }}-x86_64-pc-windows-msvc
+          name: fdemon-v${{ needs.version.outputs.version }}-x86_64-pc-windows-msvc
           path: ${{ env.ARCHIVE }}
           retention-days: 1
 
+  # ── Step 3: Create GitHub Release ───────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-macos, build-linux, build-windows]
+    needs: [version, build-macos, build-linux, build-windows]
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0   # Required for git-cliff to access full history
+          fetch-depth: 0
 
       - name: Generate release changelog
         uses: orhun/git-cliff-action@v4
@@ -181,10 +230,6 @@ jobs:
           args: --latest --strip header
         env:
           OUTPUT: CHANGES.md
-
-      - name: Get version
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
       - name: Download all artifacts
         uses: actions/download-artifact@v4
@@ -199,6 +244,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.version.outputs.tag }}
           draft: false
           prerelease: false
           body_path: CHANGES.md
@@ -206,3 +252,43 @@ jobs:
             artifacts/fdemon-v*.tar.gz
             artifacts/fdemon-v*.zip
             artifacts/checksums-sha256.txt
+
+  # ── Step 4: Deploy Website ──────────────────────────────────────────
+  publish-site:
+    name: Publish Website
+    needs: [version, release]
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: edtheguy00/flutter-demon-site
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./website
+          file: ./website/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ needs.version.outputs.version }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

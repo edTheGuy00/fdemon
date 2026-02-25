@@ -55,4 +55,22 @@ cliff.toml
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `cliff.toml` | Appended `[bump]` section with `initial_tag = "v0.1.0"` after the existing `[git]` section |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal change**: Only the required `initial_tag` field was added. Optional fields (`features_always_bump_minor`, `breaking_always_bump_major`) were omitted since the defaults match conventional semver rules as noted in the task.
+
+### Testing Performed
+
+- File verified by reading: `cliff.toml` has all three sections (`[changelog]`, `[git]`, `[bump]`) intact and unchanged except for the appended `[bump]` section.
+
+### Risks/Limitations
+
+1. **git-cliff version**: The `[bump]` section requires git-cliff >= 1.x. If an older version is used in CI, this section may be ignored or cause a parse error.

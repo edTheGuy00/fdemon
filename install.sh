@@ -2,8 +2,8 @@
 # install.sh — Install or update the fdemon binary from GitHub Releases.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash -s -- --version 0.2.0
+#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash -s -- --version 0.2.0
 #   FDEMON_INSTALL_DIR=/usr/local/bin curl -fsSL ... | bash
 #
 # Options:

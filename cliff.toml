@@ -44,3 +44,6 @@ protect_breaking_commits = false
 filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
+
+[bump]
+initial_tag = "v0.1.0"

@@ -32,7 +32,7 @@
 ## Installation
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/master/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/edTheGuy00/fdemon/main/install.sh | bash
 ```
 
 This downloads the latest release binary for your platform and installs it to `$HOME/.local/bin`.

@@ -1,23 +1,16 @@
-# Builds the fdemon.dev website (Leptos WASM app) and pushes to GHCR.
+# Ad-hoc website deploy (independent of release).
+# The main release workflow handles website deployment automatically.
+#
+# To deploy manually:
+#   GitHub → Actions → Publish Website → Run workflow
 #
 # To deploy on your server:
 #   docker pull ghcr.io/edtheguy00/flutter-demon-site:latest
 #   docker run -d -p 80:80 ghcr.io/edtheguy00/flutter-demon-site:latest
-#
-# Note: Images pushed to GHCR are private by default. After the first push,
-# change visibility to public in GitHub repo settings:
-# Settings → Packages → flutter-demon-site → Package settings → Change visibility
 
 name: Publish Website
 
 on:
-  push:
-    tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
-    branches:
-      - develop
-    paths:
-      - 'website/**'
   workflow_dispatch:
 
 env:

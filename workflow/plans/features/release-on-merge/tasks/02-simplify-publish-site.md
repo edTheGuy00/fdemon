@@ -72,4 +72,23 @@ The rest of the workflow (jobs, steps, Docker build) remains unchanged.
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/publish-site.yml` | Replaced 9-line header comment with ad-hoc deploy explanation; replaced `on:` block (push + workflow_dispatch) with `workflow_dispatch` only |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal diff**: Only the header comment and `on:` trigger section were changed. All job definitions, Docker build steps, GHCR push configuration, and metadata extraction remain byte-for-byte identical.
+
+### Testing Performed
+
+- Ruby YAML syntax validation (`YAML.load_file`) - Passed
+- Grep for `push:` key in `on:` section - 0 matches (Passed)
+
+### Risks/Limitations
+
+1. **No automatic deploy on tag/branch push**: Website changes merged to `develop` or new version tags will no longer auto-trigger this workflow — that is the intended behavior, as the release workflow now owns website deployment.
