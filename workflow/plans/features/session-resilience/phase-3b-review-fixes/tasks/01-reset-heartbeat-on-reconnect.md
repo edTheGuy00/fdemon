@@ -112,3 +112,30 @@ fn test_heartbeat_counter_reset_documented() {
 - The `heartbeat_handle` (obtained at line 989 via `client.request_handle()`) survives reconnection because `VmRequestHandle` communicates through the `VmServiceClient`'s internal command channel, which is re-established during reconnection
 - The heartbeat `tokio::time::interval` continues to tick during reconnection — this is intentional (it acts as a liveness check), but the counter must not carry over from the disconnected state
 - Consider whether heartbeat probes should be skipped entirely during reconnection (e.g., using a `reconnecting: bool` flag). This is a future enhancement — for now, resetting the counter is sufficient
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `consecutive_failures = 0;` in `VmClientEvent::Reconnecting` arm (line 1054) and `VmClientEvent::Reconnected` arm (line 1064); added `test_heartbeat_counter_reset_documented` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Both arms reset**: `Reconnecting` resets early to prevent accumulation during the backoff window; `Reconnected` is the definitive reset after successful reconnect. Both are required as specified — the `Reconnected` case handles heartbeats that raced before `Reconnecting` was emitted.
+2. **Documentation-only test**: As specified in the task, the documented test `test_heartbeat_counter_reset_documented` does not assert on async runtime state but records the invariant for future reviewers.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1141 tests + 1 doc-test; both new tests pass)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No async integration test**: The actual `forward_vm_events` loop cannot be unit-tested without an async integration harness. The fix is verified by code review only, as noted in the task.

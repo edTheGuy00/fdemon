@@ -94,6 +94,15 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
 /// Handle session exit events
 pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: Option<i32>) {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
+        // Guard: ignore duplicate exit events — the session is already stopped.
+        if handle.session.phase == AppPhase::Stopped {
+            tracing::debug!(
+                "Session {} already stopped, ignoring duplicate exit event",
+                session_id
+            );
+            return;
+        }
+
         let (level, message) = match code {
             Some(0) => (
                 LogLevel::Info,

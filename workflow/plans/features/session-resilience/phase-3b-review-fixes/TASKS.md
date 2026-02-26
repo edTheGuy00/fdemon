@@ -38,11 +38,11 @@ Follow-up fixes from the phase-3 code review. Two critical bugs (heartbeat count
 
 | # | Task | Status | Depends On | Severity | Modules |
 |---|------|--------|------------|----------|---------|
-| 1 | [01-reset-heartbeat-on-reconnect](tasks/01-reset-heartbeat-on-reconnect.md) | Pending | - | Critical | `app/actions.rs` |
-| 2 | [02-fix-duplicate-exit-race](tasks/02-fix-duplicate-exit-race.md) | Pending | - | Critical | `app/actions.rs` |
-| 3 | [03-exit-handler-idempotency](tasks/03-exit-handler-idempotency.md) | Pending | 02 | Major | `app/handler/session.rs`, `app/handler/tests.rs` |
-| 4 | [04-cleanup-get-version](tasks/04-cleanup-get-version.md) | Pending | - | Major | `daemon/vm_service/client.rs`, `daemon/vm_service/protocol.rs`, `app/actions.rs` |
-| 5 | [05-test-and-style-fixes](tasks/05-test-and-style-fixes.md) | Pending | 01, 02, 03, 04 | Minor | `app/handler/tests.rs`, `daemon/process.rs` |
+| 1 | [01-reset-heartbeat-on-reconnect](tasks/01-reset-heartbeat-on-reconnect.md) | Done | - | Critical | `app/actions.rs` |
+| 2 | [02-fix-duplicate-exit-race](tasks/02-fix-duplicate-exit-race.md) | Done | - | Critical | `app/actions.rs` |
+| 3 | [03-exit-handler-idempotency](tasks/03-exit-handler-idempotency.md) | Done | 02 | Major | `app/handler/session.rs`, `app/handler/tests.rs` |
+| 4 | [04-cleanup-get-version](tasks/04-cleanup-get-version.md) | Done | - | Major | `daemon/vm_service/client.rs`, `daemon/vm_service/protocol.rs`, `app/actions.rs` |
+| 5 | [05-test-and-style-fixes](tasks/05-test-and-style-fixes.md) | Done | 01, 02, 03, 04 | Minor | `app/handler/tests.rs`, `daemon/process.rs` |
 
 ## Execution Plan
 
@@ -56,14 +56,14 @@ Follow-up fixes from the phase-3 code review. Two critical bugs (heartbeat count
 
 Phase 3b is complete when:
 
-- [ ] `consecutive_failures` reset to 0 on `Reconnected` and `Reconnecting` events
-- [ ] Watchdog checks `process_exited` flag before synthesizing `Exited` event
-- [ ] `handle_session_exited` returns early when session is already `Stopped`
-- [ ] `get_version()` accessible from `VmRequestHandle` and used by heartbeat (or removed if unused)
-- [ ] `VersionInfo` has `#[serde(rename_all = "camelCase")]` matching module convention
-- [ ] No duplicate test (`test_session_exited_updates_session_phase` removed)
-- [ ] New tests follow `test_<function>_<scenario>_<expected_result>` naming
-- [ ] Platform-dependent tests guarded with `#[cfg(unix)]`
-- [ ] Double-exit idempotency test exists
-- [ ] All existing tests pass (`cargo test --workspace`)
-- [ ] `cargo clippy --workspace -- -D warnings` clean
+- [x] `consecutive_failures` reset to 0 on `Reconnected` and `Reconnecting` events
+- [x] Watchdog checks `process_exited` flag before synthesizing `Exited` event
+- [x] `handle_session_exited` returns early when session is already `Stopped`
+- [x] `get_version()` accessible from `VmRequestHandle` and used by heartbeat (or removed if unused)
+- [x] `VersionInfo` has `#[serde(rename_all = "camelCase")]` matching module convention
+- [x] No duplicate test (`test_session_exited_updates_session_phase` removed)
+- [x] New tests follow `test_<function>_<scenario>_<expected_result>` naming
+- [x] Platform-dependent tests guarded with `#[cfg(unix)]`
+- [x] Double-exit idempotency test exists
+- [x] All existing tests pass (`cargo test --workspace`)
+- [x] `cargo clippy --workspace -- -D warnings` clean

@@ -105,3 +105,32 @@ Task 03 will add a double-exit idempotency test at the TEA handler level as defe
 - This was explicitly called out as a phase-3 success criterion: "No duplicate `Exited` events when watchdog and wait task race" — the current code violates this criterion
 - The `process_exited` flag already exists at line 418 and is used post-loop (line 500) to decide whether to call `process.shutdown()`. This fix leverages the existing flag rather than introducing new state
 - The fix is a single-line addition (`!process_exited &&`) with no structural changes to the loop
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `!process_exited &&` guard to watchdog arm condition (line 481); added explanatory comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard placement**: The `!process_exited` check is placed before `process.has_exited()` to short-circuit and avoid the OS syscall when a real exit event has already been received. This follows the task specification exactly.
+2. **Minimal change**: Only one condition was changed and one comment added. No structural changes to the loop, no new state variables introduced. The fix leverages the existing `process_exited` flag which was already set correctly at line 436 (daemon_rx Exited arm).
+3. **Pre-existing changes**: The working tree also contained a `get_version()` change in `actions.rs` (line 1082) from the phase-3 health monitoring task — these were not part of this task but are present in the diff.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app --lib` — Passed (1141 tests, 0 failed, 5 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Race condition is untestable deterministically**: As noted in the task, this async race between the watchdog timer and the channel closure cannot be tested deterministically in a unit test. Verification is by code review — all three flag-setting paths were traced: (a) daemon_rx receives Exited → process_exited = true → watchdog guard blocks; (b) daemon_rx returns None → process_exited = true + break; (c) watchdog detects death first → process_exited = true + break.
+2. **Doctest runner**: A `cargo test -p fdemon-app` (including doctests) showed a stale rlib reference error in the doctest runner during the stash investigation. This is a build environment artifact, not caused by this change. The `--lib` flag avoids the doctest runner and all 1141 unit tests pass cleanly.

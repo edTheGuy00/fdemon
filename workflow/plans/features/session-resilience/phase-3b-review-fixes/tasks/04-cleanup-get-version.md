@@ -91,3 +91,38 @@ pub struct VersionInfo {
 - `VmRequestHandle` already has `call_extension()` (line 226) as a precedent for typed convenience methods
 - If moving `get_version()`, the `VersionInfo` import may need to be added to `VmRequestHandle`'s scope (check if `protocol.rs` types are already imported)
 - The `re-export` in `vm_service/mod.rs` (line ~27) already exports `VersionInfo` publicly
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/protocol.rs` | Added `#[serde(rename_all = "camelCase")]` to `VersionInfo` struct for consistency with all other multi-field structs in the module |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `get_version()` typed convenience method to `VmRequestHandle` impl block; removed dead `VmServiceClient::get_version()` method |
+| `crates/fdemon-app/src/actions.rs` | Updated heartbeat probe from raw `heartbeat_handle.request("getVersion", None)` to typed `heartbeat_handle.get_version()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Moved to `VmRequestHandle` (recommended approach)**: Added `get_version()` to `VmRequestHandle` rather than taking the alternative of leaving the raw `request()` call. The typed method makes the heartbeat's intent explicit — it expects a `VersionInfo`-shaped response — and validates the response structure, catching protocol changes early.
+
+2. **No import changes needed**: `VersionInfo` was already imported in `client.rs` at the top-level use statement, so no additional imports were required for the `VmRequestHandle` impl block.
+
+3. **The heartbeat return value is discarded**: The heartbeat's `Ok(Ok(_))` arm discards the typed `VersionInfo` value, which is correct — only success/failure matters for the liveness probe. The typed return means the response is validated before being discarded, providing stronger protocol correctness guarantees.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (383 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1141 tests + 1 doc-test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Heartbeat validation tightened**: The heartbeat now validates the `VersionInfo` shape before treating a probe as successful. If the VM Service response for `getVersion` is malformed, the heartbeat will now count it as a failure where previously the raw `request()` call would have succeeded. This is the desired behavior but represents a subtle behavioral change.

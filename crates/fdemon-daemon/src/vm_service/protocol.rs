@@ -135,6 +135,7 @@ pub enum VmClientEvent {
 /// Returns the Dart VM Service protocol version. This is the lightest
 /// possible RPC — no parameters, no isolate context required.
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct VersionInfo {
     /// VM Service protocol major version.
     pub major: u32,

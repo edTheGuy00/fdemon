@@ -112,3 +112,30 @@ fn test_handle_session_exited_duplicate_exit_is_idempotent() {
 - This is a common "at-most-once" handler pattern. The `AppPhase::Stopped` check is the canonical guard since the handler's purpose is to transition the session to `Stopped`
 - The `.take()` pattern on `vm_shutdown_tx`, `perf_task_handle`, etc. provides partial idempotency but not for the log entry
 - Consider whether `debug!()` logging on the early return path is useful for diagnostics (optional)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Added early-return idempotency guard after obtaining session handle; returns if `phase == AppPhase::Stopped` with a `tracing::debug!` diagnostic |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_handle_session_exited_duplicate_exit_is_idempotent` test verifying two `Exited` events produce exactly one log entry and preserve the first exit code |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added `tracing::debug!` on guard path**: The task noted this was optional, but it follows the existing pattern in the codebase of logging diagnostic information at debug level when silently ignoring events. This aids future debugging without adding noise at normal log levels.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1142 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **None**: The guard is a minimal, safe change — it only affects the duplicate-exit code path and leaves the normal first-exit path entirely unchanged.

@@ -653,26 +653,7 @@ fn test_session_daemon_stderr_routes_correctly() {
 }
 
 #[test]
-fn test_session_exited_updates_session_phase() {
-    let mut state = AppState::new();
-
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    update(
-        &mut state,
-        Message::SessionDaemon {
-            session_id,
-            event: DaemonEvent::Exited { code: Some(0) },
-        },
-    );
-
-    let handle = state.session_manager.get(session_id).unwrap();
-    assert_eq!(handle.session.phase, AppPhase::Stopped);
-}
-
-#[test]
-fn test_session_exited_with_error_code() {
+fn test_handle_session_exited_nonzero_code_logs_error() {
     let mut state = AppState::new();
 
     let device = test_device("test-device", "Test Device");
@@ -696,7 +677,7 @@ fn test_session_exited_with_error_code() {
 }
 
 #[test]
-fn test_session_exited_with_code_zero() {
+fn test_handle_session_exited_code_zero_logs_normal_exit() {
     // Setup: create state with an active session
     let mut state = AppState::new();
     let device = test_device("test-device", "Test Device");
@@ -730,7 +711,7 @@ fn test_session_exited_with_code_zero() {
 }
 
 #[test]
-fn test_session_exited_with_none_code() {
+fn test_handle_session_exited_no_code_logs_unknown_exit() {
     // Setup: create state with an active session
     let mut state = AppState::new();
     let device = test_device("test-device", "Test Device");
@@ -764,7 +745,7 @@ fn test_session_exited_with_none_code() {
 }
 
 #[test]
-fn test_vm_service_disconnected_cleans_up_devtools_tasks() {
+fn test_handle_vm_service_disconnected_clears_vm_connected_and_shutdown_tx() {
     // Verify that VmServiceDisconnected clears all DevTools task handles and
     // shutdown senders for both performance and network monitoring.
     let device = test_device("dev-1", "Device 1");
@@ -858,6 +839,51 @@ fn test_session_daemon_spawn_failed() {
         .logs
         .iter()
         .any(|e| e.message.contains("Failed to start Flutter")));
+}
+
+#[test]
+fn test_handle_session_exited_duplicate_exit_is_idempotent() {
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // First exit: should process normally
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(0) },
+        },
+    );
+
+    // Second exit: should be silently ignored
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(1) },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.session.phase, AppPhase::Stopped);
+
+    // Only one exit log entry should exist (from the first exit, not the second)
+    let exit_logs: Vec<_> = handle
+        .session
+        .logs
+        .iter()
+        .filter(|e| e.message.contains("exited"))
+        .collect();
+    assert_eq!(
+        exit_logs.len(),
+        1,
+        "duplicate exit should not add a second log entry"
+    );
+    assert!(
+        exit_logs[0].message.contains("exited normally"),
+        "the first exit (code 0) log should be preserved, not overwritten by code 1"
+    );
 }
 
 #[test]

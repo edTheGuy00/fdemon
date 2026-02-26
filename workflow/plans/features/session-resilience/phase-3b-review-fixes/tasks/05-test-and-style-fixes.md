@@ -101,3 +101,32 @@ let shutdown_cmd = format!(
 - The test renames only apply to tests introduced in phase 3/3b — do not rename existing tests that predate this work
 - The `#[cfg(unix)]` guards mean these tests will be skipped on Windows CI (if/when added). This is acceptable since the process spawning code itself is Unix-focused
 - The `SHUTDOWN_REQUEST_ID` format! approach introduces a minor runtime cost (string formatting vs static string literal). This is negligible for a shutdown path that executes at most once per session
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Removed duplicate `test_session_exited_updates_session_phase`; renamed 4 phase-3 tests to follow `test_<function>_<scenario>_<expected_result>` convention |
+| `crates/fdemon-daemon/src/process.rs` | Added `SHUTDOWN_REQUEST_ID` constant replacing hardcoded `9999`; added `#[cfg(unix)]` to `spawn_test_process` helper and 5 dependent tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **VmServiceDisconnected rename**: The task referenced `test_session_disconnect_cleans_up_vm_state` which doesn't exist. The actual phase-3 test was `test_vm_service_disconnected_cleans_up_devtools_tasks`. Renamed to `test_handle_vm_service_disconnected_clears_vm_connected_and_shutdown_tx` (not `test_handle_session_exited_*` as suggested) because the test exercises `VmServiceDisconnected`, not session exit — using `session_exited` in the name would be factually wrong.
+2. **`test_session_exited_with_error_code` rename**: The task table listed `test_session_exited_with_nonzero_code` (doesn't exist); the actual pre-existing test was `test_session_exited_with_error_code`. This is a phase-3 test so it was correctly renamed to `test_handle_session_exited_nonzero_code_logs_error`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all tests pass, no regressions)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: All changes are purely cosmetic/hygiene — test renames, platform guards, and constant extraction. No behaviour changes.

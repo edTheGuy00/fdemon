@@ -13,6 +13,11 @@ use super::commands::{CommandSender, DaemonCommand, RequestTracker};
 use fdemon_core::events::DaemonEvent;
 use fdemon_core::prelude::*;
 
+/// JSON-RPC request ID used for the `daemon.shutdown` command.
+/// Chosen to be well above the `RequestTracker`'s sequential range (starting at 1)
+/// to avoid collisions with in-flight requests.
+const SHUTDOWN_REQUEST_ID: u32 = 9999;
+
 /// Manages a Flutter child process.
 ///
 /// The `Child` handle is moved into a dedicated `wait_for_exit` background task that
@@ -330,8 +335,11 @@ impl FlutterProcess {
         }
 
         // Step 2: Send daemon.shutdown command
-        let shutdown_cmd = r#"{"method":"daemon.shutdown","id":9999}"#;
-        let _ = self.send_json(shutdown_cmd).await;
+        let shutdown_cmd = format!(
+            r#"{{"method":"daemon.shutdown","id":{}}}"#,
+            SHUTDOWN_REQUEST_ID
+        );
+        let _ = self.send_json(&shutdown_cmd).await;
 
         // Step 3: Wait up to 2 seconds for graceful exit.
         //
@@ -445,6 +453,7 @@ mod tests {
     ///
     /// We exercise only the wait task by bypassing `spawn_internal`'s pubspec check.
     /// We use `sh -c "exit N"` as a stand-in for a Flutter process.
+    #[cfg(unix)]
     async fn spawn_test_process(
         exit_code: i32,
         event_tx: mpsc::Sender<DaemonEvent>,
@@ -493,6 +502,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_exit_code_captured_on_normal_exit() {
         let (tx, mut rx) = mpsc::channel(16);
@@ -515,6 +525,7 @@ mod tests {
         assert!(found, "DaemonEvent::Exited was not received");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_exit_code_captured_on_error_exit() {
         let (tx, mut rx) = mpsc::channel(16);
@@ -536,6 +547,7 @@ mod tests {
         assert!(found, "DaemonEvent::Exited was not received");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_reader_does_not_emit_exited_event() {
         // Spawn a process that immediately closes stdout; we should get exactly
@@ -567,6 +579,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_has_exited_becomes_true_after_exit() {
         let (tx, mut rx) = mpsc::channel(16);
@@ -592,6 +605,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_shutdown_kills_long_running_process() {
         // Spawn a process that sleeps indefinitely

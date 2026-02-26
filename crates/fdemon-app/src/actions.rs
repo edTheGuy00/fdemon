@@ -476,7 +476,9 @@ fn spawn_session(
                         _ = watchdog.tick() => {
                             // Periodically poll for process death that does not produce a
                             // stdout EOF (e.g. SIGKILL, OOM kill, frozen pipe).
-                            if process.has_exited() {
+                            // Guard: skip synthesis if daemon_rx already delivered the real
+                            // Exited event to avoid a duplicate (and code: None overwrite).
+                            if !process_exited && process.has_exited() {
                                 info!(
                                     "Watchdog detected process exit for session {}",
                                     session_id
@@ -1080,7 +1082,7 @@ async fn forward_vm_events(
                 }
             }
             _ = heartbeat.tick() => {
-                let probe = heartbeat_handle.request("getVersion", None);
+                let probe = heartbeat_handle.get_version();
                 match tokio::time::timeout(HEARTBEAT_TIMEOUT, probe).await {
                     Ok(Ok(_)) => {
                         if consecutive_failures > 0 {
