@@ -204,11 +204,11 @@ Phase 1 (Bug Fix)                Phase 2 (Reconnecting UI)
                                  └── 07-reconnecting-tests
 
 Phase 2b (Reconnect Handler Fixes)     Phase 3 (Health Monitoring)
-├── 01-reconnected-message-variant     ├── 08-process-watchdog
-├── 02-cleanup-perf-on-reconnect       ├── 09-get-version-rpc
-├── 03-guard-connection-status         ├── 10-vm-heartbeat
-└── 04-reconnect-handler-tests         ├── 11-wait-for-exit-task
-                                       └── 12-health-monitoring-tests
+├── 01-reconnected-message-variant     ├── 01-process-watchdog        ─┐
+├── 02-cleanup-perf-on-reconnect       ├── 02-get-version-rpc         ─┤ Wave 1
+├── 03-guard-connection-status         ├── 04-wait-for-exit-task      ─┘
+└── 04-reconnect-handler-tests         ├── 03-vm-heartbeat (→02)       Wave 2
+                                       └── 05-health-monitoring-tests  Wave 3
 ```
 
 ---
