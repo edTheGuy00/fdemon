@@ -142,3 +142,32 @@ fn test_create_session_fails_when_all_active() {
 - The eviction is invisible to the user (stopped tab disappears) — but this is acceptable because stopped tabs are "dead" UI elements. The user can still see the exit log of the most recently stopped sessions.
 - Alternative considered: count only active sessions in the guard. Rejected because it removes the total session cap entirely (unbounded stopped session accumulation would leak memory).
 - The `remove_session` call handles `selected_index` clamping, so tab navigation remains valid after eviction
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Added `evict_oldest_stopped` and `ensure_capacity` private methods; replaced the `MAX_SESSIONS` guard in all four `create_session*` methods with `self.ensure_capacity()?;`; added `AppPhase` import; added 5 new eviction tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`is_some_and` over `map_or(false, ...)`**: Clippy required the idiomatic `is_some_and` form. The task spec used `map_or` but `is_some_and` is semantically equivalent and passes the `-D warnings` gate.
+2. **Collapsed `ensure_capacity` guard**: Clippy flagged the nested `if` as `collapsible_if`; the two conditions were merged with `&&` as suggested. Readability is equivalent.
+3. **`AppPhase` import added at crate level**: `fdemon_core::prelude::*` only exports `Error`/`Result`/tracing macros, so `AppPhase` had to be imported explicitly via `use fdemon_core::{prelude::*, AppPhase};`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app session_manager` - Passed (26 tests: 21 existing + 5 new)
+- `cargo test -p fdemon-app` - Passed (1,156 unit tests + 1 doc-test)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Quitting phase not evicted**: `Quitting` sessions are never evicted (by design — they are semantically distinct from `Stopped`). In practice `Quitting` is currently unreachable on individual sessions, so this is a safe conservative choice.

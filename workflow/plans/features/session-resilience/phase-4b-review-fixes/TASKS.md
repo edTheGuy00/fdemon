@@ -35,25 +35,25 @@ Address concerns and observations from the [phase-4 review](../../../../reviews/
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-remove-find-by-device-id](tasks/01-remove-find-by-device-id.md) | Not Started | - | `session_manager.rs` |
-| 2 | [02-auto-evict-stopped](tasks/02-auto-evict-stopped.md) | Not Started | - | `session_manager.rs` |
-| 3 | [03-missing-phase-tests](tasks/03-missing-phase-tests.md) | Not Started | 1 | `session_manager.rs`, `launch_context.rs` |
-| 4 | [04-doc-comment-fixes](tasks/04-doc-comment-fixes.md) | Not Started | 1 | `session_manager.rs`, `launch_context.rs` |
-| 5 | [05-fix-task-03-notes](tasks/05-fix-task-03-notes.md) | Not Started | - | `workflow/` docs only |
+| 1 | [01-remove-find-by-device-id](tasks/01-remove-find-by-device-id.md) | Done | - | `session_manager.rs` |
+| 2 | [02-auto-evict-stopped](tasks/02-auto-evict-stopped.md) | Done | - | `session_manager.rs` |
+| 3 | [03-missing-phase-tests](tasks/03-missing-phase-tests.md) | Done | 1 | `session_manager.rs`, `launch_context.rs` |
+| 4 | [04-doc-comment-fixes](tasks/04-doc-comment-fixes.md) | Done | 1 | `session_manager.rs`, `launch_context.rs` |
+| 5 | [05-fix-task-03-notes](tasks/05-fix-task-03-notes.md) | Done | - | `workflow/` docs only |
 
 ## Success Criteria
 
 Phase 4b is complete when:
 
-- [ ] `find_by_device_id` is removed from production code and all tests
-- [ ] `create_session*` methods auto-evict the oldest stopped session when `MAX_SESSIONS` is reached
-- [ ] `find_active_by_device_id` has tests for `Quitting` and `Reloading` phases at SessionManager level
-- [ ] `handle_launch` integration tests cover `Quitting` and `Reloading` phases
-- [ ] `find_active_by_device_id` doc comment states positive contract
-- [ ] Task reference comment in `launch_context.rs` replaced with descriptive comment
-- [ ] Inaccurate `app_id = None` claim in task-03 notes is corrected
-- [ ] `cargo clippy --workspace -- -D warnings` clean
-- [ ] All existing tests pass
+- [x] `find_by_device_id` is removed from production code and all tests
+- [x] `create_session*` methods auto-evict the oldest stopped session when `MAX_SESSIONS` is reached
+- [x] `find_active_by_device_id` has tests for `Quitting` and `Reloading` phases at SessionManager level
+- [x] `handle_launch` integration tests cover `Quitting` and `Reloading` phases
+- [x] `find_active_by_device_id` doc comment states positive contract
+- [x] Task reference comment in `launch_context.rs` replaced with descriptive comment
+- [x] Inaccurate `app_id = None` claim in task-03 notes is corrected
+- [x] `cargo clippy --workspace -- -D warnings` clean
+- [x] All existing tests pass
 
 ## Notes
 

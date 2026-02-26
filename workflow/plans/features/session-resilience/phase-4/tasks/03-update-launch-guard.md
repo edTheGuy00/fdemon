@@ -68,7 +68,7 @@ Tested via task 04 (integration-level tests for the full launch flow with pre-ex
 
 - This is a one-line change (method name swap). The risk is extremely low.
 - Two sessions with the same `device_id` can now coexist in `SessionManager` (one stopped, one active). This is safe because daemon events route by `session_id`, not `device_id`.
-- `find_by_app_id` is not affected — stopped sessions have `app_id = None`.
+- `find_by_app_id` is not affected — it routes daemon events by `app_id`, which is a separate concern from device-level duplicate prevention.
 
 ---
 

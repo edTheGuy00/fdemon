@@ -1278,7 +1278,7 @@ mod tests {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Phase 4 Task 04: Device Reuse Tests for handle_launch
+    // Device reuse guard tests — verify stopped sessions allow reuse, active sessions block
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
@@ -1393,6 +1393,87 @@ mod tests {
         assert!(
             result.action.is_none(),
             "Expected no action but got one; initializing sessions must block device reuse"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_allows_device_reuse_when_session_quitting() {
+        use fdemon_core::AppPhase;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a session for the test device, then mark it as Quitting
+        let device = test_device();
+        let id = state
+            .session_manager
+            .create_session(&device)
+            .expect("should create session");
+        state.session_manager.get_mut(id).unwrap().session.phase = AppPhase::Quitting;
+
+        // Configure new session dialog to select the same device
+        // (selected_index = 1 because index 0 is the group header)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(device);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Quitting session should not block device reuse — SpawnSession action is returned
+        assert!(
+            result.action.is_some(),
+            "Expected SpawnSession action but got none; quitting sessions must allow device reuse"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_blocks_device_with_reloading_session() {
+        use fdemon_core::AppPhase;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a session for the test device and set it to Reloading
+        let device = test_device();
+        let id = state
+            .session_manager
+            .create_session(&device)
+            .expect("should create session");
+        state.session_manager.get_mut(id).unwrap().session.phase = AppPhase::Reloading;
+
+        // Configure new session dialog to select the same device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(device);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Reloading session should block device reuse (Reloading is active)
+        assert!(
+            result.action.is_none(),
+            "Expected no action but got one; reloading sessions must block device reuse"
+        );
+        let error = state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .as_ref()
+            .expect("Expected error to be set on target_selector");
+        assert!(
+            error.contains("already has an active session"),
+            "Error message should mention active session, got: {error}"
         );
     }
 }

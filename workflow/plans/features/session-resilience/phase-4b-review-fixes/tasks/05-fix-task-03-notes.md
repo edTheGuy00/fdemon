@@ -36,3 +36,28 @@ No code changes — workflow documentation fix only.
 ### Notes
 
 - This is a documentation-only fix in the workflow plans directory. No source code affected.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/session-resilience/phase-4/tasks/03-update-launch-guard.md` | Line 71: Replaced inaccurate statement about `app_id = None` with factually correct explanation that `find_by_app_id` is unaffected because it routes by `app_id` (separate concern from device-level duplicate prevention) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Documentation accuracy**: Fixed the factually incorrect reasoning in the task-03 notes. The conclusion was correct (no impact on `find_by_app_id`), but the justification was wrong — `mark_stopped()` does NOT clear `app_id`, so the corrected statement properly explains the actual mechanism.
+
+### Testing Performed
+
+- Manual verification of line 71 replacement in task-03 file - Passed
+- No source code affected, so no compilation or test execution needed
+
+### Risks/Limitations
+
+1. **None**: This is a documentation-only fix. No risks to code or functionality.

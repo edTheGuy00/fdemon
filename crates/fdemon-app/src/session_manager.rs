@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::config::{DevToolsSettings, LaunchConfig};
-use fdemon_core::prelude::*;
+use fdemon_core::{prelude::*, AppPhase};
 use fdemon_daemon::{Device, FlutterProcess};
 
 use super::session::{Session, SessionHandle, SessionId};
@@ -42,12 +42,7 @@ impl SessionManager {
 
     /// Create a new session for a device
     pub fn create_session(&mut self, device: &Device) -> Result<SessionId> {
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err(Error::config(format!(
-                "Maximum of {} concurrent sessions reached",
-                MAX_SESSIONS
-            )));
-        }
+        self.ensure_capacity()?;
 
         let session = Session::new(
             device.id.clone(),
@@ -76,12 +71,7 @@ impl SessionManager {
         device: &Device,
         config: LaunchConfig,
     ) -> Result<SessionId> {
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err(Error::config(format!(
-                "Maximum of {} concurrent sessions reached",
-                MAX_SESSIONS
-            )));
-        }
+        self.ensure_capacity()?;
 
         let session = Session::new(
             device.id.clone(),
@@ -114,12 +104,7 @@ impl SessionManager {
         device: &Device,
         devtools: &DevToolsSettings,
     ) -> Result<SessionId> {
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err(Error::config(format!(
-                "Maximum of {} concurrent sessions reached",
-                MAX_SESSIONS
-            )));
-        }
+        self.ensure_capacity()?;
 
         let session = Session::new(
             device.id.clone(),
@@ -149,12 +134,7 @@ impl SessionManager {
         config: LaunchConfig,
         devtools: &DevToolsSettings,
     ) -> Result<SessionId> {
-        if self.sessions.len() >= MAX_SESSIONS {
-            return Err(Error::config(format!(
-                "Maximum of {} concurrent sessions reached",
-                MAX_SESSIONS
-            )));
-        }
+        self.ensure_capacity()?;
 
         let session = Session::new(
             device.id.clone(),
@@ -176,6 +156,39 @@ impl SessionManager {
         }
 
         Ok(id)
+    }
+
+    /// Remove the oldest stopped session to make room for a new one.
+    /// Returns `true` if a session was evicted, `false` if no stopped sessions exist.
+    fn evict_oldest_stopped(&mut self) -> bool {
+        // Find the first stopped session in session_order (oldest first)
+        let stopped_id = self
+            .session_order
+            .iter()
+            .find(|&&id| {
+                self.sessions
+                    .get(&id)
+                    .is_some_and(|h| h.session.phase == AppPhase::Stopped)
+            })
+            .copied();
+
+        if let Some(id) = stopped_id {
+            self.remove_session(id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Ensure there is room for a new session, evicting the oldest stopped session if needed.
+    fn ensure_capacity(&mut self) -> Result<()> {
+        if self.sessions.len() >= MAX_SESSIONS && !self.evict_oldest_stopped() {
+            return Err(Error::config(format!(
+                "Maximum of {} concurrent sessions reached",
+                MAX_SESSIONS
+            )));
+        }
+        Ok(())
     }
 
     /// Remove a session
@@ -306,19 +319,11 @@ impl SessionManager {
             .map(|(id, _)| *id)
     }
 
-    /// Find session by device_id
-    pub fn find_by_device_id(&self, device_id: &str) -> Option<SessionId> {
-        self.sessions
-            .iter()
-            .find(|(_, h)| h.session.device_id == device_id)
-            .map(|(id, _)| *id)
-    }
-
-    /// Find an active (non-stopped) session by device_id.
+    /// Find an active session by device_id.
     ///
-    /// Unlike `find_by_device_id`, this skips sessions in `Stopped` or `Quitting`
-    /// phases. Used by the new-session launch guard to allow device reuse after
-    /// a session exits.
+    /// Returns `Some(id)` for sessions in `Initializing`, `Running`, or `Reloading`
+    /// phase. Returns `None` for sessions in `Stopped` or `Quitting` phase, or if
+    /// no session matches the device_id.
     pub fn find_active_by_device_id(&self, device_id: &str) -> Option<SessionId> {
         self.sessions
             .iter()
@@ -559,22 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_by_device_id() {
-        let mut manager = SessionManager::new();
-
-        let id1 = manager
-            .create_session(&test_device("device-1", "D1"))
-            .unwrap();
-        let id2 = manager
-            .create_session(&test_device("device-2", "D2"))
-            .unwrap();
-
-        assert_eq!(manager.find_by_device_id("device-1"), Some(id1));
-        assert_eq!(manager.find_by_device_id("device-2"), Some(id2));
-        assert_eq!(manager.find_by_device_id("device-3"), None);
-    }
-
-    #[test]
     fn test_find_active_by_device_id_skips_stopped_session() {
         let mut manager = SessionManager::new();
         let id = manager
@@ -586,8 +575,6 @@ mod tests {
         // Mark as stopped
         manager.get_mut(id).unwrap().session.phase = AppPhase::Stopped;
         assert!(manager.find_active_by_device_id("dev1").is_none());
-        // Original method still finds it
-        assert!(manager.find_by_device_id("dev1").is_some());
     }
 
     #[test]
@@ -604,6 +591,26 @@ mod tests {
     fn test_find_active_by_device_id_returns_none_for_unknown_device() {
         let manager = SessionManager::new();
         assert!(manager.find_active_by_device_id("nonexistent").is_none());
+    }
+
+    #[test]
+    fn test_find_active_by_device_id_skips_quitting_session() {
+        let mut manager = SessionManager::new();
+        let id = manager
+            .create_session(&test_device("dev1", "Device 1"))
+            .unwrap();
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Quitting;
+        assert!(manager.find_active_by_device_id("dev1").is_none());
+    }
+
+    #[test]
+    fn test_find_active_by_device_id_finds_reloading_session() {
+        let mut manager = SessionManager::new();
+        let id = manager
+            .create_session(&test_device("dev1", "Device 1"))
+            .unwrap();
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Reloading;
+        assert_eq!(manager.find_active_by_device_id("dev1"), Some(id));
     }
 
     #[test]
@@ -785,5 +792,130 @@ mod tests {
         assert_eq!(app_ids.len(), 2);
         assert!(app_ids.contains(&"app-123".to_string()));
         assert!(app_ids.contains(&"app-456".to_string()));
+    }
+
+    // ── eviction tests ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_session_evicts_oldest_stopped_when_full() {
+        let mut manager = SessionManager::new();
+        // Fill with 9 sessions, mark all stopped
+        for i in 0..9 {
+            let id = manager
+                .create_session(&test_device(&format!("dev-{i}"), &format!("D{i}")))
+                .unwrap();
+            manager.get_mut(id).unwrap().session.phase = AppPhase::Stopped;
+        }
+        assert_eq!(manager.len(), MAX_SESSIONS);
+
+        // 10th session should succeed by evicting oldest (dev-0)
+        let new_id = manager
+            .create_session(&test_device("dev-new", "New"))
+            .unwrap();
+        assert!(manager.get(new_id).is_some());
+        // Still at max after evict + add
+        assert_eq!(manager.len(), MAX_SESSIONS);
+        // Oldest stopped session was evicted
+        assert!(manager.find_active_by_device_id("dev-0").is_none());
+        // The evicted session's device_id should not appear in any session
+        assert!(!manager.iter().any(|h| h.session.device_id == "dev-0"));
+    }
+
+    #[test]
+    fn test_create_session_evicts_stopped_when_8_active_1_stopped() {
+        let mut manager = SessionManager::new();
+        // Create 8 active (Running) sessions
+        for i in 0..8 {
+            let id = manager
+                .create_session(&test_device(&format!("dev-{i}"), &format!("D{i}")))
+                .unwrap();
+            manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+        }
+        // Add 1 stopped session (the 9th)
+        let stopped_id = manager
+            .create_session(&test_device("dev-stopped", "Stopped"))
+            .unwrap();
+        manager.get_mut(stopped_id).unwrap().session.phase = AppPhase::Stopped;
+        assert_eq!(manager.len(), MAX_SESSIONS);
+
+        // New session should succeed by evicting the stopped one
+        let new_id = manager
+            .create_session(&test_device("dev-new", "New"))
+            .unwrap();
+        assert!(manager.get(new_id).is_some());
+        assert_eq!(manager.len(), MAX_SESSIONS);
+        // The stopped session should be gone
+        assert!(manager.get(stopped_id).is_none());
+    }
+
+    #[test]
+    fn test_create_session_fails_when_all_active() {
+        let mut manager = SessionManager::new();
+        for i in 0..9 {
+            let id = manager
+                .create_session(&test_device(&format!("dev-{i}"), &format!("D{i}")))
+                .unwrap();
+            manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+        }
+        // No stopped sessions — must fail
+        assert!(manager
+            .create_session(&test_device("dev-new", "New"))
+            .is_err());
+    }
+
+    #[test]
+    fn test_eviction_selects_oldest_stopped_first() {
+        let mut manager = SessionManager::new();
+        // Create 9 sessions; mark sessions 2 and 5 (0-based) as stopped
+        // and leave the rest as Running
+        let mut ids = Vec::new();
+        for i in 0..9 {
+            let id = manager
+                .create_session(&test_device(&format!("dev-{i}"), &format!("D{i}")))
+                .unwrap();
+            ids.push(id);
+        }
+        // Mark sessions at index 2 and 5 as stopped
+        manager.get_mut(ids[2]).unwrap().session.phase = AppPhase::Stopped;
+        manager.get_mut(ids[5]).unwrap().session.phase = AppPhase::Stopped;
+        // All others Running
+        for &id in ids.iter().filter(|&&id| id != ids[2] && id != ids[5]) {
+            manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+        }
+
+        // Creating a 10th session should evict the oldest stopped (ids[2])
+        let new_id = manager
+            .create_session(&test_device("dev-new", "New"))
+            .unwrap();
+        assert!(manager.get(new_id).is_some());
+        // ids[2] (oldest stopped) should be gone
+        assert!(manager.get(ids[2]).is_none());
+        // ids[5] (newer stopped) should still be present
+        assert!(manager.get(ids[5]).is_some());
+    }
+
+    #[test]
+    fn test_selected_index_remains_valid_after_eviction() {
+        let mut manager = SessionManager::new();
+        // Fill with 9 stopped sessions
+        let mut ids = Vec::new();
+        for i in 0..9 {
+            let id = manager
+                .create_session(&test_device(&format!("dev-{i}"), &format!("D{i}")))
+                .unwrap();
+            ids.push(id);
+            manager.get_mut(id).unwrap().session.phase = AppPhase::Stopped;
+        }
+        // Select the last session (index 8)
+        manager.select_by_index(8);
+        assert_eq!(manager.selected_index(), 8);
+
+        // Eviction of oldest (index 0) should shift selected_index to 7
+        manager
+            .create_session(&test_device("dev-new", "New"))
+            .unwrap();
+
+        // selected_index must be within bounds
+        assert!(manager.selected_index() < manager.len());
     }
 }

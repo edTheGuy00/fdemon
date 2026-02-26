@@ -65,3 +65,29 @@ No new tests — documentation changes only. Run `cargo check -p fdemon-app` to 
 ### Notes
 
 - This must run after task 01 because the doc comment update depends on `find_by_device_id` being deleted first.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Replaced stale `find_active_by_device_id` doc comment with positive contract; removed reference to deleted `find_by_device_id` |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Replaced task reference section header with descriptive comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **No behaviour changes**: Both edits are documentation-only; no runtime or test logic was touched.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1160 passed, 0 failed, 4 ignored)
+
+### Risks/Limitations
+
+1. **None**: Documentation-only changes carry no behavioural risk.

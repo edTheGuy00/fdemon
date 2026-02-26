@@ -69,3 +69,29 @@ No new tests needed — this is dead code removal. Run full test suite to verify
 - The review recommended adding a doc comment warning. The user explicitly requested deletion instead.
 - `find_active_by_device_id` is the correct replacement for all use cases. No phase-blind device lookup is needed anywhere in the codebase.
 - Also search for any references in doc comments of other methods that mention `find_by_device_id` (e.g., the `find_active_by_device_id` doc comment says "Unlike `find_by_device_id`..." — that reference should be updated in task 04).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Deleted `find_by_device_id` method (7 lines); deleted `test_find_by_device_id` test (15 lines); removed cross-check assertion and comment from `test_find_active_by_device_id_skips_stopped_session` (2 lines) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Doc comment deferred to task 04**: The `find_active_by_device_id` doc comment still contains "Unlike `find_by_device_id`..." — this stale reference is intentionally left for task 04 to fix, as specified in the task notes.
+2. **Zero production callers confirmed**: Grep across all `crates/**/*.rs` files confirmed no remaining callers of `find_by_device_id` in source code.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` - Passed (1151 tests, 4 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **Stale doc comment**: `find_active_by_device_id` still references `find_by_device_id` in its doc comment. This is a minor documentation issue to be resolved in task 04, not a code correctness issue.
