@@ -115,4 +115,28 @@ Note: The watchdog is an async runtime behavior inside a `tokio::spawn`, making 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `PROCESS_WATCHDOG_INTERVAL` constant; added watchdog `tokio::time::interval` initialisation (with first-tick consumed) before the `spawn_session` event loop; added third `tokio::select!` arm that polls `process.has_exited()` on each tick, synthesises `DaemonEvent::Exited { code: None }`, sets `process_exited = true`, and breaks |
+
+### Notable Decisions/Tradeoffs
+
+1. **`std::time::Duration` already imported**: The file already had `use std::time::Duration;` at line 6, so no new import was needed.
+2. **Constant placement**: `PROCESS_WATCHDOG_INTERVAL` was placed directly below `PERF_POLL_MIN_MS` at the module level, keeping timing constants together.
+3. **First tick consumed outside the loop**: `watchdog.tick().await` is called once before entering `loop { tokio::select! { ... } }` to avoid a spurious check at process startup, per the task design notes.
+4. **No duplicate Exited guard needed in the watchdog arm itself**: The `process_exited = true` + `break` immediately after sending prevents any further watchdog ticks from re-firing. The existing `process_exited` flag in the normal EOF arm handles the race with the watchdog.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-app` - Passed (1136 unit tests + 1 doc test, 0 failures)
+
+### Risks/Limitations
+
+1. **`code: None` from watchdog**: The watchdog emits `Exited { code: None }` because `has_exited()` uses `try_wait()` internally which does not surface the exit code. Task 04 (`wait-for-exit-task`) will improve this.
+2. **5-second worst-case detection latency**: By design. A killed process may appear "Running" for up to 5 seconds before the watchdog detects it. This is an acceptable trade-off per the task design.

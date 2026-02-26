@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::config::LaunchConfig;
 use crate::handler::Task;
@@ -26,6 +26,19 @@ use fdemon_daemon::{
 
 /// Minimum polling interval for memory usage (500ms) to prevent excessive VM Service calls.
 const PERF_POLL_MIN_MS: u64 = 500;
+
+/// Watchdog interval for detecting externally-killed Flutter processes (e.g. SIGKILL, OOM).
+/// When stdout EOF does not occur, this ensures the session is marked exited within 5 seconds.
+const PROCESS_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Interval between VM Service heartbeat probes.
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+
+/// Maximum time to wait for a heartbeat response.
+const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Number of consecutive heartbeat failures before declaring the connection dead.
+const MAX_HEARTBEAT_FAILURES: u32 = 3;
 
 use super::spawn;
 
@@ -406,6 +419,13 @@ fn spawn_session(
 
                 // Forward daemon events to the main message channel
                 // This runs until the process exits, main loop closes, or shutdown signal
+
+                // Set up watchdog to detect processes killed without stdout EOF (e.g. SIGKILL).
+                // The first tick fires immediately; consume it so the first real check happens
+                // after PROCESS_WATCHDOG_INTERVAL seconds, not at loop entry.
+                let mut watchdog = tokio::time::interval(PROCESS_WATCHDOG_INTERVAL);
+                watchdog.tick().await; // consume the immediate first tick
+
                 loop {
                     tokio::select! {
                         event = daemon_rx.recv() => {
@@ -452,6 +472,26 @@ fn spawn_session(
                                 session_id
                             );
                             break;
+                        }
+                        _ = watchdog.tick() => {
+                            // Periodically poll for process death that does not produce a
+                            // stdout EOF (e.g. SIGKILL, OOM kill, frozen pipe).
+                            if process.has_exited() {
+                                info!(
+                                    "Watchdog detected process exit for session {}",
+                                    session_id
+                                );
+                                // Synthesize an exit event so the TEA layer transitions the
+                                // session to Stopped, just as a normal EOF exit would.
+                                let _ = msg_tx_clone
+                                    .send(Message::SessionDaemon {
+                                        session_id,
+                                        event: DaemonEvent::Exited { code: None },
+                                    })
+                                    .await;
+                                process_exited = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -946,6 +986,11 @@ async fn forward_vm_events(
     msg_tx: mpsc::Sender<Message>,
     mut vm_shutdown_rx: tokio::sync::watch::Receiver<bool>,
 ) {
+    let heartbeat_handle = client.request_handle();
+    let mut heartbeat = tokio::time::interval(HEARTBEAT_INTERVAL);
+    heartbeat.tick().await; // consume the immediate first tick so the first real probe fires after 30s
+    let mut consecutive_failures: u32 = 0;
+
     loop {
         tokio::select! {
             event = client.event_receiver().recv() => {
@@ -1032,6 +1077,48 @@ async fn forward_vm_events(
                     info!("VM Service shutdown signal received for session {}", session_id);
                     client.disconnect().await;
                     break;
+                }
+            }
+            _ = heartbeat.tick() => {
+                let probe = heartbeat_handle.request("getVersion", None);
+                match tokio::time::timeout(HEARTBEAT_TIMEOUT, probe).await {
+                    Ok(Ok(_)) => {
+                        if consecutive_failures > 0 {
+                            debug!(
+                                "VM Service heartbeat recovered for session {} after {} failure(s)",
+                                session_id, consecutive_failures
+                            );
+                        }
+                        consecutive_failures = 0;
+                    }
+                    Ok(Err(e)) => {
+                        consecutive_failures += 1;
+                        warn!(
+                            "VM Service heartbeat failed for session {} ({}/{}): {}",
+                            session_id, consecutive_failures, MAX_HEARTBEAT_FAILURES, e
+                        );
+                        if consecutive_failures >= MAX_HEARTBEAT_FAILURES {
+                            error!(
+                                "VM Service heartbeat failed {} consecutive times for session {}, disconnecting",
+                                MAX_HEARTBEAT_FAILURES, session_id
+                            );
+                            break;
+                        }
+                    }
+                    Err(_timeout) => {
+                        consecutive_failures += 1;
+                        warn!(
+                            "VM Service heartbeat timed out for session {} ({}/{})",
+                            session_id, consecutive_failures, MAX_HEARTBEAT_FAILURES
+                        );
+                        if consecutive_failures >= MAX_HEARTBEAT_FAILURES {
+                            error!(
+                                "VM Service heartbeat timed out {} consecutive times for session {}, disconnecting",
+                                MAX_HEARTBEAT_FAILURES, session_id
+                            );
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1952,4 +2039,41 @@ fn open_url_in_browser(url: &str, browser: &str) -> std::io::Result<()> {
 
     #[allow(unreachable_code)]
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_watchdog_interval_is_reasonable() {
+        assert_eq!(
+            PROCESS_WATCHDOG_INTERVAL,
+            Duration::from_secs(5),
+            "watchdog interval should be 5 seconds"
+        );
+    }
+
+    #[test]
+    fn test_heartbeat_constants_are_reasonable() {
+        assert_eq!(
+            HEARTBEAT_INTERVAL,
+            Duration::from_secs(30),
+            "heartbeat interval should be 30 seconds"
+        );
+        assert_eq!(
+            HEARTBEAT_TIMEOUT,
+            Duration::from_secs(5),
+            "heartbeat timeout should be 5 seconds"
+        );
+        assert_eq!(
+            MAX_HEARTBEAT_FAILURES, 3,
+            "max heartbeat failures should be 3"
+        );
+        // Detection time = interval * max_failures = 30 * 3 = 90s, must be <= 120s
+        assert!(
+            HEARTBEAT_INTERVAL.as_secs() * MAX_HEARTBEAT_FAILURES as u64 <= 120,
+            "heartbeat detection time should be at most 2 minutes (120 seconds)"
+        );
+    }
 }

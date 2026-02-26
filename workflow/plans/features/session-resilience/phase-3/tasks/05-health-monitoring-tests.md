@@ -185,4 +185,33 @@ cargo clippy --workspace -- -D warnings
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `#[cfg(test)] mod tests` with `test_watchdog_interval_is_reasonable` and `test_heartbeat_constants_are_reasonable` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_session_exited_with_code_zero`, `test_session_exited_with_none_code`, and `test_vm_service_disconnected_cleans_up_devtools_tasks` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Skipped already-covered tests**: `VersionInfo` deserialization tests in `protocol.rs` already exist with names `test_version_info_deserialize`, `test_version_info_deserialize_minimal`, and `test_version_info_deserialize_missing_fields_fails` — they cover the same scenarios as requested. No duplication added.
+
+2. **Skipped already-covered exit code tests**: `test_session_exited_with_error_code` (Some(1)) and `test_session_exited_updates_session_phase` (Some(0)) already exist. Only the "exited normally" message assertion for Some(0) and the None code test were missing — both were added.
+
+3. **VmServiceDisconnected comprehensive cleanup test**: The task spec requested a test checking all four cleanup fields (`perf_task_handle`, `perf_shutdown_tx`, `network_task_handle`, `network_shutdown_tx`). Existing tests only checked subsets. The new test `test_vm_service_disconnected_cleans_up_devtools_tasks` covers all four fields plus `vm_connected`.
+
+4. **process.rs tests**: All 5 required process exit tests (`test_exit_code_captured_on_normal_exit`, `test_exit_code_captured_on_error_exit`, `test_stdout_reader_does_not_emit_exited_event`, etc.) were already implemented by task 04. No additions needed.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1,141 tests, 5 new tests included)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (formatter applied)
+
+### Risks/Limitations
+
+1. **No async process tests added**: The process watchdog and heartbeat tasks run in async loops embedded in `spawn_session`; they are not unit-testable in isolation. The constant validation tests provide the primary safety net for these parameters.

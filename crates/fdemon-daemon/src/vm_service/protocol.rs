@@ -130,6 +130,18 @@ pub enum VmClientEvent {
 // VM / Isolate information types
 // ---------------------------------------------------------------------------
 
+/// Response body from the `getVersion` RPC call.
+///
+/// Returns the Dart VM Service protocol version. This is the lightest
+/// possible RPC — no parameters, no isolate context required.
+#[derive(Debug, Deserialize)]
+pub struct VersionInfo {
+    /// VM Service protocol major version.
+    pub major: u32,
+    /// VM Service protocol minor version.
+    pub minor: u32,
+}
+
 /// Response body from the `getVM` RPC call.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -551,6 +563,40 @@ mod tests {
         assert_eq!(vm.isolates[0].id, "isolates/1");
         let groups = vm.isolate_groups.unwrap();
         assert_eq!(groups[0].name, "main");
+    }
+
+    // -- VersionInfo deserialization -----------------------------------------
+
+    #[test]
+    fn test_version_info_deserialize() {
+        let json = serde_json::json!({
+            "type": "Version",
+            "major": 4,
+            "minor": 16
+        });
+        let info: VersionInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(info.major, 4);
+        assert_eq!(info.minor, 16);
+    }
+
+    #[test]
+    fn test_version_info_deserialize_minimal() {
+        // Without the "type" field (just major + minor)
+        let json = serde_json::json!({ "major": 3, "minor": 0 });
+        let info: VersionInfo = serde_json::from_value(json).unwrap();
+        assert_eq!(info.major, 3);
+        assert_eq!(info.minor, 0);
+    }
+
+    #[test]
+    fn test_version_info_deserialize_missing_fields_fails() {
+        // Missing both major and minor — should fail to deserialize
+        let json = serde_json::json!({ "type": "Version" });
+        let result: Result<VersionInfo, _> = serde_json::from_value(json);
+        assert!(
+            result.is_err(),
+            "expected deserialization to fail with missing fields"
+        );
     }
 
     // -- VmRequestTracker ----------------------------------------------------

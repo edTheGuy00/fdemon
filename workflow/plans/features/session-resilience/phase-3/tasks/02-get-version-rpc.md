@@ -127,4 +127,29 @@ fn test_version_info_deserialize_minimal() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/protocol.rs` | Added `VersionInfo` struct with `major: u32` and `minor: u32` fields; added 3 unit tests (`test_version_info_deserialize`, `test_version_info_deserialize_minimal`, `test_version_info_deserialize_missing_fields_fails`) |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `VersionInfo` to the `use super::protocol::` import block; added `get_version()` async method to `VmServiceClient` |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `VersionInfo` to the `pub use protocol::` re-export block |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of `VersionInfo`**: Placed before `VmInfo` in protocol.rs in the "VM / Isolate information types" section, matching the task's instruction to add it "near the existing `VmInfo` struct". This groups all VM-level response types together.
+2. **Import addition in client.rs**: Added `VersionInfo` to the existing `use super::protocol::` block rather than a separate import — consistent with project style.
+3. **Missing-fields test**: Added a third test (`test_version_info_deserialize_missing_fields_fails`) beyond the two specified in the task, verifying that deserialization fails when both `major` and `minor` are absent. This improves test coverage of the error path.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-daemon` - Passed (378 passed, 3 ignored, 0 failed)
+- `cargo test -p fdemon-daemon version_info` - Passed (3/3 new tests)
+
+### Risks/Limitations
+
+1. **No integration test**: `get_version()` is not covered by an integration test that actually connects to a Dart VM — this is consistent with the rest of the codebase where WebSocket-level methods are not integration-tested in the unit test suite.

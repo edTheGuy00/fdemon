@@ -37,11 +37,11 @@ Detect hung Flutter processes and stale VM Service connections through periodic 
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-process-watchdog](tasks/01-process-watchdog.md) | Not Started | - | `app/actions.rs` |
-| 2 | [02-get-version-rpc](tasks/02-get-version-rpc.md) | Not Started | - | `daemon/vm_service/protocol.rs`, `daemon/vm_service/client.rs`, `daemon/vm_service/mod.rs` |
-| 3 | [03-vm-heartbeat](tasks/03-vm-heartbeat.md) | Not Started | 02 | `app/actions.rs` |
-| 4 | [04-wait-for-exit-task](tasks/04-wait-for-exit-task.md) | Not Started | - | `daemon/process.rs` |
-| 5 | [05-health-monitoring-tests](tasks/05-health-monitoring-tests.md) | Not Started | 01, 02, 03, 04 | `daemon/vm_service/protocol.rs`, `daemon/process.rs`, `app/handler/tests.rs`, `app/actions.rs` |
+| 1 | [01-process-watchdog](tasks/01-process-watchdog.md) | Done | - | `app/actions.rs` |
+| 2 | [02-get-version-rpc](tasks/02-get-version-rpc.md) | Done | - | `daemon/vm_service/protocol.rs`, `daemon/vm_service/client.rs`, `daemon/vm_service/mod.rs` |
+| 3 | [03-vm-heartbeat](tasks/03-vm-heartbeat.md) | Done | 02 | `app/actions.rs` |
+| 4 | [04-wait-for-exit-task](tasks/04-wait-for-exit-task.md) | Done | - | `daemon/process.rs` |
+| 5 | [05-health-monitoring-tests](tasks/05-health-monitoring-tests.md) | Done | 01, 02, 03, 04 | `daemon/vm_service/protocol.rs`, `daemon/process.rs`, `app/handler/tests.rs`, `app/actions.rs` |
 
 ## Execution Plan
 

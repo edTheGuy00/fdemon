@@ -87,8 +87,8 @@ pub use performance::{
 };
 pub use protocol::{
     parse_vm_message, IsolateGroupRef, IsolateInfo, IsolateRef, LibraryRef, StreamEvent,
-    StreamEventParams, VmClientEvent, VmInfo, VmRequestTracker, VmServiceError, VmServiceEvent,
-    VmServiceMessage, VmServiceRequest, VmServiceResponse,
+    StreamEventParams, VersionInfo, VmClientEvent, VmInfo, VmRequestTracker, VmServiceError,
+    VmServiceEvent, VmServiceMessage, VmServiceRequest, VmServiceResponse,
 };
 pub use timeline::{
     enable_frame_tracking, flutter_extension_kind, is_frame_event, parse_frame_timing,

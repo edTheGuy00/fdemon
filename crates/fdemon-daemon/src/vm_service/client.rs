@@ -42,8 +42,8 @@ use fdemon_core::prelude::*;
 
 use super::extensions::build_extension_params;
 use super::protocol::{
-    parse_vm_message, IsolateInfo, IsolateRef, VmClientEvent, VmInfo, VmRequestTracker,
-    VmServiceError, VmServiceMessage, VmServiceRequest,
+    parse_vm_message, IsolateInfo, IsolateRef, VersionInfo, VmClientEvent, VmInfo,
+    VmRequestTracker, VmServiceError, VmServiceMessage, VmServiceRequest,
 };
 
 // ---------------------------------------------------------------------------
@@ -449,6 +449,21 @@ impl VmServiceClient {
         let result = self.request("getVM", None).await?;
         serde_json::from_value(result)
             .map_err(|e| Error::vm_service(format!("parse getVM response: {e}")))
+    }
+
+    /// Call `getVersion` — returns the VM Service protocol version.
+    ///
+    /// This is the lightest possible RPC probe: no parameters, no isolate
+    /// context. Useful as a heartbeat/liveness check.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::VmService`] if the response cannot be parsed as
+    /// [`VersionInfo`], or a transport error if the request fails.
+    pub async fn get_version(&self) -> Result<VersionInfo> {
+        let result = self.request("getVersion", None).await?;
+        serde_json::from_value(result)
+            .map_err(|e| Error::vm_service(format!("parse getVersion response: {e}")))
     }
 
     /// Call `getIsolate` — returns full isolate details for `isolate_id`.

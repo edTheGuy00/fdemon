@@ -220,4 +220,30 @@ Optional: if a mock `VmServiceClient` exists or can be created, test the heartbe
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `debug` to tracing imports; added `HEARTBEAT_INTERVAL`, `HEARTBEAT_TIMEOUT`, `MAX_HEARTBEAT_FAILURES` constants; added heartbeat setup (`request_handle`, interval, failure counter) before the loop in `forward_vm_events`; added third `tokio::select!` arm for periodic `getVersion` probing with 5s timeout and 3-failure disconnect logic |
+
+### Notable Decisions/Tradeoffs
+
+1. **`request_handle()` for borrow isolation**: Used `client.request_handle()` (which clones the internal `cmd_tx` sender) to issue heartbeat RPCs. This avoids a Rust borrow-checker conflict between the `event_receiver().recv()` future (which borrows `&mut client`) and a concurrent `get_version()` call. The handle is a lightweight owned value that shares the same background WebSocket task.
+
+2. **`heartbeat.tick().await` before the loop**: The first tick from `tokio::time::interval` fires immediately. Consuming it before the loop ensures the first real heartbeat probe happens after a full 30-second interval, avoiding an unnecessary RPC on connection establishment.
+
+3. **Borrow conflict resolution confirmed by compiler**: `cargo check` passed without any borrow-checker complaints, confirming the `request_handle()` approach works correctly with `tokio::select!`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-app` - Passed (1136 unit tests + 1 doc test, 0 failures)
+
+### Risks/Limitations
+
+1. **Async-only behavior**: The heartbeat logic cannot be unit-tested directly since it requires a live Tokio runtime with a real or mock `VmServiceClient`. Manual testing (kill VM Service process, wait ~90s) is the primary validation path. The downstream `VmServiceDisconnected` handler that fires when the loop breaks is already well-tested.
+
+2. **Heartbeat during reconnection**: While `run_client_task` is retrying the WebSocket, RPC calls return `Error::ChannelClosed`, counting as heartbeat failures. With 30s intervals and reconnect backoff topping at 30s, reconnection will typically complete before 3 failures accumulate. If it exceeds 90s, disconnecting is the correct outcome.

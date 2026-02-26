@@ -696,6 +696,145 @@ fn test_session_exited_with_error_code() {
 }
 
 #[test]
+fn test_session_exited_with_code_zero() {
+    // Setup: create state with an active session
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Action: send DaemonEvent::Exited with code Some(0)
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(0) },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    // Assert: session phase is Stopped
+    assert_eq!(
+        handle.session.phase,
+        AppPhase::Stopped,
+        "session phase should be Stopped after exit code 0"
+    );
+    // Assert: session log contains "exited normally"
+    assert!(
+        handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("exited normally")),
+        "session log should contain 'exited normally' for exit code 0"
+    );
+}
+
+#[test]
+fn test_session_exited_with_none_code() {
+    // Setup: create state with an active session
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Action: send DaemonEvent::Exited with code None
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: None },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    // Assert: session phase is Stopped
+    assert_eq!(
+        handle.session.phase,
+        AppPhase::Stopped,
+        "session phase should be Stopped after exit with no code"
+    );
+    // Assert: session log contains "Flutter process exited" (but not "normally" or "with code")
+    assert!(
+        handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("Flutter process exited")),
+        "session log should contain 'Flutter process exited' for None exit code"
+    );
+}
+
+#[test]
+fn test_vm_service_disconnected_cleans_up_devtools_tasks() {
+    // Verify that VmServiceDisconnected clears all DevTools task handles and
+    // shutdown senders for both performance and network monitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Simulate VM being connected with active perf and network monitoring
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.vm_connected = true;
+        handle.session.performance.monitoring_active = true;
+
+        // Attach a perf shutdown sender
+        let (perf_tx, _perf_rx) = tokio::sync::watch::channel(false);
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(perf_tx));
+
+        // Attach a network shutdown sender
+        let (net_tx, _net_rx) = tokio::sync::watch::channel(false);
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(net_tx));
+    }
+
+    // Pre-condition: handles are set
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.vm_connected,
+            "vm_connected should be true before disconnect"
+        );
+        assert!(
+            handle.perf_shutdown_tx.is_some(),
+            "perf_shutdown_tx should be Some before disconnect"
+        );
+        assert!(
+            handle.network_shutdown_tx.is_some(),
+            "network_shutdown_tx should be Some before disconnect"
+        );
+    }
+
+    // Action: send VmServiceDisconnected
+    update(&mut state, Message::VmServiceDisconnected { session_id });
+
+    // Assert: all cleanup occurred
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.vm_connected,
+        "vm_connected should be false after VmServiceDisconnected"
+    );
+    assert!(
+        !handle.session.performance.monitoring_active,
+        "monitoring_active should be false after VmServiceDisconnected"
+    );
+    assert!(
+        handle.perf_shutdown_tx.is_none(),
+        "perf_shutdown_tx should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.perf_task_handle.is_none(),
+        "perf_task_handle should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be cleared after VmServiceDisconnected"
+    );
+}
+
+#[test]
 fn test_session_daemon_spawn_failed() {
     let mut state = AppState::new();
 
