@@ -111,3 +111,34 @@ fn test_vm_service_connection_failed_background_session_no_error() {
 - Look at existing reconnection tests starting at line 3320 for setup patterns
 - For multi-session tests, check if there are existing helpers for creating two-session state — if not, create a minimal setup
 - The perf task cleanup test (test 4) may need to create mock `JoinHandle` and `watch::Sender` — check how existing tests handle this
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added 7 new test functions in a new "Reconnect Handler Tests" section at end of file |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test 4 uses tokio runtime**: `test_vm_service_reconnected_cleans_up_perf_task` wraps its body in `rt.block_on(async { ... })` following the exact same pattern as `test_close_session_cleans_up_network_monitoring`. This is the only viable approach because `tokio::task::JoinHandle<()>` can only be created inside a tokio async context.
+
+2. **Multi-session tests use inline setup**: Tests 5, 6, 7 create two sessions inline rather than using `make_state_with_two_sessions()`. That helper doesn't return session IDs for both sessions (only provides the state), so inline creation was clearer and gave explicit handles to both `session_a` and `session_b`.
+
+3. **Test 1 verifies log content via iterator**: The "reconnected" log check iterates `session.logs` (a `VecDeque`) using `.iter().any()` — matches the approach used in similar log-content tests in the file.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` - Passed (1136 tests, 0 failed, 5 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- Individual filter runs for all 7 new test names - All passed
+
+### Risks/Limitations
+
+1. **None identified**: All 7 tests are deterministic synchronous (or tokio-runtime-wrapped) unit tests with no flakiness risk.

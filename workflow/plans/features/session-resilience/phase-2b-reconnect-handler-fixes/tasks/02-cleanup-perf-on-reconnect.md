@@ -88,3 +88,29 @@ All four of these correctly abort + signal before the handle goes stale:
 - The `perf_task_handle.take()` returns `None` on first connect, so `.abort()` is never called — this is safe
 - Network monitoring (`network_task_handle`) likely has the same leak on reconnection, but the review did not flag it. Consider checking and applying the same fix if applicable.
 - The `VmServicePerformanceMonitoringStarted` handler at `update.rs:1414-1419` also silently overwrites the old handles — after this fix, the old handles will already be `None` by the time the new ones arrive, so no change needed there.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added perf and network task cleanup at the start of `VmServiceConnected` and `VmServiceReconnected` handlers, before `handle.session.vm_connected = true` and before `StartPerformanceMonitoring` is dispatched |
+
+### Notable Decisions/Tradeoffs
+
+1. **Network task cleanup included**: The task notes flagged `network_task_handle` as potentially having the same leak. Analysis confirmed it does: on `VmServiceReconnected`, no `VmServiceDisconnected` fires first, so the old network polling task (with a stale `VmRequestHandle`) keeps running and the `network_shutdown_tx` guard prevents a new task from starting when the user switches to the Network panel. Added the same four-line cleanup pattern for network tasks in both handlers.
+
+2. **Pattern choice — `take()` on both fields**: Used `.take()` on both `perf_shutdown_tx` and `network_shutdown_tx` (matching the `session_lifecycle.rs` pattern) rather than the `if let Some(ref tx)` + separate `= None` form used in `VmServiceDisconnected`. Both achieve the same result; `.take()` is more idiomatic and avoids the separate `= None` assignment.
+
+3. **Cleanup before `vm_connected = true`**: Placed the cleanup at the very start of each `if let Some(handle)` block, before any state mutation, so that if the `send(true)` causes any observable side effects they happen before the session is marked connected again.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-app` - Passed (1129 tests, 0 failed, 5 ignored)

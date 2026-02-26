@@ -101,3 +101,31 @@ if active_id == Some(session_id) {
 - The guard pattern is: `state.session_manager.selected().map(|h| h.session.id)` — this returns the currently active tab's session ID
 - Consider whether `DevToolsViewState::reset()` (called on tab switches) already handles stale state — it does reset, but that only helps on manual tab switches, not on background events arriving while viewing a tab
 - Also verify that session tab switching (`SelectSessionByIndex`) correctly syncs `connection_status` from the newly-selected session's `vm_connected` field — if not, that's a separate issue
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added active-session guard to `VmServiceConnected`, `VmServiceConnectionFailed`, and `VmServiceDisconnected` handlers |
+
+### Notable Decisions/Tradeoffs
+
+1. **Per-session state writes remain unguarded**: `handle.session.vm_connected`, `handle.vm_request_handle`, `handle.vm_shutdown_tx`, and all polling task handles are per-session fields and continue to be updated regardless of which session is active — only the global `devtools_view_state` fields are guarded.
+
+2. **Guard placed before `session_manager.get_mut`**: In `VmServiceDisconnected`, the `active_id` guard is evaluated before calling `get_mut` to avoid a borrow conflict; the per-session cleanup block runs unconditionally after, which is correct.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-app` - Passed (1129 tests, 5 ignored, 0 failed)
+
+### Risks/Limitations
+
+1. **No new unit tests added**: The multi-session guard behaviour is covered by the existing handler test suite structure; dedicated tests for background-session isolation would require multi-session fixtures not yet present in the test harness.

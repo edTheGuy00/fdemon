@@ -34,10 +34,10 @@ Three pre-existing handler design issues uncovered during the phase-2 review. Al
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-reconnected-message-variant](tasks/01-reconnected-message-variant.md) | Not Started | - | `app/message.rs`, `app/actions.rs`, `app/handler/update.rs` |
-| 2 | [02-cleanup-perf-on-reconnect](tasks/02-cleanup-perf-on-reconnect.md) | Not Started | 01 | `app/handler/update.rs` |
-| 3 | [03-guard-connection-status](tasks/03-guard-connection-status.md) | Not Started | - | `app/handler/update.rs` |
-| 4 | [04-reconnect-handler-tests](tasks/04-reconnect-handler-tests.md) | Not Started | 01, 02, 03 | `app/handler/tests.rs` |
+| 1 | [01-reconnected-message-variant](tasks/01-reconnected-message-variant.md) | Done | - | `app/message.rs`, `app/actions.rs`, `app/handler/update.rs` |
+| 2 | [02-cleanup-perf-on-reconnect](tasks/02-cleanup-perf-on-reconnect.md) | Done | 01 | `app/handler/update.rs` |
+| 3 | [03-guard-connection-status](tasks/03-guard-connection-status.md) | Done | - | `app/handler/update.rs` |
+| 4 | [04-reconnect-handler-tests](tasks/04-reconnect-handler-tests.md) | Done | 01, 02, 03 | `app/handler/tests.rs` |
 
 ## Execution Plan
 

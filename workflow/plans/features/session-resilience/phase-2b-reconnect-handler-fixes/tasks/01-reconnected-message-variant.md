@@ -94,3 +94,33 @@ The new handler still dispatches `StartPerformanceMonitoring` because the old We
 - The `VmServiceConnected` handler's comment at `update.rs:1194` says "reset on hot-restart" — that behavior should remain for initial connections. Only the reconnect path changes.
 - The handler still needs to dispatch `StartPerformanceMonitoring` because VM stream subscriptions are lost on WebSocket disconnect. Task 02 handles cleaning up the old polling task before this dispatch.
 - Consider whether `ResubscribeStreams` should also be dispatched (check if `VmServiceConnected` does this).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceReconnected { session_id: SessionId }` variant after `VmServiceConnected`, with doc comment explaining the preserve-telemetry contract |
+| `crates/fdemon-app/src/actions.rs` | Changed `VmClientEvent::Reconnected` mapping from `Message::VmServiceConnected` to `Message::VmServiceReconnected` |
+| `crates/fdemon-app/src/handler/update.rs` | Added `Message::VmServiceReconnected` match arm between `VmServiceConnected` and `VmServiceConnectionFailed` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Active-session guard on connection_status**: The handler only updates `devtools_view_state.connection_status` and `vm_connection_error` when the reconnected session is currently selected. This matches the task spec and prevents misleading the user viewing a different session in DevTools mode.
+
+2. **No PerformanceState reset**: The handler intentionally skips the `PerformanceState::with_memory_history_size()` reset that `VmServiceConnected` performs. All ring buffers (memory_history, gc_history, frame_history, memory_samples), stats, and allocation_profile are preserved across the reconnect.
+
+3. **Same StartPerformanceMonitoring dispatch**: Re-dispatched because VM stream subscriptions are invalidated on WebSocket disconnect. The `handle: None` follows the same hydration pattern as `VmServiceConnected` — `process.rs` fills in the `VmRequestHandle` before forwarding to `handle_action`.
+
+4. **VmServiceConnected unchanged**: The initial-connection path (reset + full re-init) is preserved unchanged per the task requirement.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed (clean, no warnings)
+- `cargo test -p fdemon-app` - Passed (1129 passed, 0 failed, 5 ignored)

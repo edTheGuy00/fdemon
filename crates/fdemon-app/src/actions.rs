@@ -1014,7 +1014,7 @@ async fn forward_vm_events(
                     }
                     Some(VmClientEvent::Reconnected) => {
                         let _ = msg_tx
-                            .send(Message::VmServiceConnected { session_id })
+                            .send(Message::VmServiceReconnected { session_id })
                             .await;
                     }
                     Some(VmClientEvent::PermanentlyDisconnected) => {
