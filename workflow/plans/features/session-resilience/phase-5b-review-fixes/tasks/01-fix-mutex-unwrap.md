@@ -62,3 +62,30 @@ No new tests needed — this is a defensive error-handling change. The mutex poi
 - This is the only `unwrap()` on a mutex lock in the entire `actions/` directory. All other lock sites already use defensive patterns.
 - The `warn!` log level matches the existing pattern in `session.rs:226`.
 - The `tracing::warn` macro is already imported in `mod.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced `.lock().unwrap()` with `match session_tasks.lock()` in the `ConnectVmService` arm; `Ok` branch inserts the handle, `Err` branch emits a `warn!` log. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact pattern from task spec**: The replacement matches the spec verbatim, including the warning message text and continuation backslash line-break, which also mirrors the style in `session.rs:233-248`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo test -p fdemon-app` - Passed (1163 unit tests, 1 doctest, 0 failures)
+
+### Risks/Limitations
+
+1. **Mutex poisoning is not unit-tested**: As noted in the task, inducing a poisoned mutex requires a panicking thread, which is impractical to test in isolation. The defensive branch exists to prevent a cascade panic; its correctness is verified by code review against the established pattern in `session.rs`.

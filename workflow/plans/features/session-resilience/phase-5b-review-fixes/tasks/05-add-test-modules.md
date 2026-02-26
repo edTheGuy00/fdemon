@@ -138,3 +138,39 @@ cargo test -p fdemon-app test_heartbeat_counter_reset_on_reconnection
 - Follow the existing test pattern from `session.rs:348-360` and `vm_service.rs:294-315` — these test named constants with `assert_eq!` and derived invariants with `assert!`.
 - The `inspector/widget_tree.rs` helper file also lacks a test module. It contains two pure functions (`is_transient_error`, `is_method_not_found`) that could be unit tested, but this is out of scope for this task — note it as a future improvement.
 - The `Duration` import in the `inspector/mod.rs` test module may need to be added explicitly if `Duration` is not already in scope via `use super::*`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/vm_service.rs` | Replaced empty test body with meaningful `assert!(MAX_HEARTBEAT_FAILURES > 1, ...)` invariant |
+| `crates/fdemon-app/src/actions/performance.rs` | Added `#[cfg(test)] mod tests` with `test_performance_poll_constants_are_reasonable` verifying both constants and the ordering invariant |
+| `crates/fdemon-app/src/actions/network.rs` | Added `#[cfg(test)] mod tests` with `test_network_poll_min_ms_is_reasonable` verifying `NETWORK_POLL_MIN_MS` |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Added `#[cfg(test)] mod tests` with `test_layout_fetch_timeout_is_reasonable` verifying `LAYOUT_FETCH_TIMEOUT` value and lower bound |
+
+### Notable Decisions/Tradeoffs
+
+1. **`use std::time::Duration` in `inspector/mod.rs` tests**: `Duration` is already imported at module scope (`use std::time::Duration;`) so `use super::*;` brings it into the test module without needing a separate explicit import. This matches what the task notes anticipated.
+2. **`cargo fmt` reformatted the inline `assert_eq!` calls**: `cargo fmt` split the single-line `assert_eq!(NETWORK_POLL_MIN_MS, 500, "...")` and `assert_eq!(ALLOC_PROFILE_POLL_MIN_MS, 1000, "...")` across multiple lines for line-length compliance. This is correct and expected behaviour.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no changes after formatting)
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app test_heartbeat_counter_reset_on_reconnection` - Passed (1 test)
+- `cargo test -p fdemon-app test_performance_poll_constants_are_reasonable` - Passed (1 test)
+- `cargo test -p fdemon-app test_network_poll_min_ms_is_reasonable` - Passed (1 test)
+- `cargo test -p fdemon-app test_layout_fetch_timeout_is_reasonable` - Passed (1 test)
+- `cargo test -p fdemon-app` - Passed (1164 unit tests + 1 doc-test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`inspector/widget_tree.rs` still untested**: The two pure functions `is_transient_error` and `is_method_not_found` in that file have no unit tests. This is noted in the task as a future improvement and is out of scope here.

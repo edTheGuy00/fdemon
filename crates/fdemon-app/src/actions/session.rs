@@ -249,7 +249,7 @@ pub(super) fn spawn_session(
 }
 
 /// Execute a task and send completion message
-pub async fn execute_task(
+pub(super) async fn execute_task(
     task: Task,
     msg_tx: mpsc::Sender<Message>,
     cmd_sender: Option<CommandSender>,

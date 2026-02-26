@@ -24,6 +24,9 @@ use fdemon_daemon::vm_service::{
     parse_gc_event, parse_log_record, vm_log_to_log_entry, VmClientEvent, VmServiceClient,
 };
 
+/// Maximum time to wait for the initial VM Service WebSocket connection.
+const VM_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Interval between VM Service heartbeat probes.
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -40,11 +43,8 @@ pub(super) fn spawn_vm_service_connection(
     msg_tx: mpsc::Sender<Message>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let connect_result = tokio::time::timeout(
-            std::time::Duration::from_secs(10),
-            VmServiceClient::connect(&ws_uri),
-        )
-        .await;
+        let connect_result =
+            tokio::time::timeout(VM_CONNECT_TIMEOUT, VmServiceClient::connect(&ws_uri)).await;
 
         let connect_result = match connect_result {
             Ok(result) => result,
@@ -316,12 +316,12 @@ mod tests {
 
     #[test]
     fn test_heartbeat_counter_reset_on_reconnection() {
-        // The consecutive_failures counter in forward_vm_events is reset to 0 in:
-        // 1. The Reconnecting arm (prevents accumulation during backoff)
-        // 2. The Reconnected arm (clean slate after successful reconnect)
-        // 3. The Ok(Ok(_)) heartbeat success arm (normal operation)
-        //
-        // This is an async integration concern that cannot be unit tested here.
-        // Verified by code review.
+        // The counter reset to 0 on Reconnecting/Reconnected events is only
+        // observable if MAX_HEARTBEAT_FAILURES > 1. If it were 1, a single
+        // failure would immediately disconnect before any reset could occur.
+        assert!(
+            MAX_HEARTBEAT_FAILURES > 1,
+            "MAX_HEARTBEAT_FAILURES must be > 1 for counter reset to have effect"
+        );
     }
 }

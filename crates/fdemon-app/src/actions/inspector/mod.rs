@@ -21,6 +21,9 @@ use fdemon_daemon::vm_service::{
     ext, extract_layout_info, parse_bool_extension_response, VmRequestHandle,
 };
 
+/// Timeout for a single `getLayoutExplorerNode` RPC call.
+const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// Spawn a background task that fetches the root widget tree via VM Service.
 ///
 /// Uses `ext.flutter.inspector.getRootWidgetTree` (with automatic fallback to
@@ -285,8 +288,6 @@ pub(super) fn spawn_fetch_layout_data(
 
         // Wrap the RPC call in a 10-second timeout so that a hung or slow VM
         // does not leave the Layout panel in a permanent loading state.
-        const LAYOUT_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
-
         let fetch_result = tokio::time::timeout(LAYOUT_FETCH_TIMEOUT, async {
             handle
                 .call_extension(ext::GET_LAYOUT_EXPLORER_NODE, &isolate_id, Some(args))
@@ -400,4 +401,23 @@ pub(super) fn spawn_dispose_devtools_groups(session_id: SessionId, handle: VmReq
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn test_layout_fetch_timeout_is_reasonable() {
+        assert_eq!(
+            LAYOUT_FETCH_TIMEOUT,
+            Duration::from_secs(10),
+            "layout fetch timeout should be 10 seconds"
+        );
+        assert!(
+            LAYOUT_FETCH_TIMEOUT >= Duration::from_secs(5),
+            "layout fetch timeout must be at least 5 seconds to avoid false timeouts"
+        );
+    }
 }

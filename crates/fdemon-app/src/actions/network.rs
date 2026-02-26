@@ -20,11 +20,13 @@
 //!   as `updatedSince` for incremental updates.
 //! - Exits when the shutdown channel receives `true` or `msg_tx` is closed.
 
+use std::process::Command;
+
 use tokio::sync::mpsc;
 
 use crate::message::Message;
 use crate::session::SessionId;
-use fdemon_daemon::vm_service::VmRequestHandle;
+use fdemon_daemon::vm_service::{network, VmRequestHandle};
 
 /// Minimum network polling interval (500 ms) to avoid excessive VM Service calls.
 pub(super) const NETWORK_POLL_MIN_MS: u64 = 500;
@@ -70,8 +72,6 @@ pub(super) fn spawn_network_monitoring(
     let task_handle_slot_for_msg = task_handle_slot.clone();
 
     let join_handle = tokio::spawn(async move {
-        use fdemon_daemon::vm_service::network;
-
         // Notify the TEA layer that monitoring has started, passing the lifecycle
         // handles so the session can store them for later cleanup. The slot is
         // populated synchronously by the caller before this first `.await` runs.
@@ -224,8 +224,6 @@ pub(super) fn spawn_fetch_http_request_detail(
     msg_tx: mpsc::Sender<Message>,
 ) {
     tokio::spawn(async move {
-        use fdemon_daemon::vm_service::network;
-
         let isolate_id = match handle.main_isolate_id().await {
             Ok(id) => id,
             Err(e) => {
@@ -275,14 +273,8 @@ pub(super) fn spawn_fetch_http_request_detail(
 /// Calls `ext.dart.io.clearHttpProfile`. The local `NetworkState` is cleared
 /// immediately by the TEA handler; this action resets the VM's request history.
 /// Fire-and-forget: errors are logged at warn level but do not propagate.
-pub(super) fn spawn_clear_http_profile(
-    session_id: SessionId,
-    handle: VmRequestHandle,
-    _msg_tx: mpsc::Sender<Message>,
-) {
+pub(super) fn spawn_clear_http_profile(session_id: SessionId, handle: VmRequestHandle) {
     tokio::spawn(async move {
-        use fdemon_daemon::vm_service::network;
-
         let isolate_id = match handle.main_isolate_id().await {
             Ok(id) => id,
             Err(e) => {
@@ -319,8 +311,6 @@ pub(super) fn spawn_clear_http_profile(
 /// Called from the `handle_action` dispatch for
 /// [`crate::UpdateAction::OpenBrowserDevTools`].
 pub(super) fn open_url_in_browser(url: &str, browser: &str) -> std::io::Result<()> {
-    use std::process::Command;
-
     if !browser.is_empty() {
         // Custom browser specified in settings.
         Command::new(browser).arg(url).spawn()?;
@@ -356,4 +346,17 @@ pub(super) fn open_url_in_browser(url: &str, browser: &str) -> std::io::Result<(
 
     #[allow(unreachable_code)]
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_network_poll_min_ms_is_reasonable() {
+        assert_eq!(
+            NETWORK_POLL_MIN_MS, 500,
+            "network poll minimum should be 500ms"
+        );
+    }
 }

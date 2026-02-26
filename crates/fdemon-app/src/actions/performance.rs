@@ -244,3 +244,21 @@ pub(super) fn spawn_performance_polling(
         *slot = Some(join_handle);
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_performance_poll_constants_are_reasonable() {
+        assert_eq!(PERF_POLL_MIN_MS, 500, "perf poll minimum should be 500ms");
+        assert_eq!(
+            ALLOC_PROFILE_POLL_MIN_MS, 1000,
+            "alloc profile poll minimum should be 1000ms"
+        );
+        assert!(
+            ALLOC_PROFILE_POLL_MIN_MS >= PERF_POLL_MIN_MS,
+            "allocation profiling is more expensive and should never poll faster than memory polling"
+        );
+    }
+}

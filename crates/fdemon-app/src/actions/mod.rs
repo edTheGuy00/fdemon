@@ -15,8 +15,7 @@ use fdemon_daemon::{CommandSender, ToolAvailability};
 
 use super::spawn;
 
-pub mod session;
-pub use session::execute_task;
+pub(super) mod session;
 
 pub(super) mod inspector;
 pub(super) mod network;
@@ -42,7 +41,7 @@ pub fn handle_action(
         UpdateAction::SpawnTask(task) => {
             // Spawn async task for command execution using session-specific sender
             tokio::spawn(async move {
-                execute_task(task, msg_tx, session_cmd_sender).await;
+                session::execute_task(task, msg_tx, session_cmd_sender).await;
             });
         }
 
@@ -52,7 +51,7 @@ pub fn handle_action(
                 let msg_tx_clone = msg_tx.clone();
                 let task = Task::Reload { session_id, app_id };
                 tokio::spawn(async move {
-                    execute_task(task, msg_tx_clone, Some(sender)).await;
+                    session::execute_task(task, msg_tx_clone, Some(sender)).await;
                 });
             }
         }
@@ -157,7 +156,18 @@ pub fn handle_action(
 
         UpdateAction::ConnectVmService { session_id, ws_uri } => {
             let handle = vm_service::spawn_vm_service_connection(session_id, ws_uri, msg_tx);
-            session_tasks.lock().unwrap().insert(session_id, handle);
+            match session_tasks.lock() {
+                Ok(mut guard) => {
+                    guard.insert(session_id, handle);
+                }
+                Err(e) => {
+                    warn!(
+                        "ConnectVmService: could not track VM task for session {} \
+                         (poisoned lock): {}",
+                        session_id, e
+                    );
+                }
+            }
         }
 
         UpdateAction::StartPerformanceMonitoring {
@@ -314,7 +324,7 @@ pub fn handle_action(
             vm_handle,
         } => {
             if let Some(handle) = vm_handle {
-                network::spawn_clear_http_profile(session_id, handle, msg_tx);
+                network::spawn_clear_http_profile(session_id, handle);
             } else {
                 tracing::debug!(
                     "ClearHttpProfile for session {} — no VM handle (VM disconnected), skipping",
@@ -322,5 +332,16 @@ pub fn handle_action(
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_task_map_default_is_empty() {
+        let map: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
+        assert!(map.lock().unwrap().is_empty());
     }
 }

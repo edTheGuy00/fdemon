@@ -200,3 +200,30 @@ pub(super) fn is_method_not_found(error: &fdemon_core::Error) -> bool {
         _ => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_transient_error_protocol() {
+        let err = fdemon_core::Error::Protocol {
+            message: "null check failure".into(),
+        };
+        assert!(is_transient_error(&err));
+    }
+
+    #[test]
+    fn test_is_method_not_found_by_code() {
+        let err = fdemon_core::Error::Protocol {
+            message: "RPC error -32601: method not found".into(),
+        };
+        assert!(is_method_not_found(&err));
+    }
+
+    #[test]
+    fn test_is_method_not_found_non_protocol() {
+        let err = fdemon_core::Error::VmService("something".into());
+        assert!(!is_method_not_found(&err));
+    }
+}

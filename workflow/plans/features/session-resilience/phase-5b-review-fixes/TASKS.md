@@ -32,26 +32,26 @@ Wave 2 — Depends on constant promotion from Task 03
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-mutex-unwrap](tasks/01-fix-mutex-unwrap.md) | Not Started | - | `actions/mod.rs` |
-| 2 | [02-remove-unused-msg-tx](tasks/02-remove-unused-msg-tx.md) | Not Started | - | `actions/network.rs`, `actions/mod.rs` |
-| 3 | [03-named-constants-and-imports](tasks/03-named-constants-and-imports.md) | Not Started | - | `actions/vm_service.rs`, `actions/network.rs`, `actions/inspector/mod.rs` |
-| 4 | [04-tighten-module-visibility](tasks/04-tighten-module-visibility.md) | Not Started | - | `actions/mod.rs`, `actions/session.rs` |
-| 5 | [05-add-test-modules](tasks/05-add-test-modules.md) | Not Started | 3 | `actions/vm_service.rs`, `actions/performance.rs`, `actions/network.rs`, `actions/inspector/mod.rs` |
+| 1 | [01-fix-mutex-unwrap](tasks/01-fix-mutex-unwrap.md) | Done | - | `actions/mod.rs` |
+| 2 | [02-remove-unused-msg-tx](tasks/02-remove-unused-msg-tx.md) | Done | - | `actions/network.rs`, `actions/mod.rs` |
+| 3 | [03-named-constants-and-imports](tasks/03-named-constants-and-imports.md) | Done | - | `actions/vm_service.rs`, `actions/network.rs`, `actions/inspector/mod.rs` |
+| 4 | [04-tighten-module-visibility](tasks/04-tighten-module-visibility.md) | Done | - | `actions/mod.rs`, `actions/session.rs` |
+| 5 | [05-add-test-modules](tasks/05-add-test-modules.md) | Done | 3 | `actions/vm_service.rs`, `actions/performance.rs`, `actions/network.rs`, `actions/inspector/mod.rs` |
 
 ## Success Criteria
 
 Phase 5b is complete when:
 
-- [ ] Zero `unwrap()` calls on mutex locks in `actions/` directory
-- [ ] No unused parameters in any function signature
-- [ ] All timeout/duration values use named constants
-- [ ] All submodule declarations use `pub(super)` visibility
-- [ ] All `use` declarations at top-level (no inline `use` in async blocks)
-- [ ] Every file in `actions/` has a `#[cfg(test)]` module with at least one assertion
-- [ ] `cargo fmt --all` clean
-- [ ] `cargo check --workspace` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `cargo clippy --workspace -- -D warnings` clean
+- [x] Zero `unwrap()` calls on mutex locks in `actions/` directory
+- [x] No unused parameters in any function signature
+- [x] All timeout/duration values use named constants
+- [x] All submodule declarations use `pub(super)` visibility
+- [x] All `use` declarations at top-level (no inline `use` in async blocks)
+- [x] Every file in `actions/` has a `#[cfg(test)]` module with at least one assertion
+- [x] `cargo fmt --all` clean
+- [x] `cargo check --workspace` passes
+- [x] `cargo test --workspace` passes
+- [x] `cargo clippy --workspace -- -D warnings` clean
 
 ## Notes
 
