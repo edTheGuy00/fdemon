@@ -203,12 +203,12 @@ Phase 1 (Bug Fix)                Phase 2 (Reconnecting UI)
 └── 03-network-cleanup-tests     ├── 06-forward-events-update
                                  └── 07-reconnecting-tests
 
-Phase 3 (Health Monitoring)
-├── 08-process-watchdog          ← can start independently
-├── 09-get-version-rpc           ← can start independently
-├── 10-vm-heartbeat              ← depends on 09
-├── 11-wait-for-exit-task        ← can start independently
-└── 12-health-monitoring-tests   ← depends on 08, 10, 11
+Phase 2b (Reconnect Handler Fixes)     Phase 3 (Health Monitoring)
+├── 01-reconnected-message-variant     ├── 08-process-watchdog
+├── 02-cleanup-perf-on-reconnect       ├── 09-get-version-rpc
+├── 03-guard-connection-status         ├── 10-vm-heartbeat
+└── 04-reconnect-handler-tests         ├── 11-wait-for-exit-task
+                                       └── 12-health-monitoring-tests
 ```
 
 ---
@@ -227,6 +227,14 @@ Phase 3 (Health Monitoring)
 - [ ] Inspector/Performance/Network panels show reconnection status
 - [ ] `VmConnectionStatus` resets to `Connected` after successful reconnection
 - [ ] All existing tests pass + new tests for reconnection message flow
+
+### Phase 2b Complete When:
+- [ ] `Message::VmServiceReconnected` variant exists and is used for WebSocket reconnection
+- [ ] Reconnection preserves accumulated `PerformanceState` (memory history, frame timings, etc.)
+- [ ] Old performance polling task aborted before spawning new one on reconnect
+- [ ] `connection_status` writes guarded by active-session check in all VM lifecycle handlers
+- [ ] Background session VM events don't pollute foreground connection indicator
+- [ ] All existing tests pass + new tests for all three fix areas
 
 ### Phase 3 Complete When:
 - [ ] Hung process detected within 5 seconds via watchdog

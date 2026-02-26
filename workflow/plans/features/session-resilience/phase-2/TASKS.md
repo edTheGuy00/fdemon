@@ -4,7 +4,7 @@
 
 Surface VM Service reconnection status to the UI so users see "Reconnecting (2/10)..." instead of silence during WebSocket backoff. The entire downstream pipeline (Message variant, handler, state field, all four TUI panels) is already wired — the only missing piece is emitting events from the daemon's reconnection loop and forwarding them through the app layer.
 
-**Total Tasks:** 4
+**Total Tasks:** 7 (4 original + 3 review fixes)
 
 ## Task Dependency Graph
 
@@ -35,10 +35,25 @@ Surface VM Service reconnection status to the UI so users see "Reconnecting (2/1
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 4 | [04-vm-client-event-type](tasks/04-vm-client-event-type.md) | Not Started | - | `daemon/vm_service/protocol.rs`, `daemon/vm_service/client.rs`, `daemon/vm_service/mod.rs` |
-| 5 | [05-emit-reconnect-events](tasks/05-emit-reconnect-events.md) | Not Started | 04 | `daemon/vm_service/client.rs` |
-| 6 | [06-forward-events-update](tasks/06-forward-events-update.md) | Not Started | 04 | `app/actions.rs` |
-| 7 | [07-reconnecting-tests](tasks/07-reconnecting-tests.md) | Not Started | 05, 06 | `daemon/vm_service/client.rs` tests, `app/handler/tests.rs` |
+| 4 | [04-vm-client-event-type](tasks/04-vm-client-event-type.md) | Done | - | `daemon/vm_service/protocol.rs`, `daemon/vm_service/client.rs`, `daemon/vm_service/mod.rs` |
+| 5 | [05-emit-reconnect-events](tasks/05-emit-reconnect-events.md) | Done | 04 | `daemon/vm_service/client.rs` |
+| 6 | [06-forward-events-update](tasks/06-forward-events-update.md) | Done | 04 | `app/actions.rs` |
+| 7 | [07-reconnecting-tests](tasks/07-reconnecting-tests.md) | Done | 05, 06 | `daemon/vm_service/client.rs` tests, `app/handler/tests.rs` |
+| 8 | [08-log-lifecycle-send-failures](tasks/08-log-lifecycle-send-failures.md) | Not Started | - | `daemon/vm_service/client.rs` |
+| 9 | [09-fix-stale-doc-example](tasks/09-fix-stale-doc-example.md) | Not Started | - | `daemon/vm_service/mod.rs` |
+| 10 | [10-permanently-disconnected-test](tasks/10-permanently-disconnected-test.md) | Not Started | - | `app/handler/tests.rs` |
+
+## Review Fixes (Wave 4)
+
+Three issues identified during code review that should be fixed before merge:
+
+| # | Review Issue | Severity | Description |
+|---|-------------|----------|-------------|
+| 8 | Issue #1 | Major | Lifecycle event `try_send` failures silently dropped — add `warn!` logging |
+| 9 | Issue #4 | Minor | Stale doc example references `event.params.stream_id` on `VmClientEvent` |
+| 10 | Issue #5 | Minor | No test for `PermanentlyDisconnected` → `VmServiceDisconnected` path |
+
+Tasks 08, 09, 10 are independent and can all be executed in parallel.
 
 ## Execution Plan
 
@@ -47,6 +62,7 @@ Surface VM Service reconnection status to the UI so users see "Reconnecting (2/1
 | 1 | Task 04 | Foundation: creates VmClientEvent type, changes channel plumbing |
 | 2 | Tasks 05 + 06 (parallel) | 05 is daemon-only (client.rs), 06 is app-only (actions.rs) — no file contention |
 | 3 | Task 07 | Tests depend on both 05 and 06 being complete |
+| 4 | Tasks 08 + 09 + 10 (parallel) | Review fixes — all independent, no file contention |
 
 **Compilation note:** After Task 04 alone, `cargo check -p fdemon-daemon` passes but `cargo check -p fdemon-app` fails (actions.rs expects old event type). Task 06 fixes the app crate. Full workspace compilation succeeds only after both Tasks 04 and 06 are done.
 
