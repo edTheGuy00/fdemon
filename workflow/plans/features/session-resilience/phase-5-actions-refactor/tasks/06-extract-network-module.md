@@ -69,3 +69,32 @@ No new tests needed — pure move refactoring. All existing tests must pass.
 - `open_url_in_browser` is a utility function that could live anywhere, but it's only used for opening DevTools in a browser — placing it in `network.rs` alongside the other network/DevTools actions keeps the module cohesive and avoids creating a tiny standalone file.
 - `spawn_network_monitoring` has the same `watch::channel` pattern as `spawn_performance_polling` — they follow the same lifecycle conventions but are in separate modules to match the handler decomposition.
 - After this task, `mod.rs` should contain only: `handle_action`, module declarations, re-exports, and any remaining constants/types. It should be ~350 lines.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/network.rs` | NEW — 359 lines. All 4 network functions and `NETWORK_POLL_MIN_MS` constant extracted here. Includes `//!` module doc header. |
+| `crates/fdemon-app/src/actions/mod.rs` | Reduced from 665 lines to 326 lines. Added `pub(super) mod network;`, updated 4 `handle_action` arms to call `network::*`, removed extracted functions and constant, removed now-unused `VmRequestHandle` import. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import cleanup**: `VmRequestHandle` was imported in `mod.rs` only to be used in the extracted network functions — it was removed from the import since the pattern-matched `vm_handle` variables are inferred by type from the `UpdateAction` enum without an explicit import.
+2. **Actual imports vs task spec**: The task spec listed `use std::time::Duration`, `use tracing::{debug, info, warn}`, and `use fdemon_daemon::vm_service::{ext, VmRequestHandle}` as suggested imports — the actual code uses `tracing::` inline with `tracing::warn!()` etc. (consistent with how the functions already worked in `mod.rs`), `fdemon_daemon::vm_service::VmRequestHandle` directly, and `tokio::time::Duration` inline inside the async block. No functional changes were made.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed (5.26s compile, 0 errors)
+- `cargo fmt --all` — Passed (no formatting changes needed)
+- `cargo test --workspace` — Passed (all tests across all crates)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings, 0 errors)
+
+### Risks/Limitations
+
+1. **None**: Pure refactoring — no behavioral changes. All 4 functions are identical copies, only moved to a new submodule file.

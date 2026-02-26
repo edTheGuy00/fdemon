@@ -70,3 +70,33 @@ Move the `test_heartbeat_constants_are_reasonable` test and the `test_heartbeat_
 - `forward_vm_events` is `async fn` (not `pub`) — it's only called from `spawn_vm_service_connection` in the same module. Both can remain private to the `vm_service` module.
 - `spawn_vm_service_connection` returns a `JoinHandle<()>` used by `handle_action` — its return type must be accessible from `mod.rs`.
 - The `parse_*` and `*_to_log_entry` functions are imported from `fdemon_daemon::vm_service` — they stay as imports, not moved.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/vm_service.rs` | NEW — 273 lines. Contains `spawn_vm_service_connection`, `forward_vm_events`, the three heartbeat constants, and the two heartbeat tests. Has `//!` module doc header. |
+| `crates/fdemon-app/src/actions/mod.rs` | Removed `spawn_vm_service_connection`, `forward_vm_events`, `HEARTBEAT_INTERVAL`, `HEARTBEAT_TIMEOUT`, `MAX_HEARTBEAT_FAILURES`, and their tests (~260 lines removed). Added `pub(super) mod vm_service;`. Updated `ConnectVmService` arm to call `vm_service::spawn_vm_service_connection(...)`. Trimmed now-unused imports (`VmClientEvent`, `VmServiceClient`, `enable_frame_tracking`, `flutter_error_to_log_entry`, `parse_flutter_error`, `parse_frame_timing`, `parse_gc_event`, `parse_log_record`, `vm_log_to_log_entry`, `debug`, `error`, `info`). |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub(super)` visibility for `vm_service` module**: `spawn_vm_service_connection` needs to be accessible from `mod.rs` but not from outside the `actions` module. Used `pub(super) fn` on the function and `pub(super) mod vm_service` on the module declaration — consistent with how `session.rs` uses `pub(super)`.
+2. **`watch` and `info` kept in `mod.rs`**: After extraction, `watch::Receiver<bool>` is still used in `handle_action`'s signature (for `shutdown_rx`) and `info!` is used in `spawn_performance_polling`. Both were retained in the imports.
+3. **Heartbeat bug fix preserved exactly**: The `consecutive_failures = 0` assignments in the `Reconnecting` and `Reconnected` arms of `forward_vm_events` are present in `vm_service.rs` as extracted — no behavioral change.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2,803 tests across all crates: 1161 + 360 + 383 + 773 + 10 + 16 + 80 + 7 + 1 + 5 + 0 + 7; 69 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Pure refactoring**: No behavioral changes introduced. The extraction is a mechanical move of code between files.

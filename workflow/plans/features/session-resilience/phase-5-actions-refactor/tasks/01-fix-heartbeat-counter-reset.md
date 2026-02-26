@@ -99,3 +99,32 @@ fn test_heartbeat_counter_reset_on_reconnection() {
 - This is the same fix specified in Phase 3b `01-reset-heartbeat-on-reconnect.md` — it was never applied
 - The fix is applied to the monolithic `actions.rs` before the refactoring begins (tasks 02-06)
 - After task 03, this code will live in `actions/vm_service.rs`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `consecutive_failures = 0;` as the first statement in both the `Reconnecting` and `Reconnected` arms of the `forward_vm_events` match; added `test_heartbeat_counter_reset_on_reconnection` test to the `tests` module |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reset on Reconnecting (not just Reconnected)**: Resetting the counter on `Reconnecting` as well as `Reconnected` ensures the counter cannot accumulate across multiple consecutive backoff retries before reconnection completes. This matches the task specification exactly.
+2. **Documentation-only test**: The async `forward_vm_events` function cannot be directly unit tested without a complex mock of `VmServiceClient`. The test records the invariant as a code-review artifact, consistent with the approach specified in the task.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1161 unit tests + 1 doc test)
+- `cargo test --workspace` - Passed (all crates: 0 failures across 2803+ tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No async integration test**: The fix cannot be exercised by a synchronous unit test. The invariant is documented in the test body comment and verified by code review.

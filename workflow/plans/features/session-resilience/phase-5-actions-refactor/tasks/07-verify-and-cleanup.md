@@ -66,3 +66,58 @@ Run the full test suite and compare test counts before/after. No tests should be
 - This is the final cleanup task — it catches anything missed during the individual extraction tasks
 - If any file exceeds 500 lines, identify further split opportunities and note them (but do not split further in this phase unless the overage is significant)
 - Update `docs/ARCHITECTURE.md` if it references `actions.rs` as a flat file — it should now reference the `actions/` directory module
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/inspector.rs` | Removed (replaced by directory module) |
+| `crates/fdemon-app/src/actions/inspector/mod.rs` | Created: contains 4 `pub(super)` spawn functions (403 lines) |
+| `crates/fdemon-app/src/actions/inspector/widget_tree.rs` | Created: private helpers `poll_widget_tree_ready`, `try_fetch_widget_tree`, `is_transient_error`, `is_method_not_found` (202 lines) |
+| `docs/ARCHITECTURE.md` | Updated line 857: changed `actions.rs` reference to `actions/` directory module description |
+
+### Final Module Structure
+
+| File | Lines | Status |
+|------|-------|--------|
+| `actions/mod.rs` | 326 | Under 500 ✓ |
+| `actions/session.rs` | 360 | Under 500 ✓ |
+| `actions/vm_service.rs` | 327 | Under 500 ✓ |
+| `actions/performance.rs` | 246 | Under 500 ✓ |
+| `actions/inspector/mod.rs` | 403 | Under 500 ✓ |
+| `actions/inspector/widget_tree.rs` | 202 | Under 500 ✓ |
+| `actions/network.rs` | 359 | Under 500 ✓ |
+
+### Verification of Acceptance Criteria
+
+1. **No file exceeds 500 lines** — all 7 files are under 500 lines. ✓
+2. **All 6 top-level files have `//!` module doc headers** — verified with `head -1`. ✓
+3. **No unused imports (clippy)** — `cargo clippy --workspace -- -D warnings` passes. ✓
+4. **Public API accessible from same paths** — `handle_action`, `execute_task`, `SessionTaskMap` all re-exported from `actions/mod.rs`. ✓
+5. **Full quality gate passes** — see testing below. ✓
+6. **All tests pass, same count** — 2,803 tests pass, 0 failed. ✓
+
+### Test placement verified
+
+- `test_heartbeat_constants_are_reasonable` → `actions::vm_service::tests` ✓
+- `test_heartbeat_counter_reset_on_reconnection` → `actions::vm_service::tests` ✓
+- `test_watchdog_interval_is_reasonable` → `actions::session::tests` ✓
+
+### Notable Decisions/Tradeoffs
+
+1. **inspector.rs split into inspector/ directory module**: The original `inspector.rs` was 598 lines (98 lines over the 500-line hard limit). The private widget-tree helpers (`poll_widget_tree_ready`, `try_fetch_widget_tree`, `is_transient_error`, `is_method_not_found`) were extracted to `inspector/widget_tree.rs`. This preserves all documentation quality while bringing both files well under 500 lines.
+
+2. **`pub(super)` visibility preserved**: The helper functions in `widget_tree.rs` are `pub(super)` (visible to `inspector/mod.rs` as parent), maintaining the same encapsulation boundary.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2,803 tests pass, 69 ignored, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)

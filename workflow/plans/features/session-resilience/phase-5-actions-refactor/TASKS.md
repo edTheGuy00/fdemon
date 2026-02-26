@@ -44,13 +44,13 @@ Wave 2 — Sequential refactoring (each moves code out of mod.rs)
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-heartbeat-counter-reset](tasks/01-fix-heartbeat-counter-reset.md) | Not Started | - | `actions.rs` |
-| 2 | [02-extract-session-module](tasks/02-extract-session-module.md) | Not Started | 1 | `actions/mod.rs`, `actions/session.rs` **NEW** |
-| 3 | [03-extract-vm-service-module](tasks/03-extract-vm-service-module.md) | Not Started | 2 | `actions/mod.rs`, `actions/vm_service.rs` **NEW** |
-| 4 | [04-extract-performance-module](tasks/04-extract-performance-module.md) | Not Started | 3 | `actions/mod.rs`, `actions/performance.rs` **NEW** |
-| 5 | [05-extract-inspector-module](tasks/05-extract-inspector-module.md) | Not Started | 4 | `actions/mod.rs`, `actions/inspector.rs` **NEW** |
-| 6 | [06-extract-network-module](tasks/06-extract-network-module.md) | Not Started | 5 | `actions/mod.rs`, `actions/network.rs` **NEW** |
-| 7 | [07-verify-and-cleanup](tasks/07-verify-and-cleanup.md) | Not Started | 6 | all `actions/*.rs` |
+| 1 | [01-fix-heartbeat-counter-reset](tasks/01-fix-heartbeat-counter-reset.md) | Done | - | `actions.rs` |
+| 2 | [02-extract-session-module](tasks/02-extract-session-module.md) | Done | 1 | `actions/mod.rs`, `actions/session.rs` **NEW** |
+| 3 | [03-extract-vm-service-module](tasks/03-extract-vm-service-module.md) | Done | 2 | `actions/mod.rs`, `actions/vm_service.rs` **NEW** |
+| 4 | [04-extract-performance-module](tasks/04-extract-performance-module.md) | Done | 3 | `actions/mod.rs`, `actions/performance.rs` **NEW** |
+| 5 | [05-extract-inspector-module](tasks/05-extract-inspector-module.md) | Done | 4 | `actions/mod.rs`, `actions/inspector.rs` **NEW** |
+| 6 | [06-extract-network-module](tasks/06-extract-network-module.md) | Done | 5 | `actions/mod.rs`, `actions/network.rs` **NEW** |
+| 7 | [07-verify-and-cleanup](tasks/07-verify-and-cleanup.md) | Done | 6 | all `actions/*.rs` |
 
 ## Target Module Structure
 
