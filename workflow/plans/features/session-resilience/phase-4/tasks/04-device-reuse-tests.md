@@ -107,4 +107,27 @@ cargo test -p fdemon-app -- --test-threads=1  # full suite
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Added 3 new tests in the `#[cfg(test)] mod tests` block: `test_handle_launch_allows_device_reuse_when_session_stopped`, `test_handle_launch_blocks_device_with_running_session`, `test_handle_launch_blocks_device_with_initializing_session` |
+| `crates/fdemon-app/src/handler/tests.rs` | Replaced the dead `test_device_selected_prevents_duplicate` stub with a comment pointing to the 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`error` not `error_message`**: The task description mentioned `target_selector.error_message` but the struct field is named `error`. The tests assert against `state.new_session_dialog_state.target_selector.error` per the actual struct definition in `target_selector_state.rs`.
+2. **Used existing `test_device()` helper**: The task pseudocode used `create_session("macos", ...)` but the actual signature is `create_session(&Device)`. All three tests reuse the existing `test_device()` helper (device id `"emulator-5554"`) and populate the dialog's `connected_devices` with the same device.
+3. **Dead stub replaced with comment**: Rather than keeping an empty `#[ignore]` test, the stub was replaced with a doc comment pointing to the three new tests that cover this scenario.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- test_handle_launch_allows_device_reuse` - Passed (1 test)
+- `cargo test -p fdemon-app -- test_handle_launch_blocks_device` - Passed (2 tests)
+- `cargo test -p fdemon-app -- --test-threads=1` - Passed (1152 tests, 4 ignored, 0 failed)
+
+### Risks/Limitations
+
+1. **None**: All acceptance criteria met. The three tests exercise the `find_active_by_device_id` guard introduced in task 03 and confirm it correctly allows reuse for stopped sessions while blocking initializing and running sessions.

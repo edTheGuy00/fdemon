@@ -223,6 +223,41 @@ mod tests {
     }
 
     #[test]
+    fn test_is_active_returns_true_for_initializing() {
+        let session = Session::new("dev1".into(), "Device 1".into(), "macos".into(), false);
+        assert_eq!(session.phase, AppPhase::Initializing);
+        assert!(session.is_active());
+    }
+
+    #[test]
+    fn test_is_active_returns_true_for_running() {
+        let mut session = Session::new("dev1".into(), "Device 1".into(), "macos".into(), false);
+        session.phase = AppPhase::Running;
+        assert!(session.is_active());
+    }
+
+    #[test]
+    fn test_is_active_returns_true_for_reloading() {
+        let mut session = Session::new("dev1".into(), "Device 1".into(), "macos".into(), false);
+        session.phase = AppPhase::Reloading;
+        assert!(session.is_active());
+    }
+
+    #[test]
+    fn test_is_active_returns_false_for_stopped() {
+        let mut session = Session::new("dev1".into(), "Device 1".into(), "macos".into(), false);
+        session.phase = AppPhase::Stopped;
+        assert!(!session.is_active());
+    }
+
+    #[test]
+    fn test_is_active_returns_false_for_quitting() {
+        let mut session = Session::new("dev1".into(), "Device 1".into(), "macos".into(), false);
+        session.phase = AppPhase::Quitting;
+        assert!(!session.is_active());
+    }
+
+    #[test]
     fn test_clear_logs() {
         let mut session = Session::new("d".into(), "Device".into(), "ios".into(), false);
         session.log_info(LogSource::App, "Test");

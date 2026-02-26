@@ -519,6 +519,15 @@ impl Session {
         matches!(self.phase, AppPhase::Reloading)
     }
 
+    /// Check if session is actively in use (not stopped/quitting).
+    ///
+    /// Unlike `is_running()` which only matches `Running | Reloading`,
+    /// this also includes `Initializing` — a session that is starting up
+    /// but hasn't emitted `app.start` yet.
+    pub fn is_active(&self) -> bool {
+        !matches!(self.phase, AppPhase::Stopped | AppPhase::Quitting)
+    }
+
     /// Get status indicator character
     pub fn status_icon(&self) -> &'static str {
         match self.phase {

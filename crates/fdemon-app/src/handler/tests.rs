@@ -332,11 +332,11 @@ fn test_device_selected_session_id_in_spawn_action() {
     // This test is obsolete - DeviceSelected message is deprecated
 }
 
-#[test]
-#[ignore = "DeviceSelected is deprecated - functionality moved to NewSessionDialog"]
-fn test_device_selected_prevents_duplicate() {
-    // This test is obsolete - DeviceSelected message is deprecated
-}
+// test_device_selected_prevents_duplicate was removed (phase 4 task 04).
+// Device-reuse guard logic is now covered by:
+//   handler::new_session::launch_context::tests::test_handle_launch_allows_device_reuse_when_session_stopped
+//   handler::new_session::launch_context::tests::test_handle_launch_blocks_device_with_running_session
+//   handler::new_session::launch_context::tests::test_handle_launch_blocks_device_with_initializing_session
 
 #[test]
 #[ignore = "DeviceSelected is deprecated - functionality moved to NewSessionDialog"]

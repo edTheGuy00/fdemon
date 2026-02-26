@@ -314,6 +314,18 @@ impl SessionManager {
             .map(|(id, _)| *id)
     }
 
+    /// Find an active (non-stopped) session by device_id.
+    ///
+    /// Unlike `find_by_device_id`, this skips sessions in `Stopped` or `Quitting`
+    /// phases. Used by the new-session launch guard to allow device reuse after
+    /// a session exits.
+    pub fn find_active_by_device_id(&self, device_id: &str) -> Option<SessionId> {
+        self.sessions
+            .iter()
+            .find(|(_, h)| h.session.device_id == device_id && h.session.is_active())
+            .map(|(id, _)| *id)
+    }
+
     /// Get all running sessions
     pub fn running_sessions(&self) -> Vec<SessionId> {
         self.sessions
@@ -410,7 +422,7 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use fdemon_core::LogSource;
+    use fdemon_core::{AppPhase, LogSource};
 
     fn test_device(id: &str, name: &str) -> Device {
         Device {
@@ -560,6 +572,38 @@ mod tests {
         assert_eq!(manager.find_by_device_id("device-1"), Some(id1));
         assert_eq!(manager.find_by_device_id("device-2"), Some(id2));
         assert_eq!(manager.find_by_device_id("device-3"), None);
+    }
+
+    #[test]
+    fn test_find_active_by_device_id_skips_stopped_session() {
+        let mut manager = SessionManager::new();
+        let id = manager
+            .create_session(&test_device("dev1", "Device 1"))
+            .unwrap();
+        // Session starts as Initializing (active)
+        assert!(manager.find_active_by_device_id("dev1").is_some());
+
+        // Mark as stopped
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Stopped;
+        assert!(manager.find_active_by_device_id("dev1").is_none());
+        // Original method still finds it
+        assert!(manager.find_by_device_id("dev1").is_some());
+    }
+
+    #[test]
+    fn test_find_active_by_device_id_finds_running_session() {
+        let mut manager = SessionManager::new();
+        let id = manager
+            .create_session(&test_device("dev1", "Device 1"))
+            .unwrap();
+        manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+        assert_eq!(manager.find_active_by_device_id("dev1"), Some(id));
+    }
+
+    #[test]
+    fn test_find_active_by_device_id_returns_none_for_unknown_device() {
+        let manager = SessionManager::new();
+        assert!(manager.find_active_by_device_id("nonexistent").is_none());
     }
 
     #[test]

@@ -84,4 +84,27 @@ fn test_is_active_returns_false_for_quitting() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/session.rs` | Added `is_active()` method after `is_busy()` (line 521) |
+| `crates/fdemon-app/src/session/tests.rs` | Added 5 unit tests for all `AppPhase` variants, placed adjacent to `test_is_busy` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of `is_active()`**: Added immediately after `is_busy()` as specified in the task, keeping the three lifecycle query methods (`is_running`, `is_busy`, `is_active`) grouped together for discoverability.
+2. **`!matches!` macro**: Used the negated `matches!` form to express "not Stopped or Quitting" clearly, consistent with the task specification and the codebase idiom (`matches!` is used in `is_running` and `is_busy`).
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- is_active` - Passed (5 tests)
+- `cargo check -p fdemon-app` - Passed
+- `cargo fmt --all` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: The method is a simple predicate with no side effects and clearly distinct semantics from `is_running()`. All five `AppPhase` variants are covered by tests.

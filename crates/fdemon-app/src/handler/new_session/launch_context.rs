@@ -418,10 +418,10 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
             }
         };
 
-        // Check if device already has a running session
+        // Check if device already has an active session (skip stopped sessions)
         if state
             .session_manager
-            .find_by_device_id(&device.id)
+            .find_active_by_device_id(&device.id)
             .is_some()
         {
             state
@@ -1275,5 +1275,124 @@ mod tests {
 
         // Modal should be closed
         assert!(state.new_session_dialog_state.fuzzy_modal.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 4 Task 04: Device Reuse Tests for handle_launch
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_handle_launch_allows_device_reuse_when_session_stopped() {
+        use fdemon_core::AppPhase;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a session for the test device, then mark it as stopped
+        let device = test_device();
+        let id = state
+            .session_manager
+            .create_session(&device)
+            .expect("should create session");
+        state.session_manager.get_mut(id).unwrap().session.phase = AppPhase::Stopped;
+
+        // Configure new session dialog to select the same device
+        // (selected_index = 1 because index 0 is the group header)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(device);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Stopped session should not block device reuse — SpawnSession action is returned
+        assert!(
+            result.action.is_some(),
+            "Expected SpawnSession action but got none; stopped sessions must allow device reuse"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_blocks_device_with_running_session() {
+        use fdemon_core::AppPhase;
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a session for the test device and set it to Running
+        let device = test_device();
+        let id = state
+            .session_manager
+            .create_session(&device)
+            .expect("should create session");
+        state.session_manager.get_mut(id).unwrap().session.phase = AppPhase::Running;
+
+        // Configure new session dialog to select the same device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(device);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Running session should block device reuse
+        assert!(
+            result.action.is_none(),
+            "Expected no action but got one; running sessions must block device reuse"
+        );
+        let error = state
+            .new_session_dialog_state
+            .target_selector
+            .error
+            .as_ref()
+            .expect("Expected error to be set on target_selector");
+        assert!(
+            error.contains("already has an active session"),
+            "Error message should mention active session, got: {error}"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_blocks_device_with_initializing_session() {
+        // Default phase for a new session is Initializing — it should block device reuse
+
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Create a session — default phase is Initializing
+        let device = test_device();
+        state
+            .session_manager
+            .create_session(&device)
+            .expect("should create session");
+
+        // Configure new session dialog to select the same device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(device);
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Initializing session should block device reuse
+        assert!(
+            result.action.is_none(),
+            "Expected no action but got one; initializing sessions must block device reuse"
+        );
     }
 }

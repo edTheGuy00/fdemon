@@ -74,4 +74,23 @@ Tested via task 04 (integration-level tests for the full launch flow with pre-ex
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Changed `find_by_device_id` to `find_active_by_device_id` in the device guard at line 424; updated comment from "running session" to "active session (skip stopped sessions)" |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comment updated**: The task said "The comment above already says 'active session' so no comment change needed", but the original comment said "running session" not "active session". Updated it to match the task's intent ("active session (skip stopped sessions)") for clarity.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1149 unit tests + 1 doc-test, 0 failures, 5 ignored)
+
+### Risks/Limitations
+
+1. **None**: This is a one-line method name change. Stopped sessions no longer block new session creation on the same device. Running/Initializing/Reloading sessions still block duplicate launches because `find_active_by_device_id` only returns sessions in those phases.

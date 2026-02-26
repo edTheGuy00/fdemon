@@ -82,4 +82,25 @@ fn test_find_active_by_device_id_returns_none_for_unknown_device() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Added `find_active_by_device_id()` method after `find_by_device_id()`; added `AppPhase` to test imports; added 3 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`AppPhase` import in tests**: The existing test module only imported `LogSource` from `fdemon_core`. Since the new tests set `session.phase = AppPhase::Stopped` / `AppPhase::Running` directly, `AppPhase` needed to be added to the test import (`use fdemon_core::{AppPhase, LogSource};`). The production code does not need this import because `AppPhase` is accessed via struct field assignment, not by name.
+
+2. **Preserved `find_by_device_id` unchanged**: The original method remains exactly as-is to maintain the general-purpose lookup for any session phase.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- find_active_by_device_id` - Passed (3 tests)
+- `cargo check -p fdemon-app` - Passed
+
+### Risks/Limitations
+
+None. The implementation is a straightforward addition that delegates to the already-tested `is_active()` method from task 01.
