@@ -170,6 +170,42 @@ Two approaches were evaluated:
 
 ---
 
+### Phase 4: Stopped Session Device Reuse (UX Bug Fix)
+
+**Goal**: Allow users to start a new session on a device that has a stopped (exited) session, instead of incorrectly blocking with "Device already has an active session".
+
+**Priority**: High — this is a UX-blocking bug that forces users to exit the entire app to restart a session on the same device.
+
+#### Root Cause
+
+`handle_launch` (in `launch_context.rs:421`) calls `session_manager.find_by_device_id()` which is phase-blind — it returns any session matching the device ID, including stopped ones. When a Flutter process exits, `handle_session_exited` sets `phase = AppPhase::Stopped` but intentionally does NOT remove the session (to preserve exit logs in the tab). The duplicate-device guard doesn't account for this.
+
+#### Steps
+
+1. **Add `is_active()` method to `Session`**
+   - File: `crates/fdemon-app/src/session/session.rs` (after `is_running()` at line 513)
+   - Returns `true` for `Initializing`, `Running`, `Reloading`; `false` for `Stopped`, `Quitting`
+   - Complements `is_running()` (which only covers `Running | Reloading`) — `is_active()` also includes `Initializing` since a session being spawned occupies the device
+
+2. **Add `find_active_by_device_id()` to `SessionManager`**
+   - File: `crates/fdemon-app/src/session_manager.rs` (after `find_by_device_id()` at line 309)
+   - Like `find_by_device_id()` but filters with `h.session.is_active()`
+   - Keeps the original `find_by_device_id()` unchanged for general-purpose lookup
+
+3. **Update launch guard to use phase-aware check**
+   - File: `crates/fdemon-app/src/handler/new_session/launch_context.rs` (line 424)
+   - Change `find_by_device_id` → `find_active_by_device_id`
+   - One-line change; error message and all other behavior unchanged
+
+4. **Add device reuse tests**
+   - Test that stopped session allows device reuse (returns `SpawnSession` action)
+   - Test that running/initializing sessions still correctly block duplicate launches
+   - Clean up dead `test_device_selected_prevents_duplicate` stub in `handler/tests.rs`
+
+**Milestone**: Users can start a new session on a device after the previous session has exited, without needing to exit Flutter Demon or manually close the stopped session tab.
+
+---
+
 ## Edge Cases & Risks
 
 ### Race Conditions
@@ -209,6 +245,12 @@ Phase 2b (Reconnect Handler Fixes)     Phase 3 (Health Monitoring)
 ├── 03-guard-connection-status         ├── 04-wait-for-exit-task      ─┘
 └── 04-reconnect-handler-tests         ├── 03-vm-heartbeat (→02)       Wave 2
                                        └── 05-health-monitoring-tests  Wave 3
+
+Phase 4 (Device Reuse UX Fix)
+├── 01-is-active-method          ─┐
+├── 02-find-active-device-id (→01)─┤ Wave 1-2
+├── 03-update-launch-guard (→02)   Wave 3
+└── 04-device-reuse-tests (→03)    Wave 4
 ```
 
 ---
@@ -241,6 +283,15 @@ Phase 2b (Reconnect Handler Fixes)     Phase 3 (Health Monitoring)
 - [ ] Stale VM connection detected within ~90 seconds via heartbeat
 - [ ] Actual process exit code captured and surfaced in session log
 - [ ] All existing tests pass + new tests for watchdog and heartbeat
+
+### Phase 4 Complete When:
+- [ ] `Session::is_active()` returns `true` for `Initializing`, `Running`, `Reloading` and `false` for `Stopped`, `Quitting`
+- [ ] `SessionManager::find_active_by_device_id()` skips stopped/quitting sessions
+- [ ] `handle_launch` uses `find_active_by_device_id` so stopped sessions don't block device reuse
+- [ ] User can start a new session on a device that has a stopped session
+- [ ] Active sessions (Initializing/Running/Reloading) still correctly block duplicate launches
+- [ ] All existing tests pass + new tests for device reuse scenarios
+- [ ] `cargo clippy --workspace -- -D warnings` clean
 
 ---
 
