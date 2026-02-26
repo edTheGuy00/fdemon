@@ -105,6 +105,27 @@ pub struct StreamEvent {
     pub data: Value,
 }
 
+/// Events emitted by the VM Service client through the event channel.
+///
+/// Wraps raw stream notifications (`VmServiceEvent`) with connection lifecycle
+/// events so consumers can react to reconnection status changes.
+#[derive(Debug)]
+pub enum VmClientEvent {
+    /// A stream notification from the VM Service (e.g., Extension, Logging, GC).
+    StreamEvent(VmServiceEvent),
+    /// The client is attempting to reconnect after a connection loss.
+    Reconnecting {
+        /// Current attempt number (1-based).
+        attempt: u32,
+        /// Maximum attempts before giving up.
+        max_attempts: u32,
+    },
+    /// The client successfully reconnected after a connection loss.
+    Reconnected,
+    /// All reconnection attempts exhausted; the client has given up.
+    PermanentlyDisconnected,
+}
+
 // ---------------------------------------------------------------------------
 // VM / Isolate information types
 // ---------------------------------------------------------------------------

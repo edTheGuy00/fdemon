@@ -18,8 +18,8 @@ use fdemon_daemon::{
     vm_service::{
         enable_frame_tracking, ext, extract_layout_info, flutter_error_to_log_entry,
         parse_bool_extension_response, parse_diagnostics_node_response, parse_flutter_error,
-        parse_frame_timing, parse_gc_event, parse_log_record, vm_log_to_log_entry, VmRequestHandle,
-        VmServiceClient,
+        parse_frame_timing, parse_gc_event, parse_log_record, vm_log_to_log_entry, VmClientEvent,
+        VmRequestHandle, VmServiceClient,
     },
     CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker, ToolAvailability,
 };
@@ -950,7 +950,7 @@ async fn forward_vm_events(
         tokio::select! {
             event = client.event_receiver().recv() => {
                 match event {
-                    Some(event) => {
+                    Some(VmClientEvent::StreamEvent(event)) => {
                         // Try parsing as Flutter.Error (Extension stream) — most critical.
                         if let Some(flutter_error) = parse_flutter_error(&event.params.event) {
                             let log_entry = flutter_error_to_log_entry(&flutter_error);
@@ -1002,6 +1002,23 @@ async fn forward_vm_events(
                         }
 
                         // Other event kinds (Isolate, Timeline, etc.) are intentionally ignored
+                    }
+                    Some(VmClientEvent::Reconnecting { attempt, max_attempts }) => {
+                        let _ = msg_tx
+                            .send(Message::VmServiceReconnecting {
+                                session_id,
+                                attempt,
+                                max_attempts,
+                            })
+                            .await;
+                    }
+                    Some(VmClientEvent::Reconnected) => {
+                        let _ = msg_tx
+                            .send(Message::VmServiceConnected { session_id })
+                            .await;
+                    }
+                    Some(VmClientEvent::PermanentlyDisconnected) => {
+                        break; // Fall through to VmServiceDisconnected below
                     }
                     None => {
                         // Event receiver closed — client disconnected

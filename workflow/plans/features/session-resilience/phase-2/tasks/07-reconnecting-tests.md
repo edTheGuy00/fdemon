@@ -200,4 +200,31 @@ fn test_vm_service_reconnecting_progressive_attempts() {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `VmConnectionStatus` to existing import; added 4 new unit tests for reconnection message flow in a clearly-labeled section |
+
+### Notable Decisions/Tradeoffs
+
+1. **`select` vs `select_by_id`**: The task spec used `state.session_manager.select(session_id)` but that method does not exist. The actual API is `select_by_id(session_id: SessionId) -> bool`. Corrected all four test call sites to match the real API.
+
+2. **Formatting of single-line `update` call**: In `test_vm_service_connected_after_reconnecting_resets_status`, `rustfmt` collapsed the multi-line `update(&mut state, Message::VmServiceConnected { session_id })` call to a single line. Applied the formatter's preferred style to keep `cargo fmt --all --check` clean.
+
+3. **Initial `connection_status` is `Connected`**: `VmConnectionStatus` derives `Default` with `#[default]` on the `Connected` variant, so `AppState::new()` initialises `devtools_view_state.connection_status` to `Connected` — matching what tests 1 and 2 assert as the baseline.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app test_vm_service_reconnecting` — 3 tests passed
+- `cargo test -p fdemon-app test_vm_service_connected_after_reconnecting` — 1 test passed
+- `cargo test -p fdemon-app` — 1129 passed, 0 failed, 5 ignored
+- `cargo test --workspace` — all crates passed (1129 + 360 + 375 + 773 + ... no failures)
+- `cargo fmt --all --check` — clean
+- `cargo clippy -p fdemon-app -- -D warnings` — clean
+
+### Risks/Limitations
+
+1. **Per-session vs global status**: As noted in the task, `connection_status` is currently a global field on `DevToolsViewState` (not per-session). Tests 1–4 are written against this global design. If the field becomes per-session in a future task, these tests will need updating to retrieve status from the session handle instead.

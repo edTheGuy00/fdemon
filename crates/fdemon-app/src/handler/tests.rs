@@ -3,7 +3,7 @@
 use super::*;
 use crate::input_key::InputKey;
 use crate::message::Message;
-use crate::state::{AppState, DevToolsError, UiMode};
+use crate::state::{AppState, DevToolsError, UiMode, VmConnectionStatus};
 use fdemon_core::{AppPhase, DaemonEvent};
 
 /// Helper function to create a test Device with minimal required fields
@@ -3310,6 +3310,133 @@ fn test_vm_service_disconnected_clears_flag() {
         !handle.session.vm_connected,
         "vm_connected should be false after VmServiceDisconnected"
     );
+}
+
+// ─────────────────────────────────────────────────────────
+// VM Service Reconnection Tests (Phase 2, Task 07)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_service_reconnecting_sets_connection_status() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Verify initial state
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected
+    );
+
+    // Action
+    let result = update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id,
+            attempt: 2,
+            max_attempts: 10,
+        },
+    );
+
+    // Assert
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 10,
+        }
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_vm_service_reconnecting_ignores_inactive_session() {
+    let mut state = AppState::new();
+    let device1 = test_device("dev-1", "Device 1");
+    let device2 = test_device("dev-2", "Device 2");
+    let session_1 = state.session_manager.create_session(&device1).unwrap();
+    let session_2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Select session 2 (session 1 is inactive)
+    state.session_manager.select_by_id(session_2);
+
+    // Action: reconnecting event for inactive session 1
+    update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id: session_1,
+            attempt: 3,
+            max_attempts: 10,
+        },
+    );
+
+    // Assert: connection_status should NOT be Reconnecting (it's for inactive session)
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+        "connection_status should not change for inactive session"
+    );
+}
+
+#[test]
+fn test_vm_service_connected_after_reconnecting_resets_status() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // First: simulate reconnecting
+    update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id,
+            attempt: 1,
+            max_attempts: 10,
+        },
+    );
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 1,
+            max_attempts: 10,
+        }
+    );
+
+    // Then: simulate successful reconnection
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    // Assert: status should be back to Connected
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+    );
+}
+
+#[test]
+fn test_vm_service_reconnecting_progressive_attempts() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    for attempt in 1..=3 {
+        update(
+            &mut state,
+            Message::VmServiceReconnecting {
+                session_id,
+                attempt,
+                max_attempts: 10,
+            },
+        );
+        assert_eq!(
+            state.devtools_view_state.connection_status,
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts: 10,
+            }
+        );
+    }
 }
 
 #[test]

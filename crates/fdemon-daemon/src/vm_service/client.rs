@@ -42,8 +42,8 @@ use fdemon_core::prelude::*;
 
 use super::extensions::build_extension_params;
 use super::protocol::{
-    parse_vm_message, IsolateInfo, IsolateRef, VmInfo, VmRequestTracker, VmServiceError,
-    VmServiceEvent, VmServiceMessage, VmServiceRequest,
+    parse_vm_message, IsolateInfo, IsolateRef, VmClientEvent, VmInfo, VmRequestTracker,
+    VmServiceError, VmServiceMessage, VmServiceRequest,
 };
 
 // ---------------------------------------------------------------------------
@@ -245,7 +245,7 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(1);
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Maximum number of consecutive reconnection attempts before giving up.
-const MAX_RECONNECT_ATTEMPTS: u32 = 10;
+pub const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
 /// Capacity of the command channel (bounded, to apply backpressure).
 const CMD_CHANNEL_CAPACITY: usize = 32;
@@ -328,7 +328,7 @@ pub struct VmServiceClient {
     /// Shared request handle — owns the cmd_tx, state, and isolate cache.
     handle: VmRequestHandle,
     /// Stream-event receiver (not clonable; owned exclusively by this client).
-    event_rx: mpsc::Receiver<VmServiceEvent>,
+    event_rx: mpsc::Receiver<VmClientEvent>,
 }
 
 impl VmServiceClient {
@@ -342,7 +342,7 @@ impl VmServiceClient {
     /// Returns an error if the initial connection cannot be established.
     pub async fn connect(ws_uri: &str) -> Result<Self> {
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientCommand>(CMD_CHANNEL_CAPACITY);
-        let (event_tx, event_rx) = mpsc::channel::<VmServiceEvent>(EVENT_CHANNEL_CAPACITY);
+        let (event_tx, event_rx) = mpsc::channel::<VmClientEvent>(EVENT_CHANNEL_CAPACITY);
         let state = Arc::new(std::sync::RwLock::new(ConnectionState::Connecting));
         let isolate_id_cache: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
 
@@ -412,7 +412,7 @@ impl VmServiceClient {
     ///
     /// Callers can `recv()` or `try_recv()` on this to consume VM Service
     /// stream events (Extension, Logging, GC, etc.).
-    pub fn event_receiver(&mut self) -> &mut mpsc::Receiver<VmServiceEvent> {
+    pub fn event_receiver(&mut self) -> &mut mpsc::Receiver<VmClientEvent> {
         &mut self.event_rx
     }
 
@@ -583,7 +583,7 @@ async fn run_client_task(
     ws_uri: String,
     ws_stream: WsStream,
     mut cmd_rx: mpsc::Receiver<ClientCommand>,
-    event_tx: mpsc::Sender<VmServiceEvent>,
+    event_tx: mpsc::Sender<VmClientEvent>,
     state: Arc<std::sync::RwLock<ConnectionState>>,
     isolate_id_cache: Arc<Mutex<Option<String>>>,
 ) {
@@ -609,6 +609,7 @@ async fn run_client_task(
             );
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Disconnected;
+            let _ = event_tx.try_send(VmClientEvent::PermanentlyDisconnected);
             break;
         }
 
@@ -616,6 +617,10 @@ async fn run_client_task(
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Reconnecting { attempt };
         }
+        let _ = event_tx.try_send(VmClientEvent::Reconnecting {
+            attempt,
+            max_attempts: MAX_RECONNECT_ATTEMPTS,
+        });
 
         let backoff = compute_backoff(attempt);
         warn!(
@@ -639,6 +644,7 @@ async fn run_client_task(
                     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     *guard = ConnectionState::Connected;
                 }
+                let _ = event_tx.try_send(VmClientEvent::Reconnected);
 
                 // Invalidate the isolate ID cache — after a reconnection the
                 // VM may have started a new isolate with a different ID.
@@ -684,7 +690,7 @@ async fn run_client_task(
 async fn run_io_loop(
     ws_stream: WsStream,
     cmd_rx: &mut mpsc::Receiver<ClientCommand>,
-    event_tx: &mpsc::Sender<VmServiceEvent>,
+    event_tx: &mpsc::Sender<VmClientEvent>,
     tracker: &mut VmRequestTracker,
     resubscribe: bool,
 ) -> bool {
@@ -792,7 +798,7 @@ fn compute_backoff(attempt: u32) -> Duration {
 async fn handle_ws_text(
     text: &str,
     tracker: &mut VmRequestTracker,
-    event_tx: &mpsc::Sender<VmServiceEvent>,
+    event_tx: &mpsc::Sender<VmClientEvent>,
 ) {
     match parse_vm_message(text) {
         VmServiceMessage::Response(mut response) => {
@@ -806,7 +812,7 @@ async fn handle_ws_text(
             }
         }
         VmServiceMessage::Event(event) => {
-            if let Err(err) = event_tx.try_send(event) {
+            if let Err(err) = event_tx.try_send(VmClientEvent::StreamEvent(event)) {
                 warn!(
                     "VM Service: event channel full or closed, dropping event: {}",
                     err

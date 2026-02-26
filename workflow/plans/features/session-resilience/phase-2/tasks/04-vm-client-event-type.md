@@ -152,4 +152,27 @@ Existing daemon tests should continue to pass because they test the VmServiceCli
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/protocol.rs` | Added `VmClientEvent` enum with 4 variants after `VmServiceEvent` struct |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Changed `MAX_RECONNECT_ATTEMPTS` to `pub const`; updated import to add `VmClientEvent` and remove unused `VmServiceEvent`; changed `event_rx` field type; changed `event_tx`/`event_rx` channel type in `connect()`; updated `event_receiver()` return type; updated `run_client_task`, `run_io_loop`, `handle_ws_text` function signatures; wrapped event send with `VmClientEvent::StreamEvent()` |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `MAX_RECONNECT_ATTEMPTS` to client re-export; added `VmClientEvent` to protocol re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed `VmServiceEvent` from client.rs import**: After wrapping event sends with `VmClientEvent::StreamEvent(event)`, `VmServiceEvent` is no longer used directly in `client.rs`. Removed it to avoid the unused import warning that would fail the `-D warnings` clippy check.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed (no warnings)
+- `cargo test -p fdemon-daemon` - Passed (375 passed, 0 failed, 3 ignored)
+- `cargo fmt --all --check` - Passed (no formatting issues)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **App crate broken**: As expected and documented in the task, `fdemon-app` (specifically `actions.rs`) still accesses `VmServiceEvent` fields directly and will not compile until Task 06 updates the consumer. Verified by using `-p fdemon-daemon` only as instructed.

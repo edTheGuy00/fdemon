@@ -153,4 +153,27 @@ The changes here are structural (match arm wrapping) plus three new one-liner tr
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions.rs` | Added `VmClientEvent` to `fdemon_daemon::vm_service` imports; wrapped `Some(event)` arm as `Some(VmClientEvent::StreamEvent(event))`; added three new match arms for `Reconnecting`, `Reconnected`, and `PermanentlyDisconnected` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Reconnected` reuses `Message::VmServiceConnected`**: Matches the design decision in the task — the existing handler already does the right thing (resets DevToolsViewState, restarts perf monitoring, re-fetches inspector tree). No new handler code needed.
+2. **`PermanentlyDisconnected` → break (no explicit message)**: Falls through to the `VmServiceDisconnected` send after the loop, reusing the existing disconnect cleanup path without duplication.
+3. **`let _ =` discards on send**: Consistent with the existing pattern throughout the function — if `msg_tx` is closed, the engine is shutting down and the send failure is acceptable.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all crates, no failures)
+- `cargo fmt --all --check` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No new unit tests in this task**: Task 07 covers testing. The structural change (match arm wrapping) is minimal and the new arms delegate entirely to existing tested message handlers.

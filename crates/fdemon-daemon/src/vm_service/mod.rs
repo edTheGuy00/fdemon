@@ -63,7 +63,7 @@ pub mod performance;
 pub mod protocol;
 pub mod timeline;
 
-pub use client::{ConnectionState, VmRequestHandle, VmServiceClient};
+pub use client::{ConnectionState, VmRequestHandle, VmServiceClient, MAX_RECONNECT_ATTEMPTS};
 pub use errors::{flutter_error_to_log_entry, parse_flutter_error, FlutterErrorEvent};
 pub use extensions::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, debug_paint, ext,
@@ -87,8 +87,8 @@ pub use performance::{
 };
 pub use protocol::{
     parse_vm_message, IsolateGroupRef, IsolateInfo, IsolateRef, LibraryRef, StreamEvent,
-    StreamEventParams, VmInfo, VmRequestTracker, VmServiceError, VmServiceEvent, VmServiceMessage,
-    VmServiceRequest, VmServiceResponse,
+    StreamEventParams, VmClientEvent, VmInfo, VmRequestTracker, VmServiceError, VmServiceEvent,
+    VmServiceMessage, VmServiceRequest, VmServiceResponse,
 };
 pub use timeline::{
     enable_frame_tracking, flutter_extension_kind, is_frame_event, parse_frame_timing,

@@ -135,4 +135,29 @@ Testing lifecycle emissions requires an integration test with a mock WebSocket s
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added 3 `try_send` event emissions in `run_client_task`: `Reconnecting` after state transition (before backoff sleep), `Reconnected` after successful reconnect, `PermanentlyDisconnected` only when max attempts exhausted |
+
+### Notable Decisions/Tradeoffs
+
+1. **Emission ordering for `Reconnecting`**: The event is sent after the `ConnectionState::Reconnecting { attempt }` write but before the `tokio::time::sleep(backoff)` call, matching the task spec. This ensures consumers see the event immediately at the start of each attempt rather than after the delay.
+
+2. **`PermanentlyDisconnected` only at exhaustion**: The event is emitted only in the `if attempt > MAX_RECONNECT_ATTEMPTS { ... break }` branch. The two clean-shutdown `break` paths (`cmd_rx.is_closed()` and `run_io_loop` returning `false` after reconnection) do not emit this event — the channel closing naturally is sufficient for consumers to detect clean shutdowns.
+
+3. **`try_send` with `let _ =`**: Matches the existing pattern for stream event forwarding at the bottom of the file. Non-blocking and discards send errors, appropriate since the channel has capacity 256 and lifecycle events are rare.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (375 passed, 3 ignored)
+- `cargo fmt --all --check` - Passed
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No dedicated tests for emission logic**: As specified in the task, lifecycle emission tests are deferred to Task 07, which will add handler-level integration tests. The existing unit tests cover the surrounding code paths but not the channel sends directly.
