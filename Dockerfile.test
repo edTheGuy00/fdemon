@@ -13,16 +13,24 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
-# Create dummy source to build dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    echo "// lib" > src/lib.rs
+# Copy workspace member Cargo.toml files
+COPY crates/fdemon-core/Cargo.toml crates/fdemon-core/Cargo.toml
+COPY crates/fdemon-daemon/Cargo.toml crates/fdemon-daemon/Cargo.toml
+COPY crates/fdemon-app/Cargo.toml crates/fdemon-app/Cargo.toml
+COPY crates/fdemon-tui/Cargo.toml crates/fdemon-tui/Cargo.toml
 
-# Build dependencies (will fail due to dummy source, but caches deps)
+# Create dummy sources for the workspace
+RUN mkdir -p src && \
+    echo "fn main() {}" > src/main.rs && \
+    for crate_dir in crates/fdemon-core crates/fdemon-daemon crates/fdemon-app crates/fdemon-tui; do \
+        mkdir -p "$crate_dir/src" && echo "// dummy" > "$crate_dir/src/lib.rs"; \
+    done
+
+# Build dependencies (caches them in Docker layer)
 RUN cargo build --release 2>/dev/null || true
 
-# Clean up dummy files
-RUN rm -rf src target/release/fdemon target/release/flutter-demon target/release/flutter_demon
+# Clean up dummy source files (keep cached deps in target/)
+RUN rm -rf src crates/*/src target/release/.fingerprint/fdemon-* target/release/.fingerprint/flutter-demon-*
 
 # Stage 2: Test runner environment
 FROM ghcr.io/cirruslabs/flutter:stable

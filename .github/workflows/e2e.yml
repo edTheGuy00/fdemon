@@ -74,11 +74,11 @@ jobs:
         id: e2e
         run: |
           mkdir -p test-logs
-          docker-compose -f docker-compose.test.yml run \
+          docker compose -f docker-compose.test.yml run \
             --rm \
             -e FDEMON_LOG_DIR=/app/test-logs \
             -e FDEMON_TEST_TIMEOUT=${{ env.FDEMON_TEST_TIMEOUT }} \
-            flutter-e2e-test
+            flutter-e2e-test 2>&1 | tee test-logs/docker-run.log
         continue-on-error: true
 
       - name: Upload test logs
@@ -87,11 +87,15 @@ jobs:
         with:
           name: e2e-test-logs-${{ github.run_number }}
           path: test-logs/
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Check test result
         if: steps.e2e.outcome == 'failure'
         run: |
+          echo "::group::Docker run output"
+          cat test-logs/docker-run.log 2>/dev/null || echo "No docker-run.log found"
+          echo "::endgroup::"
           echo "::error::E2E tests failed. Check the test-logs artifact for details."
           exit 1
 
