@@ -247,6 +247,9 @@ main() {
     setup
     cleanup_old_logs
 
+    # Tell child test scripts not to kill the shared Xvfb
+    export FDEMON_SHARED_XVFB=1
+
     # Run all tests
     for test_info in "${TESTS[@]}"; do
         IFS=':' read -r name script desc <<< "$test_info"

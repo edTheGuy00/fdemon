@@ -84,10 +84,31 @@ async fn headless_event_loop(engine: &mut Engine) -> Result<()> {
 
 /// Emit events before message processing
 fn emit_pre_message_events(_state: &AppState, msg: &Message) {
-    if let Message::HotReload = msg {
-        if let Some(session_id) = get_current_session_id(_state) {
-            HeadlessEvent::hot_reload_started(&session_id).emit();
+    match msg {
+        Message::HotReload => {
+            if let Some(session_id) = get_current_session_id(_state) {
+                HeadlessEvent::hot_reload_started(&session_id).emit();
+            }
         }
+        Message::SessionStarted {
+            session_id,
+            device_name,
+            ..
+        } => {
+            let sid = session_id.to_string();
+            HeadlessEvent::daemon_connected(device_name).emit();
+            HeadlessEvent::app_started(&sid, device_name).emit();
+        }
+        Message::SessionReloadCompleted {
+            session_id,
+            time_ms,
+        } => {
+            HeadlessEvent::hot_reload_completed(&session_id.to_string(), *time_ms).emit();
+        }
+        Message::SessionReloadFailed { session_id, reason } => {
+            HeadlessEvent::hot_reload_failed(&session_id.to_string(), reason.clone()).emit();
+        }
+        _ => {}
     }
 }
 
