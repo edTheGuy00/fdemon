@@ -17,7 +17,7 @@
 //! ## Quick start
 //!
 //! ```ignore
-//! use fdemon_daemon::vm_service::{VmServiceClient, VmRequestTracker, parse_vm_message, VmServiceMessage};
+//! use fdemon_daemon::vm_service::{VmServiceClient, VmClientEvent, VmRequestTracker, parse_vm_message, VmServiceMessage};
 //!
 //! // Connect to the VM Service
 //! let mut client = VmServiceClient::connect("ws://127.0.0.1:8181/ws").await?;
@@ -34,9 +34,18 @@
 //! ).await?;
 //! let enabled = vm_service::extensions::parse_bool_extension_response(&result)?;
 //!
-//! // Receive stream events
+//! // Receive stream events (yields VmClientEvent)
 //! while let Some(event) = client.event_receiver().recv().await {
-//!     tracing::debug!("Event: {:?}", event.params.stream_id);
+//!     match event {
+//!         VmClientEvent::StreamEvent(e) => {
+//!             tracing::debug!("Stream event: {:?}", e.params.stream_id);
+//!         }
+//!         VmClientEvent::Reconnecting { attempt, max_attempts } => {
+//!             tracing::warn!("Reconnecting {}/{}", attempt, max_attempts);
+//!         }
+//!         VmClientEvent::Reconnected => tracing::info!("Reconnected"),
+//!         VmClientEvent::PermanentlyDisconnected => break,
+//!     }
 //! }
 //!
 //! // Or use the tracker directly:

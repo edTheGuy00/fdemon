@@ -624,7 +624,12 @@ async fn run_client_task(
             );
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Disconnected;
-            let _ = event_tx.try_send(VmClientEvent::PermanentlyDisconnected);
+            if let Err(e) = event_tx.try_send(VmClientEvent::PermanentlyDisconnected) {
+                warn!(
+                    "VM Service: failed to send PermanentlyDisconnected event: {}",
+                    e
+                );
+            }
             break;
         }
 
@@ -632,10 +637,12 @@ async fn run_client_task(
             let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
             *guard = ConnectionState::Reconnecting { attempt };
         }
-        let _ = event_tx.try_send(VmClientEvent::Reconnecting {
+        if let Err(e) = event_tx.try_send(VmClientEvent::Reconnecting {
             attempt,
             max_attempts: MAX_RECONNECT_ATTEMPTS,
-        });
+        }) {
+            warn!("VM Service: failed to send Reconnecting event: {}", e);
+        }
 
         let backoff = compute_backoff(attempt);
         warn!(
@@ -659,7 +666,9 @@ async fn run_client_task(
                     let mut guard = state.write().unwrap_or_else(|e| e.into_inner());
                     *guard = ConnectionState::Connected;
                 }
-                let _ = event_tx.try_send(VmClientEvent::Reconnected);
+                if let Err(e) = event_tx.try_send(VmClientEvent::Reconnected) {
+                    warn!("VM Service: failed to send Reconnected event: {}", e);
+                }
 
                 // Invalidate the isolate ID cache — after a reconnection the
                 // VM may have started a new isolate with a different ID.
