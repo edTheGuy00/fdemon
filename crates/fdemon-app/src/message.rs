@@ -692,6 +692,15 @@ pub enum Message {
     /// VM Service WebSocket connected for a session
     VmServiceConnected { session_id: SessionId },
 
+    /// VM Service WebSocket successfully reconnected after a brief disconnect.
+    ///
+    /// Unlike `VmServiceConnected`, this variant does **not** reset accumulated
+    /// performance telemetry (ring buffers, stats). Stream re-subscriptions and
+    /// performance monitoring are restarted because the old WebSocket connection
+    /// and its Dart VM stream subscriptions are gone, but historical data is
+    /// preserved so the UI shows continuous history across the reconnect.
+    VmServiceReconnected { session_id: SessionId },
+
     /// VM Service connection failed
     VmServiceConnectionFailed {
         session_id: SessionId,

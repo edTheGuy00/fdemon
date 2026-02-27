@@ -854,7 +854,7 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - TEA handler implementation (`handler/`)
 - Process spawning logic (`process.rs`, `spawn.rs`)
 - Signal handling (`signals.rs`)
-- Action dispatching (`actions.rs`)
+- Action dispatching (`actions/` — modular directory with `mod.rs`, `session.rs`, `vm_service.rs`, `performance.rs`, `inspector/`, `network.rs`)
 
 #### `fdemon-tui` — Terminal UI
 

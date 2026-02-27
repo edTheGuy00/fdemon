@@ -35,7 +35,7 @@ Wave 2 (after all Wave 1 tasks are committed)
 | 2 | [02-simplify-publish-site](tasks/02-simplify-publish-site.md) | Done | — | 1 | `.github/workflows/publish-site.yml` |
 | 3 | [03-cliff-bump-config](tasks/03-cliff-bump-config.md) | Done | — | 1 | `cliff.toml` |
 | 4 | [04-update-branch-refs](tasks/04-update-branch-refs.md) | Done | — | 1 | `install.sh`, `README.md`, `website/src/pages/docs/installation.rs` |
-| 5 | [05-branch-migration](tasks/05-branch-migration.md) | Not Started | 1, 2, 3, 4 | 2 | Manual GitHub settings + git commands |
+| 5 | [05-branch-migration](tasks/05-branch-migration.md) | Done | 1, 2, 3, 4 | 2 | Manual GitHub settings + git commands |
 
 ## Success Criteria
 

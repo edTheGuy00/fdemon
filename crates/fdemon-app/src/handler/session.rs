@@ -94,6 +94,15 @@ pub fn handle_session_stdout(state: &mut AppState, session_id: SessionId, line: 
 /// Handle session exit events
 pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: Option<i32>) {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
+        // Guard: ignore duplicate exit events — the session is already stopped.
+        if handle.session.phase == AppPhase::Stopped {
+            tracing::debug!(
+                "Session {} already stopped, ignoring duplicate exit event",
+                session_id
+            );
+            return;
+        }
+
         let (level, message) = match code {
             Some(0) => (
                 LogLevel::Info,
@@ -133,6 +142,18 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
             );
         }
         handle.session.performance.monitoring_active = false;
+
+        // Abort and signal the network monitoring polling task to stop.
+        if let Some(h) = handle.network_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.network_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent network shutdown signal on process exit for session {}",
+                session_id
+            );
+        }
 
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
@@ -185,6 +206,15 @@ pub fn handle_session_message_state(
                     tracing::info!("Sent perf shutdown signal for session {}", session_id);
                 }
                 handle.session.performance.monitoring_active = false;
+
+                // Abort and signal the network monitoring polling task to stop.
+                if let Some(h) = handle.network_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.network_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                    tracing::info!("Sent network shutdown signal for session {}", session_id);
+                }
             }
         }
     }
