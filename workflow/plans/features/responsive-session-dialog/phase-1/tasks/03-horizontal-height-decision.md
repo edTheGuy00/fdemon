@@ -64,3 +64,26 @@ New tests will be added in task 05. For this task, verify manually or with exist
 - The `centered_rect()` function uses 70% height for horizontal mode. This means the content pane height is roughly `terminal_height * 0.70 - 8` (8 rows for dialog border, header, separators, footer). The threshold of 28 means expanded mode activates at roughly `terminal_height >= 52`. This is reasonable — most full-screen terminals are 40+ rows.
 - If we want expanded mode to kick in at shorter terminals, we could reduce the `MIN_EXPANDED_LAUNCH_HEIGHT` threshold or adjust `centered_rect()` percentages. But changing percentages is out of scope for Phase 1.
 - The compact LaunchContext in horizontal mode will have the "Launch Context" titled border (from `render_compact()`), which looks slightly different from the borderless expanded mode. This is intentional and consistent with how compact mode works in vertical layout.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Replaced hardcoded `false` in `render_panes()` call within `render_horizontal()` with a height-based decision using `MIN_EXPANDED_LAUNCH_HEIGHT` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal change**: The fix is exactly two lines replacing one line — a `let launch_compact` binding plus the updated `render_panes` call. No structural changes to the function.
+2. **Constant already defined**: `MIN_EXPANDED_LAUNCH_HEIGHT` (value 28) was added in task 01 and is already in scope within the same module. No additional imports needed.
+3. **Pre-existing dead_code warnings**: Three unused constants (`COMPACT_LAUNCH_HEIGHT_THRESHOLD`, `MIN_EXPANDED_TARGET_HEIGHT`, `COMPACT_TARGET_HEIGHT_THRESHOLD`) produce warnings from task 01. These are expected to be consumed by later tasks (04, 05) and are not introduced by this change.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (3 pre-existing dead_code warnings, no errors)
+- `cargo test -p fdemon-tui` - Passed (773 unit tests + 7 doc tests, 0 failures)

@@ -63,3 +63,30 @@ No dedicated tests for constants themselves — they'll be exercised by tasks 03
 - The `LaunchContext::min_height()` method (line 847-849 of `launch_context.rs`) returns `29`. Our threshold of `28` is intentionally 1 less because `calculate_fields_layout` has a `Min(0)` absorber at the end that handles the final spacer gracefully.
 - The hysteresis gap (4 rows) is chosen to be larger than typical terminal resize increments (1-2 rows at a time).
 - These constants are private to `mod.rs` — they're implementation details of the dialog layout, not part of any public API.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added 4 height threshold constants with `///` doc comments after `MIN_HEIGHT` constant (lines 133-148) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement after MIN_HEIGHT**: Constants were inserted immediately after the `MIN_WIDTH`/`MIN_HEIGHT` block (line 131) and before the `LayoutMode` enum, keeping all layout threshold constants together in one contiguous block.
+2. **Dead-code warnings are expected**: The four new constants are unused until tasks 03-05 consume them. The `dead_code` warnings are inherent to this incremental approach and will resolve when the constants are referenced.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (4 expected dead_code warnings only, no errors)
+- `cargo fmt -p fdemon-tui` - Passed (no formatting changes needed)
+- `cargo clippy -p fdemon-tui` - Passed (4 dead_code warnings only, no lint errors)
+
+### Risks/Limitations
+
+1. **Dead-code warnings**: Until tasks 03-05 use these constants, clippy with `-D warnings` would fail at the workspace level. The task explicitly notes these constants will be exercised by later tasks, so this is expected and acceptable for this incremental phase.

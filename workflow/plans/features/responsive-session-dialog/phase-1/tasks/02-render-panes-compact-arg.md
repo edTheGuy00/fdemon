@@ -79,3 +79,30 @@ No new tests needed — this is a signature change that preserves existing behav
 - `render_panes()` is only called from `render_horizontal()` (one call site), so this is a low-risk change.
 - We intentionally do NOT add a `target_compact` parameter. In horizontal mode, the TargetSelector gets 40% of a >= 70-column-wide pane, which gives it at least 28 columns and the full pane height. Compact mode for the target selector is only needed in vertical layout, which constructs the widget directly (not through `render_panes()`).
 - Future: If we ever need compact TargetSelector in horizontal mode, we can add a second parameter then.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `launch_compact: bool` parameter to `render_panes()` signature; chained `.compact(launch_compact)` on `LaunchContextWithDevice` construction; updated call site in `render_horizontal()` to pass `false` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pure mechanical refactor**: The `TargetSelector` construction was deliberately left unchanged per acceptance criterion 4. Only `LaunchContextWithDevice` receives the `launch_compact` flag, consistent with the task rationale that the right pane is what overflows at reduced heights.
+
+2. **Pre-existing unused constant warnings**: The 4 dead-code warnings for `MIN_EXPANDED_LAUNCH_HEIGHT`, `COMPACT_LAUNCH_HEIGHT_THRESHOLD`, `MIN_EXPANDED_TARGET_HEIGHT`, and `COMPACT_TARGET_HEIGHT_THRESHOLD` were already present before this task. They are intentional stubs for future tasks (task 03+).
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (4 pre-existing dead_code warnings, no errors)
+- `cargo test -p fdemon-tui` - Passed (773 unit tests + 7 doc tests, 0 failed)
+
+### Risks/Limitations
+
+1. **No behavioral change**: Confirmed — the only call site passes `false`, so `LaunchContextWithDevice` receives `compact(false)` which is equivalent to its prior default (no `.compact()` call), as the builder method initializes `compact` to `false`.

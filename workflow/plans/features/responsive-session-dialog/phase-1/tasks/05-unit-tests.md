@@ -165,3 +165,37 @@ cargo test -p fdemon-tui
 - Color/style differences between focused/unfocused states cannot be verified with string assertions. Tests should focus on content presence (field labels, border titles) to distinguish modes.
 - If existing test helpers for `NewSessionDialogState` already exist in the test module, prefer reusing them over creating new ones.
 - The exact terminal heights that trigger threshold crossings depend on `centered_rect` percentage calculations. Tests should document the math in comments (as shown above) so future maintainers understand why specific sizes were chosen.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `test_dialog_state()` and `render_dialog()` helpers; added 9 new test functions covering height-based compact/expanded decisions; added `#[allow(dead_code)]` to two pre-existing unused hysteresis threshold constants |
+
+### Notable Decisions/Tradeoffs
+
+1. **Boundary test heights adjusted to avoid rounding ambiguity**: Ratatui's `Percentage` layout uses integer floor division across multiple constraints, making exact threshold math non-trivial. Rather than hitting the exact threshold, the boundary tests use heights that clearly sit on each side (e.g., 100x50 vs 100x55 for horizontal; 50x25 vs 50x40 for vertical TargetSelector). Math is documented in test comments.
+
+2. **`#[allow(dead_code)]` on hysteresis constants**: `COMPACT_LAUNCH_HEIGHT_THRESHOLD` and `COMPACT_TARGET_HEIGHT_THRESHOLD` were introduced by tasks 03/04 but are not yet wired into the render path (hysteresis is planned). Adding `#[allow(dead_code)]` is preferable to removing them or using them in tests, since they represent a design intent.
+
+3. **Reused `TestBackend`/`Terminal` pattern**: Rather than `TestTerminal` from `crate::test_utils`, the new tests follow the same `TestBackend::new(w, h)` + `Terminal::new(backend)` pattern used throughout the existing test module. Both approaches work; consistency within the file was prioritised.
+
+4. **`test_dialog_state()` helper**: New helper creates state with one connected iPhone 15 device. This ensures LaunchContext renders the device-related fields correctly in both compact and expanded modes, exercising the full render path of `LaunchContextWithDevice`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- new_session_dialog::tests` — Passed (33 tests, all new tests green)
+- `cargo test -p fdemon-tui` — Passed (782 unit tests + 7 doc tests, zero regressions)
+- `cargo clippy -p fdemon-tui -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Ratatui layout integer arithmetic**: The exact pixel/cell height at which the compact/expanded switch occurs depends on Ratatui's internal percentage-to-integer rounding. Tests use heights with clear margins from thresholds, but if the layout algorithm changes in a Ratatui upgrade, boundary tests may need recalibration.
+
+2. **Hysteresis constants are unused**: `COMPACT_LAUNCH_HEIGHT_THRESHOLD` and `COMPACT_TARGET_HEIGHT_THRESHOLD` are suppressed with `#[allow(dead_code)]`. They should be removed from this annotation once wired into a stateful hysteresis mechanism.

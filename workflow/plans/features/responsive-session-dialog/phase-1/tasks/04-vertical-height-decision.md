@@ -88,3 +88,30 @@ New tests will be added in task 05. For this task, verify with existing tests:
 - The vertical layout footer also has compact vs full variants (`render_footer_compact` vs `render_footer`). These should remain tied to the overall layout mode (Vertical → compact footer), not to the LaunchContext compact decision. The footer shows key hints and is independent of field rendering.
 - The header in vertical mode is already compact (2 rows vs 3 rows in horizontal). This should remain unchanged.
 - The `Percentage(45)` split for TargetSelector in vertical mode is fixed. The plan's "Future Enhancements" section mentions making this dynamic based on device count, but that's out of scope for Phase 1.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Changed `render_vertical()` to use height-based compact decisions for TargetSelector (`chunks[2].height < MIN_EXPANDED_TARGET_HEIGHT`) and LaunchContext (`chunks[4].height < MIN_EXPANDED_LAUNCH_HEIGHT`) instead of always using `.compact(true)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Footer and header remain layout-mode-tied**: As specified in the task, the compact footer (`render_footer_compact`) and compact header (`render_header_compact`) remain bound to the Vertical layout mode, not the content height. Only the TargetSelector and LaunchContext are height-aware.
+2. **Variable names are descriptive**: Used `target_compact` and `launch_compact` as boolean variables, computed inline before each widget construction, making the logic easy to read and follow.
+3. **No logic changes to render_horizontal**: The horizontal layout's `launch_compact` logic (already height-based from a prior task) was not touched.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed (2 pre-existing dead_code warnings for hysteresis constants, not introduced by this task)
+- `cargo test -p fdemon-tui` - Passed (773 unit tests + 7 doc tests, 0 failures)
+
+### Risks/Limitations
+
+1. **Hysteresis constants unused**: `COMPACT_LAUNCH_HEIGHT_THRESHOLD` and `COMPACT_TARGET_HEIGHT_THRESHOLD` are defined but not yet used. They are reserved for a future task that implements hysteresis to prevent mode-flicker during resize. This is expected and pre-existing from task 01.
