@@ -146,3 +146,34 @@ Run the full test suite:
 - Ratatui's `Buffer::empty(area)` creates a buffer exactly the size of `area`. Writing beyond `area` bounds will panic, which is what makes these tests effective — a panic means the button overflowed.
 - The tests that render at heights below 29 with `compact(false)` are testing a scenario that won't normally happen in production (Phase 1's compact guard prevents it). However, they verify the defense-in-depth fix works correctly regardless of the caller's compact decision.
 - Some existing tests may reference `chunks[10]` as the "rest" slot. After task 01, the rest slot moves to `chunks[12]`. Scan for and update any such references.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Added 5 new tests in `launch_context_tests` module for button overflow prevention |
+
+### Notable Decisions/Tradeoffs
+
+1. **Used `Buffer::empty(area)` + direct `widget.render()` pattern**: The new tests use this pattern (matching the task specification) rather than `TestBackend` + `Terminal` pattern used by most existing tests. Both patterns are valid; `Buffer::empty` makes out-of-bounds panics explicit, which is exactly what makes these tests effective as overflow guards.
+
+2. **Reused existing `buffer_to_string` helper**: The helper already existed at line 1720. No duplication needed.
+
+3. **`test_min_height_arithmetic` required no update**: The existing test already accounts for `button_spacer` as a separate variable (line 1338), matching the 13-slot layout. The total is still 29 and the test passes unchanged. No comment update was needed.
+
+4. **No `chunks[10]` references needed updating**: Scanning the existing tests showed no test referenced `chunks[10]` as "rest" — the layout was already 13 slots with `chunks[12]` as rest.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` — Passed (788 tests, including 5 new)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Small-height render tests**: Tests at heights 15-28 with `compact(false)` exercise a scenario prevented by Phase 1's compact guard in production. Ratatui's `Layout::vertical` clamps children to zero-height when area is insufficient, so these tests pass without panic even though the button may not be visually rendered. This is expected behavior — the fix guarantees no out-of-bounds write.

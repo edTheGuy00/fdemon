@@ -100,3 +100,33 @@ Verify with:
 - The `Rc<[Rect]>` to `[Rect; N]` conversion pattern: check if the codebase uses `chunks.as_ref().try_into().unwrap()` or manual `[chunks[0], chunks[1], ...]`. The latter requires adding two more elements.
 - Callers of `calculate_fields_layout()` are: `LaunchContext::render()` (line 858), `LaunchContextWithDevice::render_full()` (line 934), and the test module. All three need to compile with the new return type.
 - The existing `test_min_height_arithmetic` test (line 1330) should still pass since the arithmetic is unchanged: `spacer(1) + config(4) + spacer(1) + mode(4) + spacer(1) + flavor(4) + spacer(1) + entry(4) + spacer(1) + dart_defines(4) + spacer(1) + button(3) = 29`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Extended `calculate_fields_layout()` return type from `[Rect; 11]` to `[Rect; 13]`; added `Constraint::Length(1)` (button spacer, index 10) and `Constraint::Length(3)` (launch button, index 11); moved `Constraint::Min(0)` to index 12; updated manual array construction to include two new elements; updated `render_common_fields` signature from `&[Rect; 11]` to `&[Rect; 13]`; updated test assertion from `chunks.len() == 11` to `chunks.len() == 13` and updated inline comment to reflect new layout indices |
+
+### Notable Decisions/Tradeoffs
+
+1. **Manual array construction over `try_into`**: The existing code used manual indexing (`[chunks[0], chunks[1], ...]`) rather than `try_into().unwrap()`. Continued with this pattern for consistency and added `chunks[10]`, `chunks[11]`, `chunks[12]` to the array literal.
+
+2. **Test update required**: The `test_layout_has_entry_point_row` test at line 1888 directly asserted `chunks.len() == 11`. This assertion was updated to `chunks.len() == 13` and the comment listing layout slots was updated to include the two new entries. This was the only test change needed — all other tests compiled and passed without modification because the function signature change enforced correct usage at compile time.
+
+3. **`LaunchContext::render()` and `LaunchContextWithDevice::render_full()` unchanged**: Both callers still construct a manual `Rect` for the button area using the old `chunks[9].y + chunks[9].height + 1` pattern. These callers are not modified in this task — they continue to work because the type change is backwards compatible for their current usage. A follow-up task (task 02 or 03) will update them to use `chunks[11]` directly.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (783 unit tests, 7 doc tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Callers still use manual Rect for button**: `LaunchContext::render()` and `LaunchContextWithDevice::render_full()` compute the button area with `Rect { y: chunks[9].y + chunks[9].height + 1, height: 3, ... }` rather than using `chunks[11]`. This means the layout system is not yet fully driving the button position. A follow-up task should migrate these callers to use `chunks[11]`.

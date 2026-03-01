@@ -98,3 +98,30 @@ Task 03 adds explicit overflow tests.
 - After this task, the only manual `Rect` construction remaining in the render paths is the horizontal inset (`x + 1`, `width - 2`), which cannot overflow because it only reduces the button's width.
 - The `chunks[10]` slot (button spacer, `Length(1)`) is not rendered — it's just an empty spacer row. No code needs to reference it.
 - If `chunks[11].height == 0` (due to Ratatui constraint solver collapse), the `LaunchButton` widget will receive a zero-height `Rect` and render nothing. This is safe — `LaunchButton::render()` writes text to `buf` at absolute coordinates within the given `Rect`, and a zero-height Rect means no cells are written.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Replaced manual button `Rect` construction in `LaunchContext::render()` (line ~865) and `LaunchContextWithDevice::render_full()` (line ~941) with layout-managed `chunks[11]` slot. Updated comments in both locations. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Struct update syntax (`..chunks[11]`)**: Used Rust's struct update syntax to inherit `y` and `height` from the layout slot while overriding `x` and `width` for horizontal inset padding. This is idiomatic and directly matches the task specification.
+2. **No changes to `chunks[10]`**: The spacer slot is intentionally not referenced in rendering code — it simply acts as a gap managed by the layout system.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (783 unit tests + 7 doc-tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: The change is mechanical — both occurrences were replaced identically and all existing tests (including render tests at 50x30) pass unchanged.

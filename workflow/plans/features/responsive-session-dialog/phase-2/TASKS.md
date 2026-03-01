@@ -29,9 +29,9 @@ Ensure the Launch button never renders outside the dialog bounds by including it
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-extend-layout-with-button-slot](tasks/01-extend-layout-with-button-slot.md) | Not Started | - | 1-2h | `launch_context.rs` |
-| 2 | [02-render-full-use-layout-button](tasks/02-render-full-use-layout-button.md) | Not Started | 1 | 1-2h | `launch_context.rs` |
-| 3 | [03-unit-tests](tasks/03-unit-tests.md) | Not Started | 2 | 2h | `launch_context.rs` |
+| 1 | [01-extend-layout-with-button-slot](tasks/01-extend-layout-with-button-slot.md) | Done | - | 1-2h | `launch_context.rs` |
+| 2 | [02-render-full-use-layout-button](tasks/02-render-full-use-layout-button.md) | Done | 1 | 1-2h | `launch_context.rs` |
+| 3 | [03-unit-tests](tasks/03-unit-tests.md) | Done | 2 | 2h | `launch_context.rs` |
 
 ## Success Criteria
 
