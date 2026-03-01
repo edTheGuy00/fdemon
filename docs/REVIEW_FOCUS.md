@@ -12,8 +12,24 @@ This project uses the TEA pattern for state management. Watch for:
 |---------|---------------|
 | **Side effects in update()** | The `update()` function should be pure; side effects return via `UpdateAction` |
 | **Direct state mutation** | State should only change through `handler::update()`, never directly |
-| **View function purity** | `tui::render()` should only read state, never mutate |
+| **View function purity** | `tui::render()` should only read state, never mutate (see [Approved Exception](#approved-tea-exception-render-hint-feedback) below) |
 | **Message routing** | All events must be routed through the `Message` enum |
+
+### Approved TEA Exception: Render-Hint Feedback
+
+`Cell<usize>` fields on state types are permitted as a narrow exception to view purity
+when they carry **render-derived layout metrics** (e.g., visible row counts) back to the
+handler layer. These fields:
+
+- Must only carry numeric hints that improve scroll/layout accuracy
+- Must not affect logical application state or business rules
+- Must not participate in state equality comparisons or serialization
+- Must default to a safe fallback (e.g., 0) so the handler works without any render
+
+**Current usage:** `TargetSelectorState::last_known_visible_height` — the renderer writes
+the actual device list area height each frame; the handler reads it for scroll calculations.
+
+New `Cell`-based render-hint fields require explicit review and documentation here.
 
 ### Layer Boundary Violations
 

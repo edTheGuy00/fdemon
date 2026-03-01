@@ -9,9 +9,27 @@ use fdemon_daemon::Device;
 use tracing::warn;
 
 /// Default estimated visible height for scroll calculations.
-/// Used when actual render height is unavailable (TEA pattern constraint).
-/// This is an approximation that works well for typical terminal sizes.
+/// Used as a fallback on the first frame before the renderer has
+/// written the actual visible height to `last_known_visible_height`.
 const DEFAULT_ESTIMATED_VISIBLE_HEIGHT: usize = 10;
+
+/// Get the effective visible height for scroll calculations.
+///
+/// Returns the actual visible height from the last render frame,
+/// or falls back to `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` if no render
+/// has occurred yet (first frame).
+fn effective_visible_height(state: &AppState) -> usize {
+    let height = state
+        .new_session_dialog_state
+        .target_selector
+        .last_known_visible_height
+        .get();
+    if height > 0 {
+        height
+    } else {
+        DEFAULT_ESTIMATED_VISIBLE_HEIGHT
+    }
+}
 
 /// Handle device list navigation up
 pub fn handle_device_up(state: &mut AppState) -> UpdateResult {
@@ -19,22 +37,24 @@ pub fn handle_device_up(state: &mut AppState) -> UpdateResult {
         .new_session_dialog_state
         .target_selector
         .select_previous();
-    // Adjust scroll - use estimated visible height (will be refined by render)
+    // Use actual visible height from last render, fall back to estimate on first frame
+    let height = effective_visible_height(state);
     state
         .new_session_dialog_state
         .target_selector
-        .adjust_scroll(DEFAULT_ESTIMATED_VISIBLE_HEIGHT);
+        .adjust_scroll(height);
     UpdateResult::none()
 }
 
 /// Handle device list navigation down
 pub fn handle_device_down(state: &mut AppState) -> UpdateResult {
     state.new_session_dialog_state.target_selector.select_next();
-    // Adjust scroll - use estimated visible height (will be refined by render)
+    // Use actual visible height from last render, fall back to estimate on first frame
+    let height = effective_visible_height(state);
     state
         .new_session_dialog_state
         .target_selector
-        .adjust_scroll(DEFAULT_ESTIMATED_VISIBLE_HEIGHT);
+        .adjust_scroll(height);
     UpdateResult::none()
 }
 
@@ -458,5 +478,142 @@ mod tests {
             .target_selector
             .error
             .is_some());
+    }
+
+    #[test]
+    fn test_handle_device_down_uses_default_height_on_first_frame() {
+        let mut state = test_app_state();
+        // Add 20 devices to require scrolling
+        let devices: Vec<Device> = (0..20)
+            .map(|i| {
+                fdemon_daemon::test_utils::test_device_full(
+                    &format!("d{}", i),
+                    &format!("Device {}", i),
+                    "ios",
+                    false,
+                )
+            })
+            .collect();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+
+        // last_known_visible_height is 0 (no render yet) — handler should fall back to
+        // DEFAULT_ESTIMATED_VISIBLE_HEIGHT (10)
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .last_known_visible_height
+                .get(),
+            0
+        );
+
+        // Navigate down 12 times — past the default estimated viewport of 10
+        for _ in 0..12 {
+            handle_device_down(&mut state);
+        }
+
+        // scroll_offset should have adjusted to keep selection visible
+        assert!(
+            state.new_session_dialog_state.target_selector.scroll_offset > 0,
+            "scroll_offset should be > 0 after navigating past estimated viewport"
+        );
+    }
+
+    #[test]
+    fn test_handle_device_down_uses_actual_height_after_render() {
+        let mut state = test_app_state();
+        let devices: Vec<Device> = (0..20)
+            .map(|i| {
+                fdemon_daemon::test_utils::test_device_full(
+                    &format!("d{}", i),
+                    &format!("Device {}", i),
+                    "ios",
+                    false,
+                )
+            })
+            .collect();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+
+        // Simulate the renderer writing an actual visible height of 5
+        state
+            .new_session_dialog_state
+            .target_selector
+            .last_known_visible_height
+            .set(5);
+
+        // Navigate down 6 times — past the 5-row viewport
+        for _ in 0..6 {
+            handle_device_down(&mut state);
+        }
+
+        // With visible_height=5, scrolling should start after 5 items visible.
+        // After 6 navigations the selection is past the viewport boundary.
+        assert!(
+            state.new_session_dialog_state.target_selector.scroll_offset > 0,
+            "scroll_offset should be > 0 after navigating past actual 5-row viewport"
+        );
+    }
+
+    #[test]
+    fn test_handle_device_up_uses_actual_height() {
+        let mut state = test_app_state();
+        let devices: Vec<Device> = (0..20)
+            .map(|i| {
+                fdemon_daemon::test_utils::test_device_full(
+                    &format!("d{}", i),
+                    &format!("Device {}", i),
+                    "ios",
+                    false,
+                )
+            })
+            .collect();
+        state
+            .new_session_dialog_state
+            .target_selector
+            .set_connected_devices(devices);
+
+        // Simulate the renderer writing an actual visible height of 5
+        state
+            .new_session_dialog_state
+            .target_selector
+            .last_known_visible_height
+            .set(5);
+
+        // Navigate down 10 times to scroll the list
+        for _ in 0..10 {
+            handle_device_down(&mut state);
+        }
+        let scroll_after_down = state.new_session_dialog_state.target_selector.scroll_offset;
+        assert!(
+            scroll_after_down > 0,
+            "scroll_offset should be > 0 after navigating down"
+        );
+
+        // Navigate back up 10 times — should return to top
+        for _ in 0..10 {
+            handle_device_up(&mut state);
+        }
+
+        // Selection should be back at the first selectable item.
+        // The flat list is [header, dev0, dev1, ...], so the first selectable
+        // index is 1 (the header at 0 is not selectable).
+        let sel = state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index;
+        let offset = state.new_session_dialog_state.target_selector.scroll_offset;
+        // Selection returned to first device (flat index 1, after the header at 0)
+        assert_eq!(sel, 1, "Selection should be at flat index 1 (first device)");
+        // Selection must be visible: selected_index is within [offset, offset + visible_height)
+        assert!(
+            sel >= offset && sel < offset + 5,
+            "selected_index ({sel}) should be visible in viewport [offset={offset}, offset+5)"
+        );
     }
 }

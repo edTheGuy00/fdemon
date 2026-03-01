@@ -2005,8 +2005,7 @@ mod launch_context_tests {
 
             let state = LaunchContextState::new(LoadedConfigs::default());
             let icons = test_icons();
-            let widget =
-                LaunchContextWithDevice::new(&state, false, false, &icons).compact(false);
+            let widget = LaunchContextWithDevice::new(&state, false, false, &icons).compact(false);
             widget.render(area, &mut buf);
             // Ratatui's Buffer panics on OOB writes — reaching here proves no overflow
         }
@@ -2037,7 +2036,10 @@ mod launch_context_tests {
 
         assert_eq!(chunks.len(), 13);
         assert_eq!(chunks[10].height, 1, "button spacer should be 1 row");
-        assert_eq!(chunks[LAUNCH_BUTTON_SLOT].height, 3, "button slot should be 3 rows");
+        assert_eq!(
+            chunks[LAUNCH_BUTTON_SLOT].height, 3,
+            "button slot should be 3 rows"
+        );
         // 5 spacers(1) + 5 fields(4) + 1 button spacer(1) = 26
         let expected_button_y = area.y + (5 * 1) + (5 * 4) + 1;
         assert_eq!(

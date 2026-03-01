@@ -32,10 +32,10 @@ Ensure the selected device is always visible when scrolling through the device l
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-add-visible-height-field](tasks/01-add-visible-height-field.md) | Not Started | - | 1h | `target_selector_state.rs` |
-| 2 | [02-renderer-write-and-clamp](tasks/02-renderer-write-and-clamp.md) | Not Started | 1 | 2-3h | `target_selector.rs` (TUI) |
-| 3 | [03-handler-use-actual-height](tasks/03-handler-use-actual-height.md) | Not Started | 1 | 1-2h | `target_selector.rs` (app handler) |
-| 4 | [04-unit-tests](tasks/04-unit-tests.md) | Not Started | 2, 3 | 2-3h | `target_selector_state.rs`, `target_selector.rs` (TUI + app handler), `device_list.rs` |
+| 1 | [01-add-visible-height-field](tasks/01-add-visible-height-field.md) | Done | - | 1h | `target_selector_state.rs` |
+| 2 | [02-renderer-write-and-clamp](tasks/02-renderer-write-and-clamp.md) | Done | 1 | 2-3h | `target_selector.rs` (TUI) |
+| 3 | [03-handler-use-actual-height](tasks/03-handler-use-actual-height.md) | Done | 1 | 1-2h | `target_selector.rs` (app handler) |
+| 4 | [04-unit-tests](tasks/04-unit-tests.md) | Done | 2, 3 | 2-3h | `target_selector_state.rs`, `target_selector.rs` (TUI + app handler), `device_list.rs` |
 
 ## Design Decision: `Cell<usize>` for Interior Mutability
 

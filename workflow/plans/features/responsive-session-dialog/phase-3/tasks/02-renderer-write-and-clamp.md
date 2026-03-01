@@ -134,3 +134,31 @@ Existing tests like `test_target_selector_renders` use small device lists where 
 - The correction only fires when `scroll_offset` is wrong for the actual visible height. For the common case (handler already computed correct offset), it's a no-op — the function returns `current_offset` unchanged.
 - Loading and error states skip the device list render entirely, so `visible_height` is still written but `corrected_scroll` is unused. This is fine — the visible height is still accurate for when devices load.
 - The `self.state` reference is `&'a TargetSelectorState`. Writing to `last_known_visible_height` (a `Cell<usize>`) is safe through a shared reference — this is the fundamental purpose of `Cell`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Added `calculate_scroll_offset` to device_list import; added visible height write and corrected scroll computation in both `render_full()` and `render_compact()`; replaced all four `self.state.scroll_offset` arguments with `corrected_scroll` in device list constructors |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import style**: Extended the existing `use super::device_list::{...}` import to include `calculate_scroll_offset` rather than adding a second `use` statement, keeping related imports grouped.
+2. **Placement before tab bar render**: The visible height write and corrected scroll computation are placed immediately after the layout split, before any rendering — this ensures the value is accurate before any render path (loading, error, or device list) executes.
+3. **corrected_scroll not written to state**: As specified, `corrected_scroll` is a local render-time variable only. The handler's `scroll_offset` field remains unchanged; it will be recalculated on the next key press using the now-accurate `last_known_visible_height`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (788 unit tests + 7 doc-tests, 0 failed)
+
+### Risks/Limitations
+
+1. **Loading/error state**: When `state.loading` is true or `state.error` is set, `corrected_scroll` is computed but not used (the device list is not rendered). The visible height write still occurs, which is correct — the height is accurate for when devices load.
+2. **Zero visible height edge case**: If `chunks[1].height` is 0 (terminal too small), `calculate_scroll_offset` returns 0, which is a safe no-op. The `last_known_visible_height` cell is set to 0 in this case, which causes the handler to fall back to `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` on the next key press (task 03 behaviour).

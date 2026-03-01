@@ -122,3 +122,30 @@ New tests in Task 04 will verify the actual height feedback path.
 - The `state` parameter in `handle_device_up/down` is `&mut AppState`. We read `last_known_visible_height.get()` through the mutable reference, which is fine — `Cell::get()` works on both `&Cell` and `&mut Cell` (through auto-deref).
 - The helper function takes `&AppState` (not `&mut`) since it only reads.
 - We do NOT change the scroll behavior for other handlers (e.g., `handle_connected_devices_received` which resets `scroll_offset = 0`). Those don't use `adjust_scroll` and don't need visible height.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/target_selector.rs` | Added `effective_visible_height()` helper; updated `handle_device_up()` and `handle_device_down()` to call it; updated `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helper takes `&AppState` not `&mut AppState`**: The helper only reads `last_known_visible_height.get()`, so it takes an immutable reference. The callers (`handle_device_up/down`) hold `&mut AppState` and pass it via auto-deref to `&AppState` for the helper call — this is safe because the mutable borrow on `target_selector` has already ended before the helper is called.
+2. **Fallback value unchanged**: `DEFAULT_ESTIMATED_VISIBLE_HEIGHT = 10` is kept as the first-frame fallback, producing identical behaviour to the previous code when no render has occurred yet.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1168 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No new tests added**: The task notes that Task 04 will add tests verifying the actual-height feedback path. Existing tests continue to pass because the fallback path (`height == 0`) produces identical behaviour to the old code.

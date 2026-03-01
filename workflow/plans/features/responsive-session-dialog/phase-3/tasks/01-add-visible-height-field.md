@@ -72,3 +72,30 @@ No new tests in this task — the field is exercised by Tasks 02-04. Verify with
 - The field should be placed after `scroll_offset` to keep scroll-related fields grouped together.
 - Existing tests that construct `TargetSelectorState::default()` or `TargetSelectorState::new()` will continue to work without changes since `Cell::new(0)` is included in the `Default` impl.
 - Tests that use struct literal construction (if any) will need `last_known_visible_height: Cell::new(0)` added — but current tests all use `default()` or `new()`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | Added `use std::cell::Cell;` import; added `pub last_known_visible_height: Cell<usize>` field after `scroll_offset`; added `last_known_visible_height: Cell::new(0)` to `Default` impl |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field placement**: Placed `last_known_visible_height` after `scroll_offset` and before `cached_flat_list`, as specified, keeping scroll-related fields grouped together.
+2. **No changes to `new()` or `set_tab()`**: `new()` delegates to `Default::default()`, so it picks up the new field automatically. `set_tab()` resets `scroll_offset` but not `last_known_visible_height`; the height will be refreshed on the next render frame.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1168 tests, 0 failed)
+- `cargo test -p fdemon-tui` - Passed (788 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **None**: The change is purely additive. `Cell<usize>` derives `Debug` and `Clone` correctly, so no impact on the existing `#[derive(Debug, Clone)]` on `TargetSelectorState`. All existing tests use `default()` or `new()` so no struct-literal updates were required.
