@@ -3,9 +3,6 @@ name: E2E Tests
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-    types: [closed]
   schedule:
     # Run nightly at 2 AM UTC
     - cron: '0 2 * * *'
@@ -29,12 +26,6 @@ jobs:
   e2e-tests:
     name: Docker E2E Tests
     runs-on: ubuntu-latest
-    # Only run on merged PRs, not all closed PRs
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
 
     timeout-minutes: 30
 
