@@ -134,21 +134,10 @@ const MIN_HEIGHT: u16 = 20;
 /// Must match `LaunchContext::min_height()` (29) to avoid button clipping.
 const MIN_EXPANDED_LAUNCH_HEIGHT: u16 = 29;
 
-/// Height at which LaunchContext switches back to compact mode (hysteresis).
-/// 5 rows below the expand threshold to prevent flickering during resize.
-// TODO(phase-2): wire into stateful hysteresis in render path
-#[allow(dead_code)]
-const COMPACT_LAUNCH_HEIGHT_THRESHOLD: u16 = 24;
-
 /// Minimum content-area height for TargetSelector to render in full mode.
 /// Full mode needs: 3-row tab bar + Min(5) device list + 1-row footer = 9 rows minimum.
 /// We use 10 to give the device list a reasonable viewport.
 const MIN_EXPANDED_TARGET_HEIGHT: u16 = 10;
-
-/// Height at which TargetSelector switches back to compact mode (hysteresis).
-// TODO(phase-2): wire into stateful hysteresis in render path
-#[allow(dead_code)]
-const COMPACT_TARGET_HEIGHT_THRESHOLD: u16 = 7;
 
 /// Layout mode for NewSessionDialog based on terminal size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

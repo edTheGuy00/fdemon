@@ -515,42 +515,18 @@ fn render(&self, area: Rect, buf: &mut Buffer) {
 
 Group related thresholds near the widget module they control, not scattered across files.
 
-### Principle 5: Add hysteresis at layout breakpoints
+### Principle 5: Use deterministic single-threshold layout decisions
 
-**Statement**: When a widget switches between two display modes at a size threshold, use a _pair_ of thresholds with a gap between them (hysteresis) rather than a single shared boundary.
+**Statement**: When a widget switches between two display modes based on available space, use a single named threshold constant. The decision should be deterministic and stateless — the same dimensions always produce the same layout.
 
-**Rationale**: A single threshold causes flickering during terminal resize: each row of resize crosses the threshold and toggles the mode. Hysteresis — a lower threshold to enter compact mode and a higher threshold to return to expanded — prevents rapid toggling by requiring the size to move meaningfully before switching back.
+**Rationale**: A single threshold is simple, predictable, and requires no state tracking. Terminal resize is infrequent (especially while modal dialogs are open), and Ratatui's fast redraw cycle means any transient mode change during resize stabilizes within one frame. The complexity of stateful hysteresis (tracking previous mode, handling stale state on reopen) is not justified for TUI layout switching.
 
 ```rust
-// Anti-pattern: single threshold causes flickering at boundary
-const MODE_THRESHOLD: u16 = 29;
-let compact = area.height < MODE_THRESHOLD; // toggles every row during resize
-
-// Correct: hysteresis pair with a gap
-/// Switch to expanded mode when height reaches or exceeds this value.
+/// Minimum content-area height for expanded mode.
+/// Expanded needs 5 fields x 4 rows + spacers + button = 29 rows.
 const MIN_EXPANDED_HEIGHT: u16 = 29;
 
-/// Switch back to compact mode when height falls to or below this value.
-/// The 5-row gap prevents mode flickering during terminal resize.
-const COMPACT_HEIGHT_THRESHOLD: u16 = 24;
-
-// Stateful renderer
-fn render(&self, area: Rect, buf: &mut Buffer) {
-    let new_compact = if self.compact {
-        area.height <= COMPACT_HEIGHT_THRESHOLD // stay compact until clearly larger
-    } else {
-        area.height < MIN_EXPANDED_HEIGHT       // stay expanded until clearly smaller
-    };
-    // ...
-}
-```
-
-**Implementation note**: Hysteresis requires the widget to remember its previous mode, making the renderer stateful. For stateless renderers, start with only the expand threshold (`MIN_EXPANDED_HEIGHT`) and add hysteresis — and the `COMPACT_HEIGHT_THRESHOLD` constant — if flickering is observed in practice. Document the intended compact threshold even when not yet active:
-
-```rust
-/// Compact-mode threshold (reserved for hysteresis; unused while renderer is stateless).
-#[allow(dead_code)]
-const COMPACT_HEIGHT_THRESHOLD: u16 = 24;
+let compact = area.height < MIN_EXPANDED_HEIGHT;
 ```
 
 ### Anti-Pattern Summary
@@ -561,4 +537,4 @@ const COMPACT_HEIGHT_THRESHOLD: u16 = 24;
 | Manual `Rect` computed outside the layout system | Can produce coordinates that overflow parent bounds | Include all elements in `Layout` with a `Constraint::Min(0)` absorber |
 | `adjust_scroll(HARDCODED_HEIGHT)` | Real viewport height varies with terminal size and layout | Feed render-time height back via `Cell<usize>`; add render-time scroll clamp |
 | Magic numbers for size thresholds | No rationale, maintenance burden when content changes | Named constants with doc comments explaining derivation |
-| Single threshold for mode switching | Mode flickers on every row during terminal resize | Hysteresis pair with a 3–5 row gap between enter and exit thresholds |
+| Stateful layout mode tracking | Adds complexity for negligible benefit in fast-redraw TUI | Single deterministic threshold; same dimensions always produce the same layout |
