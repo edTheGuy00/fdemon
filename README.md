@@ -10,7 +10,7 @@
     <a href="https://github.com/edTheGuy00/fdemon/releases">
         <img src="https://img.shields.io/github/v/release/edTheGuy00/fdemon?style=flat&labelColor=1d1d1d&color=54c5f8&logo=GitHub&logoColor=white" alt="GitHub Release"></a>
     <a href="https://github.com/edTheGuy00/fdemon/actions">
-        <img src="https://img.shields.io/github/actions/workflow/status/edTheGuy00/fdemon/ci.yml?style=flat&labelColor=1d1d1d&color=white&logo=GitHub%20Actions&logoColor=white" alt="CI"></a>
+        <img src="https://img.shields.io/github/actions/workflow/status/edTheGuy00/fdemon/e2e.yml?style=flat&labelColor=1d1d1d&color=white&logo=GitHub%20Actions&logoColor=white" alt="E2E Tests"></a>
     <a href="https://github.com/edTheGuy00/fdemon/blob/main/LICENSE">
         <img src="https://img.shields.io/badge/license-BSL%201.1-white?style=flat&labelColor=1d1d1d" alt="License"></a>
     <br>
