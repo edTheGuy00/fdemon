@@ -131,7 +131,7 @@ const MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 20;
 
 /// Minimum content-area height for LaunchContext to render in expanded (full) mode.
-/// Must match `LaunchContextWithDevice::min_height()` (29) to avoid button clipping.
+/// Must match `LaunchContext::min_height()` (29) to avoid button clipping.
 const MIN_EXPANDED_LAUNCH_HEIGHT: u16 = 29;
 
 /// Height at which LaunchContext switches back to compact mode (hysteresis).
@@ -992,7 +992,7 @@ mod tests {
             content.contains("Launch Context"),
             "Short horizontal terminal (100x25) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1012,7 +1012,7 @@ mod tests {
             !content.contains("Launch Context"),
             "Tall horizontal terminal (100x55) should NOT show 'Launch Context' border \
              (expanded mode uses no border). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
 
         // Expanded mode renders "CONFIGURATION" as the uppercase field label above the
@@ -1021,7 +1021,7 @@ mod tests {
             content.contains("CONFIGURATION"),
             "Tall horizontal terminal (100x55) should show 'CONFIGURATION' field label \
              in expanded mode. Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1044,14 +1044,14 @@ mod tests {
             content.contains("Launch Context"),
             "Short vertical terminal (50x25) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
 
         assert!(
             content.contains("Target Selector"),
             "Short vertical terminal (50x25) should render TargetSelector in compact mode \
              (with 'Target Selector' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1071,7 +1071,7 @@ mod tests {
             !content.contains("Target Selector"),
             "Medium-tall vertical terminal (50x40) should render TargetSelector in full mode \
              (no 'Target Selector' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
 
         // Compact LaunchContext has the titled border
@@ -1079,7 +1079,7 @@ mod tests {
             content.contains("Launch Context"),
             "Medium-tall vertical terminal (50x40) should render LaunchContext in compact mode \
              (with 'Launch Context' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
     }
 
@@ -1099,7 +1099,7 @@ mod tests {
             !content.contains("Launch Context"),
             "Tall vertical terminal (50x80) should render LaunchContext in expanded mode \
              (no 'Launch Context' border title). Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
 
         // Expanded mode shows uppercase field labels
@@ -1107,7 +1107,7 @@ mod tests {
             content.contains("CONFIGURATION") || content.contains("FLAVOR"),
             "Tall vertical terminal (50x80) should show expanded field labels such as \
              'CONFIGURATION'. Content: {:?}",
-            &content[..content.len().min(500)]
+            &content.chars().take(500).collect::<String>()
         );
     }
 

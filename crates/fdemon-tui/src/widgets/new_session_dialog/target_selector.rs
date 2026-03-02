@@ -1002,7 +1002,7 @@ mod tests {
         assert!(
             content.contains("Dev 1"),
             "Selected device 'Dev 1' (flat index 2) should be visible after scroll correction; content: {}",
-            &content[..content.len().min(200)]
+            &content.chars().take(200).collect::<String>()
         );
     }
 
