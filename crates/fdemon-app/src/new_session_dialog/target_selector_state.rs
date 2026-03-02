@@ -3,6 +3,8 @@
 //! This module contains the state management for the target selector,
 //! which allows users to choose between connected and bootable devices.
 
+use std::cell::Cell;
+
 use super::device_groups::{
     flatten_groups, group_bootable_devices, group_connected_devices, next_selectable,
     prev_selectable, DeviceListItem, GroupedBootableDevice,
@@ -10,7 +12,12 @@ use super::device_groups::{
 use super::TargetTab;
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator};
 
-/// State for the Target Selector pane
+/// State for the Target Selector pane.
+///
+/// Note: `last_known_visible_height` uses `Cell<usize>` interior mutability and is
+/// written by the renderer each frame as a render-hint feedback channel. It must not
+/// be used as a correctness input to business logic or participate in state equality
+/// comparisons. See `docs/REVIEW_FOCUS.md` "Approved TEA Exception" for rationale.
 #[derive(Debug, Clone)]
 pub struct TargetSelectorState {
     /// Currently active tab
@@ -40,6 +47,14 @@ pub struct TargetSelectorState {
     /// Scroll offset for device list (number of items scrolled past)
     pub scroll_offset: usize,
 
+    /// Last-known visible height of the device list area (in rows).
+    ///
+    /// Written by the renderer each frame via interior mutability (`Cell`).
+    /// Read by the handler to compute accurate scroll offsets.
+    /// Defaults to 0, which signals "no render has occurred yet" — the handler
+    /// falls back to `DEFAULT_ESTIMATED_VISIBLE_HEIGHT` when this is 0.
+    pub last_known_visible_height: Cell<usize>,
+
     /// Cached flattened device list, invalidated on device updates
     pub cached_flat_list: Option<Vec<DeviceListItem<String>>>,
 }
@@ -56,6 +71,7 @@ impl Default for TargetSelectorState {
             bootable_loading: true,
             error: None,
             scroll_offset: 0,
+            last_known_visible_height: Cell::new(0),
             cached_flat_list: None,
         }
     }
@@ -313,6 +329,40 @@ impl TargetSelectorState {
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_last_known_visible_height_default_is_zero() {
+        let state = TargetSelectorState::default();
+        assert_eq!(state.last_known_visible_height.get(), 0);
+    }
+
+    #[test]
+    fn test_last_known_visible_height_set_and_get() {
+        let state = TargetSelectorState::default();
+        state.last_known_visible_height.set(15);
+        assert_eq!(state.last_known_visible_height.get(), 15);
+    }
+
+    #[test]
+    fn test_last_known_visible_height_survives_clone() {
+        let state = TargetSelectorState::default();
+        state.last_known_visible_height.set(20);
+        let cloned = state.clone();
+        assert_eq!(cloned.last_known_visible_height.get(), 20);
+    }
+
+    #[test]
+    fn test_last_known_visible_height_writable_through_shared_ref() {
+        let state = TargetSelectorState::default();
+        let shared: &TargetSelectorState = &state;
+        shared.last_known_visible_height.set(12);
+        assert_eq!(state.last_known_visible_height.get(), 12);
+    }
+}
+
 /// Calculate scroll offset to keep selection visible
 ///
 /// # Arguments
@@ -322,6 +372,7 @@ impl TargetSelectorState {
 ///
 /// # Returns
 /// The new scroll offset that keeps the selection visible
+// TODO: deduplicate with device_list::calculate_scroll_offset — move to fdemon-core
 fn calculate_scroll_offset(
     selected_index: usize,
     visible_height: usize,

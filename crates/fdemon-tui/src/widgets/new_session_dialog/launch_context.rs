@@ -780,8 +780,23 @@ fn render_dart_defines_field(
         .render(area, buf);
 }
 
+/// Index of the launch button slot in the layout array returned by [`calculate_fields_layout`].
+const LAUNCH_BUTTON_SLOT: usize = 11;
+
+/// Horizontal inset (in cells) applied to each side of the button slot.
+const BUTTON_HORIZONTAL_INSET: u16 = 1;
+
+/// Derive the button render area from its layout slot, applying horizontal inset padding.
+fn button_render_area(slot: Rect) -> Rect {
+    Rect {
+        x: slot.x + BUTTON_HORIZONTAL_INSET,
+        width: slot.width.saturating_sub(BUTTON_HORIZONTAL_INSET * 2),
+        ..slot
+    }
+}
+
 /// Calculate the layout for all fields (stacked label+field design)
-fn calculate_fields_layout(area: Rect) -> [Rect; 11] {
+fn calculate_fields_layout(area: Rect) -> [Rect; 13] {
     let chunks = Layout::vertical([
         Constraint::Length(1), // Spacer          [0]
         Constraint::Length(4), // Configuration   [1]
@@ -793,13 +808,15 @@ fn calculate_fields_layout(area: Rect) -> [Rect; 11] {
         Constraint::Length(4), // Entry Point     [7]
         Constraint::Length(1), // Spacer          [8]
         Constraint::Length(4), // Dart Defines    [9]
-        Constraint::Min(0),    // Rest            [10]
+        Constraint::Length(1), // Button spacer   [10]
+        Constraint::Length(3), // Launch button   [11]
+        Constraint::Min(0),    // Rest            [12]
     ])
     .split(area);
 
     [
         chunks[0], chunks[1], chunks[2], chunks[3], chunks[4], chunks[5], chunks[6], chunks[7],
-        chunks[8], chunks[9], chunks[10],
+        chunks[8], chunks[9], chunks[10], chunks[11], chunks[12],
     ]
 }
 
@@ -811,7 +828,7 @@ fn render_background(area: Rect, buf: &mut Buffer) {
 
 /// Render all common fields (config, mode, flavor, entry point, dart defines)
 fn render_common_fields(
-    chunks: &[Rect; 11],
+    chunks: &[Rect; 13],
     buf: &mut Buffer,
     state: &LaunchContextState,
     is_focused: bool,
@@ -860,15 +877,8 @@ impl Widget for LaunchContext<'_> {
         // Render fields
         render_common_fields(&chunks, buf, self.state, self.is_focused);
 
-        // Calculate launch button area (after dart defines field + spacer)
-        let button_area = Rect {
-            x: area.x + 1,
-            y: chunks[9].y + chunks[9].height + 1,
-            width: area.width.saturating_sub(2),
-            height: 3,
-        };
-
         // Render Launch button
+        let button_area = button_render_area(chunks[LAUNCH_BUTTON_SLOT]);
         let launch_focused =
             self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
         let launch_button = LaunchButton::new(self.icons)
@@ -936,15 +946,8 @@ impl LaunchContextWithDevice<'_> {
         // Render fields
         render_common_fields(&chunks, buf, self.state, self.is_focused);
 
-        // Calculate launch button area
-        let button_area = Rect {
-            x: area.x + 1,
-            y: chunks[9].y + chunks[9].height + 1,
-            width: area.width.saturating_sub(2),
-            height: 3,
-        };
-
         // Render Launch button with device awareness
+        let button_area = button_render_area(chunks[LAUNCH_BUTTON_SLOT]);
         let launch_focused =
             self.is_focused && self.state.focused_field == super::state::LaunchContextField::Launch;
         let launch_button = LaunchButton::new(self.icons)
@@ -1890,8 +1893,8 @@ mod launch_context_tests {
         let area = Rect::new(0, 0, 60, 30);
         let chunks = calculate_fields_layout(area);
 
-        // Verify we have 11 chunks
-        assert_eq!(chunks.len(), 11);
+        // Verify we have 13 chunks
+        assert_eq!(chunks.len(), 13);
 
         // Verify Entry Point row (index 7) has height 4 (label + field)
         assert_eq!(chunks[7].height, 4);
@@ -1901,7 +1904,7 @@ mod launch_context_tests {
 
         // Verify the layout order:
         // 0: Spacer, 1: Config(4), 2: Spacer, 3: Mode(4), 4: Spacer, 5: Flavor(4)
-        // 6: Spacer, 7: Entry Point(4), 8: Spacer, 9: Dart Defines(4), 10: Remaining space
+        // 6: Spacer, 7: Entry Point(4), 8: Spacer, 9: Dart Defines(4), 10: Button spacer, 11: Launch button(3), 12: Remaining space
 
         // Entry Point should be after Flavor (5)
         assert!(
@@ -1966,5 +1969,94 @@ mod launch_context_tests {
             entry_pos.unwrap() > flavor_pos.unwrap(),
             "Entry Point should be after Flavor"
         );
+    }
+
+    // =========================================================================
+    // Phase 2 Task 03: Button overflow prevention tests
+    // =========================================================================
+
+    #[test]
+    fn test_render_full_button_within_bounds_at_min_height() {
+        let buf_height = 29;
+        let area = Rect::new(0, 0, 50, buf_height);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = test_icons();
+        let widget = LaunchContextWithDevice::new(&state, false, false, &icons).compact(false);
+        widget.render(area, &mut buf);
+
+        // Verify button text is present
+        let content = buffer_to_string(&buf);
+        assert!(
+            content.contains("SELECT DEVICE") || content.contains("LAUNCH INSTANCE"),
+            "Button text should be visible at min_height"
+        );
+
+        // Ratatui's Buffer::set_string/set_style panic on OOB writes, so a clean
+        // return here proves no cell was written outside `area`.
+    }
+
+    #[test]
+    fn test_render_full_no_overflow_at_small_heights() {
+        for height in [15u16, 20, 25, 28] {
+            let area = Rect::new(0, 0, 50, height);
+            let mut buf = Buffer::empty(area);
+
+            let state = LaunchContextState::new(LoadedConfigs::default());
+            let icons = test_icons();
+            let widget = LaunchContextWithDevice::new(&state, false, false, &icons).compact(false);
+            widget.render(area, &mut buf);
+            // Ratatui's Buffer panics on OOB writes — reaching here proves no overflow
+        }
+    }
+
+    #[test]
+    fn test_render_full_button_position_at_large_height() {
+        let area = Rect::new(0, 0, 50, 40);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = test_icons();
+        let widget = LaunchContextWithDevice::new(&state, false, true, &icons).compact(false);
+        widget.render(area, &mut buf);
+
+        // Button text should appear at expected position
+        let content = buffer_to_string(&buf);
+        assert!(
+            content.contains("LAUNCH INSTANCE"),
+            "Button text should be visible at large height"
+        );
+    }
+
+    #[test]
+    fn test_calculate_fields_layout_includes_button_slot() {
+        let area = Rect::new(0, 0, 50, 40);
+        let chunks = calculate_fields_layout(area);
+
+        assert_eq!(chunks.len(), 13);
+        assert_eq!(chunks[10].height, 1, "button spacer should be 1 row");
+        assert_eq!(
+            chunks[LAUNCH_BUTTON_SLOT].height, 3,
+            "button slot should be 3 rows"
+        );
+        // 5 spacers(1) + 5 fields(4) + 1 button spacer(1) = 26
+        let expected_button_y = area.y + (5 * 1) + (5 * 4) + 1;
+        assert_eq!(
+            chunks[LAUNCH_BUTTON_SLOT].y, expected_button_y,
+            "button slot y position"
+        );
+    }
+
+    #[test]
+    fn test_launch_context_button_within_bounds() {
+        let area = Rect::new(0, 0, 50, 29);
+        let mut buf = Buffer::empty(area);
+
+        let state = LaunchContextState::new(LoadedConfigs::default());
+        let icons = test_icons();
+        let widget = LaunchContext::new(&state, false, &icons);
+        widget.render(area, &mut buf);
+        // Ratatui's Buffer panics on OOB writes — reaching here proves no overflow
     }
 }
