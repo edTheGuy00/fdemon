@@ -18,14 +18,14 @@ struct Commit {
     scope: Option<String>,
 }
 
-/// Canonical ordering for commit groups (matches cliff.toml parser order).
+/// Group display order for the website changelog (matches cliff.toml commit_parsers sequence).
 fn group_order(group: &str) -> usize {
     match group {
         "Features" => 0,
         "Bug Fixes" => 1,
-        "Performance" => 2,
-        "Refactoring" => 3,
-        "Documentation" => 4,
+        "Documentation" => 2,
+        "Performance" => 3,
+        "Refactoring" => 4,
         "Styling" => 5,
         "Testing" => 6,
         "Security" => 7,
@@ -115,9 +115,11 @@ fn generate_entries(entries: &[VersionEntry]) -> String {
             continue;
         }
 
-        // Sort groups by canonical order
+        // Sort groups by canonical order, with alphabetical tiebreak for reproducibility
         let mut sorted_groups: Vec<_> = groups.into_iter().collect();
-        sorted_groups.sort_by_key(|(g, _)| group_order(g));
+        sorted_groups.sort_by(|(a, _), (b, _)| {
+            group_order(a).cmp(&group_order(b)).then_with(|| a.cmp(b))
+        });
 
         out.push_str("    ChangelogEntry {\n");
         out.push_str(&format!("        version: \"{}\",\n", escape(version)));
@@ -133,7 +135,7 @@ fn generate_entries(entries: &[VersionEntry]) -> String {
             out.push_str("                changes: vec![\n");
 
             for commit in commits {
-                let desc = upper_first(&escape(&commit.message));
+                let desc = escape(&upper_first(&commit.message));
                 match &commit.scope {
                     Some(scope) => {
                         out.push_str(&format!(
