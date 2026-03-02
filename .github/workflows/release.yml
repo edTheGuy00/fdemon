@@ -268,8 +268,18 @@ jobs:
       IMAGE_NAME: edtheguy00/flutter-demon-site
 
     steps:
-      - name: Checkout
+      - name: Checkout with full history
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install git-cliff
+        uses: taiki-e/install-action@v2
+        with:
+          tool: git-cliff
+
+      - name: Generate changelog JSON for website
+        run: git cliff --context -o website/changelog.json
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

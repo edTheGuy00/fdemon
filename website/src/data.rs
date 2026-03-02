@@ -21,71 +21,7 @@ pub struct ChangelogEntry {
 }
 
 pub fn changelog_entries() -> Vec<ChangelogEntry> {
-    vec![
-        ChangelogEntry {
-            version: "0.1.0",
-            date: "2026-02-24",
-            groups: vec![
-                ChangelogGroup {
-                    group: "Features",
-                    changes: vec![
-                        ChangelogChange { description: "Phase 3 — version flag, title bar version, release workflow & install script", scope: None },
-                        ChangelogChange { description: "DevTools v2 phase 5 — polish, config, filter input, review & fix plan", scope: None },
-                        ChangelogChange { description: "DevTools v2 phase 4 — network monitor tab", scope: None },
-                        ChangelogChange { description: "DevTools v2 phase 3 — performance tab overhaul", scope: None },
-                        ChangelogChange { description: "DevTools v2 phase 2 — merge Inspector and Layout into unified tab", scope: None },
-                        ChangelogChange { description: "DevTools phase 5 — config expansion, connection UI, error UX, performance polish, docs & website", scope: None },
-                        ChangelogChange { description: "DevTools phase 4 — TUI panels, key handlers, and review fix plans", scope: None },
-                        ChangelogChange { description: "DevTools phase 3 — performance & memory monitoring data pipeline", scope: None },
-                        ChangelogChange { description: "Add VM Service client foundation with structured errors and hybrid logging (Phase 1)", scope: None },
-                        ChangelogChange { description: "Implement full-screen settings panel with tabbed UI", scope: Some("settings") },
-                        ChangelogChange { description: "Complete Phase 5 with startup dialog, config priority, and bugfixes", scope: Some("startup") },
-                        ChangelogChange { description: "Implement phase 8 integration & cleanup", scope: Some("new-session-dialog") },
-                        ChangelogChange { description: "Implement Phase 1 mock daemon testing infrastructure", scope: Some("e2e") },
-                        ChangelogChange { description: "Implement double-'q' quick quit feature", scope: Some("keys") },
-                        ChangelogChange { description: "Add Link Highlight Mode for opening files from logs (Phase 3.1)", scope: None },
-                        ChangelogChange { description: "Complete Phase 1 - Log filtering, search, and error navigation", scope: None },
-                        ChangelogChange { description: "Complete Phase 2 - Error highlighting, stack traces, and horizontal scroll", scope: None },
-                        ChangelogChange { description: "Add log view word wrap mode with correct scroll bounds", scope: None },
-                        ChangelogChange { description: "Settings launch tab modals — dart defines editor & extra args picker", scope: None },
-                        ChangelogChange { description: "Create website", scope: None },
-                    ],
-                },
-                ChangelogGroup {
-                    group: "Bug Fixes",
-                    changes: vec![
-                        ChangelogChange { description: "Phase 2 review remediation — 6 fixes across settings modals", scope: None },
-                        ChangelogChange { description: "Resolve Phase 2 bugs — response routing, shutdown, exit handling, selector UI", scope: None },
-                        ChangelogChange { description: "Devtools phase 4 bugs — layout tab, refresh, narrow window, browser URL, key nav", scope: None },
-                        ChangelogChange { description: "Devtools v2 phase 3 review fixes — 7 tasks + allocation table bug", scope: None },
-                        ChangelogChange { description: "Devtools v2 phase 4 review fixes — 7 tasks across 4 crates", scope: None },
-                        ChangelogChange { description: "Devtools v2 phase 5 review fixes — 6 tasks across 4 crates", scope: None },
-                        ChangelogChange { description: "Implement boolean toggle handler", scope: Some("settings") },
-                        ChangelogChange { description: "Address phase 2 review issues — split extensions, refactor ownership, harden error handling", scope: None },
-                        ChangelogChange { description: "Widget inspector groupName bug + timeout improvements for large projects", scope: None },
-                    ],
-                },
-                ChangelogGroup {
-                    group: "Refactoring",
-                    changes: vec![
-                        ChangelogChange { description: "Devtools v2 phase 1 — decompose oversized widget and handler files", scope: None },
-                        ChangelogChange { description: "Split tui/mod.rs into focused modules", scope: None },
-                        ChangelogChange { description: "Split handler.rs into focused modules", scope: None },
-                        ChangelogChange { description: "Split log_view.rs into module directory", scope: Some("tui") },
-                        ChangelogChange { description: "Implement phase 6.1 file splitting", scope: Some("new-session-dialog") },
-                    ],
-                },
-                ChangelogGroup {
-                    group: "Documentation",
-                    changes: vec![
-                        ChangelogChange { description: "Add log filtering, search, and error navigation to README", scope: None },
-                        ChangelogChange { description: "Clean up ARCHITECTURE.md and move code samples to CODE_STANDARDS.md", scope: None },
-                        ChangelogChange { description: "Plan phase 1 and phase 2 task breakdowns for cyber-glass redesign", scope: None },
-                    ],
-                },
-            ],
-        },
-    ]
+    include!(concat!(env!("OUT_DIR"), "/changelog_generated.rs"))
 }
 
 pub struct Feature {
