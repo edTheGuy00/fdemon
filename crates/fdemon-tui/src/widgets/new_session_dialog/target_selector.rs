@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 // State types now live in app layer (moved in Phase 1, Task 05)
-use super::device_list::{BootableDeviceList, ConnectedDeviceList};
+use super::device_list::{calculate_scroll_offset, BootableDeviceList, ConnectedDeviceList};
 use super::tab_bar::TabBar;
 use super::TargetTab;
 use fdemon_app::ToolAvailability;
@@ -72,6 +72,22 @@ impl TargetSelector<'_> {
         ])
         .split(area);
 
+        // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+        let visible_height = chunks[1].height as usize;
+        self.state.last_known_visible_height.set(visible_height);
+
+        // Render-time scroll correction: ensure selected item is visible
+        // even if handler used stale visible_height estimate.
+        // Note: corrected_scroll is intentionally NOT written back to state.scroll_offset.
+        // The handler will recompute scroll_offset on the next key press using the
+        // now-accurate last_known_visible_height. This correction is a per-frame safety
+        // net that converges within one frame after any terminal resize.
+        let corrected_scroll = calculate_scroll_offset(
+            self.state.selected_index,
+            visible_height,
+            self.state.scroll_offset,
+        );
+
         // Render tab bar
         let tab_bar = TabBar::new(self.state.active_tab, self.is_focused);
         tab_bar.render(chunks[0], buf);
@@ -88,7 +104,7 @@ impl TargetSelector<'_> {
                         &self.state.connected_devices,
                         self.state.selected_index,
                         self.is_focused,
-                        self.state.scroll_offset,
+                        corrected_scroll,
                     );
                     list.render(chunks[1], buf);
                 }
@@ -98,7 +114,7 @@ impl TargetSelector<'_> {
                         &self.state.android_avds,
                         self.state.selected_index,
                         self.is_focused,
-                        self.state.scroll_offset,
+                        corrected_scroll,
                         self.tool_availability,
                     );
                     list.render(chunks[1], buf);
@@ -135,6 +151,20 @@ impl TargetSelector<'_> {
         ])
         .split(inner);
 
+        // EXCEPTION: TEA render-hint write-back via Cell — see docs/REVIEW_FOCUS.md
+        let visible_height = chunks[1].height as usize;
+        self.state.last_known_visible_height.set(visible_height);
+
+        // Render-time scroll correction: ensure selected item is visible
+        // even if handler used stale visible_height estimate.
+        // Note: corrected_scroll is intentionally NOT written back to state.scroll_offset.
+        // See render_full() for detailed rationale.
+        let corrected_scroll = calculate_scroll_offset(
+            self.state.selected_index,
+            visible_height,
+            self.state.scroll_offset,
+        );
+
         // Render compact tab bar
         self.render_tabs_compact(chunks[0], buf);
 
@@ -150,7 +180,7 @@ impl TargetSelector<'_> {
                         &self.state.connected_devices,
                         self.state.selected_index,
                         self.is_focused,
-                        self.state.scroll_offset,
+                        corrected_scroll,
                     );
                     list.render(chunks[1], buf);
                 }
@@ -160,7 +190,7 @@ impl TargetSelector<'_> {
                         &self.state.android_avds,
                         self.state.selected_index,
                         self.is_focused,
-                        self.state.scroll_offset,
+                        corrected_scroll,
                         self.tool_availability,
                     );
                     list.render(chunks[1], buf);
@@ -875,5 +905,153 @@ mod tests {
             content.contains("iPhone 15") || content.contains("Pixel 6"),
             "Device names should be visible within borders"
         );
+    }
+
+    // Tests for Phase 3 Task 04 - Visible height write-back and scroll correction
+
+    #[test]
+    fn test_render_full_writes_visible_height() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+        assert_eq!(state.last_known_visible_height.get(), 0);
+
+        let backend = TestBackend::new(50, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        // render_full layout: Length(3) tab + Min(5) list + Length(1) footer
+        // At height 20: list area = 20 - 3 - 1 = 16
+        assert_eq!(
+            state.last_known_visible_height.get(),
+            16,
+            "render_full at height 20 should write visible_height = 16"
+        );
+    }
+
+    #[test]
+    fn test_render_compact_writes_visible_height() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+        assert_eq!(state.last_known_visible_height.get(), 0);
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true).compact(true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        // render_compact layout: Block border (2 rows) + Length(1) tab + Min(1) list
+        // At height 10: inner = 10 - 2 = 8, list area = 8 - 1 = 7
+        assert_eq!(
+            state.last_known_visible_height.get(),
+            7,
+            "render_compact at height 10 should write visible_height = 7"
+        );
+    }
+
+    #[test]
+    fn test_render_corrects_stale_scroll_offset() {
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+
+        // 15 ios devices → flat list: header + 15 devices = 16 items
+        // Flat index 0 = "iOS Devices" header, 1 = "Dev 0", 2 = "Dev 1", ...
+        let devices: Vec<fdemon_daemon::Device> = (0..15)
+            .map(|i| test_device_full(&format!("id{}", i), &format!("Dev {}", i), "ios", false))
+            .collect();
+        state.set_connected_devices(devices);
+
+        // selected_index=2 is "Dev 1"; scroll_offset=10 means selected is above viewport
+        state.selected_index = 2;
+        state.scroll_offset = 10;
+
+        let tool_availability = ToolAvailability::default();
+
+        // At height 10, render_full gives list area = 10 - 4 = 6 rows
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                f.render_widget(selector, f.area());
+            })
+            .unwrap();
+
+        let buffer = terminal.backend().buffer();
+        let content: String = buffer.content().iter().map(|c| c.symbol()).collect();
+
+        // Render-time scroll correction: selected_index(2) < scroll_offset(10)
+        // → corrected_scroll = 2, viewport shows [2..8], so "Dev 1" is visible
+        assert!(
+            content.contains("Dev 1"),
+            "Selected device 'Dev 1' (flat index 2) should be visible after scroll correction; content: {}",
+            &content.chars().take(200).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_render_at_various_heights() {
+        use ratatui::layout::{Constraint, Layout, Rect};
+
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "D1", "ios", false)]);
+
+        let tool_availability = ToolAvailability::default();
+
+        // render_full layout: Length(3) tab + Min(5) list + Length(1) footer
+        // The actual list height depends on the ratatui constraint solver; for heights
+        // where the Min(5) cannot be satisfied alongside both Length constraints, the
+        // solver may clip footer to 0 to preserve the Min. We derive the expected value
+        // from the same layout algorithm to stay in sync.
+        for height in [8u16, 15, 25, 40, 80] {
+            // Reset the height before each render
+            state.last_known_visible_height.set(0);
+
+            let backend = TestBackend::new(50, height);
+            let mut terminal = Terminal::new(backend).unwrap();
+
+            terminal
+                .draw(|f| {
+                    let selector = TargetSelector::new(&state, &tool_availability, true);
+                    f.render_widget(selector, f.area());
+                })
+                .unwrap();
+
+            // Derive expected using the same layout the renderer uses
+            let area = Rect::new(0, 0, 50, height);
+            let chunks = Layout::vertical([
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(1),
+            ])
+            .split(area);
+            let expected = chunks[1].height as usize;
+
+            assert_eq!(
+                state.last_known_visible_height.get(),
+                expected,
+                "At terminal height {}, expected visible_height {} (from layout solver)",
+                height,
+                expected
+            );
+        }
     }
 }

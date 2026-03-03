@@ -47,8 +47,10 @@ cleanup() {
     fi
     # Remove output file
     rm -f "$OUTPUT_FILE"
-    # Stop Xvfb
-    stop_xvfb
+    # Only stop Xvfb if not shared (run_all_e2e.sh manages its own)
+    if [ -z "${FDEMON_SHARED_XVFB:-}" ]; then
+        stop_xvfb
+    fi
 }
 trap cleanup EXIT
 

@@ -3,9 +3,6 @@ name: E2E Tests
 on:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-    types: [closed]
   schedule:
     # Run nightly at 2 AM UTC
     - cron: '0 2 * * *'
@@ -29,12 +26,6 @@ jobs:
   e2e-tests:
     name: Docker E2E Tests
     runs-on: ubuntu-latest
-    # Only run on merged PRs, not all closed PRs
-    if: |
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
 
     timeout-minutes: 30
 
@@ -74,11 +65,11 @@ jobs:
         id: e2e
         run: |
           mkdir -p test-logs
-          docker-compose -f docker-compose.test.yml run \
+          docker compose -f docker-compose.test.yml run \
             --rm \
             -e FDEMON_LOG_DIR=/app/test-logs \
             -e FDEMON_TEST_TIMEOUT=${{ env.FDEMON_TEST_TIMEOUT }} \
-            flutter-e2e-test
+            flutter-e2e-test 2>&1 | tee test-logs/docker-run.log
         continue-on-error: true
 
       - name: Upload test logs
@@ -87,11 +78,15 @@ jobs:
         with:
           name: e2e-test-logs-${{ github.run_number }}
           path: test-logs/
+          if-no-files-found: warn
           retention-days: 7
 
       - name: Check test result
         if: steps.e2e.outcome == 'failure'
         run: |
+          echo "::group::Docker run output"
+          cat test-logs/docker-run.log 2>/dev/null || echo "No docker-run.log found"
+          echo "::endgroup::"
           echo "::error::E2E tests failed. Check the test-logs artifact for details."
           exit 1
 

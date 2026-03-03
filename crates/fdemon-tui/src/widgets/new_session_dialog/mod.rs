@@ -130,6 +130,15 @@ const MIN_VERTICAL_HEIGHT: u16 = 20;
 const MIN_WIDTH: u16 = 40;
 const MIN_HEIGHT: u16 = 20;
 
+/// Minimum content-area height for LaunchContext to render in expanded (full) mode.
+/// Must match `LaunchContext::min_height()` (29) to avoid button clipping.
+const MIN_EXPANDED_LAUNCH_HEIGHT: u16 = 29;
+
+/// Minimum content-area height for TargetSelector to render in full mode.
+/// Full mode needs: 3-row tab bar + Min(5) device list + 1-row footer = 9 rows minimum.
+/// We use 10 to give the device list a reasonable viewport.
+const MIN_EXPANDED_TARGET_HEIGHT: u16 = 10;
+
 /// Layout mode for NewSessionDialog based on terminal size
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LayoutMode {
@@ -306,7 +315,7 @@ impl<'a> NewSessionDialog<'a> {
     }
 
     /// Render main content (two panes)
-    fn render_panes(&self, area: Rect, buf: &mut Buffer) {
+    fn render_panes(&self, area: Rect, buf: &mut Buffer, launch_compact: bool) {
         // Split into 40% (Target Selector) + 1 col (separator) + 60% (Launch Context)
         let chunks = Layout::horizontal([
             Constraint::Percentage(40), // Target Selector
@@ -335,7 +344,8 @@ impl<'a> NewSessionDialog<'a> {
             launch_focused,
             has_device,
             self.icons,
-        );
+        )
+        .compact(launch_compact);
         launch_context.render(chunks[2], buf);
     }
 
@@ -475,8 +485,9 @@ impl<'a> NewSessionDialog<'a> {
         // Render separator
         Self::render_separator(chunks[1], buf);
 
-        // Render main content (two panes)
-        self.render_panes(chunks[2], buf);
+        // Determine if LaunchContext needs compact mode based on available height
+        let launch_compact = chunks[2].height < MIN_EXPANDED_LAUNCH_HEIGHT;
+        self.render_panes(chunks[2], buf, launch_compact);
 
         // Render separator
         Self::render_separator(chunks[3], buf);
@@ -534,29 +545,31 @@ impl<'a> NewSessionDialog<'a> {
         // Render separator
         Self::render_separator(chunks[1], buf);
 
-        // Render Target Selector (top, compact mode)
+        // Render Target Selector (top) — use full mode when sufficient height is available
         let target_focused = self.state.is_target_selector_focused();
+        let target_compact = chunks[2].height < MIN_EXPANDED_TARGET_HEIGHT;
         let target_selector = TargetSelector::new(
             &self.state.target_selector,
             self.tool_availability,
             target_focused,
         )
-        .compact(true);
+        .compact(target_compact);
         target_selector.render(chunks[2], buf);
 
         // Render separator line
         Self::render_separator(chunks[3], buf);
 
-        // Render Launch Context (bottom, compact mode)
+        // Render Launch Context (bottom) — use expanded mode when sufficient height is available
         let launch_focused = self.state.is_launch_context_focused();
         let has_device = self.state.is_ready_to_launch();
+        let launch_compact = chunks[4].height < MIN_EXPANDED_LAUNCH_HEIGHT;
         let launch_context = LaunchContextWithDevice::new(
             &self.state.launch_context,
             launch_focused,
             has_device,
             self.icons,
         )
-        .compact(true);
+        .compact(launch_compact);
         launch_context.render(chunks[4], buf);
 
         // Render separator
@@ -656,8 +669,56 @@ impl Widget for NewSessionDialog<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::test_device_full;
     use fdemon_app::config::{IconMode, LoadedConfigs};
     use ratatui::{backend::TestBackend, Terminal};
+
+    // =========================================================================
+    // Test helper — dialog state with a connected device
+    // =========================================================================
+
+    /// Build a `NewSessionDialogState` with one connected device already set.
+    ///
+    /// The device triggers the "ready to launch" path in `LaunchContextWithDevice`,
+    /// ensuring device-dependent fields are rendered in both compact and expanded modes.
+    fn test_dialog_state() -> NewSessionDialogState {
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        state
+            .target_selector
+            .set_connected_devices(vec![test_device_full(
+                "iphone15",
+                "iPhone 15",
+                "ios",
+                false,
+            )]);
+        // set_connected_devices clears the loading flag automatically
+        state
+    }
+
+    /// Render the dialog and return buffer content as a flat string.
+    fn render_dialog(state: &NewSessionDialogState, width: u16, height: u16) -> String {
+        let tool_availability = ToolAvailability::default();
+        let icons = IconSet::new(IconMode::Unicode);
+
+        let backend = TestBackend::new(width, height);
+        let mut terminal =
+            Terminal::new(backend).expect("render_dialog: failed to create terminal");
+
+        terminal
+            .draw(|f| {
+                let dialog = NewSessionDialog::new(state, &tool_availability, &icons);
+                f.render_widget(dialog, f.area());
+            })
+            .expect("render_dialog: failed to draw");
+
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect()
+    }
 
     #[test]
     fn test_dialog_renders() {
@@ -899,5 +960,265 @@ mod tests {
         // Multi-byte chars - "日本語デバイス" is 7 chars
         assert_eq!(truncate_middle("日本語デバイス", 7), "日本語デバイス");
         assert_eq!(truncate_middle("日本語デバイス", 6), "日本...ス");
+    }
+
+    // =========================================================================
+    // Group 1: Horizontal layout — height-based LaunchContext decisions
+    // =========================================================================
+
+    /// Wide-but-short: horizontal layout (width >= 70), but not enough height for expanded fields.
+    ///
+    /// Math: dialog.height = 25 * 0.70 = 17, inner.height = 17 - 2 = 15,
+    ///       content.height = 15 - 6 (header+sep+sep+footer) = 9
+    ///       9 < MIN_EXPANDED_LAUNCH_HEIGHT (29) → compact mode
+    #[test]
+    fn test_horizontal_short_terminal_uses_compact_launch_context() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 100, 25);
+
+        // Compact mode renders a " Launch Context " titled border
+        assert!(
+            content.contains("Launch Context"),
+            "Short horizontal terminal (100x25) should render LaunchContext in compact mode \
+             (with 'Launch Context' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+    }
+
+    /// Wide-and-tall: horizontal layout with enough height to use expanded (full) field layout.
+    ///
+    /// Math: dialog.height = 55 * 0.70 = 38, inner.height = 38 - 2 = 36,
+    ///       content.height = 36 - 6 = 30
+    ///       30 >= MIN_EXPANDED_LAUNCH_HEIGHT (29) → expanded mode
+    #[test]
+    fn test_horizontal_tall_terminal_uses_expanded_launch_context() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 100, 55);
+
+        // Expanded mode renders no "Launch Context" titled border;
+        // instead it renders stacked label+field blocks (label is uppercase).
+        assert!(
+            !content.contains("Launch Context"),
+            "Tall horizontal terminal (100x55) should NOT show 'Launch Context' border \
+             (expanded mode uses no border). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+
+        // Expanded mode renders "CONFIGURATION" as the uppercase field label above the
+        // bordered dropdown box (from render_config_field → DropdownField::render).
+        assert!(
+            content.contains("CONFIGURATION"),
+            "Tall horizontal terminal (100x55) should show 'CONFIGURATION' field label \
+             in expanded mode. Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+    }
+
+    // =========================================================================
+    // Group 2: Vertical layout — height-based decisions for both widgets
+    // =========================================================================
+
+    /// Narrow-and-short: vertical layout (width 40–69), compact for both widgets.
+    ///
+    /// Math (vertical layout uses 85% height):
+    ///   dialog.height = 25 * 0.85 = 21, inner.height = 21 - 2 = 19
+    ///   target.height ≈ 19 * 0.45 = 8  → 8 < MIN_EXPANDED_TARGET_HEIGHT (10) → compact
+    ///   layout overhead = header(2) + sep(1) + mid-sep(1) + footer-sep(1) + footer(1) = 6, launch.height = 19 - 6 - 8 = 5 → compact
+    #[test]
+    fn test_vertical_short_terminal_uses_compact_both() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 50, 25);
+
+        assert!(
+            content.contains("Launch Context"),
+            "Short vertical terminal (50x25) should render LaunchContext in compact mode \
+             (with 'Launch Context' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+
+        assert!(
+            content.contains("Target Selector"),
+            "Short vertical terminal (50x25) should render TargetSelector in compact mode \
+             (with 'Target Selector' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+    }
+
+    /// Narrow-and-medium-tall: full TargetSelector but compact LaunchContext.
+    ///
+    /// Math (vertical layout, 50 wide, 40 tall):
+    ///   dialog.height = 40 * 0.85 = 34, inner.height = 34 - 2 = 32
+    ///   target.height ≈ 32 * 0.45 = 14  → 14 >= MIN_EXPANDED_TARGET_HEIGHT (10) → full
+    ///   launch.height = 32 - 6 - 14 = 12 → 12 < MIN_EXPANDED_LAUNCH_HEIGHT (29) → compact
+    #[test]
+    fn test_vertical_medium_tall_uses_full_target_compact_launch() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 50, 40);
+
+        // Full TargetSelector has no titled border — no "Target Selector" text
+        assert!(
+            !content.contains("Target Selector"),
+            "Medium-tall vertical terminal (50x40) should render TargetSelector in full mode \
+             (no 'Target Selector' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+
+        // Compact LaunchContext has the titled border
+        assert!(
+            content.contains("Launch Context"),
+            "Medium-tall vertical terminal (50x40) should render LaunchContext in compact mode \
+             (with 'Launch Context' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+    }
+
+    /// Narrow-and-very-tall: vertical layout with enough height for expanded LaunchContext.
+    ///
+    /// Math (vertical layout, 50 wide, 80 tall):
+    ///   dialog.height = 80 * 0.85 = 68, inner.height = 68 - 2 = 66
+    ///   target.height ≈ 66 * 0.45 = 29  → full (>= 10)
+    ///   launch.height = 66 - 6 - 29 = 31 → expanded (31 >= 29)
+    #[test]
+    fn test_vertical_tall_terminal_uses_expanded_launch_context() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 50, 80);
+
+        // Expanded LaunchContext has no titled border
+        assert!(
+            !content.contains("Launch Context"),
+            "Tall vertical terminal (50x80) should render LaunchContext in expanded mode \
+             (no 'Launch Context' border title). Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+
+        // Expanded mode shows uppercase field labels
+        assert!(
+            content.contains("CONFIGURATION") || content.contains("FLAVOR"),
+            "Tall vertical terminal (50x80) should show expanded field labels such as \
+             'CONFIGURATION'. Content: {:?}",
+            &content.chars().take(500).collect::<String>()
+        );
+    }
+
+    // =========================================================================
+    // Group 3: Boundary conditions at thresholds
+    // =========================================================================
+
+    /// Test the exact threshold boundary for horizontal layout LaunchContext mode.
+    ///
+    /// compact_threshold: content.height = terminal.height * 0.70 - 2 - 6 < 29
+    ///   → terminal.height < (28 + 8) / 0.70 ≈ 51.4
+    ///   → compact at h=50, expanded at h=52 (h=51 may round to either side)
+    ///
+    /// h=50: dialog=35, inner=33, content=27 → compact (27 < 29)
+    /// h=55: dialog=38, inner=36, content=30 → expanded (30 >= 29)
+    #[test]
+    fn test_horizontal_at_expanded_threshold_boundary() {
+        let state = test_dialog_state();
+
+        // Below threshold — compact
+        let compact_content = render_dialog(&state, 100, 50);
+        assert!(
+            compact_content.contains("Launch Context"),
+            "Terminal 100x50 should be in compact mode (content height 27 < threshold 29). \
+             Expected 'Launch Context' border title."
+        );
+
+        // Above threshold — expanded
+        let expanded_content = render_dialog(&state, 100, 55);
+        assert!(
+            !expanded_content.contains("Launch Context"),
+            "Terminal 100x55 should be in expanded mode (content height 30 >= threshold 29). \
+             Expected NO 'Launch Context' border title."
+        );
+        assert!(
+            expanded_content.contains("CONFIGURATION"),
+            "Terminal 100x55 expanded mode should show 'CONFIGURATION' field label."
+        );
+    }
+
+    /// Test TargetSelector threshold in vertical layout.
+    ///
+    /// compact_threshold: chunks[2].height < MIN_EXPANDED_TARGET_HEIGHT (10)
+    ///   chunks[2] is the 45% slice of the inner area in the vertical dialog.
+    ///
+    /// h=25: dialog≈23, inner≈21, 45%*21≈9 → compact (< 10)
+    /// h=40: dialog≈36, inner≈34, 45%*34≈15 → full (>= 10)
+    #[test]
+    fn test_vertical_target_selector_at_threshold_boundary() {
+        let state = test_dialog_state();
+
+        // Clearly below threshold — compact TargetSelector (has border)
+        let compact_content = render_dialog(&state, 50, 25);
+        assert!(
+            compact_content.contains("Target Selector"),
+            "Terminal 50x25 should render TargetSelector in compact mode \
+             (with 'Target Selector' border title)."
+        );
+
+        // Clearly above threshold — full TargetSelector (no border)
+        // h=40: dialog≈36, inner≈34, 45%*34≈15 → full (>= 10)
+        let full_content = render_dialog(&state, 50, 40);
+        assert!(
+            !full_content.contains("Target Selector"),
+            "Terminal 50x40 should render TargetSelector in full mode \
+             (no 'Target Selector' border title)."
+        );
+    }
+
+    // =========================================================================
+    // Group 4: Regression — standard sizes must render without panic
+    // =========================================================================
+
+    /// Classic terminal 80x24: horizontal layout, compact mode due to short height.
+    ///
+    /// Math: dialog.height = 24 * 0.70 = 16, content.height = 16 - 8 = 8 → compact
+    #[test]
+    fn test_standard_80x24_renders_without_panic() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 80, 24);
+
+        // Must render dialog content (not "too small" message)
+        assert!(
+            content.contains("New Session"),
+            "80x24 terminal should render dialog header 'New Session'."
+        );
+
+        // Height constraint means compact launch context
+        assert!(
+            content.contains("Launch Context"),
+            "80x24 terminal should render LaunchContext in compact mode."
+        );
+    }
+
+    /// Large terminal 120x40: horizontal layout, compact mode due to height constraint.
+    ///
+    /// Math: dialog.height = 40 * 0.70 = 28, inner.height = 26, content.height = 20
+    ///       20 < MIN_EXPANDED_LAUNCH_HEIGHT (29) → compact
+    ///       (expanded requires ~55+ rows)
+    #[test]
+    fn test_standard_120x40_renders_without_panic() {
+        let state = test_dialog_state();
+        let content = render_dialog(&state, 120, 40);
+
+        // Must render dialog content
+        assert!(
+            content.contains("New Session"),
+            "120x40 terminal should render dialog header 'New Session'."
+        );
+    }
+
+    // =========================================================================
+    // Group 5: Threshold constant invariants
+    // =========================================================================
+
+    #[test]
+    fn test_expanded_launch_threshold_matches_min_height() {
+        assert_eq!(
+            MIN_EXPANDED_LAUNCH_HEIGHT,
+            LaunchContext::min_height(),
+            "MIN_EXPANDED_LAUNCH_HEIGHT must equal LaunchContext::min_height() \
+             to avoid button clipping at the expanded threshold boundary"
+        );
     }
 }

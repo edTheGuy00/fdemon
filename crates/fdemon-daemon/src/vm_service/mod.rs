@@ -17,7 +17,7 @@
 //! ## Quick start
 //!
 //! ```ignore
-//! use fdemon_daemon::vm_service::{VmServiceClient, VmRequestTracker, parse_vm_message, VmServiceMessage};
+//! use fdemon_daemon::vm_service::{VmServiceClient, VmClientEvent, VmRequestTracker, parse_vm_message, VmServiceMessage};
 //!
 //! // Connect to the VM Service
 //! let mut client = VmServiceClient::connect("ws://127.0.0.1:8181/ws").await?;
@@ -34,9 +34,18 @@
 //! ).await?;
 //! let enabled = vm_service::extensions::parse_bool_extension_response(&result)?;
 //!
-//! // Receive stream events
+//! // Receive stream events (yields VmClientEvent)
 //! while let Some(event) = client.event_receiver().recv().await {
-//!     tracing::debug!("Event: {:?}", event.params.stream_id);
+//!     match event {
+//!         VmClientEvent::StreamEvent(e) => {
+//!             tracing::debug!("Stream event: {:?}", e.params.stream_id);
+//!         }
+//!         VmClientEvent::Reconnecting { attempt, max_attempts } => {
+//!             tracing::warn!("Reconnecting {}/{}", attempt, max_attempts);
+//!         }
+//!         VmClientEvent::Reconnected => tracing::info!("Reconnected"),
+//!         VmClientEvent::PermanentlyDisconnected => break,
+//!     }
 //! }
 //!
 //! // Or use the tracker directly:
@@ -63,7 +72,7 @@ pub mod performance;
 pub mod protocol;
 pub mod timeline;
 
-pub use client::{ConnectionState, VmRequestHandle, VmServiceClient};
+pub use client::{ConnectionState, VmRequestHandle, VmServiceClient, MAX_RECONNECT_ATTEMPTS};
 pub use errors::{flutter_error_to_log_entry, parse_flutter_error, FlutterErrorEvent};
 pub use extensions::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, debug_paint, ext,
@@ -87,8 +96,8 @@ pub use performance::{
 };
 pub use protocol::{
     parse_vm_message, IsolateGroupRef, IsolateInfo, IsolateRef, LibraryRef, StreamEvent,
-    StreamEventParams, VmInfo, VmRequestTracker, VmServiceError, VmServiceEvent, VmServiceMessage,
-    VmServiceRequest, VmServiceResponse,
+    StreamEventParams, VersionInfo, VmClientEvent, VmInfo, VmRequestTracker, VmServiceError,
+    VmServiceEvent, VmServiceMessage, VmServiceRequest, VmServiceResponse,
 };
 pub use timeline::{
     enable_frame_tracking, flutter_extension_kind, is_frame_event, parse_frame_timing,

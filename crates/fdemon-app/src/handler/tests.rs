@@ -3,7 +3,7 @@
 use super::*;
 use crate::input_key::InputKey;
 use crate::message::Message;
-use crate::state::{AppState, DevToolsError, UiMode};
+use crate::state::{AppState, DevToolsError, UiMode, VmConnectionStatus};
 use fdemon_core::{AppPhase, DaemonEvent};
 
 /// Helper function to create a test Device with minimal required fields
@@ -332,11 +332,11 @@ fn test_device_selected_session_id_in_spawn_action() {
     // This test is obsolete - DeviceSelected message is deprecated
 }
 
-#[test]
-#[ignore = "DeviceSelected is deprecated - functionality moved to NewSessionDialog"]
-fn test_device_selected_prevents_duplicate() {
-    // This test is obsolete - DeviceSelected message is deprecated
-}
+// test_device_selected_prevents_duplicate was removed (phase 4 task 04).
+// Device-reuse guard logic is now covered by:
+//   handler::new_session::launch_context::tests::test_handle_launch_allows_device_reuse_when_session_stopped
+//   handler::new_session::launch_context::tests::test_handle_launch_blocks_device_with_running_session
+//   handler::new_session::launch_context::tests::test_handle_launch_blocks_device_with_initializing_session
 
 #[test]
 #[ignore = "DeviceSelected is deprecated - functionality moved to NewSessionDialog"]
@@ -653,26 +653,7 @@ fn test_session_daemon_stderr_routes_correctly() {
 }
 
 #[test]
-fn test_session_exited_updates_session_phase() {
-    let mut state = AppState::new();
-
-    let device = test_device("test-device", "Test Device");
-    let session_id = state.session_manager.create_session(&device).unwrap();
-
-    update(
-        &mut state,
-        Message::SessionDaemon {
-            session_id,
-            event: DaemonEvent::Exited { code: Some(0) },
-        },
-    );
-
-    let handle = state.session_manager.get(session_id).unwrap();
-    assert_eq!(handle.session.phase, AppPhase::Stopped);
-}
-
-#[test]
-fn test_session_exited_with_error_code() {
+fn test_handle_session_exited_nonzero_code_logs_error() {
     let mut state = AppState::new();
 
     let device = test_device("test-device", "Test Device");
@@ -693,6 +674,145 @@ fn test_session_exited_with_error_code() {
         .logs
         .iter()
         .any(|e| e.message.contains("exited with code")));
+}
+
+#[test]
+fn test_handle_session_exited_code_zero_logs_normal_exit() {
+    // Setup: create state with an active session
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Action: send DaemonEvent::Exited with code Some(0)
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(0) },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    // Assert: session phase is Stopped
+    assert_eq!(
+        handle.session.phase,
+        AppPhase::Stopped,
+        "session phase should be Stopped after exit code 0"
+    );
+    // Assert: session log contains "exited normally"
+    assert!(
+        handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("exited normally")),
+        "session log should contain 'exited normally' for exit code 0"
+    );
+}
+
+#[test]
+fn test_handle_session_exited_no_code_logs_unknown_exit() {
+    // Setup: create state with an active session
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Action: send DaemonEvent::Exited with code None
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: None },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    // Assert: session phase is Stopped
+    assert_eq!(
+        handle.session.phase,
+        AppPhase::Stopped,
+        "session phase should be Stopped after exit with no code"
+    );
+    // Assert: session log contains "Flutter process exited" (but not "normally" or "with code")
+    assert!(
+        handle
+            .session
+            .logs
+            .iter()
+            .any(|e| e.message.contains("Flutter process exited")),
+        "session log should contain 'Flutter process exited' for None exit code"
+    );
+}
+
+#[test]
+fn test_handle_vm_service_disconnected_clears_vm_connected_and_shutdown_tx() {
+    // Verify that VmServiceDisconnected clears all DevTools task handles and
+    // shutdown senders for both performance and network monitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Simulate VM being connected with active perf and network monitoring
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.vm_connected = true;
+        handle.session.performance.monitoring_active = true;
+
+        // Attach a perf shutdown sender
+        let (perf_tx, _perf_rx) = tokio::sync::watch::channel(false);
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(perf_tx));
+
+        // Attach a network shutdown sender
+        let (net_tx, _net_rx) = tokio::sync::watch::channel(false);
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(net_tx));
+    }
+
+    // Pre-condition: handles are set
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.session.vm_connected,
+            "vm_connected should be true before disconnect"
+        );
+        assert!(
+            handle.perf_shutdown_tx.is_some(),
+            "perf_shutdown_tx should be Some before disconnect"
+        );
+        assert!(
+            handle.network_shutdown_tx.is_some(),
+            "network_shutdown_tx should be Some before disconnect"
+        );
+    }
+
+    // Action: send VmServiceDisconnected
+    update(&mut state, Message::VmServiceDisconnected { session_id });
+
+    // Assert: all cleanup occurred
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        !handle.session.vm_connected,
+        "vm_connected should be false after VmServiceDisconnected"
+    );
+    assert!(
+        !handle.session.performance.monitoring_active,
+        "monitoring_active should be false after VmServiceDisconnected"
+    );
+    assert!(
+        handle.perf_shutdown_tx.is_none(),
+        "perf_shutdown_tx should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.perf_task_handle.is_none(),
+        "perf_task_handle should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after VmServiceDisconnected"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be cleared after VmServiceDisconnected"
+    );
 }
 
 #[test]
@@ -719,6 +839,51 @@ fn test_session_daemon_spawn_failed() {
         .logs
         .iter()
         .any(|e| e.message.contains("Failed to start Flutter")));
+}
+
+#[test]
+fn test_handle_session_exited_duplicate_exit_is_idempotent() {
+    let mut state = AppState::new();
+    let device = test_device("test-device", "Test Device");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // First exit: should process normally
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(0) },
+        },
+    );
+
+    // Second exit: should be silently ignored
+    update(
+        &mut state,
+        Message::SessionDaemon {
+            session_id,
+            event: DaemonEvent::Exited { code: Some(1) },
+        },
+    );
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.session.phase, AppPhase::Stopped);
+
+    // Only one exit log entry should exist (from the first exit, not the second)
+    let exit_logs: Vec<_> = handle
+        .session
+        .logs
+        .iter()
+        .filter(|e| e.message.contains("exited"))
+        .collect();
+    assert_eq!(
+        exit_logs.len(),
+        1,
+        "duplicate exit should not add a second log entry"
+    );
+    assert!(
+        exit_logs[0].message.contains("exited normally"),
+        "the first exit (code 0) log should be preserved, not overwritten by code 1"
+    );
 }
 
 #[test]
@@ -3312,6 +3477,133 @@ fn test_vm_service_disconnected_clears_flag() {
     );
 }
 
+// ─────────────────────────────────────────────────────────
+// VM Service Reconnection Tests (Phase 2, Task 07)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_service_reconnecting_sets_connection_status() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Verify initial state
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected
+    );
+
+    // Action
+    let result = update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id,
+            attempt: 2,
+            max_attempts: 10,
+        },
+    );
+
+    // Assert
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 2,
+            max_attempts: 10,
+        }
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_vm_service_reconnecting_ignores_inactive_session() {
+    let mut state = AppState::new();
+    let device1 = test_device("dev-1", "Device 1");
+    let device2 = test_device("dev-2", "Device 2");
+    let session_1 = state.session_manager.create_session(&device1).unwrap();
+    let session_2 = state.session_manager.create_session(&device2).unwrap();
+
+    // Select session 2 (session 1 is inactive)
+    state.session_manager.select_by_id(session_2);
+
+    // Action: reconnecting event for inactive session 1
+    update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id: session_1,
+            attempt: 3,
+            max_attempts: 10,
+        },
+    );
+
+    // Assert: connection_status should NOT be Reconnecting (it's for inactive session)
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+        "connection_status should not change for inactive session"
+    );
+}
+
+#[test]
+fn test_vm_service_connected_after_reconnecting_resets_status() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // First: simulate reconnecting
+    update(
+        &mut state,
+        Message::VmServiceReconnecting {
+            session_id,
+            attempt: 1,
+            max_attempts: 10,
+        },
+    );
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 1,
+            max_attempts: 10,
+        }
+    );
+
+    // Then: simulate successful reconnection
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    // Assert: status should be back to Connected
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+    );
+}
+
+#[test]
+fn test_vm_service_reconnecting_progressive_attempts() {
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    for attempt in 1..=3 {
+        update(
+            &mut state,
+            Message::VmServiceReconnecting {
+                session_id,
+                attempt,
+                max_attempts: 10,
+            },
+        );
+        assert_eq!(
+            state.devtools_view_state.connection_status,
+            VmConnectionStatus::Reconnecting {
+                attempt,
+                max_attempts: 10,
+            }
+        );
+    }
+}
+
 #[test]
 fn test_vm_service_flutter_error_adds_log() {
     let device = test_device("dev-1", "Device 1");
@@ -4333,6 +4625,35 @@ fn test_session_exited_signals_perf_shutdown() {
 }
 
 #[test]
+fn test_session_exited_cleans_up_network_monitoring() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let mut network_rx = attach_network_shutdown(&mut state, session_id);
+
+    // Action
+    super::session::handle_session_exited(&mut state, session_id, Some(0));
+
+    // Assert: shutdown signal was sent
+    assert!(
+        *network_rx.borrow_and_update(),
+        "network_shutdown_tx should be signaled on handle_session_exited"
+    );
+
+    // Assert: field was cleared
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after process exit"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be None after process exit"
+    );
+}
+
+#[test]
 fn test_app_stop_signals_perf_shutdown() {
     use fdemon_core::{AppStart, AppStop, DaemonMessage};
 
@@ -4375,6 +4696,51 @@ fn test_app_stop_signals_perf_shutdown() {
     assert!(
         handle.perf_shutdown_tx.is_none(),
         "perf_shutdown_tx should be cleared after AppStop"
+    );
+}
+
+#[test]
+fn test_app_stop_cleans_up_network_monitoring() {
+    use fdemon_core::{AppStart, AppStop, DaemonMessage};
+
+    let mut state = AppState::new();
+    let device = test_device("dev-1", "Device 1");
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Mark session as started with a known app_id
+    let start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "dev-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &start_msg);
+
+    let mut network_rx = attach_network_shutdown(&mut state, session_id);
+
+    // Action
+    let stop_msg = DaemonMessage::AppStop(AppStop {
+        app_id: "test-app".to_string(),
+        error: None,
+    });
+    super::session::handle_session_message_state(&mut state, session_id, &stop_msg);
+
+    // Assert: shutdown signal was sent
+    assert!(
+        *network_rx.borrow_and_update(),
+        "network_shutdown_tx should be signaled on AppStop"
+    );
+
+    // Assert: field was cleared
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.network_shutdown_tx.is_none(),
+        "network_shutdown_tx should be cleared after AppStop"
+    );
+    assert!(
+        handle.network_task_handle.is_none(),
+        "network_task_handle should be None after AppStop"
     );
 }
 
@@ -5410,5 +5776,306 @@ fn test_http_profile_received_only_shows_entries_after_recording_resumed() {
         handle.session.network.last_poll_timestamp,
         Some(3000),
         "Timestamp should reflect the last poll"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Reconnect Handler Tests (Phase 2b, Task 04)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_service_reconnected_preserves_performance_state() {
+    use fdemon_core::performance::MemoryUsage;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Populate performance state with some data to confirm it is NOT wiped.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.performance.memory_history.push(MemoryUsage {
+            heap_usage: 42_000_000,
+            heap_capacity: 100_000_000,
+            external_usage: 5_000_000,
+            timestamp: chrono::Local::now(),
+        });
+        handle.session.performance.monitoring_active = true;
+    }
+
+    // Send VmServiceReconnected — must NOT clear perf history.
+    update(&mut state, Message::VmServiceReconnected { session_id });
+
+    let handle = state.session_manager.get(session_id).unwrap();
+
+    // Performance data must still be present (not wiped on reconnect).
+    assert_eq!(
+        handle.session.performance.memory_history.len(),
+        1,
+        "memory_history must be preserved across reconnect"
+    );
+    assert_eq!(
+        handle
+            .session
+            .performance
+            .memory_history
+            .latest()
+            .unwrap()
+            .heap_usage,
+        42_000_000,
+        "heap_usage value must be intact after reconnect"
+    );
+
+    // vm_connected must be true after reconnection.
+    assert!(
+        handle.session.vm_connected,
+        "vm_connected should be true after VmServiceReconnected"
+    );
+
+    // connection_status must be Connected for the active session.
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+        "connection_status should be Connected after VmServiceReconnected"
+    );
+
+    // The session log should contain the word "reconnected".
+    let reconnected_log = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .iter()
+        .any(|e| e.message.to_lowercase().contains("reconnected"));
+    assert!(
+        reconnected_log,
+        "Session log should contain a 'reconnected' message"
+    );
+}
+
+#[test]
+fn test_vm_service_reconnected_restarts_monitoring() {
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    let result = update(&mut state, Message::VmServiceReconnected { session_id });
+
+    // VmServiceReconnected must return a StartPerformanceMonitoring action.
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceReconnected should trigger StartPerformanceMonitoring"
+    );
+}
+
+#[test]
+fn test_vm_service_connected_still_resets_performance() {
+    // Regression test: VmServiceConnected (initial connection / hot-restart)
+    // must still clear accumulated performance state.
+    use fdemon_core::performance::MemoryUsage;
+
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Pre-populate performance state.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.performance.memory_history.push(MemoryUsage {
+            heap_usage: 99_000_000,
+            heap_capacity: 200_000_000,
+            external_usage: 1_000_000,
+            timestamp: chrono::Local::now(),
+        });
+        handle.session.performance.monitoring_active = true;
+    }
+
+    // Send VmServiceConnected — must reset perf state.
+    update(&mut state, Message::VmServiceConnected { session_id });
+
+    let perf = &state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .performance;
+    assert!(
+        perf.memory_history.is_empty(),
+        "memory_history must be cleared by VmServiceConnected (initial connection / hot-restart)"
+    );
+    assert!(
+        !perf.monitoring_active,
+        "monitoring_active must be reset by VmServiceConnected"
+    );
+}
+
+#[test]
+fn test_vm_service_reconnected_cleans_up_perf_task() {
+    // Uses a tokio runtime to create a real JoinHandle, mirroring the pattern
+    // used in test_close_session_cleans_up_network_monitoring.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state.session_manager.select_by_id(session_id);
+
+        // Attach a real perf_shutdown_tx and a long-running perf_task_handle.
+        let (tx, mut perf_rx) = tokio::sync::watch::channel(false);
+        let task: tokio::task::JoinHandle<()> =
+            tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_secs(60)).await });
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.perf_shutdown_tx = Some(std::sync::Arc::new(tx));
+            handle.perf_task_handle = Some(task);
+        }
+
+        // Confirm handles are present before reconnect.
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert!(
+                handle.perf_shutdown_tx.is_some(),
+                "perf_shutdown_tx should be Some before VmServiceReconnected"
+            );
+            assert!(
+                handle.perf_task_handle.is_some(),
+                "perf_task_handle should be Some before VmServiceReconnected"
+            );
+        }
+
+        // Send VmServiceReconnected.
+        update(&mut state, Message::VmServiceReconnected { session_id });
+
+        // Both handles must be taken (cleared) after reconnect.
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.perf_task_handle.is_none(),
+            "perf_task_handle must be None after VmServiceReconnected (old task aborted)"
+        );
+        assert!(
+            handle.perf_shutdown_tx.is_none(),
+            "perf_shutdown_tx must be None after VmServiceReconnected (shutdown signaled)"
+        );
+
+        // The shutdown sender should have been sent `true` before being dropped.
+        assert!(
+            *perf_rx.borrow_and_update(),
+            "perf_shutdown_tx should have been signaled true on VmServiceReconnected"
+        );
+    });
+}
+
+#[test]
+fn test_vm_service_connected_background_session_no_status_change() {
+    // Two sessions: A is active, B is background.
+    // Sending VmServiceConnected for B must NOT overwrite the foreground status.
+    let mut state = AppState::new();
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    // Make A the active (selected) session.
+    state.session_manager.select_by_id(session_a);
+
+    // Simulate A currently reconnecting.
+    state.devtools_view_state.connection_status = VmConnectionStatus::Reconnecting {
+        attempt: 3,
+        max_attempts: 10,
+    };
+
+    // Send VmServiceConnected for the background session B.
+    update(
+        &mut state,
+        Message::VmServiceConnected {
+            session_id: session_b,
+        },
+    );
+
+    // Foreground status must still be Reconnecting — B's connect must not pollute it.
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Reconnecting {
+            attempt: 3,
+            max_attempts: 10,
+        },
+        "connection_status must not be overwritten by a background session's VmServiceConnected"
+    );
+}
+
+#[test]
+fn test_vm_service_disconnected_background_session_no_status_change() {
+    // Two sessions: A is active (Connected), B is background.
+    // Sending VmServiceDisconnected for B must NOT change the foreground status.
+    let mut state = AppState::new();
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    // A is active and Connected (default status).
+    state.session_manager.select_by_id(session_a);
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+        "initial status should be Connected"
+    );
+
+    // Send VmServiceDisconnected for the background session B.
+    update(
+        &mut state,
+        Message::VmServiceDisconnected {
+            session_id: session_b,
+        },
+    );
+
+    // Foreground status must still be Connected.
+    assert_eq!(
+        state.devtools_view_state.connection_status,
+        VmConnectionStatus::Connected,
+        "connection_status must not change when a background session disconnects"
+    );
+}
+
+#[test]
+fn test_vm_service_connection_failed_background_session_no_error() {
+    // Two sessions: A is active, B is background.
+    // Sending VmServiceConnectionFailed for B must NOT set vm_connection_error
+    // on the foreground devtools_view_state.
+    let mut state = AppState::new();
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    // A is active.
+    state.session_manager.select_by_id(session_a);
+
+    // Confirm no error initially.
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error should be None initially"
+    );
+
+    // Send VmServiceConnectionFailed for the background session B.
+    update(
+        &mut state,
+        Message::VmServiceConnectionFailed {
+            session_id: session_b,
+            error: "timeout".to_string(),
+        },
+    );
+
+    // vm_connection_error must still be None — background session must not pollute it.
+    assert!(
+        state.devtools_view_state.vm_connection_error.is_none(),
+        "vm_connection_error must not be set by a background session's VmServiceConnectionFailed"
     );
 }

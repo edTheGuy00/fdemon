@@ -1186,6 +1186,24 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
 
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Clean up any existing performance task before spawning a new one.
+                // No-op on first connect (both are None); correctly tears down on
+                // hot-restart where VmServiceConnected fires without a preceding
+                // VmServiceDisconnected.
+                if let Some(h) = handle.perf_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.perf_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                // Clean up any existing network monitoring task for the same reason.
+                if let Some(h) = handle.network_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.network_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
                     LogSource::App,
@@ -1197,11 +1215,16 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 handle.session.performance =
                     crate::session::PerformanceState::with_memory_history_size(memory_history_size);
             }
-            // Clear any previous connection error now that we are connected.
-            state.devtools_view_state.vm_connection_error = None;
-            // Update rich connection status indicator.
-            state.devtools_view_state.connection_status =
-                crate::state::VmConnectionStatus::Connected;
+            // Clear any previous connection error and update status to Connected,
+            // but only when this session is currently active in the UI.
+            // Updating connection_status for a background session would mislead the
+            // user who is viewing a different session in DevTools mode.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.devtools_view_state.vm_connection_error = None;
+                state.devtools_view_state.connection_status =
+                    crate::state::VmConnectionStatus::Connected;
+            }
 
             // If the user is already in DevTools/Inspector mode with no tree loaded,
             // auto-fetch the widget tree now that the VM is connected.
@@ -1253,6 +1276,65 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
+        Message::VmServiceReconnected { session_id } => {
+            // Read config values before borrowing state mutably.
+            let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+            let allocation_profile_interval_ms =
+                state.settings.devtools.allocation_profile_interval_ms;
+
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Abort the old performance polling task before spawning a new one.
+                // The old task holds a VmRequestHandle for the previous WebSocket
+                // connection; without this abort it keeps running and emits duplicate
+                // VmServiceMemorySample messages alongside the newly spawned task.
+                if let Some(h) = handle.perf_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.perf_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+                // Abort the old network monitoring task for the same reason.
+                if let Some(h) = handle.network_task_handle.take() {
+                    h.abort();
+                }
+                if let Some(tx) = handle.network_shutdown_tx.take() {
+                    let _ = tx.send(true);
+                }
+
+                handle.session.vm_connected = true;
+                handle.session.add_log(fdemon_core::LogEntry::info(
+                    LogSource::App,
+                    "VM Service reconnected — resuming monitoring",
+                ));
+                // DO NOT reset PerformanceState — preserve accumulated telemetry
+                // (memory_history, gc_history, frame_history, stats, memory_samples,
+                // allocation_profile). New samples append to the existing history.
+            }
+
+            // Clear any previous connection error and update status to Connected,
+            // but only when this session is currently active in the UI.
+            // Updating connection_status for a background session would mislead the
+            // user who is viewing a different session in DevTools mode.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.devtools_view_state.vm_connection_error = None;
+                state.devtools_view_state.connection_status =
+                    crate::state::VmConnectionStatus::Connected;
+            }
+
+            // Re-subscribe to VM streams and restart performance monitoring.
+            // The old WebSocket connection's stream subscriptions are gone — the
+            // Dart VM Service requires re-subscription after a WebSocket reconnect.
+            // `process.rs` will hydrate `handle` with the VmRequestHandle from the
+            // session before dispatching the action to handle_action.
+            UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+                performance_refresh_ms,
+                allocation_profile_interval_ms,
+            })
+        }
+
         Message::VmServiceConnectionFailed { session_id, error } => {
             warn!(
                 "VM Service connection failed for session {}: {}",
@@ -1270,15 +1352,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
             // Surface the error in DevTools panels so users see the specific reason
             // instead of the generic "VM Service not connected" message.
-            state.devtools_view_state.vm_connection_error =
-                Some(format!("Connection failed: {error}"));
+            // Only update the global indicator when the failing session is active.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.devtools_view_state.vm_connection_error =
+                    Some(format!("Connection failed: {error}"));
+            }
             UpdateResult::none()
         }
 
         Message::VmServiceDisconnected { session_id } => {
-            // Update rich connection status indicator.
-            state.devtools_view_state.connection_status =
-                crate::state::VmConnectionStatus::Disconnected;
+            // Update rich connection status indicator, but only when the
+            // disconnecting session is the one currently active in the UI.
+            // A background session disconnect must not overwrite the foreground
+            // session's connection_status with Disconnected.
+            let active_id = state.session_manager.selected().map(|h| h.session.id);
+            if active_id == Some(session_id) {
+                state.devtools_view_state.connection_status =
+                    crate::state::VmConnectionStatus::Disconnected;
+            }
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.session.vm_connected = false;
                 // Clear the request handle — the underlying channel is now closed.
