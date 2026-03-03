@@ -97,13 +97,21 @@ Custom DAP events (IDE-consumed):
 - `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` — Re-export new debugger module
 - `crates/fdemon-daemon/src/vm_service/protocol.rs` — Add debug event types (`PauseBreakpoint`, `PauseException`, etc.)
 - `crates/fdemon-daemon/Cargo.toml` — No new deps needed (raw `request()` suffices)
-- `crates/fdemon-app/src/message.rs` — Add DAP Message variants
-- `crates/fdemon-app/src/handler/mod.rs` — Add DAP UpdateAction variants
+- `crates/fdemon-app/src/config/types.rs` — Add `DapSettings` struct, `ParentIde::Emacs`/`Helix` variants, `supports_dap_config()` method
+- `crates/fdemon-app/src/message.rs` — Add DAP Message variants (`StartDapServer`, `StopDapServer`, `ToggleDap`, `DapServerStarted`, etc.)
+- `crates/fdemon-app/src/handler/mod.rs` — Add DAP UpdateAction variants (`SpawnDapServer`, `StopDapServer`)
+- `crates/fdemon-app/src/handler/keys.rs` — Add `D` keybinding in Normal mode for `Message::ToggleDap`
+- `crates/fdemon-app/src/settings_items.rs` — Add DAP settings section (`dap.enabled`, `dap.auto_start_in_ide`, `dap.port`)
+- `crates/fdemon-app/src/handler/settings.rs` — Add `apply_project_setting` cases for `dap.*` keys
 - `crates/fdemon-app/src/session/handle.rs` — Add DAP shutdown/task fields to `SessionHandle`
 - `crates/fdemon-app/src/engine_event.rs` — Wire up unimplemented `EngineEvent` variants needed by DAP
 - `crates/fdemon-app/Cargo.toml` — Depend on `fdemon-dap` (or feature-gated)
+- `crates/fdemon-tui/src/widgets/log_view/mod.rs` — Add `dap_status` field to `StatusInfo`, render `[DAP :PORT]` badge
+- `crates/fdemon-tui/src/widgets/header.rs` — Add `[D] DAP` to keybinding hints
 - `Cargo.toml` (workspace) — Add `fdemon-dap` member, binary deps
-- `src/main.rs` — Add `--dap` / `--dap-port` CLI flags
+- `src/main.rs` — Add `--dap` / `--dap-port` / `--dap-config` CLI flags
+- `src/tui/runner.rs` — Handle `UpdateAction::SpawnDapServer` / `StopDapServer` in TUI event loop
+- `src/headless/runner.rs` — Handle DAP startup in headless mode event loop
 
 ### New Modules
 
@@ -122,10 +130,14 @@ Custom DAP events (IDE-consumed):
   - `src/adapter/sources.rs` — Source reference resolution
 - `crates/fdemon-daemon/src/vm_service/debugger.rs` — **NEW**: VM Service debugging RPC wrappers
 - `crates/fdemon-daemon/src/vm_service/debugger_types.rs` — **NEW**: Typed structs for VM Service debug protocol
-- `crates/fdemon-app/src/handler/dap.rs` — **NEW**: DAP message handler in TEA
+- `crates/fdemon-app/src/handler/dap.rs` — **NEW**: DAP message handler in TEA (StartDapServer, StopDapServer, ToggleDap, DapServerStarted, etc.)
 - `crates/fdemon-app/src/session/debug_state.rs` — **NEW**: Per-session debug state
-- `src/dap/mod.rs` — **NEW**: DAP runner (binary crate, like `src/headless/`)
-- `src/dap/runner.rs` — **NEW**: DAP server event loop
+- `crates/fdemon-dap/src/ide_config/mod.rs` — **NEW**: IDE DAP config auto-generation dispatch
+- `crates/fdemon-dap/src/ide_config/vscode.rs` — **NEW**: VS Code `.vscode/launch.json` generator
+- `crates/fdemon-dap/src/ide_config/neovim.rs` — **NEW**: Neovim nvim-dap config generator
+- `crates/fdemon-dap/src/ide_config/helix.rs` — **NEW**: Helix `.helix/languages.toml` generator
+- `crates/fdemon-dap/src/ide_config/zed.rs` — **NEW**: Zed `.zed/debug.json` generator
+- `crates/fdemon-dap/src/ide_config/emacs.rs` — **NEW**: Emacs dap-mode snippet generator
 
 ---
 
@@ -136,7 +148,7 @@ Custom DAP events (IDE-consumed):
 ```
 ┌─────────────────────────────────────────────────────┐
 │           flutter-demon (binary crate)               │
-│     CLI + TUI runner + headless + DAP runner         │
+│       CLI + TUI runner + headless runner             │
 └──────────────┬──────────────────────────────────────┘
                │
        ┌───────┼────────┬──────────────┐
@@ -202,8 +214,9 @@ Main thread (Engine event loop)
   ├── processes Message::Dap* variants from DAP server
   └── emits EngineEvent to all subscribers
 
-DAP server task (tokio::spawn)
+DAP server task (tokio::spawn — started/stopped at runtime)
   ├── TcpListener on configured port
+  ├── shutdown_rx: watch::Receiver<bool> for clean stop
   └── per-client tasks (tokio::spawn per connection)
        ├── reads DAP requests from TCP stream
        ├── translates to VM Service RPCs via VmRequestHandle
@@ -216,6 +229,38 @@ VM Service background task (existing)
   ├── forwards Debug/Isolate stream events → Message pipeline
   └── routes RPC responses to waiting oneshot channels
 ```
+
+### DAP Server Startup Flow (Smart Auto-Start)
+
+The DAP server is an **integrated service** within TUI mode (and headless mode), not a separate runner. It can be started/stopped at runtime like other Engine services.
+
+```
+fdemon launch
+  │
+  ├── Parse CLI args: --dap, --dap-port, --dap-config
+  ├── Load settings: dap.enabled, dap.auto_start_in_ide
+  ├── detect_parent_ide() → Option<ParentIde>
+  │
+  ├── Should DAP start?
+  │   ├── --dap CLI flag present?                    → YES, start
+  │   ├── dap.enabled = true in config?              → YES, start
+  │   ├── IDE detected AND dap.auto_start_in_ide?    → YES, start
+  │   └── None of the above?                         → NO, stay off
+  │
+  ├── If starting:
+  │   ├── Bind TCP port (configured or auto-assign)
+  │   ├── Emit Message::DapServerStarted { port }
+  │   ├── Generate IDE config (Phase 5) if IDE detected
+  │   └── Log: "DAP server listening on 127.0.0.1:{port}"
+  │
+  └── At runtime (keybinding 'D' in Normal mode):
+      ├── If DAP off → Message::StartDapServer → bind + start + config gen
+      └── If DAP on  → Message::StopDapServer  → disconnect clients + unbind
+```
+
+**Key design decision**: The DAP server is NOT a separate `fdemon --dap` mode (unlike `--headless`). Instead, `--dap` is a flag that enables the DAP service within the normal TUI or headless mode. This means the TUI keeps running — the developer sees their logs while the IDE connects for debugging.
+
+**On fdemon exit**: Generated IDE config entries are **left in place** (not cleaned up). The next fdemon run updates the port in the config. This avoids surprising the user by removing their IDE setup.
 
 ---
 
@@ -306,19 +351,43 @@ VM Service background task (existing)
    - `disconnect` → cleanup, optionally resume paused isolates
    - Request/response tracking (match `seq` numbers)
 
-6. **DAP runner** (`src/dap/runner.rs` in binary crate)
-   - `run_dap_server(project_path, port) -> Result<()>`
-   - Creates `Engine`, subscribes to events
-   - Spawns DAP TCP server task with `engine.msg_sender()` + `VmRequestHandle`
-   - Runs Engine event loop (reuses headless pattern)
-   - CLI: `fdemon --dap [--dap-port 4711] [project_path]`
+6. **DAP service integration** (Engine-level, not a separate runner)
+   - `DapService` struct in `fdemon-dap` — manages server lifecycle (start/stop/status)
+   - `DapService::start(port, bind_addr, msg_tx, event_rx) -> Result<DapHandle>`
+   - `DapHandle { port: u16, shutdown_tx: watch::Sender<bool>, task: JoinHandle }` — returned to Engine for lifecycle management
+   - `DapService::stop(handle) -> Result<()>` — signals shutdown, waits for task completion, disconnects all clients
+   - Engine holds `Option<DapHandle>` — `Some` when DAP is running, `None` when off
+   - CLI: `fdemon [--dap] [--dap-port 4711] [--dap-bind ADDR] [project_path]`
+   - `--dap` enables DAP service within TUI mode (not a separate mode like `--headless`)
+   - Both TUI and headless runners check startup conditions and call `DapService::start()` if needed
 
-7. **Integration with Engine lifecycle**
-   - Add `Message::DapClientConnected { session_id }` and `Message::DapClientDisconnected { session_id }` variants
-   - Add DAP shutdown fields to `SessionHandle`
-   - Wire up cleanup in all session teardown paths
+7. **Smart auto-start logic** (startup + runtime toggle)
+   - **Startup**: On Engine init, evaluate startup conditions (see Architecture → DAP Server Startup Flow)
+   - **Message variants**:
+     - `Message::StartDapServer` — keybinding or auto-start trigger
+     - `Message::StopDapServer` — keybinding or shutdown cleanup
+     - `Message::DapServerStarted { port: u16 }` — response after successful bind
+     - `Message::DapServerStopped` — response after shutdown
+     - `Message::DapClientConnected { client_id: String }` — per-connection tracking
+     - `Message::DapClientDisconnected { client_id: String }` — per-connection tracking
+   - **Keybinding**: `D` (uppercase) in Normal mode → `Message::ToggleDap`
+     - If DAP off: transitions to `StartDapServer`, auto-picks port, generates IDE config
+     - If DAP on: transitions to `StopDapServer`, disconnects clients
+   - **UpdateAction variants**:
+     - `UpdateAction::SpawnDapServer { port, bind_addr }` — handled by TUI/headless runner event loops
+     - `UpdateAction::StopDapServer` — triggers graceful shutdown
+   - **Status tracking**: Add to `AppState`:
+     - `dap_status: DapStatus` where `DapStatus` is `Off`, `Starting`, `Running { port: u16, client_count: usize }`, `Stopping`
+   - **Cleanup**: On Engine shutdown (`engine.shutdown()`), stop DAP server if running. On session close, notify connected DAP clients
 
-**Milestone**: `fdemon --dap` starts a TCP server. VS Code (or `dap-client` test tool) can connect, complete initialization, and receive capabilities response. No debugging yet, but the transport works end-to-end.
+8. **Status bar integration**
+   - Add `dap_status` field to TUI's `StatusInfo` struct
+   - When `DapStatus::Running { port, .. }`: render `[DAP :4711]` badge next to existing `[VM]` badge
+   - When `DapStatus::Running { client_count > 0, .. }`: render `[DAP :4711 ●]` with a connected indicator
+   - When `DapStatus::Off`: no badge shown (default state)
+   - In header keybinding hints: add `[D] DAP` when in Normal mode
+
+**Milestone**: `fdemon --dap` starts with the DAP TCP server running alongside the TUI. Running `fdemon` inside VS Code auto-starts the DAP server (if `auto_start_in_ide` is enabled). Pressing `D` toggles the server on/off. Status bar shows `[DAP :PORT]` when active. VS Code (or `dap-client` test tool) can connect, complete initialization, and receive capabilities response. No debugging yet, but the transport and UX work end-to-end.
 
 ---
 
@@ -440,6 +509,187 @@ VM Service background task (existing)
 
 ---
 
+### Phase 5: IDE DAP Auto-Configuration
+
+**Goal**: Automatically detect which IDE the terminal is running inside and generate the appropriate DAP client configuration so the user can start debugging with zero manual setup. Leverages the existing `ParentIde` detection from the hyperlinks/editor feature (`fdemon-app/src/config/settings.rs`).
+
+#### Background
+
+fdemon already detects the parent IDE via environment variables in `detect_parent_ide()` (`crates/fdemon-app/src/config/settings.rs:73-123`). The existing `ParentIde` enum covers 7 IDEs: VS Code, VS Code Insiders, Cursor, Zed, IntelliJ, Android Studio, and Neovim. Each IDE has a distinct mechanism for connecting a DAP client to an external TCP server:
+
+| IDE | Config File | DAP TCP Mechanism | Auto-Gen Feasibility |
+|-----|------------|-------------------|---------------------|
+| VS Code / Insiders / Cursor | `.vscode/launch.json` | `debugServer: PORT` field | High — fully auto-generatable |
+| Neovim (nvim-dap) | `.vscode/launch.json` (via `load_launchjs()`) | `type = "server"` adapter | Medium — piggybacks on VS Code format |
+| Helix | `.helix/languages.toml` | `transport = "tcp"` | High — project-local config supported |
+| Zed | `.zed/debug.json` | `tcp_connection: {host, port}` | High — project-local config supported |
+| Emacs (dap-mode) | Project-local snippet | `:debugPort` / `:host` plist | Low — requires user to source snippet |
+| IntelliJ / Android Studio | N/A | No standard DAP path | Not supported — uses proprietary debugging |
+
+#### Steps
+
+1. **IDE config generation trait** (`ide_config/mod.rs`)
+   - `IdeConfigGenerator` trait with methods:
+     - `config_path(project_root: &Path) -> PathBuf` — where to write the config
+     - `generate(port: u16, project_root: &Path) -> Result<String>` — generate config content
+     - `config_exists(project_root: &Path) -> bool` — check if config already exists
+     - `merge_config(existing: &str, port: u16) -> Result<String>` — merge into existing config without clobbering
+   - `generate_ide_config(ide: Option<ParentIde>, port: u16, project_root: &Path) -> Result<IdeConfigResult>`
+   - `IdeConfigResult { path: PathBuf, action: ConfigAction }` where `ConfigAction` is `Created`, `Updated`, `Skipped(reason)`
+   - Dispatch to IDE-specific generators based on `ParentIde` variant
+
+2. **VS Code config generator** (`ide_config/vscode.rs`)
+   - Generates/merges into `.vscode/launch.json`
+   - Uses `debugServer` field to redirect DAP transport to fdemon's TCP port:
+     ```json
+     {
+       "name": "Flutter (fdemon)",
+       "type": "dart",
+       "request": "attach",
+       "debugServer": 4711
+     }
+     ```
+   - `debugServer` is a VS Code internal mechanism that tells VS Code to connect to an already-running DAP server on the given port instead of spawning a debug adapter process. The Dart extension must be installed (it provides `"type": "dart"`)
+   - **Merge logic**: If `.vscode/launch.json` exists, parse it, check for existing fdemon configuration (match by `"name"` field), update the port if found, append if not. Preserve all other configurations and the `version` field
+   - Handles VS Code, VS Code Insiders, and Cursor (all use the same `.vscode/launch.json` format)
+   - Include `"cwd": "${workspaceFolder}"` for correct path resolution
+
+3. **Neovim config generator** (`ide_config/neovim.rs`)
+   - **Primary strategy**: Generate `.vscode/launch.json` (same as VS Code generator) because nvim-dap supports loading VS Code launch configs via `require("dap.ext.vscode").load_launchjs()`
+   - **Secondary strategy**: Also generate a project-local `.nvim-dap.lua` snippet that users can source:
+     ```lua
+     -- fdemon DAP configuration (auto-generated)
+     -- Source this file or add to your nvim-dap config:
+     --   require("dap.ext.vscode").load_launchjs()
+     local dap = require('dap')
+     dap.adapters.fdemon = {
+       type = 'server',
+       host = '127.0.0.1',
+       port = 4711,
+     }
+     dap.configurations.dart = dap.configurations.dart or {}
+     table.insert(dap.configurations.dart, {
+       type = 'fdemon',
+       request = 'attach',
+       name = 'Flutter (fdemon)',
+       cwd = vim.fn.getcwd(),
+     })
+     ```
+   - The `.nvim-dap.lua` file is informational — the `.vscode/launch.json` is the primary auto-config path since nvim-dap's `load_launchjs()` is widely used
+   - Detect if `$NVIM` socket is available for status feedback via `nvim --server $NVIM --remote-send`
+
+4. **Helix config generator** (`ide_config/helix.rs`)
+   - Generates `.helix/languages.toml` in the project root (Helix merges project-local with user config)
+   - Helix's TCP transport spawns the adapter and picks the port via `port-arg`. For fdemon (already-running server), the config points to the fdemon binary with `--dap-port`:
+     ```toml
+     [[language]]
+     name = "dart"
+
+     [language.debugger]
+     name = "fdemon-dap"
+     transport = "tcp"
+     command = "fdemon"
+     args = ["--dap"]
+     port-arg = "--dap-port {}"
+
+     [[language.debugger.templates]]
+     name = "Flutter: Attach (fdemon)"
+     request = "attach"
+     completion = []
+     args = {}
+     ```
+   - **Alternative for already-running fdemon**: Generate a helper script that simply connects to the fixed port (since Helix always wants to spawn + pick port). Document this limitation
+   - **Merge logic**: If `.helix/languages.toml` exists, parse TOML, find or create the `[[language]]` entry for `name = "dart"`, update the debugger section. Preserve all other language configurations
+
+5. **Zed config generator** (`ide_config/zed.rs`)
+   - Generates `.zed/debug.json` in the project root:
+     ```json
+     [
+       {
+         "label": "Flutter (fdemon DAP)",
+         "adapter": "fdemon-dap",
+         "request": "attach",
+         "tcp_connection": {
+           "host": "127.0.0.1",
+           "port": 4711
+         },
+         "cwd": "$ZED_WORKTREE_ROOT"
+       }
+     ]
+     ```
+   - `tcp_connection` tells Zed to connect to an existing TCP server rather than spawning a new adapter process
+   - **Caveat**: Dart/Flutter are not natively supported by Zed's debugger as of March 2026. A community Zed debugger extension for Dart would need to exist for this config to work. Generate the config anyway (forward-compatible) but log a warning if Dart support is not detected
+   - **Merge logic**: If `.zed/debug.json` exists, parse JSON array, find existing fdemon entry by `"label"` field, update port if found, append if not
+
+6. **Emacs config generator** (`ide_config/emacs.rs`)
+   - Cannot auto-write to user's Emacs config — Emacs does not support project-local DAP configuration in a standard way
+   - Generate a `.dir-locals.el` snippet file at `.fdemon/dap-emacs.el`:
+     ```elisp
+     ;; fdemon DAP configuration for Emacs dap-mode
+     ;; Add this to your Emacs config or eval-buffer this file:
+     ;;
+     ;; (load-file "/path/to/project/.fdemon/dap-emacs.el")
+
+     (require 'dap-mode)
+
+     (dap-register-debug-provider
+       "fdemon"
+       (lambda (conf)
+         (plist-put conf :debugPort 4711)
+         (plist-put conf :host "localhost")
+         conf))
+
+     (dap-register-debug-template
+       "Flutter :: fdemon"
+       (list :type "fdemon"
+             :request "attach"
+             :name "Flutter (fdemon DAP)"))
+     ```
+   - This is a "generate and instruct" approach — fdemon generates the snippet and prints instructions on how to load it
+   - Emacs detection: Not currently in `ParentIde` enum. Add `ParentIde::Emacs` variant with detection via `$INSIDE_EMACS` environment variable (set by Emacs shell/vterm/eshell)
+
+7. **Auto-generation trigger and lifecycle**
+   - When DAP server starts (handles `Message::DapServerStarted { port }`), call `generate_ide_config(detect_parent_ide(), port, project_root)` if `dap.auto_configure_ide` is true
+   - Print result to tracing log: `"Generated DAP config for {ide} at {path}"` or `"Skipped DAP config: {reason}"`
+   - Add `Message::DapConfigGenerated { path, action }` variant for TUI status display
+   - On port change (server toggled off/on with different port), regenerate config with updated port
+   - On fdemon exit: **leave generated config in place** (not cleaned up). Next run updates the port if needed
+   - **When no IDE detected**: Skip auto-generation, log info message suggesting manual config. Print the port number and a generic connection instruction
+   - **Manual generation**: `fdemon --dap-config <ide> --dap-port <port>` generates config for a specific IDE without starting the full TUI
+
+8. **Extend `ParentIde` enum**
+   - Add `ParentIde::Emacs` variant:
+     - Detection: `$INSIDE_EMACS` environment variable (set by Emacs `shell-mode`, `vterm`, `eshell`, `term-mode`)
+     - `display_name()` → `"Emacs"`
+     - `url_scheme()` → `"file"` (Emacs doesn't have a URL scheme for file opening)
+     - `reuse_flag()` → `None`
+   - Add `ParentIde::Helix` variant:
+     - Detection: `$HELIX_RUNTIME` environment variable (set when running inside Helix's `:sh` command)
+     - `display_name()` → `"Helix"`
+     - `url_scheme()` → `"file"`
+     - `reuse_flag()` → `None`
+   - Add methods to `ParentIde`:
+     - `supports_dap_config(&self) -> bool` — returns `true` for IDEs where auto-generation is meaningful (all except IntelliJ/AndroidStudio)
+     - `dap_config_path(&self, project_root: &Path) -> Option<PathBuf>` — returns the target config file path
+
+9. **Safe file writing with merge semantics**
+   - **Critical**: Never overwrite existing IDE config files. Always merge
+   - For JSON files (`.vscode/launch.json`, `.zed/debug.json`): parse existing, find/update fdemon entries, serialize back preserving formatting and comments where possible
+   - For TOML files (`.helix/languages.toml`): parse existing, find/update dart language section, serialize back
+   - For Elisp files (`.fdemon/dap-emacs.el`): always overwrite (fdemon-owned file)
+   - Use a marker comment/field (e.g., `"fdemon-managed": true` in JSON configs) to identify auto-generated entries for safe updates and cleanup
+   - Create parent directories if they don't exist (e.g., `.vscode/`, `.helix/`, `.zed/`)
+   - Respect `.gitignore` — add a note in generated files that they can be committed or gitignored
+
+10. **TUI integration**
+    - When DAP config is generated, show a brief status message: `"DAP config generated for {IDE} at {path}"`
+    - Add a DAP status indicator to the status bar (Phase 2 already adds the server status; extend with config status)
+    - In settings UI, add a `[dap] auto_configure_ide` boolean option (default: `true`)
+
+**Milestone**: When a developer runs `fdemon --dap` from inside VS Code's terminal, fdemon auto-generates a `launch.json` configuration. The developer opens the Run & Debug panel, selects "Flutter (fdemon)", and is immediately connected to the debugger — zero manual configuration required. Same for Neovim, Helix, and Zed (with their respective config formats).
+
+---
+
 ## Edge Cases & Risks
 
 ### Protocol Compatibility
@@ -477,6 +727,31 @@ VM Service background task (existing)
 - **Risk:** Dart VM Service isolate IDs are strings like `"isolates/1234567890"`. After hot restart, new isolate gets a different ID. Cached references become stale.
 - **Mitigation:** fdemon already handles this via `VmRequestHandle::invalidate_isolate_cache()`. The DAP adapter must invalidate its own thread-ID-to-isolate mapping on hot restart and re-discover isolates.
 
+### IDE Config Overwrite (Phase 5)
+
+- **Risk:** Auto-generating IDE config files could overwrite user's existing debug configurations
+- **Mitigation:** Always merge, never overwrite. Parse existing config files, find fdemon-managed entries by marker field (`"fdemon-managed": true`), update only those entries. If no fdemon entry exists, append. If the file can't be parsed (malformed JSON/TOML), skip generation and log a warning rather than clobbering the file.
+
+### Stale Port in Generated Config (Phase 5)
+
+- **Risk:** fdemon generates config with port 54321, user restarts fdemon on port 54322 — IDE still tries the old port
+- **Mitigation:** Regenerate config on every DAP server startup, updating the port in the existing config entry. For stable ports across restarts, recommend users set a fixed `dap.port` in config or `--dap-port` on CLI. The auto-generated config always reflects the current run's port.
+
+### Helix Port-Arg Incompatibility (Phase 5)
+
+- **Risk:** Helix's `transport = "tcp"` always spawns the adapter binary and passes a port via `port-arg`. This conflicts with fdemon's model where the DAP server is already running as part of the fdemon process
+- **Mitigation:** The Helix config uses `fdemon --dap` as the command with `--dap-port {}` as the port arg. Helix spawns a *new* fdemon instance that listens on the Helix-chosen port. This is acceptable for single-session use. For the already-running fdemon scenario, document that users should use `hx --health` to verify DAP support and manually set the port. Alternative: provide a thin wrapper script that connects stdin/stdout to an existing TCP socket.
+
+### IDE Not Detected (Phase 5)
+
+- **Risk:** fdemon is run from a terminal that isn't inside any IDE (plain terminal, tmux, etc.) — no config to generate
+- **Mitigation:** This is a normal case, not an error. Skip auto-generation silently (debug-level log only). Print the DAP port to stdout/logs so the user can manually configure their IDE. Include a `fdemon --dap-config <ide>` CLI flag for manual config generation targeting a specific IDE.
+
+### Emacs/Helix Detection Gaps (Phase 5)
+
+- **Risk:** `$INSIDE_EMACS` is not set in all Emacs terminal modes (e.g., some custom shell setups). `$HELIX_RUNTIME` may not be set in Helix's `:sh` command in all versions
+- **Mitigation:** These are best-effort detections. Document the expected environment variables. Users can always fall back to `fdemon --dap-config emacs` or `fdemon --dap-config helix` for manual generation.
+
 ---
 
 ## Configuration Additions
@@ -485,10 +760,17 @@ VM Service background task (existing)
 # .fdemon/config.toml
 
 [dap]
-# Enable DAP server (can also use --dap CLI flag)
+# Always enable DAP server on startup (overrides auto-detection)
+# Can also use --dap CLI flag
 enabled = false
 
+# Auto-start DAP server when running inside a detected IDE terminal
+# (VS Code, Neovim, Helix, Zed, Emacs). No effect if enabled = true.
+# Default: true — zero-setup experience for IDE users
+auto_start_in_ide = true
+
 # TCP port for DAP connections (default: 0 = auto-assign)
+# Use a fixed port for stable IDE configs across restarts
 port = 0
 
 # Bind address (default: 127.0.0.1 for security)
@@ -499,6 +781,9 @@ suppress_reload_on_pause = true
 
 # Auto-attach debugger when session starts (vs waiting for IDE to attach)
 auto_attach = false
+
+# Automatically generate IDE DAP config when server starts (Phase 5)
+auto_configure_ide = true
 ```
 
 ---
@@ -506,18 +791,29 @@ auto_attach = false
 ## CLI Additions
 
 ```
-fdemon --dap [--dap-port PORT] [--dap-bind ADDRESS] [project_path]
+fdemon [--dap] [--dap-port PORT] [--dap-bind ADDRESS] [--dap-config IDE] [project_path]
 
 Options:
-  --dap              Start with DAP server enabled
-  --dap-port PORT    Port for DAP server (default: 0 = auto-assign, printed to stdout)
+  --dap              Enable DAP server alongside TUI (or headless) mode
+                     Note: not a separate mode — TUI keeps running
+  --dap-port PORT    Port for DAP server (default: 0 = auto-assign, printed to log)
+                     Use a fixed port for stable IDE configs across restarts
   --dap-bind ADDR    Bind address (default: 127.0.0.1)
+  --dap-config IDE   Generate DAP config for a specific IDE without auto-detection
+                     Values: vscode, neovim, helix, zed, emacs
+                     Can be used standalone: fdemon --dap-config vscode --dap-port 4711
 ```
 
-When `--dap-port 0` is used, the actual port is printed to stdout as JSON for IDE integration:
+When `--dap-port 0` is used, the actual assigned port is logged and emitted via `Message::DapServerStarted { port }`. In headless mode, it is also printed to stdout as JSON:
 ```json
 {"dapPort": 54321}
 ```
+
+**Note**: The `--dap` flag is independent of `--headless`. Both can be combined:
+- `fdemon` — TUI mode, DAP auto-starts if IDE detected
+- `fdemon --dap` — TUI mode, DAP always enabled
+- `fdemon --headless --dap` — Headless mode with DAP enabled
+- `fdemon --dap-port 4711` — implies `--dap`, fixed port
 
 ---
 
@@ -535,7 +831,12 @@ When `--dap-port 0` is used, the actual port is printed to stdout as JSON for ID
 - [ ] `fdemon-dap` crate compiles and passes tests
 - [ ] DAP protocol codec handles Content-Length framing correctly (including edge cases: partial reads, zero-length, oversized)
 - [ ] TCP server accepts connections and completes DAP initialization handshake
-- [ ] `fdemon --dap` CLI flag works
+- [ ] `fdemon --dap` CLI flag starts DAP server alongside TUI
+- [ ] Smart auto-start works: running inside VS Code terminal auto-starts DAP (when `auto_start_in_ide = true`)
+- [ ] `D` keybinding toggles DAP server on/off in Normal mode
+- [ ] Status bar shows `[DAP :PORT]` badge when server is running
+- [ ] `DapSettings` struct with `enabled`, `auto_start_in_ide`, `port`, `bind_address` fields in config
+- [ ] DAP settings appear in settings panel (`,` → DAP section)
 - [ ] Tested with VS Code DAP client (can connect and see capabilities)
 - [ ] `cargo test -p fdemon-dap` passes
 - [ ] `cargo clippy --workspace` clean
@@ -565,6 +866,23 @@ When `--dap-port 0` is used, the actual port is printed to stdout as JSON for ID
 - [ ] Performance tested: variable expansion doesn't hang on large objects
 - [ ] Documentation updated
 
+### Phase 5 Complete When:
+- [ ] `ParentIde` enum extended with `Emacs` and `Helix` variants (with env var detection)
+- [ ] `ParentIde::supports_dap_config()` and `dap_config_path()` methods implemented
+- [ ] VS Code config generator creates valid `launch.json` with `debugServer` field
+- [ ] VS Code config generator merges into existing `launch.json` without clobbering other configs
+- [ ] Neovim config generator produces `.vscode/launch.json` + `.nvim-dap.lua` snippet
+- [ ] Helix config generator produces valid `.helix/languages.toml` with `transport = "tcp"`
+- [ ] Zed config generator produces valid `.zed/debug.json` with `tcp_connection`
+- [ ] Emacs config generator produces `.fdemon/dap-emacs.el` with `dap-register-debug-provider`
+- [ ] Auto-generation triggers on DAP server bind, skips gracefully when no IDE detected
+- [ ] `--dap-config <ide>` CLI flag works for manual generation
+- [ ] Config merge logic handles malformed files without data loss (skip + warn)
+- [ ] 50+ unit tests covering generation, merging, and edge cases
+- [ ] `cargo test -p fdemon-dap` passes
+- [ ] `cargo clippy --workspace` clean
+- [ ] Tested end-to-end: run `fdemon --dap` inside VS Code terminal → launch.json generated → Debug panel shows config → connection succeeds
+
 ---
 
 ## Future Enhancements
@@ -574,6 +892,8 @@ When `--dap-port 0` is used, the actual port is printed to stdout as JSON for ID
 - **Data breakpoints**: Break on field value changes (requires VM Service `addBreakpointOnActivation` or equivalent)
 - **Memory inspection**: Expose fdemon's memory profiling data through DAP's `readMemory` request
 - **Inline values**: Support DAP's `inlineValues` capability for showing variable values inline in the editor
-- **IDE extensions**: Publish VS Code extension and Neovim plugin that auto-discover fdemon's DAP port
+- **Dedicated IDE extensions**: Publish VS Code extension and Neovim plugin that auto-discover fdemon's DAP port and provide richer integration (Phase 5 handles config generation; dedicated extensions would add live port discovery, status bar indicators, and custom DAP views)
+- **Zed Dart debugger extension**: Write a Zed extension implementing `get_dap_binary` for Dart/Flutter so `.zed/debug.json` auto-config actually works (currently Dart is not in Zed's supported debugger languages)
 - **Remote debugging**: Support non-localhost bind addresses for remote Flutter device debugging
 - **Profiling integration**: Expose fdemon's performance data through DAP events for integrated perf views
+- **IntelliJ DAP via LSP4IJ**: If the LSP4IJ plugin gains wider adoption, add `.idea/runConfigurations/` XML generation for IntelliJ/Android Studio DAP support
