@@ -6,6 +6,10 @@
 
 use std::collections::HashMap;
 
+// `ExceptionPauseMode` is available at `fdemon_daemon::vm_service::ExceptionPauseMode`.
+// `IsolateRef` from `debugger_types` is re-exported as `DebugIsolateRef` at the
+// `vm_service` level to avoid a name collision with `protocol::IsolateRef` — so
+// the direct submodule path is used here to keep the familiar `IsolateRef` name.
 use fdemon_daemon::vm_service::debugger_types::{ExceptionPauseMode, IsolateRef};
 
 // ---------------------------------------------------------------------------
@@ -19,7 +23,9 @@ pub enum PauseReason {
     Breakpoint,
     /// An exception was thrown.
     Exception,
-    /// Completed a single-step operation.
+    /// Paused after a single-step operation (maps to VM `PauseStep` event).
+    /// Currently unused — the VM sends `PauseStep` but it is not yet mapped
+    /// in the event pipeline. Reserved for Phase 2 stepping support.
     Step,
     /// Manual pause requested.
     Interrupted,

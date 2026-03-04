@@ -154,4 +154,30 @@ fn test_parse_debug_event_from_raw_json() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/debugger_types.rs` | Added `use super::protocol::StreamEvent` import; changed `parse_debug_event` signature from `(kind: &str, data: &Value)` to `(event: &StreamEvent)`; changed `parse_isolate_event` signature similarly; removed `parse_isolate_ref` helper; updated all 20+ parse_debug_event and parse_isolate_event tests to construct `StreamEvent` structs; added `make_event`/`make_event_with_isolate` test helpers; added `test_parse_debug_event_from_raw_json` and `test_parse_isolate_event_from_raw_json` integration tests; fixed `test_parse_unknown_debug_event_returns_none` to include valid isolate |
+| `crates/fdemon-app/src/actions/vm_service.rs` | Updated call sites for `parse_debug_event` and `parse_isolate_event` from `(&kind, &data)` to `(&event.params.event)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **IsolateRef type mapping**: `protocol::IsolateRef` has `name: String` (required), while `debugger_types::IsolateRef` has `name: Option<String>`. The conversion in `parse_debug_event`/`parse_isolate_event` maps the required string to `Some(name)`. Test helpers use an alias `ProtocolIsolateRef` to avoid name collision with the local `IsolateRef`.
+
+2. **Test helpers**: Added `make_event()` and `make_event_with_isolate()` helpers to reduce boilerplate across the 20+ updated tests. Each test now constructs a proper `StreamEvent` struct with the isolate in the typed field and kind-specific data in the flatten remainder, exactly matching the production deserialization path.
+
+3. **Integration tests validate the actual bug**: Both `test_parse_debug_event_from_raw_json` and `test_parse_isolate_event_from_raw_json` deserialize raw JSON into `StreamEvent` via `serde_json::from_value` and assert that (a) `stream_event.isolate.is_some()`, (b) `stream_event.data.get("isolate").is_none()`, and (c) the parse function returns `Some`. This directly demonstrates that the serde flatten bug is fixed.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2946+ tests across all crates, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **IsolateRef name field**: The `protocol::IsolateRef.name` is `String` (non-optional), but real VM Service events can send isolates with no name. If such an event is received, deserialization will fail at the `StreamEvent` level before reaching `parse_debug_event`. This is the same behavior as before — no regression introduced here.

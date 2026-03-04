@@ -88,4 +88,27 @@ Note: The other stream handlers (Extension, GC, Logging) also silently drop pars
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/vm_service.rs` | Added `use fdemon_daemon::vm_service::protocol::stream_id;` import; replaced two inline full-path `fdemon_daemon::vm_service::protocol::stream_id::DEBUG/ISOLATE` references with `stream_id::DEBUG` and `stream_id::ISOLATE`; added `else` branches with `tracing::debug!` on both the Debug and Isolate stream parse-failure paths |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import placement**: Added the `stream_id` import as a separate `use` statement rather than nesting it inside the existing `fdemon_daemon::vm_service` block. `rustfmt` reordered it to sit above the multi-item import, which is idiomatic (shorter/simpler imports before grouped ones). The alternative — adding `protocol::stream_id` to the existing block — would have required either a re-export in `fdemon_daemon::vm_service` (which doesn't exist) or restructuring into a nested `use` tree. The current approach is cleaner and idiomatic.
+
+2. **Log level `debug!` not `warn!`**: Kept at `debug!` as specified. Unrecognized event kinds are expected as the Dart VM introduces new protocol events; `warn!` would create noise in production logs.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo test --workspace` - Passed (all tests)
+- `cargo fmt --all` - Applied (reordered imports to idiomatic position)
+
+### Risks/Limitations
+
+1. **No unit tests**: The task explicitly states no new unit tests are required, and logging side-effects are not unit-testable in this codebase. The `else` branches are only exercised at runtime when the VM sends an unrecognized event kind.

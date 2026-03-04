@@ -16,6 +16,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::protocol::StreamEvent;
+
 // ---------------------------------------------------------------------------
 // Source location types
 // ---------------------------------------------------------------------------
@@ -418,117 +420,129 @@ pub enum IsolateEvent {
 // Parsing helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a Debug stream event from a raw VM Service stream event payload.
+/// Parse a Debug stream event from a typed VM Service stream event.
 ///
 /// # Arguments
 ///
-/// * `kind` — The event kind string from the `kind` field of the stream event.
-/// * `data` — The full event JSON object (containing `isolate`, `topFrame`, etc.).
+/// * `event` — A reference to the deserialized [`StreamEvent`]. The `isolate`
+///   field is read from the typed `event.isolate`, and kind-specific fields
+///   (e.g. `topFrame`, `breakpoint`) are read from the flattened `event.data`.
 ///
 /// # Returns
 ///
-/// `Some(DebugEvent)` for recognized event kinds, `None` for unrecognized kinds.
-pub fn parse_debug_event(kind: &str, data: &serde_json::Value) -> Option<DebugEvent> {
-    let isolate = parse_isolate_ref(data)?;
+/// `Some(DebugEvent)` for recognized event kinds, `None` for unrecognized kinds
+/// or when the required `isolate` field is absent.
+pub fn parse_debug_event(event: &StreamEvent) -> Option<DebugEvent> {
+    let isolate = event.isolate.as_ref().map(|iso| IsolateRef {
+        id: iso.id.clone(),
+        name: Some(iso.name.clone()),
+    })?;
 
-    match kind {
+    match event.kind.as_str() {
         "PauseStart" => Some(DebugEvent::PauseStart {
             isolate,
-            top_frame: parse_top_frame(data),
+            top_frame: parse_top_frame(&event.data),
         }),
         "PauseBreakpoint" => Some(DebugEvent::PauseBreakpoint {
             isolate,
-            top_frame: parse_top_frame(data),
-            breakpoint: parse_breakpoint_field(data, "breakpoint"),
-            pause_breakpoints: parse_breakpoint_array(data, "pauseBreakpoints"),
-            at_async_suspension: data
+            top_frame: parse_top_frame(&event.data),
+            breakpoint: parse_breakpoint_field(&event.data, "breakpoint"),
+            pause_breakpoints: parse_breakpoint_array(&event.data, "pauseBreakpoints"),
+            at_async_suspension: event
+                .data
                 .get("atAsyncSuspension")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
         }),
         "PauseException" => Some(DebugEvent::PauseException {
             isolate,
-            top_frame: parse_top_frame(data),
-            exception: parse_instance_ref_field(data, "exception"),
+            top_frame: parse_top_frame(&event.data),
+            exception: parse_instance_ref_field(&event.data, "exception"),
         }),
         "PauseExit" => Some(DebugEvent::PauseExit {
             isolate,
-            top_frame: parse_top_frame(data),
+            top_frame: parse_top_frame(&event.data),
         }),
         "PauseInterrupted" => Some(DebugEvent::PauseInterrupted {
             isolate,
-            top_frame: parse_top_frame(data),
-            at_async_suspension: data
+            top_frame: parse_top_frame(&event.data),
+            at_async_suspension: event
+                .data
                 .get("atAsyncSuspension")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false),
         }),
         "PausePostRequest" => Some(DebugEvent::PausePostRequest {
             isolate,
-            top_frame: parse_top_frame(data),
+            top_frame: parse_top_frame(&event.data),
         }),
         "Resume" => Some(DebugEvent::Resume { isolate }),
         "BreakpointAdded" => {
-            let breakpoint = parse_breakpoint_field(data, "breakpoint")?;
+            let breakpoint = parse_breakpoint_field(&event.data, "breakpoint")?;
             Some(DebugEvent::BreakpointAdded {
                 isolate,
                 breakpoint,
             })
         }
         "BreakpointResolved" => {
-            let breakpoint = parse_breakpoint_field(data, "breakpoint")?;
+            let breakpoint = parse_breakpoint_field(&event.data, "breakpoint")?;
             Some(DebugEvent::BreakpointResolved {
                 isolate,
                 breakpoint,
             })
         }
         "BreakpointRemoved" => {
-            let breakpoint = parse_breakpoint_field(data, "breakpoint")?;
+            let breakpoint = parse_breakpoint_field(&event.data, "breakpoint")?;
             Some(DebugEvent::BreakpointRemoved {
                 isolate,
                 breakpoint,
             })
         }
         "BreakpointUpdated" => {
-            let breakpoint = parse_breakpoint_field(data, "breakpoint")?;
+            let breakpoint = parse_breakpoint_field(&event.data, "breakpoint")?;
             Some(DebugEvent::BreakpointUpdated {
                 isolate,
                 breakpoint,
             })
         }
         "Inspect" => {
-            let inspectee = parse_instance_ref_field(data, "inspectee")?;
+            let inspectee = parse_instance_ref_field(&event.data, "inspectee")?;
             Some(DebugEvent::Inspect { isolate, inspectee })
         }
         _ => None,
     }
 }
 
-/// Parse an Isolate stream event from a raw VM Service stream event payload.
+/// Parse an Isolate stream event from a typed VM Service stream event.
 ///
 /// # Arguments
 ///
-/// * `kind` — The event kind string from the `kind` field of the stream event.
-/// * `data` — The full event JSON object (containing `isolate`, `extensionRPC`, etc.).
+/// * `event` — A reference to the deserialized [`StreamEvent`]. The `isolate`
+///   field is read from the typed `event.isolate`, and kind-specific fields
+///   (e.g. `extensionRPC`) are read from the flattened `event.data`.
 ///
 /// # Returns
 ///
-/// `Some(IsolateEvent)` for recognized event kinds, `None` for unrecognized kinds.
-pub fn parse_isolate_event(kind: &str, data: &serde_json::Value) -> Option<IsolateEvent> {
-    let isolate = parse_isolate_ref(data)?;
+/// `Some(IsolateEvent)` for recognized event kinds, `None` for unrecognized kinds
+/// or when the required `isolate` field is absent.
+pub fn parse_isolate_event(event: &StreamEvent) -> Option<IsolateEvent> {
+    let isolate = event.isolate.as_ref().map(|iso| IsolateRef {
+        id: iso.id.clone(),
+        name: Some(iso.name.clone()),
+    })?;
 
-    match kind {
+    match event.kind.as_str() {
         "IsolateStart" => Some(IsolateEvent::IsolateStart { isolate }),
         "IsolateRunnable" => Some(IsolateEvent::IsolateRunnable { isolate }),
         "IsolateExit" => Some(IsolateEvent::IsolateExit { isolate }),
         "IsolateUpdate" => Some(IsolateEvent::IsolateUpdate { isolate }),
         "IsolateReload" => Some(IsolateEvent::IsolateReload { isolate }),
         "ServiceExtensionAdded" => {
-            let extension_rpc = data
+            let extension_rpc = event
+                .data
                 .get("extensionRPC")
                 .and_then(|v| v.as_str())
-                .unwrap_or("")
-                .to_string();
+                .map(str::to_owned)?;
             Some(IsolateEvent::ServiceExtensionAdded {
                 isolate,
                 extension_rpc,
@@ -541,12 +555,6 @@ pub fn parse_isolate_event(kind: &str, data: &serde_json::Value) -> Option<Isola
 // ---------------------------------------------------------------------------
 // Internal parsing helpers
 // ---------------------------------------------------------------------------
-
-/// Extract an `IsolateRef` from the `"isolate"` field of an event JSON object.
-fn parse_isolate_ref(data: &serde_json::Value) -> Option<IsolateRef> {
-    data.get("isolate")
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-}
 
 /// Extract a `Frame` from the `"topFrame"` field of an event JSON object.
 fn parse_top_frame(data: &serde_json::Value) -> Option<Frame> {
@@ -581,21 +589,52 @@ fn parse_instance_ref_field(data: &serde_json::Value, field: &str) -> Option<Ins
 
 #[cfg(test)]
 mod tests {
+    use super::super::protocol::IsolateRef as ProtocolIsolateRef;
     use super::*;
     use serde_json::json;
+
+    /// Helper: build a `StreamEvent` with the given kind and isolate for tests.
+    fn make_event(kind: &str, data: serde_json::Value) -> StreamEvent {
+        StreamEvent {
+            kind: kind.to_string(),
+            isolate: Some(ProtocolIsolateRef {
+                id: "isolates/1".to_string(),
+                name: "main".to_string(),
+                number: None,
+                is_system_isolate: None,
+            }),
+            timestamp: None,
+            data,
+        }
+    }
+
+    /// Helper: build a `StreamEvent` with a named isolate.
+    fn make_event_with_isolate(
+        kind: &str,
+        isolate_id: &str,
+        isolate_name: &str,
+        data: serde_json::Value,
+    ) -> StreamEvent {
+        StreamEvent {
+            kind: kind.to_string(),
+            isolate: Some(ProtocolIsolateRef {
+                id: isolate_id.to_string(),
+                name: isolate_name.to_string(),
+                number: None,
+                is_system_isolate: None,
+            }),
+            timestamp: None,
+            data,
+        }
+    }
 
     // -- parse_debug_event ---------------------------------------------------
 
     #[test]
     fn test_parse_pause_start_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseStart",
-            "isolate": { "type": "@Isolate", "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_debug_event("PauseStart", &data).unwrap();
-        match event {
+        let event = make_event_with_isolate("PauseStart", "isolates/1", "main", json!({}));
+        let result = parse_debug_event(&event).unwrap();
+        match result {
             DebugEvent::PauseStart { isolate, top_frame } => {
                 assert_eq!(isolate.id, "isolates/1");
                 assert_eq!(isolate.name.as_deref(), Some("main"));
@@ -607,36 +646,38 @@ mod tests {
 
     #[test]
     fn test_parse_pause_breakpoint_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseBreakpoint",
-            "isolate": { "type": "@Isolate", "id": "isolates/123", "name": "main" },
-            "topFrame": {
-                "type": "Frame",
-                "index": 0,
-                "function": { "type": "@Function", "id": "func/1", "name": "myFunc" },
-                "location": {
-                    "type": "SourceLocation",
-                    "script": { "type": "@Script", "id": "scripts/1", "uri": "package:app/main.dart" },
-                    "tokenPos": 100,
-                    "line": 42,
-                    "column": 5
+        let event = make_event_with_isolate(
+            "PauseBreakpoint",
+            "isolates/123",
+            "main",
+            json!({
+                "topFrame": {
+                    "type": "Frame",
+                    "index": 0,
+                    "function": { "type": "@Function", "id": "func/1", "name": "myFunc" },
+                    "location": {
+                        "type": "SourceLocation",
+                        "script": { "type": "@Script", "id": "scripts/1", "uri": "package:app/main.dart" },
+                        "tokenPos": 100,
+                        "line": 42,
+                        "column": 5
+                    },
+                    "vars": []
                 },
-                "vars": []
-            },
-            "breakpoint": {
-                "type": "Breakpoint",
-                "id": "breakpoints/1",
-                "breakpointNumber": 1,
-                "enabled": true,
-                "resolved": true
-            },
-            "pauseBreakpoints": [],
-            "atAsyncSuspension": false
-        });
+                "breakpoint": {
+                    "type": "Breakpoint",
+                    "id": "breakpoints/1",
+                    "breakpointNumber": 1,
+                    "enabled": true,
+                    "resolved": true
+                },
+                "pauseBreakpoints": [],
+                "atAsyncSuspension": false
+            }),
+        );
 
-        let event = parse_debug_event("PauseBreakpoint", &data).unwrap();
-        assert!(matches!(event, DebugEvent::PauseBreakpoint { .. }));
+        let result = parse_debug_event(&event).unwrap();
+        assert!(matches!(result, DebugEvent::PauseBreakpoint { .. }));
 
         if let DebugEvent::PauseBreakpoint {
             isolate,
@@ -644,7 +685,7 @@ mod tests {
             breakpoint,
             pause_breakpoints,
             at_async_suspension,
-        } = event
+        } = result
         {
             assert_eq!(isolate.id, "isolates/123");
             let frame = top_frame.unwrap();
@@ -665,19 +706,16 @@ mod tests {
 
     #[test]
     fn test_parse_pause_breakpoint_with_async_suspension() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseBreakpoint",
-            "isolate": { "id": "isolates/1", "name": null },
-            "pauseBreakpoints": [],
-            "atAsyncSuspension": true
-        });
+        let event = make_event(
+            "PauseBreakpoint",
+            json!({ "pauseBreakpoints": [], "atAsyncSuspension": true }),
+        );
 
-        let event = parse_debug_event("PauseBreakpoint", &data).unwrap();
+        let result = parse_debug_event(&event).unwrap();
         if let DebugEvent::PauseBreakpoint {
             at_async_suspension,
             ..
-        } = event
+        } = result
         {
             assert!(at_async_suspension);
         }
@@ -685,24 +723,21 @@ mod tests {
 
     #[test]
     fn test_parse_pause_exception_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseException",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "topFrame": {
-                "index": 0,
-                "vars": []
-            },
-            "exception": {
-                "id": "objects/42",
-                "kind": "PlainInstance",
-                "classRef": { "id": "classes/1", "name": "Error" },
-                "valueAsString": "Something went wrong"
-            }
-        });
+        let event = make_event(
+            "PauseException",
+            json!({
+                "topFrame": { "index": 0, "vars": [] },
+                "exception": {
+                    "id": "objects/42",
+                    "kind": "PlainInstance",
+                    "classRef": { "id": "classes/1", "name": "Error" },
+                    "valueAsString": "Something went wrong"
+                }
+            }),
+        );
 
-        let event = parse_debug_event("PauseException", &data).unwrap();
-        if let DebugEvent::PauseException { exception, .. } = event {
+        let result = parse_debug_event(&event).unwrap();
+        if let DebugEvent::PauseException { exception, .. } = result {
             let ex = exception.unwrap();
             assert_eq!(ex.kind, "PlainInstance");
             assert_eq!(ex.value_as_string.as_deref(), Some("Something went wrong"));
@@ -715,28 +750,17 @@ mod tests {
 
     #[test]
     fn test_parse_pause_exit_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseExit",
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_debug_event("PauseExit", &data).unwrap();
-        assert!(matches!(event, DebugEvent::PauseExit { .. }));
+        let event = make_event("PauseExit", json!({}));
+        let result = parse_debug_event(&event).unwrap();
+        assert!(matches!(result, DebugEvent::PauseExit { .. }));
     }
 
     #[test]
     fn test_parse_pause_interrupted_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PauseInterrupted",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "atAsyncSuspension": false
-        });
-
-        let event = parse_debug_event("PauseInterrupted", &data).unwrap();
+        let event = make_event("PauseInterrupted", json!({ "atAsyncSuspension": false }));
+        let result = parse_debug_event(&event).unwrap();
         assert!(matches!(
-            event,
+            result,
             DebugEvent::PauseInterrupted {
                 at_async_suspension: false,
                 ..
@@ -746,44 +770,34 @@ mod tests {
 
     #[test]
     fn test_parse_pause_post_request_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "PausePostRequest",
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_debug_event("PausePostRequest", &data).unwrap();
-        assert!(matches!(event, DebugEvent::PausePostRequest { .. }));
+        let event = make_event("PausePostRequest", json!({}));
+        let result = parse_debug_event(&event).unwrap();
+        assert!(matches!(result, DebugEvent::PausePostRequest { .. }));
     }
 
     #[test]
     fn test_parse_resume_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "Resume",
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_debug_event("Resume", &data).unwrap();
-        assert!(matches!(event, DebugEvent::Resume { .. }));
+        let event = make_event("Resume", json!({}));
+        let result = parse_debug_event(&event).unwrap();
+        assert!(matches!(result, DebugEvent::Resume { .. }));
     }
 
     #[test]
     fn test_parse_breakpoint_added_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "BreakpointAdded",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "breakpoint": {
-                "id": "breakpoints/5",
-                "breakpointNumber": 5,
-                "enabled": true,
-                "resolved": false
-            }
-        });
+        let event = make_event(
+            "BreakpointAdded",
+            json!({
+                "breakpoint": {
+                    "id": "breakpoints/5",
+                    "breakpointNumber": 5,
+                    "enabled": true,
+                    "resolved": false
+                }
+            }),
+        );
 
-        let event = parse_debug_event("BreakpointAdded", &data).unwrap();
-        if let DebugEvent::BreakpointAdded { breakpoint, .. } = event {
+        let result = parse_debug_event(&event).unwrap();
+        if let DebugEvent::BreakpointAdded { breakpoint, .. } = result {
             assert_eq!(breakpoint.id, "breakpoints/5");
             assert_eq!(breakpoint.breakpoint_number, 5);
             assert!(!breakpoint.resolved);
@@ -794,25 +808,25 @@ mod tests {
 
     #[test]
     fn test_parse_breakpoint_resolved_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "BreakpointResolved",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "breakpoint": {
-                "id": "breakpoints/5",
-                "breakpointNumber": 5,
-                "enabled": true,
-                "resolved": true,
-                "location": {
-                    "script": { "id": "scripts/1", "uri": "package:app/main.dart" },
-                    "tokenPos": 200,
-                    "line": 10
+        let event = make_event(
+            "BreakpointResolved",
+            json!({
+                "breakpoint": {
+                    "id": "breakpoints/5",
+                    "breakpointNumber": 5,
+                    "enabled": true,
+                    "resolved": true,
+                    "location": {
+                        "script": { "id": "scripts/1", "uri": "package:app/main.dart" },
+                        "tokenPos": 200,
+                        "line": 10
+                    }
                 }
-            }
-        });
+            }),
+        );
 
-        let event = parse_debug_event("BreakpointResolved", &data).unwrap();
-        if let DebugEvent::BreakpointResolved { breakpoint, .. } = event {
+        let result = parse_debug_event(&event).unwrap();
+        if let DebugEvent::BreakpointResolved { breakpoint, .. } = result {
             assert!(breakpoint.resolved);
             assert!(breakpoint.location.is_some());
         } else {
@@ -822,38 +836,38 @@ mod tests {
 
     #[test]
     fn test_parse_breakpoint_removed_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "BreakpointRemoved",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "breakpoint": {
-                "id": "breakpoints/3",
-                "breakpointNumber": 3,
-                "enabled": true,
-                "resolved": true
-            }
-        });
+        let event = make_event(
+            "BreakpointRemoved",
+            json!({
+                "breakpoint": {
+                    "id": "breakpoints/3",
+                    "breakpointNumber": 3,
+                    "enabled": true,
+                    "resolved": true
+                }
+            }),
+        );
 
-        let event = parse_debug_event("BreakpointRemoved", &data).unwrap();
-        assert!(matches!(event, DebugEvent::BreakpointRemoved { .. }));
+        let result = parse_debug_event(&event).unwrap();
+        assert!(matches!(result, DebugEvent::BreakpointRemoved { .. }));
     }
 
     #[test]
     fn test_parse_breakpoint_updated_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "BreakpointUpdated",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "breakpoint": {
-                "id": "breakpoints/2",
-                "breakpointNumber": 2,
-                "enabled": false,
-                "resolved": true
-            }
-        });
+        let event = make_event(
+            "BreakpointUpdated",
+            json!({
+                "breakpoint": {
+                    "id": "breakpoints/2",
+                    "breakpointNumber": 2,
+                    "enabled": false,
+                    "resolved": true
+                }
+            }),
+        );
 
-        let event = parse_debug_event("BreakpointUpdated", &data).unwrap();
-        if let DebugEvent::BreakpointUpdated { breakpoint, .. } = event {
+        let result = parse_debug_event(&event).unwrap();
+        if let DebugEvent::BreakpointUpdated { breakpoint, .. } = result {
             assert!(!breakpoint.enabled);
         } else {
             panic!("Expected BreakpointUpdated");
@@ -862,19 +876,19 @@ mod tests {
 
     #[test]
     fn test_parse_inspect_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "Inspect",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "inspectee": {
-                "id": "objects/77",
-                "kind": "String",
-                "valueAsString": "hello"
-            }
-        });
+        let event = make_event(
+            "Inspect",
+            json!({
+                "inspectee": {
+                    "id": "objects/77",
+                    "kind": "String",
+                    "valueAsString": "hello"
+                }
+            }),
+        );
 
-        let event = parse_debug_event("Inspect", &data).unwrap();
-        if let DebugEvent::Inspect { inspectee, .. } = event {
+        let result = parse_debug_event(&event).unwrap();
+        if let DebugEvent::Inspect { inspectee, .. } = result {
             assert_eq!(inspectee.kind, "String");
             assert_eq!(inspectee.value_as_string.as_deref(), Some("hello"));
         } else {
@@ -884,33 +898,117 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_debug_event_returns_none() {
-        let data = json!({});
-        assert!(parse_debug_event("UnknownEvent", &data).is_none());
+        // Must include a valid isolate so the unknown-kind path is tested,
+        // not the missing-isolate early return (issue #13).
+        let event = make_event("UnknownEvent", json!({}));
+        assert!(parse_debug_event(&event).is_none());
     }
 
     #[test]
     fn test_parse_debug_event_missing_isolate_returns_none() {
         // If `isolate` field is absent, parsing should fail gracefully.
-        let data = json!({
-            "kind": "Resume"
+        let event = StreamEvent {
+            kind: "Resume".to_string(),
+            isolate: None,
+            timestamp: None,
+            data: json!({}),
+        };
+        assert!(parse_debug_event(&event).is_none());
+    }
+
+    // -- Integration test: full JSON -> StreamEvent -> parse_debug_event ----
+
+    #[test]
+    fn test_parse_debug_event_from_raw_json() {
+        // Raw JSON as the VM Service would send it (isolate key at top level).
+        // Verifies that serde #[flatten] correctly separates the typed `isolate`
+        // field from the `data` remainder, and that parse_debug_event succeeds.
+        let raw = json!({
+            "kind": "PauseBreakpoint",
+            "isolate": {
+                "id": "isolates/123",
+                "name": "main",
+                "number": "1",
+                "isSystemIsolate": false
+            },
+            "topFrame": {
+                "index": 0,
+                "kind": "Regular"
+            },
+            "pauseBreakpoints": [],
+            "atAsyncSuspension": false,
+            "timestamp": 1_234_567_890_i64
         });
-        assert!(parse_debug_event("Resume", &data).is_none());
+        let stream_event: StreamEvent = serde_json::from_value(raw).unwrap();
+        // The typed `isolate` field must be populated.
+        assert!(
+            stream_event.isolate.is_some(),
+            "StreamEvent.isolate must be Some after deserialization"
+        );
+        // The flatten remainder must NOT contain `isolate` (serde consumed it).
+        assert!(
+            stream_event.data.get("isolate").is_none(),
+            "StreamEvent.data must not contain 'isolate' (consumed by typed field)"
+        );
+
+        let debug_event = parse_debug_event(&stream_event);
+        assert!(
+            debug_event.is_some(),
+            "parse_debug_event must succeed with real VM JSON"
+        );
+        match debug_event.unwrap() {
+            DebugEvent::PauseBreakpoint { isolate, .. } => {
+                assert_eq!(isolate.id, "isolates/123");
+            }
+            other => panic!("Expected PauseBreakpoint, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_isolate_event_from_raw_json() {
+        // Integration test: raw JSON -> StreamEvent -> parse_isolate_event.
+        let raw = json!({
+            "kind": "IsolateStart",
+            "isolate": {
+                "id": "isolates/456",
+                "name": "worker",
+                "number": "2",
+                "isSystemIsolate": false
+            },
+            "timestamp": 1_234_567_890_i64
+        });
+        let stream_event: StreamEvent = serde_json::from_value(raw).unwrap();
+        assert!(
+            stream_event.isolate.is_some(),
+            "StreamEvent.isolate must be Some after deserialization"
+        );
+        assert!(
+            stream_event.data.get("isolate").is_none(),
+            "StreamEvent.data must not contain 'isolate' (consumed by typed field)"
+        );
+
+        let isolate_event = parse_isolate_event(&stream_event);
+        assert!(
+            isolate_event.is_some(),
+            "parse_isolate_event must succeed with real VM JSON"
+        );
+        match isolate_event.unwrap() {
+            IsolateEvent::IsolateStart { isolate } => {
+                assert_eq!(isolate.id, "isolates/456");
+            }
+            other => panic!("Expected IsolateStart, got {:?}", other),
+        }
     }
 
     // -- parse_isolate_event -------------------------------------------------
 
     #[test]
     fn test_parse_isolate_start_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "IsolateStart",
-            "isolate": { "type": "@Isolate", "id": "isolates/456", "name": "worker" }
-        });
+        let event = make_event_with_isolate("IsolateStart", "isolates/456", "worker", json!({}));
+        let result = parse_isolate_event(&event).unwrap();
+        assert!(matches!(result, IsolateEvent::IsolateStart { .. }));
 
-        let event = parse_isolate_event("IsolateStart", &data).unwrap();
-        assert!(matches!(event, IsolateEvent::IsolateStart { .. }));
-
-        if let IsolateEvent::IsolateStart { isolate } = event {
+        if let IsolateEvent::IsolateStart { isolate } = result {
             assert_eq!(isolate.id, "isolates/456");
             assert_eq!(isolate.name.as_deref(), Some("worker"));
         }
@@ -918,66 +1016,45 @@ mod tests {
 
     #[test]
     fn test_parse_isolate_runnable_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "IsolateRunnable",
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_isolate_event("IsolateRunnable", &data).unwrap();
-        assert!(matches!(event, IsolateEvent::IsolateRunnable { .. }));
+        let event = make_event("IsolateRunnable", json!({}));
+        let result = parse_isolate_event(&event).unwrap();
+        assert!(matches!(result, IsolateEvent::IsolateRunnable { .. }));
     }
 
     #[test]
     fn test_parse_isolate_exit_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "IsolateExit",
-            "isolate": { "id": "isolates/2", "name": "worker" }
-        });
-
-        let event = parse_isolate_event("IsolateExit", &data).unwrap();
-        assert!(matches!(event, IsolateEvent::IsolateExit { .. }));
+        let event = make_event_with_isolate("IsolateExit", "isolates/2", "worker", json!({}));
+        let result = parse_isolate_event(&event).unwrap();
+        assert!(matches!(result, IsolateEvent::IsolateExit { .. }));
     }
 
     #[test]
     fn test_parse_isolate_update_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "IsolateUpdate",
-            "isolate": { "id": "isolates/1", "name": "main (renamed)" }
-        });
-
-        let event = parse_isolate_event("IsolateUpdate", &data).unwrap();
-        assert!(matches!(event, IsolateEvent::IsolateUpdate { .. }));
+        let event =
+            make_event_with_isolate("IsolateUpdate", "isolates/1", "main (renamed)", json!({}));
+        let result = parse_isolate_event(&event).unwrap();
+        assert!(matches!(result, IsolateEvent::IsolateUpdate { .. }));
     }
 
     #[test]
     fn test_parse_isolate_reload_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "IsolateReload",
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-
-        let event = parse_isolate_event("IsolateReload", &data).unwrap();
-        assert!(matches!(event, IsolateEvent::IsolateReload { .. }));
+        let event = make_event("IsolateReload", json!({}));
+        let result = parse_isolate_event(&event).unwrap();
+        assert!(matches!(result, IsolateEvent::IsolateReload { .. }));
     }
 
     #[test]
     fn test_parse_service_extension_added_event() {
-        let data = json!({
-            "type": "Event",
-            "kind": "ServiceExtensionAdded",
-            "isolate": { "id": "isolates/1", "name": "main" },
-            "extensionRPC": "ext.flutter.reassemble"
-        });
+        let event = make_event(
+            "ServiceExtensionAdded",
+            json!({ "extensionRPC": "ext.flutter.reassemble" }),
+        );
 
-        let event = parse_isolate_event("ServiceExtensionAdded", &data).unwrap();
+        let result = parse_isolate_event(&event).unwrap();
         if let IsolateEvent::ServiceExtensionAdded {
             extension_rpc,
             isolate,
-        } = event
+        } = result
         {
             assert_eq!(extension_rpc, "ext.flutter.reassemble");
             assert_eq!(isolate.id, "isolates/1");
@@ -987,17 +1064,39 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_service_extension_added_missing_rpc_returns_none() {
+        // When `extensionRPC` is absent, parse_isolate_event must return None
+        // rather than producing an event with an empty extension_rpc string.
+        let event = StreamEvent {
+            kind: "ServiceExtensionAdded".to_string(),
+            isolate: Some(ProtocolIsolateRef {
+                id: "isolates/1".to_string(),
+                name: "main".to_string(),
+                number: None,
+                is_system_isolate: None,
+            }),
+            timestamp: None,
+            data: json!({}), // no extensionRPC field
+        };
+        assert!(parse_isolate_event(&event).is_none());
+    }
+
+    #[test]
     fn test_parse_unknown_isolate_event_returns_none() {
-        let data = json!({
-            "isolate": { "id": "isolates/1", "name": "main" }
-        });
-        assert!(parse_isolate_event("UnknownIsolateKind", &data).is_none());
+        // Must include a valid isolate so the unknown-kind path is tested.
+        let event = make_event("UnknownIsolateKind", json!({}));
+        assert!(parse_isolate_event(&event).is_none());
     }
 
     #[test]
     fn test_parse_isolate_event_missing_isolate_returns_none() {
-        let data = json!({ "kind": "IsolateStart" });
-        assert!(parse_isolate_event("IsolateStart", &data).is_none());
+        let event = StreamEvent {
+            kind: "IsolateStart".to_string(),
+            isolate: None,
+            timestamp: None,
+            data: json!({}),
+        };
+        assert!(parse_isolate_event(&event).is_none());
     }
 
     // -- StepOption ----------------------------------------------------------

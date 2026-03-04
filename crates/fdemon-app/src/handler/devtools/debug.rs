@@ -94,9 +94,15 @@ pub fn handle_debug_event(
                 .mark_breakpoint_verified(&breakpoint.id);
         }
         DebugEvent::BreakpointRemoved { breakpoint, .. } => {
+            // Remove from tracked breakpoints so DebugState stays consistent
+            // with the VM. This covers VM-initiated removals (e.g., hot restart
+            // clearing breakpoints) in addition to user-initiated ones.
+            handle.session.debug.untrack_breakpoint(&breakpoint.id);
             tracing::debug!("Breakpoint removed: {}", breakpoint.id);
         }
         DebugEvent::BreakpointUpdated { breakpoint, .. } => {
+            // Breakpoint metadata updates (e.g., resolved location) are informational.
+            // Full breakpoint sync will be implemented in Phase 3 (DAP adapter).
             tracing::debug!("Breakpoint updated: {}", breakpoint.id);
         }
         DebugEvent::Inspect { inspectee, .. } => {
@@ -391,6 +397,62 @@ mod tests {
         let result = handle_debug_event(&mut state, session_id, event);
         assert!(result.action.is_none());
         assert!(result.message.is_none());
+    }
+
+    #[test]
+    fn test_breakpoint_removed_untracks() {
+        use crate::session::debug_state::TrackedBreakpoint;
+
+        let (mut state, session_id) = make_state_with_session();
+
+        // Setup: track a breakpoint in DebugState.
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .debug
+            .track_breakpoint(TrackedBreakpoint {
+                dap_id: 1,
+                vm_id: "breakpoints/1".to_string(),
+                uri: "package:app/main.dart".to_string(),
+                line: 10,
+                column: None,
+                verified: true,
+            });
+
+        // Confirm it is tracked.
+        {
+            let debug = &state.session_manager.get(session_id).unwrap().session.debug;
+            assert_eq!(debug.breakpoints_for_uri("package:app/main.dart").len(), 1);
+        }
+
+        // Dispatch BreakpointRemoved event.
+        let event = DebugEvent::BreakpointRemoved {
+            isolate: IsolateRef {
+                id: "isolates/1".into(),
+                name: None,
+            },
+            breakpoint: fdemon_daemon::vm_service::debugger_types::Breakpoint {
+                id: "breakpoints/1".to_string(),
+                breakpoint_number: 1,
+                enabled: true,
+                resolved: true,
+                location: None,
+            },
+        };
+        let result = handle_debug_event(&mut state, session_id, event);
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+
+        // Assert: breakpoint is no longer in DebugState.
+        let debug = &state.session_manager.get(session_id).unwrap().session.debug;
+        assert!(
+            debug
+                .breakpoints_for_uri("package:app/main.dart")
+                .is_empty(),
+            "BreakpointRemoved should untrack the breakpoint from DebugState"
+        );
     }
 
     #[test]

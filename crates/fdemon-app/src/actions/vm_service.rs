@@ -19,6 +19,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::message::Message;
 use crate::session::SessionId;
+use fdemon_daemon::vm_service::protocol::stream_id;
 use fdemon_daemon::vm_service::{
     enable_frame_tracking, flutter_error_to_log_entry, parse_debug_event, parse_flutter_error,
     parse_frame_timing, parse_gc_event, parse_isolate_event, parse_log_record, vm_log_to_log_entry,
@@ -205,34 +206,38 @@ async fn forward_vm_events(
 
                         // Route Debug stream events (breakpoints, pause, resume, etc.).
                         // Checked by stream_id so we only attempt parsing on the correct stream.
-                        if event.params.stream_id == fdemon_daemon::vm_service::protocol::stream_id::DEBUG {
-                            if let Some(debug_event) = parse_debug_event(
-                                &event.params.event.kind,
-                                &event.params.event.data,
-                            ) {
+                        if event.params.stream_id == stream_id::DEBUG {
+                            if let Some(debug_event) = parse_debug_event(&event.params.event) {
                                 let _ = msg_tx
                                     .send(Message::VmServiceDebugEvent {
                                         session_id,
                                         event: debug_event,
                                     })
                                     .await;
+                            } else {
+                                tracing::debug!(
+                                    "Debug stream: unrecognized or malformed event kind '{}'",
+                                    event.params.event.kind
+                                );
                             }
                             continue;
                         }
 
                         // Route Isolate stream events (isolate lifecycle).
                         // Checked by stream_id so we only attempt parsing on the correct stream.
-                        if event.params.stream_id == fdemon_daemon::vm_service::protocol::stream_id::ISOLATE {
-                            if let Some(isolate_event) = parse_isolate_event(
-                                &event.params.event.kind,
-                                &event.params.event.data,
-                            ) {
+                        if event.params.stream_id == stream_id::ISOLATE {
+                            if let Some(isolate_event) = parse_isolate_event(&event.params.event) {
                                 let _ = msg_tx
                                     .send(Message::VmServiceIsolateEvent {
                                         session_id,
                                         event: isolate_event,
                                     })
                                     .await;
+                            } else {
+                                tracing::debug!(
+                                    "Isolate stream: unrecognized or malformed event kind '{}'",
+                                    event.params.event.kind
+                                );
                             }
                             continue;
                         }

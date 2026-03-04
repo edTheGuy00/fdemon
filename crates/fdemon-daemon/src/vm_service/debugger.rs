@@ -387,6 +387,13 @@ pub async fn get_source_report(
 
 #[cfg(test)]
 mod tests {
+    // NOTE: All tests in this module are synchronous parameter-construction tests.
+    // They verify that JSON-RPC parameter objects are assembled correctly (required
+    // fields present, optional fields omitted when None, enum values serialised to
+    // the right strings). No async RPC tests are included because there is no mock
+    // transport for `VmRequestHandle` — wiring a fake channel would require a live
+    // Tokio runtime and a stub task, adding complexity without meaningful coverage
+    // of the protocol layer. End-to-end RPC coverage will be addressed separately.
     use super::*;
     use serde_json::json;
 

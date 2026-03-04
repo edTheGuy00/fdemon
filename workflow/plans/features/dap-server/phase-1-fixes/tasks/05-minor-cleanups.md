@@ -96,4 +96,30 @@ Also update the comment block (around line 341) from "log at debug" to "log at w
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/debug_state.rs` | Updated `PauseReason::Step` doc comment to reference `PauseStep` VM event and mark as Phase 2 placeholder; added explanatory comment on direct submodule import for `IsolateRef` |
+| `crates/fdemon-daemon/src/vm_service/debugger.rs` | Added `// NOTE:` comment at top of test module explaining sync-only parameter-construction approach |
+| `crates/fdemon-app/src/actions/mod.rs` | Changed 5 DAP stub arms from `tracing::debug!` to `tracing::warn!`; updated comment from "log at debug" to "log at warn" |
+| `crates/fdemon-app/src/actions/vm_service.rs` | Fixed pre-existing broken call sites for `parse_debug_event` and `parse_isolate_event` that still used old 2-argument signature after upstream `debugger_types.rs` was refactored to take `&StreamEvent` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import path comment for `IsolateRef`**: `fdemon_daemon::vm_service` re-exports `debugger_types::IsolateRef` as `DebugIsolateRef` to avoid collision with `protocol::IsolateRef`. Since the module uses the unaliased name `IsolateRef`, the direct submodule path is kept with a comment explaining the aliasing conflict rather than adopting the `DebugIsolateRef` alias throughout this file.
+
+2. **Fixing pre-existing breakage in `vm_service.rs`**: The uncommitted changes from a prior task refactored `parse_debug_event` and `parse_isolate_event` to take `&StreamEvent` instead of `(kind: &str, data: &Value)`, but the call sites in `actions/vm_service.rs` were not updated. This caused `cargo check` to fail (but not before — the base commit was clean). Fixed both call sites by passing `&event.params.event` directly, matching the new signature.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (2924 tests: all pass, 69 ignored)
+- `cargo clippy --workspace -- -D warnings` — Passed
+- `cargo fmt --all` — Applied (no changes needed)
+
+### Risks/Limitations
+
+1. **Pre-existing broken state**: The `actions/vm_service.rs` fix was necessary to bring the workspace to a compilable state. This fix is correct and was left incomplete by a prior task's changes to `debugger_types.rs`.

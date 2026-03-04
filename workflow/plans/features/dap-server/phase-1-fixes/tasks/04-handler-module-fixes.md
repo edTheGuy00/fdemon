@@ -96,4 +96,30 @@ fn test_breakpoint_removed_untracks() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Changed `pub mod debug;` to `pub(crate) mod debug;` to match `network` and `performance` |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Added `handle.session.debug.untrack_breakpoint(&breakpoint.id)` in `BreakpointRemoved` arm; added intent comments on `BreakpointRemoved` and `BreakpointUpdated` arms; added `test_breakpoint_removed_untracks` unit test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing compilation breakage from Task 01**: The `parse_debug_event` / `parse_isolate_event` function signatures were already updated to `&StreamEvent` (partial Task 01 work) but the tests in `debugger_types.rs` still used the old 2-arg form. Since Task 04 requires `cargo test --workspace` to pass, and the `debugger_types.rs` tests were discovered to have already been updated (the file was modified by the linter/system), the workspace compiled and tested cleanly. The `actions/vm_service.rs` call sites were also already updated.
+
+2. **`BreakpointRemoved` now calls `untrack_breakpoint`**: The untrack call is placed before the tracing log to ensure the state mutation happens even if there's a future early return added. This matches the pattern used in `mark_breakpoint_verified` for `BreakpointResolved`.
+
+3. **Intent comments match existing style**: The comments on `BreakpointUpdated` follow the same pattern as the pre-existing comment on `BreakpointAdded` — explaining why the handler is limited for now and referencing the future phase that will complete the implementation.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no changes needed)
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all tests pass)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Task 01 partial state**: The `debugger_types.rs` tests were already updated to use `StreamEvent` before this task ran (the system/linter had applied those changes). This means the Task 01 acceptance criterion for test updates is partially done, but the full Task 01 (integration tests, `parse_isolate_ref` removal) still needs completion.

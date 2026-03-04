@@ -73,4 +73,26 @@ fn test_parse_service_extension_added_missing_rpc_returns_none() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/debugger_types.rs` | Changed `.unwrap_or("").to_string()` to `.map(str::to_owned)?` in `ServiceExtensionAdded` arm; added `test_parse_service_extension_added_missing_rpc_returns_none` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **No existing tests needed updating**: The only pre-existing test for `ServiceExtensionAdded` (`test_parse_service_extension_added_event`) tests the happy path with a valid `extensionRPC` field present — it was not affected by this change. No test expected an empty string on the missing-field path.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2954 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-daemon test_parse_service_extension_added` - Passed (2 tests: happy path + new missing-rpc test)
+
+### Risks/Limitations
+
+1. **Downstream callers silently drop missing-RPC events**: Any code that previously received `ServiceExtensionAdded` with an empty `extension_rpc` will now simply not receive the event. This is the desired behavior, and no downstream code in Phase 1 relies on the empty-string case.
