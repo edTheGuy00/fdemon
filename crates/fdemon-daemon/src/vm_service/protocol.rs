@@ -16,6 +16,28 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 // ---------------------------------------------------------------------------
+// Stream ID constants
+// ---------------------------------------------------------------------------
+
+/// VM Service stream identifiers.
+///
+/// These constants name the streams that the client subscribes to via
+/// `streamListen`. Use these instead of raw string literals to avoid typos
+/// and to make stream routing code self-documenting.
+pub mod stream_id {
+    /// Flutter service extension events (e.g. `Flutter.Error`).
+    pub const EXTENSION: &str = "Extension";
+    /// Structured log records from `dart:developer`.
+    pub const LOGGING: &str = "Logging";
+    /// Garbage collection events for memory monitoring.
+    pub const GC: &str = "GC";
+    /// Debugger events (breakpoint pause, resume, exceptions, etc.).
+    pub const DEBUG: &str = "Debug";
+    /// Isolate lifecycle events (start, runnable, exit, reload, etc.).
+    pub const ISOLATE: &str = "Isolate";
+}
+
+// ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
 
@@ -729,5 +751,28 @@ mod tests {
 
         let isolate: IsolateRef = serde_json::from_str(json).unwrap();
         assert_eq!(isolate.is_system_isolate, Some(true));
+    }
+
+    // -- stream_id constants -------------------------------------------------
+
+    #[test]
+    fn test_stream_id_constants_match_vm_service_protocol() {
+        assert_eq!(stream_id::EXTENSION, "Extension");
+        assert_eq!(stream_id::LOGGING, "Logging");
+        assert_eq!(stream_id::GC, "GC");
+        assert_eq!(stream_id::DEBUG, "Debug");
+        assert_eq!(stream_id::ISOLATE, "Isolate");
+    }
+
+    #[test]
+    fn test_stream_id_debug_constant() {
+        // Verify the Debug stream ID matches the Dart VM Service protocol value.
+        assert_eq!(stream_id::DEBUG, "Debug");
+    }
+
+    #[test]
+    fn test_stream_id_isolate_constant() {
+        // Verify the Isolate stream ID matches the Dart VM Service protocol value.
+        assert_eq!(stream_id::ISOLATE, "Isolate");
     }
 }

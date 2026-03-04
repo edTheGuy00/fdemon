@@ -325,4 +325,30 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/debugger.rs` | NEW FILE: 11 async RPC wrapper functions with doc comments and 21 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod debugger;`, re-exports for all 11 functions, updated module doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test strategy without live WebSocket**: `VmRequestHandle::new_for_test()` creates a disconnected dummy handle that returns `Error::ChannelClosed` on any real request. Since all 11 functions require a live connection for end-to-end testing, the unit tests instead verify the parameter construction logic and `@Error` detection logic directly by simulating the JSON values, matching the pattern from `debugger_types.rs` tests. This provides meaningful coverage of the serialization logic without requiring a live Dart VM.
+
+2. **`@Error` detection comment**: Added an explicit inline comment in `evaluate` and `evaluate_in_frame` explaining that the `@Error` check is for VM-level errors (compile/runtime), distinct from transport errors. This matches the task spec and makes the intent clear for future maintainers.
+
+3. **Import style**: Used `super::debugger_types::` prefix imports in `debugger.rs` rather than `crate::vm_service::debugger_types::` for consistency with how `performance.rs` references `super::client::VmRequestHandle`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (457 unit tests: 0 failed, 3 ignored; 21 new tests in `debugger.rs`)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (0 warnings)
+- `cargo fmt -p fdemon-daemon` - Applied (formatter made minor style adjustments to test assertions)
+
+### Risks/Limitations
+
+1. **Async tests not possible without mock infrastructure**: The RPC functions cannot be tested end-to-end without a live Dart VM or a mock WebSocket server. A future task could introduce a mock `VmRequestHandle` that records requests and returns pre-set responses, enabling full async test coverage for parameter serialization verification.

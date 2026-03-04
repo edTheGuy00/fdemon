@@ -42,7 +42,7 @@ use fdemon_core::prelude::*;
 
 use super::extensions::build_extension_params;
 use super::protocol::{
-    parse_vm_message, IsolateInfo, IsolateRef, VersionInfo, VmClientEvent, VmInfo,
+    parse_vm_message, stream_id, IsolateInfo, IsolateRef, VersionInfo, VmClientEvent, VmInfo,
     VmRequestTracker, VmServiceError, VmServiceMessage, VmServiceRequest,
 };
 
@@ -270,8 +270,14 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// Stream IDs that the background task re-subscribes to after a reconnection.
 /// A fresh VM Service connection has no active subscriptions, so these must be
-/// re-established to keep receiving Extension, Logging, and GC events.
-const RESUBSCRIBE_STREAMS: &[&str] = &["Extension", "Logging", "GC"];
+/// re-established to keep receiving Extension, Logging, GC, Debug, and Isolate events.
+const RESUBSCRIBE_STREAMS: &[&str] = &[
+    stream_id::EXTENSION,
+    stream_id::LOGGING,
+    stream_id::GC,
+    stream_id::DEBUG,
+    stream_id::ISOLATE,
+];
 
 /// How often to run stale request cleanup in the I/O loop.
 const STALE_REQUEST_CLEANUP_INTERVAL: Duration = Duration::from_secs(30);
@@ -526,7 +532,7 @@ impl VmServiceClient {
         Ok(main_isolate.clone())
     }
 
-    /// Subscribe to Flutter streams (Extension, Logging, and GC).
+    /// Subscribe to Flutter streams (Extension, Logging, GC, Debug, and Isolate).
     ///
     /// Returns a list of human-readable error descriptions for any streams
     /// that could not be subscribed (non-fatal — the app continues without
@@ -535,18 +541,28 @@ impl VmServiceClient {
         let mut errors = Vec::new();
 
         // Extension stream: Flutter.Error events (widget crash logs)
-        if let Err(e) = self.stream_listen("Extension").await {
+        if let Err(e) = self.stream_listen(stream_id::EXTENSION).await {
             errors.push(format!("Extension stream: {e}"));
         }
 
         // Logging stream: structured log records
-        if let Err(e) = self.stream_listen("Logging").await {
+        if let Err(e) = self.stream_listen(stream_id::LOGGING).await {
             errors.push(format!("Logging stream: {e}"));
         }
 
         // GC stream: garbage collection events for memory monitoring
-        if let Err(e) = self.stream_listen("GC").await {
+        if let Err(e) = self.stream_listen(stream_id::GC).await {
             errors.push(format!("GC stream: {e}"));
+        }
+
+        // Debug stream: breakpoint pause, resume, and exception events
+        if let Err(e) = self.stream_listen(stream_id::DEBUG).await {
+            errors.push(format!("Debug stream: {e}"));
+        }
+
+        // Isolate stream: isolate lifecycle events (start, runnable, exit, reload)
+        if let Err(e) = self.stream_listen(stream_id::ISOLATE).await {
+            errors.push(format!("Isolate stream: {e}"));
         }
 
         errors
@@ -1428,5 +1444,47 @@ mod tests {
         // Drop the guard before the cloned handle goes out of scope.
         drop(guard);
         drop(cloned);
+    }
+
+    // -- RESUBSCRIBE_STREAMS -------------------------------------------------
+
+    #[test]
+    fn test_resubscribe_streams_includes_debug_and_isolate() {
+        assert!(
+            RESUBSCRIBE_STREAMS.contains(&"Debug"),
+            "RESUBSCRIBE_STREAMS must contain 'Debug'"
+        );
+        assert!(
+            RESUBSCRIBE_STREAMS.contains(&"Isolate"),
+            "RESUBSCRIBE_STREAMS must contain 'Isolate'"
+        );
+    }
+
+    #[test]
+    fn test_resubscribe_streams_retains_existing_streams() {
+        // Ensure adding Debug/Isolate did not remove Extension, Logging, or GC.
+        assert!(
+            RESUBSCRIBE_STREAMS.contains(&"Extension"),
+            "RESUBSCRIBE_STREAMS must contain 'Extension'"
+        );
+        assert!(
+            RESUBSCRIBE_STREAMS.contains(&"Logging"),
+            "RESUBSCRIBE_STREAMS must contain 'Logging'"
+        );
+        assert!(
+            RESUBSCRIBE_STREAMS.contains(&"GC"),
+            "RESUBSCRIBE_STREAMS must contain 'GC'"
+        );
+    }
+
+    #[test]
+    fn test_resubscribe_streams_uses_correct_stream_id_values() {
+        // Constants from the stream_id module must agree with the literal values
+        // in RESUBSCRIBE_STREAMS (no accidental rename drift).
+        assert!(RESUBSCRIBE_STREAMS.contains(&stream_id::DEBUG));
+        assert!(RESUBSCRIBE_STREAMS.contains(&stream_id::ISOLATE));
+        assert!(RESUBSCRIBE_STREAMS.contains(&stream_id::EXTENSION));
+        assert!(RESUBSCRIBE_STREAMS.contains(&stream_id::LOGGING));
+        assert!(RESUBSCRIBE_STREAMS.contains(&stream_id::GC));
     }
 }

@@ -385,4 +385,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/debugger_types.rs` | NEW FILE: all debug type definitions, parsing functions, and 61 unit tests |
+| `crates/fdemon-daemon/src/vm_service/mod.rs` | Added `pub mod debugger_types;` declaration, updated module doc header, added re-exports from `debugger_types` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`IsolateRef` naming conflict**: `protocol.rs` already exports an `IsolateRef` with `name: String` (required) and extra fields (`number`, `is_system_isolate`). The debug stream events use a different shape where `name` is optional. Rather than shadowing the existing top-level `IsolateRef`, the new type is re-exported as `DebugIsolateRef` at the `vm_service` module level. The type itself is still named `IsolateRef` within the `debugger_types` module (i.e., `debugger_types::IsolateRef`) so task 03 can reference it naturally.
+
+2. **`FrameKind` custom deserializer**: The VM Service protocol sends PascalCase strings (`"Regular"`, `"AsyncCausal"`, `"AsyncSuspensionMarker"`). A manual `impl<'de> Deserialize<'de>` was used instead of `#[serde(rename_all = "PascalCase")]` (which doesn't exist as an attribute) to correctly handle each variant.
+
+3. **`Breakpoint.location` as `serde_json::Value`**: Kept as `Value` per the task spec, since resolved vs. unresolved source locations have different JSON shapes. The DAP adapter (Phase 3) will discriminate between them.
+
+4. **`parse_debug_event` / `parse_isolate_event` return `None` on missing `isolate`**: If the `isolate` field is absent from event data, we return `None` rather than producing an error. This matches the acceptance criterion that unrecognized/malformed events return `None`.
+
+5. **Internal parsing helpers are private**: `parse_isolate_ref`, `parse_top_frame`, `parse_breakpoint_field`, `parse_breakpoint_array`, and `parse_instance_ref_field` are private `fn` helpers. They reduce repetition in the two public parsing functions without leaking implementation details.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (436 tests: 375 pre-existing + 61 new in `debugger_types`)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-daemon` - Applied (no changes needed to logic)
+
+### Risks/Limitations
+
+1. **`DebugIsolateRef` alias at top level**: Consumers using `fdemon_daemon::vm_service::IsolateRef` get the `protocol` version; consumers needing the debug variant must use `DebugIsolateRef` or `debugger_types::IsolateRef`. This is a mild usability asymmetry but avoids a breaking change to the existing `IsolateRef` type.
+
+2. **No `FrameKind::Regular` is not `Default`**: `FrameKind` has no `Default` impl since there's no obvious sensible default. Callers work with `Option<FrameKind>` in `Frame`, which is the correct representation when kind is absent from the JSON.

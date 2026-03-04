@@ -262,6 +262,89 @@ pub enum UpdateAction {
         /// `None` until hydrated by `process.rs`.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
+
+    // --- Debug Actions (DAP Server Phase 1, Task 05) ---
+    /// Pause an isolate in the VM.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    PauseIsolate {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to pause (e.g. `"isolates/1234"`).
+        isolate_id: String,
+    },
+
+    /// Resume an isolate, optionally with a step action.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    ResumeIsolate {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to resume (e.g. `"isolates/1234"`).
+        isolate_id: String,
+        /// Optional step action. `None` resumes normally; `Some` performs a step.
+        step: Option<fdemon_daemon::vm_service::debugger_types::StepOption>,
+    },
+
+    /// Set a breakpoint via URI and line number.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    AddBreakpoint {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID the breakpoint belongs to.
+        isolate_id: String,
+        /// The script URI (e.g. `"package:app/main.dart"`).
+        script_uri: String,
+        /// 1-based line number in the source file.
+        line: i32,
+        /// Optional 1-based column number.
+        column: Option<i32>,
+    },
+
+    /// Remove a breakpoint by VM Service ID.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    RemoveBreakpoint {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID the breakpoint belongs to.
+        isolate_id: String,
+        /// The VM Service breakpoint ID to remove (e.g. `"breakpoints/1"`).
+        breakpoint_id: String,
+    },
+
+    /// Set the exception pause mode for an isolate.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    SetIsolatePauseMode {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to configure.
+        isolate_id: String,
+        /// The new exception pause mode.
+        mode: fdemon_daemon::vm_service::debugger_types::ExceptionPauseMode,
+    },
 }
 
 /// Background tasks to spawn

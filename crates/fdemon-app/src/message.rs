@@ -887,6 +887,27 @@ pub enum Message {
     /// Navigate within the widget inspector tree.
     DevToolsInspectorNavigate(InspectorNav),
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // VM Service Debug Messages (DAP Server Phase 1, Task 05)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// A debug stream event from the VM Service (breakpoints, pause, resume, etc.).
+    ///
+    /// Sent by the event forwarding loop when a "Debug" stream notification
+    /// arrives. The handler updates per-session `DebugState`.
+    VmServiceDebugEvent {
+        session_id: SessionId,
+        event: fdemon_daemon::vm_service::debugger_types::DebugEvent,
+    },
+
+    /// An isolate lifecycle event from the VM Service.
+    ///
+    /// Sent by the event forwarding loop when an "Isolate" stream notification
+    /// arrives. The handler tracks known isolates and clears pause state on exit.
+    VmServiceIsolateEvent {
+        session_id: SessionId,
+        event: fdemon_daemon::vm_service::debugger_types::IsolateEvent,
+    },
+
     // ── VM Service Network Messages (Phase 4, Network Monitor) ───────────────
     /// HTTP profile poll results arrived.
     VmServiceHttpProfileReceived {

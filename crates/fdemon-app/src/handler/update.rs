@@ -1464,6 +1464,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // ─────────────────────────────────────────────────────────────────────
+        // VM Service Debug Messages (DAP Server Phase 1, Task 05)
+        // ─────────────────────────────────────────────────────────────────────
+        Message::VmServiceDebugEvent { session_id, event } => {
+            devtools::debug::handle_debug_event(state, session_id, event)
+        }
+
+        Message::VmServiceIsolateEvent { session_id, event } => {
+            devtools::debug::handle_isolate_event(state, session_id, event)
+        }
+
         // ─────────────────────────────────────────────────────────
         // VM Service Frame Timing Messages (Phase 3, Task 06)
         // ─────────────────────────────────────────────────────────

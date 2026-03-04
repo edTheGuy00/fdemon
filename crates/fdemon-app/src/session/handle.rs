@@ -62,6 +62,21 @@ pub struct SessionHandle {
     /// tasks from continuing after the session has ended. Set by
     /// `VmServiceNetworkMonitoringStarted`, cleared on disconnect/close.
     pub network_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Shutdown signal for the debug event monitoring task.
+    ///
+    /// Sending `true` signals the debug event forwarding task to stop.
+    /// Stored as `Arc` because the `Message` enum requires `Clone`.
+    /// Initialized to `None`; set in Phase 2 when the DAP server starts a
+    /// per-session debug task.
+    pub debug_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// Handle for the debug event monitoring task.
+    ///
+    /// Aborted on session close or DAP client disconnect to prevent zombie
+    /// tasks. Initialized to `None`; set in Phase 2 when the DAP server
+    /// spawns the per-session debug event forwarding task.
+    pub debug_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -76,6 +91,8 @@ impl std::fmt::Debug for SessionHandle {
             .field("has_perf_task", &self.perf_task_handle.is_some())
             .field("has_network_shutdown", &self.network_shutdown_tx.is_some())
             .field("has_network_task", &self.network_task_handle.is_some())
+            .field("has_debug_shutdown", &self.debug_shutdown_tx.is_some())
+            .field("has_debug_task", &self.debug_task_handle.is_some())
             .finish()
     }
 }
@@ -94,6 +111,8 @@ impl SessionHandle {
             perf_task_handle: None,
             network_shutdown_tx: None,
             network_task_handle: None,
+            debug_shutdown_tx: None,
+            debug_task_handle: None,
         }
     }
 

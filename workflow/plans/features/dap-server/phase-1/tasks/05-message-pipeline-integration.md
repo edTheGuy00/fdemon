@@ -374,4 +374,39 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `VmServiceDebugEvent` and `VmServiceIsolateEvent` Message variants (with doc comments), placed in a new "VM Service Debug Messages" section before the network messages |
+| `crates/fdemon-app/src/handler/mod.rs` | Added 5 new `UpdateAction` debug variants: `PauseIsolate`, `ResumeIsolate`, `AddBreakpoint`, `RemoveBreakpoint`, `SetIsolatePauseMode`, each with `vm_handle: Option<VmRequestHandle>` and full doc comments |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | **NEW FILE** - `handle_debug_event()` and `handle_isolate_event()` handler functions, plus 19 unit tests covering all pause reasons, resume, breakpoint resolved, isolate lifecycle, and unknown-session edge cases |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added `pub mod debug;` declaration |
+| `crates/fdemon-app/src/handler/update.rs` | Added routing arms for `VmServiceDebugEvent` and `VmServiceIsolateEvent` in the TEA `update()` function |
+| `crates/fdemon-app/src/actions/vm_service.rs` | Added imports for `parse_debug_event` and `parse_isolate_event`; added Debug and Isolate stream event routing in `forward_vm_events()` using `stream_id` matching |
+| `crates/fdemon-app/src/actions/mod.rs` | Added match arms for all 5 new `UpdateAction` debug variants (log at debug level, Phase 2 wiring placeholder) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`get_session_mut()` vs `get_mut()`**: The task plan used `state.session_manager.get_session_mut(session_id)` in the handler template, but the actual API is `state.session_manager.get_mut(session_id)`. Used the correct API; handlers access `handle.session.debug` via the `SessionHandle`.
+
+2. **`stream_id` routing vs parser-cascade pattern**: Existing code uses a cascade of parser calls without checking `stream_id` first. For Debug/Isolate events, we check `event.params.stream_id` before calling the specific parser. This is more correct because `parse_debug_event` and `parse_isolate_event` take separate `kind` and `data` arguments (not the whole `StreamEvent`), and routing by stream_id avoids attempting debug parsing on unrelated streams.
+
+3. **Debug action placeholders**: The 5 new `UpdateAction` debug variants (`PauseIsolate`, `ResumeIsolate`, `AddBreakpoint`, `RemoveBreakpoint`, `SetIsolatePauseMode`) are wired with `tracing::debug!()` stubs in `actions/mod.rs`. They satisfy the exhaustive match requirement and will be wired to actual async executors in Phase 2 (DAP server).
+
+4. **No process.rs hydration functions**: The new debug actions' `vm_handle` fields will be hydrated in Phase 2 when the DAP server properly integrates. The existing hydration chain in `process.rs` passes all unknown actions through unchanged via `Some(action)`, so the debug actions reach `handle_action` and hit the debug log stub.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (2,824+ tests, 0 failures; 19 new tests in `handler::devtools::debug::tests`)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Phase 2 hydration**: The debug `UpdateAction` variants reach `handle_action` without VM handle hydration. This is intentional — Phase 2 will add hydration functions in `process.rs` and actual async executor dispatch in `actions/mod.rs`.
+
+2. **Parse-then-route ordering**: The Debug stream routing uses `continue` so that Debug/Isolate events are not double-parsed as GC or Log events. The ordering matters: Extension/Frame/GC/Log parsers run first (by design, as they only match specific event kinds), then stream_id routing handles Debug and Isolate.

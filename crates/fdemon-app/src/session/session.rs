@@ -16,6 +16,7 @@ use fdemon_core::{
 
 use super::block_state::LogBlockState;
 use super::collapse::CollapseState;
+use super::debug_state::DebugState;
 use super::log_batcher::LogBatcher;
 use super::network::NetworkState;
 use super::next_session_id;
@@ -129,6 +130,12 @@ pub struct Session {
     // ─────────────────────────────────────────────────────────
     /// Network monitoring state (HTTP profile, sockets).
     pub network: NetworkState,
+
+    // ─────────────────────────────────────────────────────────
+    // Debug Adapter Protocol state (DAP feature, Phase 1, Task 04)
+    // ─────────────────────────────────────────────────────────
+    /// Per-session debug state (pause status, breakpoints, exception mode).
+    pub debug: DebugState,
 }
 
 impl Session {
@@ -169,6 +176,7 @@ impl Session {
             log_batcher: LogBatcher::new(),
             performance: PerformanceState::default(),
             network: NetworkState::default(),
+            debug: DebugState::default(),
         }
     }
 

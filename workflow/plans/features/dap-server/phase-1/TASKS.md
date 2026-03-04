@@ -38,11 +38,11 @@ Wave 3:       └──────────────┬──────
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-debug-types](tasks/01-debug-types.md) | Not Started | - | `fdemon-daemon/vm_service/debugger_types.rs` |
-| 2 | [02-debug-stream-events](tasks/02-debug-stream-events.md) | Not Started | - | `fdemon-daemon/vm_service/client.rs`, `protocol.rs` |
-| 3 | [03-debug-rpc-wrappers](tasks/03-debug-rpc-wrappers.md) | Not Started | 1 | `fdemon-daemon/vm_service/debugger.rs`, `mod.rs` |
-| 4 | [04-session-debug-state](tasks/04-session-debug-state.md) | Not Started | 1 | `fdemon-app/session/debug_state.rs`, `session.rs`, `handle.rs` |
-| 5 | [05-message-pipeline-integration](tasks/05-message-pipeline-integration.md) | Not Started | 2, 3, 4 | `fdemon-app/message.rs`, `handler/mod.rs`, `handler/devtools/` |
+| 1 | [01-debug-types](tasks/01-debug-types.md) | Done | - | `fdemon-daemon/vm_service/debugger_types.rs` |
+| 2 | [02-debug-stream-events](tasks/02-debug-stream-events.md) | Done | - | `fdemon-daemon/vm_service/client.rs`, `protocol.rs` |
+| 3 | [03-debug-rpc-wrappers](tasks/03-debug-rpc-wrappers.md) | Done | 1 | `fdemon-daemon/vm_service/debugger.rs`, `mod.rs` |
+| 4 | [04-session-debug-state](tasks/04-session-debug-state.md) | Done | 1 | `fdemon-app/session/debug_state.rs`, `session.rs`, `handle.rs` |
+| 5 | [05-message-pipeline-integration](tasks/05-message-pipeline-integration.md) | Done | 2, 3, 4 | `fdemon-app/message.rs`, `handler/mod.rs`, `handler/devtools/` |
 
 ## Success Criteria
 

@@ -332,6 +332,74 @@ pub fn handle_action(
                 );
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Debug RPC Actions (DAP Server Phase 1, Task 05)
+        //
+        // These variants are defined now to satisfy the exhaustive match but are
+        // not dispatched to async executors until Phase 2 (DAP server wiring).
+        // Reaching these arms in the current build is unexpected; log at debug.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::PauseIsolate {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+        } => {
+            tracing::debug!(
+                "PauseIsolate action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::ResumeIsolate {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            step: _,
+        } => {
+            tracing::debug!(
+                "ResumeIsolate action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::AddBreakpoint {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            script_uri: _,
+            line: _,
+            column: _,
+        } => {
+            tracing::debug!(
+                "AddBreakpoint action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::RemoveBreakpoint {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            breakpoint_id: _,
+        } => {
+            tracing::debug!(
+                "RemoveBreakpoint action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::SetIsolatePauseMode {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            mode: _,
+        } => {
+            tracing::debug!(
+                "SetIsolatePauseMode action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
     }
 }
 

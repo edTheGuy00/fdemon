@@ -114,4 +114,31 @@ Integration-level verification (that `streamListen` is actually called) is cover
 
 ## Completion Summary
 
-**Status:** Not started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/protocol.rs` | Added `pub mod stream_id` with five named constants (`EXTENSION`, `LOGGING`, `GC`, `DEBUG`, `ISOLATE`) and three corresponding tests |
+| `crates/fdemon-daemon/src/vm_service/client.rs` | Added `stream_id` to the `use super::protocol` import; updated `RESUBSCRIBE_STREAMS` to use the constants and include `DEBUG`/`ISOLATE`; updated `subscribe_flutter_streams` to subscribe to `Debug` and `Isolate` streams via constants; added three new tests for `RESUBSCRIBE_STREAMS` coverage |
+
+### Notable Decisions/Tradeoffs
+
+1. **Constants in `protocol.rs`, used from `client.rs`**: The `stream_id` module lives in `protocol.rs` alongside the other VM Service protocol types. This follows the existing pattern where protocol-level constants and types are co-located. `client.rs` imports them via `use super::protocol::stream_id`, which keeps the layer boundary clean.
+
+2. **`subscribe_flutter_streams` updated alongside `RESUBSCRIBE_STREAMS`**: Both the initial-connect path (`subscribe_flutter_streams`) and the reconnect path (`RESUBSCRIBE_STREAMS`/`resubscribe_streams`) were updated together to ensure they stay in sync. This satisfies acceptance criteria 2 and 3.
+
+3. **String literals in tests left unchanged**: Test fixtures in the test modules still use raw string literals (e.g. `"Extension"` in JSON payloads) where they are part of test data rather than code routing. The constants are used in all production routing/subscription code.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (389 unit tests, 0 failed, 3 ignored)
+  - New tests: `test_resubscribe_streams_includes_debug_and_isolate`, `test_resubscribe_streams_retains_existing_streams`, `test_resubscribe_streams_uses_correct_stream_id_values`
+  - New tests in protocol: `test_stream_id_constants_match_vm_service_protocol`, `test_stream_id_debug_constant`, `test_stream_id_isolate_constant`
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Debug stream event volume**: As noted in the task, the `Debug` stream can be high-frequency during stepping. The existing `mpsc::channel` with `EVENT_CHANNEL_CAPACITY = 256` handles bursts; no capacity concerns at this phase since app-level routing (task 05) is not yet implemented.
