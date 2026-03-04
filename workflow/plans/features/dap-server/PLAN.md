@@ -109,7 +109,7 @@ Custom DAP events (IDE-consumed):
 - `crates/fdemon-tui/src/widgets/log_view/mod.rs` — Add `dap_status` field to `StatusInfo`, render `[DAP :PORT]` badge
 - `crates/fdemon-tui/src/widgets/header.rs` — Add `[D] DAP` to keybinding hints
 - `Cargo.toml` (workspace) — Add `fdemon-dap` member, binary deps
-- `src/main.rs` — Add `--dap` / `--dap-port` / `--dap-config` CLI flags
+- `src/main.rs` — Add `--dap-port` / `--dap-config` CLI flags
 - `src/tui/runner.rs` — Handle `UpdateAction::SpawnDapServer` / `StopDapServer` in TUI event loop
 - `src/headless/runner.rs` — Handle DAP startup in headless mode event loop
 
@@ -237,15 +237,14 @@ The DAP server is an **integrated service** within TUI mode (and headless mode),
 ```
 fdemon launch
   │
-  ├── Parse CLI args: --dap, --dap-port, --dap-config
+  ├── Parse CLI args: --dap-port (if provided, sets dap.enabled = true)
   ├── Load settings: dap.enabled, dap.auto_start_in_ide
   ├── detect_parent_ide() → Option<ParentIde>
   │
-  ├── Should DAP start?
-  │   ├── --dap CLI flag present?                    → YES, start
-  │   ├── dap.enabled = true in config?              → YES, start
-  │   ├── IDE detected AND dap.auto_start_in_ide?    → YES, start
-  │   └── None of the above?                         → NO, stay off
+  ├── Should DAP auto-start?
+  │   ├── dap.enabled = true in config (or --dap-port)?  → YES, start
+  │   ├── IDE detected AND dap.auto_start_in_ide?        → YES, start
+  │   └── None of the above?                             → NO, stay off
   │
   ├── If starting:
   │   ├── Bind TCP port (configured or auto-assign)
@@ -258,7 +257,7 @@ fdemon launch
       └── If DAP on  → Message::StopDapServer  → disconnect clients + unbind
 ```
 
-**Key design decision**: The DAP server is NOT a separate `fdemon --dap` mode (unlike `--headless`). Instead, `--dap` is a flag that enables the DAP service within the normal TUI or headless mode. This means the TUI keeps running — the developer sees their logs while the IDE connects for debugging.
+**Key design decision**: The DAP server is NOT a separate mode — it's an integrated service within TUI or headless mode. There is no `--dap` CLI flag. Instead, the server starts automatically when an IDE terminal is detected (zero-config experience), or can be toggled at runtime with `D`. For CI/scripting, `--dap-port PORT` forces a specific port and implies DAP enabled. This means the TUI keeps running — the developer sees their logs while the IDE connects for debugging.
 
 **On fdemon exit**: Generated IDE config entries are **left in place** (not cleaned up). The next fdemon run updates the port in the config. This avoids surprising the user by removing their IDE setup.
 
@@ -357,9 +356,10 @@ fdemon launch
    - `DapHandle { port: u16, shutdown_tx: watch::Sender<bool>, task: JoinHandle }` — returned to Engine for lifecycle management
    - `DapService::stop(handle) -> Result<()>` — signals shutdown, waits for task completion, disconnects all clients
    - Engine holds `Option<DapHandle>` — `Some` when DAP is running, `None` when off
-   - CLI: `fdemon [--dap] [--dap-port 4711] [--dap-bind ADDR] [project_path]`
-   - `--dap` enables DAP service within TUI mode (not a separate mode like `--headless`)
-   - Both TUI and headless runners check startup conditions and call `DapService::start()` if needed
+   - CLI: `fdemon [--dap-port PORT] [project_path]`
+   - `--dap-port PORT` sets a fixed port and forces `dap.enabled = true` (for CI/scripting)
+   - No `--dap` flag — auto-start via IDE detection is the primary path; `D` keybinding for runtime toggle
+   - Both TUI and headless runners evaluate `should_auto_start_dap()` and call `DapService::start()` if needed
 
 7. **Smart auto-start logic** (startup + runtime toggle)
    - **Startup**: On Engine init, evaluate startup conditions (see Architecture → DAP Server Startup Flow)
@@ -387,7 +387,7 @@ fdemon launch
    - When `DapStatus::Off`: no badge shown (default state)
    - In header keybinding hints: add `[D] DAP` when in Normal mode
 
-**Milestone**: `fdemon --dap` starts with the DAP TCP server running alongside the TUI. Running `fdemon` inside VS Code auto-starts the DAP server (if `auto_start_in_ide` is enabled). Pressing `D` toggles the server on/off. Status bar shows `[DAP :PORT]` when active. VS Code (or `dap-client` test tool) can connect, complete initialization, and receive capabilities response. No debugging yet, but the transport and UX work end-to-end.
+**Milestone**: Running `fdemon` inside VS Code auto-starts the DAP server with zero configuration. Pressing `D` toggles the server on/off at runtime. Status bar shows `[DAP :PORT]` when active. VS Code (or `dap-client` test tool) can connect, complete initialization, and receive capabilities response. `--dap-port PORT` available for CI/scripting. No debugging yet, but the transport and UX work end-to-end.
 
 ---
 
@@ -589,7 +589,7 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
      name = "fdemon-dap"
      transport = "tcp"
      command = "fdemon"
-     args = ["--dap"]
+     args = []
      port-arg = "--dap-port {}"
 
      [[language.debugger.templates]]
@@ -686,7 +686,7 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
     - Add a DAP status indicator to the status bar (Phase 2 already adds the server status; extend with config status)
     - In settings UI, add a `[dap] auto_configure_ide` boolean option (default: `true`)
 
-**Milestone**: When a developer runs `fdemon --dap` from inside VS Code's terminal, fdemon auto-generates a `launch.json` configuration. The developer opens the Run & Debug panel, selects "Flutter (fdemon)", and is immediately connected to the debugger — zero manual configuration required. Same for Neovim, Helix, and Zed (with their respective config formats).
+**Milestone**: When a developer runs `fdemon` from inside VS Code's terminal, the DAP server auto-starts and fdemon auto-generates a `launch.json` configuration. The developer opens the Run & Debug panel, selects "Flutter (fdemon)", and is immediately connected to the debugger — zero manual configuration required. Same for Neovim, Helix, and Zed (with their respective config formats).
 
 ---
 
@@ -740,7 +740,7 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
 ### Helix Port-Arg Incompatibility (Phase 5)
 
 - **Risk:** Helix's `transport = "tcp"` always spawns the adapter binary and passes a port via `port-arg`. This conflicts with fdemon's model where the DAP server is already running as part of the fdemon process
-- **Mitigation:** The Helix config uses `fdemon --dap` as the command with `--dap-port {}` as the port arg. Helix spawns a *new* fdemon instance that listens on the Helix-chosen port. This is acceptable for single-session use. For the already-running fdemon scenario, document that users should use `hx --health` to verify DAP support and manually set the port. Alternative: provide a thin wrapper script that connects stdin/stdout to an existing TCP socket.
+- **Mitigation:** The Helix config uses `fdemon` as the command with `--dap-port {}` as the port arg. Helix spawns a *new* fdemon instance that listens on the Helix-chosen port. This is acceptable for single-session use. For the already-running fdemon scenario, document that users should use `hx --health` to verify DAP support and manually set the port. Alternative: provide a thin wrapper script that connects stdin/stdout to an existing TCP socket.
 
 ### IDE Not Detected (Phase 5)
 
@@ -761,7 +761,7 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
 
 [dap]
 # Always enable DAP server on startup (overrides auto-detection)
-# Can also use --dap CLI flag
+# Can also use --dap-port CLI flag for a fixed port
 enabled = false
 
 # Auto-start DAP server when running inside a detected IDE terminal
@@ -791,29 +791,29 @@ auto_configure_ide = true
 ## CLI Additions
 
 ```
-fdemon [--dap] [--dap-port PORT] [--dap-bind ADDRESS] [--dap-config IDE] [project_path]
+fdemon [--dap-port PORT] [--dap-config IDE] [project_path]
 
 Options:
-  --dap              Enable DAP server alongside TUI (or headless) mode
-                     Note: not a separate mode — TUI keeps running
-  --dap-port PORT    Port for DAP server (default: 0 = auto-assign, printed to log)
-                     Use a fixed port for stable IDE configs across restarts
-  --dap-bind ADDR    Bind address (default: 127.0.0.1)
+  --dap-port PORT    Start DAP server on a fixed port (implies DAP enabled).
+                     Use a fixed port for stable IDE configs across restarts.
+                     Without this flag, DAP auto-starts when an IDE terminal is
+                     detected, using an auto-assigned port.
   --dap-config IDE   Generate DAP config for a specific IDE without auto-detection
                      Values: vscode, neovim, helix, zed, emacs
                      Can be used standalone: fdemon --dap-config vscode --dap-port 4711
 ```
 
-When `--dap-port 0` is used, the actual assigned port is logged and emitted via `Message::DapServerStarted { port }`. In headless mode, it is also printed to stdout as JSON:
+The auto-assigned port is logged and emitted via `Message::DapServerStarted { port }`. In headless mode, it is also printed to stdout as JSON:
 ```json
 {"dapPort": 54321}
 ```
 
-**Note**: The `--dap` flag is independent of `--headless`. Both can be combined:
-- `fdemon` — TUI mode, DAP auto-starts if IDE detected
-- `fdemon --dap` — TUI mode, DAP always enabled
-- `fdemon --headless --dap` — Headless mode with DAP enabled
-- `fdemon --dap-port 4711` — implies `--dap`, fixed port
+**How DAP starts (no `--dap` flag needed):**
+- `fdemon` inside VS Code/Neovim/etc. — DAP auto-starts (IDE detected, zero config)
+- `fdemon` in plain terminal — DAP stays off; press `D` to toggle on
+- `fdemon --dap-port 4711` — DAP on fixed port (for CI/scripting)
+- `fdemon --headless --dap-port 4711` — Headless mode with DAP on fixed port
+- `dap.enabled = true` in `.fdemon/config.toml` — DAP always on regardless of IDE
 
 ---
 
@@ -831,8 +831,8 @@ When `--dap-port 0` is used, the actual assigned port is logged and emitted via 
 - [ ] `fdemon-dap` crate compiles and passes tests
 - [ ] DAP protocol codec handles Content-Length framing correctly (including edge cases: partial reads, zero-length, oversized)
 - [ ] TCP server accepts connections and completes DAP initialization handshake
-- [ ] `fdemon --dap` CLI flag starts DAP server alongside TUI
-- [ ] Smart auto-start works: running inside VS Code terminal auto-starts DAP (when `auto_start_in_ide = true`)
+- [ ] Smart auto-start works: running inside VS Code terminal auto-starts DAP (zero config, `auto_start_in_ide = true` by default)
+- [ ] `--dap-port PORT` CLI flag starts DAP server on a fixed port
 - [ ] `D` keybinding toggles DAP server on/off in Normal mode
 - [ ] Status bar shows `[DAP :PORT]` badge when server is running
 - [ ] `DapSettings` struct with `enabled`, `auto_start_in_ide`, `port`, `bind_address` fields in config
@@ -881,7 +881,7 @@ When `--dap-port 0` is used, the actual assigned port is logged and emitted via 
 - [ ] 50+ unit tests covering generation, merging, and edge cases
 - [ ] `cargo test -p fdemon-dap` passes
 - [ ] `cargo clippy --workspace` clean
-- [ ] Tested end-to-end: run `fdemon --dap` inside VS Code terminal → launch.json generated → Debug panel shows config → connection succeeds
+- [ ] Tested end-to-end: run `fdemon` inside VS Code terminal → DAP auto-starts → launch.json generated → Debug panel shows config → connection succeeds
 
 ---
 
