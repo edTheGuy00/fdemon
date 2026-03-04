@@ -360,3 +360,33 @@ mod tests {
 - `UpdateAction::SpawnDapServer` and `StopDapServer` are handled in the TUI/headless runner event loops (Task 05), not in `actions/mod.rs`. This is because the DAP server is an Engine-level service (like the file watcher), not a session-scoped action.
 - The `client_id` in `DapClientConnected`/`DapClientDisconnected` is a string identifier assigned by the DAP server (e.g., remote address or UUID). It's used for logging only in Phase 2.
 - The handler returns `UpdateResult` (not `Option<Message>` + `Option<UpdateAction>`), following the pattern established in Phase 1's `handler/devtools/debug.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `DapStatus` enum with `Off/Starting/Running{port,client_count}/Stopping` variants and helper methods; added `dap_status: DapStatus` field to `AppState`; initialized to `DapStatus::Off` in `with_settings()` |
+| `crates/fdemon-app/src/message.rs` | Added 8 DAP `Message` variants: `StartDapServer`, `StopDapServer`, `ToggleDap`, `DapServerStarted{port}`, `DapServerStopped`, `DapServerFailed{reason}`, `DapClientConnected{client_id}`, `DapClientDisconnected{client_id}` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `pub(crate) mod dap;`; added `UpdateAction::SpawnDapServer{port,bind_addr}` and `UpdateAction::StopDapServer` variants; updated module doc comment |
+| `crates/fdemon-app/src/handler/dap.rs` | NEW FILE — DAP lifecycle handler with `handle_dap_message()` and 23 unit tests covering all state transitions |
+| `crates/fdemon-app/src/handler/update.rs` | Added `dap` to import list; added match arms routing all 8 DAP messages to `dap::handle_dap_message()` |
+| `crates/fdemon-app/src/actions/mod.rs` | Added exhaustive match stubs for `UpdateAction::SpawnDapServer` and `UpdateAction::StopDapServer` with warn-level logging (these are Engine-level, handled by runner event loops) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`UpdateResult::action()` not `with_action()`**: The task file example used `UpdateResult::with_action()`, but the actual codebase only has `UpdateResult::action()`. Used the existing API to match the codebase.
+2. **`actions/mod.rs` stub needed**: Adding new `UpdateAction` variants requires exhaustive match coverage. The task notes said these are handled by the runner event loops, so the `actions/mod.rs` stubs simply log a warning (matching the Phase 1 debug action pattern).
+3. **23 tests written**: Added all specified tests from the task plus additional edge-case coverage (`Stopping.port()`, non-running client events, `Starting` variant when StartDapServer called, `SpawnDapServer` action field verification).
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1255 tests, 0 failed)
+- `cargo test -p fdemon-app handler::dap` - Passed (23 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (clean)

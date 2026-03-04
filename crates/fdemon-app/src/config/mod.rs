@@ -25,14 +25,15 @@ pub use settings::{
     clear_last_selection, detect_editor, detect_parent_ide, editor_config_for_ide,
     find_editor_config, init_config_dir, init_fdemon_directory, load_last_selection, load_settings,
     load_user_preferences, merge_preferences, save_last_selection, save_settings,
-    save_user_preferences, validate_last_selection, EditorConfig, LastSelection,
-    ValidatedSelection, KNOWN_EDITORS,
+    save_user_preferences, should_auto_start_dap, validate_last_selection, EditorConfig,
+    LastSelection, ValidatedSelection, KNOWN_EDITORS,
 };
 // Re-export public config types used by TUI and other crates
 pub use types::{
-    BehaviorSettings, ConfigSource, DevToolsLoggingSettings, DevToolsSettings, EditorSettings,
-    FlutterMode, IconMode, LaunchConfig, LaunchFile, ParentIde, ResolvedLaunchConfig, SettingItem,
-    SettingValue, Settings, SettingsTab, UiSettings, UserPreferences, WatcherSettings, WindowPrefs,
+    BehaviorSettings, ConfigSource, DapSettings, DevToolsLoggingSettings, DevToolsSettings,
+    EditorSettings, FlutterMode, IconMode, LaunchConfig, LaunchFile, ParentIde,
+    ResolvedLaunchConfig, SettingItem, SettingValue, Settings, SettingsTab, UiSettings,
+    UserPreferences, WatcherSettings, WindowPrefs,
 };
 pub use vscode::load_vscode_configs;
 pub use writer::{

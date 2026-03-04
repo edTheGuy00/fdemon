@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch};
 use tracing::warn;
@@ -12,6 +12,7 @@ use crate::message::Message;
 use crate::session::SessionId;
 use crate::UpdateAction;
 use fdemon_daemon::{CommandSender, ToolAvailability};
+use fdemon_dap::{DapServerEvent, DapServerHandle, DapService};
 
 use super::spawn;
 
@@ -25,6 +26,13 @@ pub(super) mod vm_service;
 /// Convenience type alias for session task tracking
 pub type SessionTaskMap = Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>;
 
+/// Convenience type alias for the shared DAP server handle slot.
+///
+/// The Engine stores the running `DapServerHandle` here so that
+/// `handle_action` can deposit it (on `SpawnDapServer`) or withdraw it
+/// (on `StopDapServer`) without taking ownership of the Engine.
+pub type DapHandleSlot = Arc<Mutex<Option<DapServerHandle>>>;
+
 /// Execute an action by spawning a background task
 #[allow(clippy::too_many_arguments)]
 pub fn handle_action(
@@ -36,6 +44,7 @@ pub fn handle_action(
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
     tool_availability: ToolAvailability,
+    dap_server_handle: DapHandleSlot,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
@@ -399,6 +408,89 @@ pub fn handle_action(
                 "SetIsolatePauseMode action for session {} — DAP executor not yet wired (Phase 2)",
                 session_id
             );
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // DAP Server Actions (DAP Server Phase 2, Task 05)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::SpawnDapServer { port, bind_addr } => {
+            let msg_tx_clone = msg_tx.clone();
+            let handle_slot = dap_server_handle.clone();
+            tokio::spawn(async move {
+                // Create the event channel: DapServerEvent → Message bridge
+                let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<DapServerEvent>(32);
+
+                // Start the TCP server
+                match DapService::start(port, bind_addr, event_tx).await {
+                    Ok(server_handle) => {
+                        let actual_port = server_handle.port;
+
+                        // Deposit the handle into the shared slot so Engine::shutdown()
+                        // can stop it, and StopDapServer can retrieve it.
+                        match handle_slot.lock() {
+                            Ok(mut guard) => {
+                                *guard = Some(server_handle);
+                            }
+                            Err(e) => {
+                                warn!("DAP handle slot poisoned after start: {}", e);
+                            }
+                        }
+
+                        // Notify the TEA loop that the server is up
+                        let _ = msg_tx_clone
+                            .send(Message::DapServerStarted { port: actual_port })
+                            .await;
+
+                        // Bridge DapServerEvent → Message
+                        // Runs until the server stops (event_rx closes) or Engine channel drops.
+                        while let Some(event) = event_rx.recv().await {
+                            let msg = match event {
+                                DapServerEvent::ClientConnected { client_id } => {
+                                    Message::DapClientConnected { client_id }
+                                }
+                                DapServerEvent::ClientDisconnected { client_id } => {
+                                    Message::DapClientDisconnected { client_id }
+                                }
+                                DapServerEvent::ServerError { reason } => {
+                                    Message::DapServerFailed { reason }
+                                }
+                            };
+                            if msg_tx_clone.send(msg).await.is_err() {
+                                // Engine channel closed — Engine is shutting down.
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Bind failed — report back to TEA loop
+                        let _ = msg_tx_clone
+                            .send(Message::DapServerFailed {
+                                reason: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        UpdateAction::StopDapServer => {
+            let handle_slot = dap_server_handle.clone();
+            let msg_tx_clone = msg_tx.clone();
+            tokio::spawn(async move {
+                let maybe_handle = match handle_slot.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("DAP handle slot poisoned on StopDapServer: {}", e);
+                        None
+                    }
+                };
+                if let Some(handle) = maybe_handle {
+                    DapService::stop(handle).await;
+                    let _ = msg_tx_clone.send(Message::DapServerStopped).await;
+                } else {
+                    tracing::debug!("StopDapServer: no running DAP server to stop");
+                }
+            });
         }
     }
 }

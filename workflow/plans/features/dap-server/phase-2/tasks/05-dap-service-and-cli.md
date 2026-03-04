@@ -272,3 +272,48 @@ mod tests {
 - The bridge task (DapServerEvent → Message) runs until the event channel closes (when the server stops) or the msg_tx is dropped (when the Engine shuts down). Either way, it cleans up automatically.
 - `--dap-port` is independent of `--headless`. Both can be combined: `fdemon --headless --dap-port 4711` runs headless with DAP on a fixed port. This mirrors the plan's design decision that DAP is a service, not a mode.
 - In headless mode, the DAP port is printed to stdout as JSON: `{"dapPort": 54321}` so external tooling can discover it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/service.rs` | NEW — `DapService` stateless helper wrapping `server::start()`/stop; event forwarding via caller-supplied channel; 4 unit tests |
+| `crates/fdemon-dap/src/lib.rs` | Added `pub mod service;` and `pub use service::DapService;` |
+| `crates/fdemon-app/Cargo.toml` | Added `fdemon-dap.workspace = true` dependency |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `DapHandleSlot` type alias; updated `handle_action` signature with `dap_server_handle` param; implemented `SpawnDapServer` (start + event bridge) and `StopDapServer` (take handle and stop) arms; replaced warn stubs with real async logic |
+| `crates/fdemon-app/src/engine.rs` | Added `dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>` field; initialized in `new()`; DAP shutdown in `Engine::shutdown()`; passed `dap_server_handle.clone()` to `process_message` and `dispatch_spawn_session` |
+| `crates/fdemon-app/src/process.rs` | Added `dap_server_handle` parameter to `process_message()`; imported `DapServerHandle`; forwarded to `handle_action` |
+| `src/main.rs` | Added `--dap-port PORT` CLI flag to `Args` struct; declared `mod tui`; replaced `fdemon_tui::run_with_project` calls with `tui::runner::run_with_project_and_dap`; replaced headless call with `run_headless(project, args.dap_port)` |
+| `src/tui/mod.rs` | NEW — binary-crate TUI module |
+| `src/tui/runner.rs` | NEW — `run_with_project_and_dap(project_path, dap_port)` wrapper; delegates to `fdemon_tui::run_with_project` for TUI; full DAP wiring deferred to Task 06 (which modifies fdemon-tui) |
+| `src/headless/runner.rs` | Updated `run_headless` signature to accept `dap_port: Option<u16>`; applies port override to engine settings; sends `Message::StartDapServer` on startup when enabled; emits `{"event":"dap_server_started","dapPort":<N>}` JSON when DAP starts |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DapService` uses caller-supplied channel (Option B)**: Since `fdemon-dap` cannot depend on `fdemon-app` (circular), `DapService::start()` accepts `mpsc::Sender<DapServerEvent>` and the `DapServerEvent → Message` bridge lives in `actions/mod.rs`. This keeps `fdemon-dap` free of app-layer types.
+
+2. **`Arc<Mutex<Option<DapServerHandle>>>` for handle storage**: `DapServerHandle` contains a `JoinHandle` which is not `Clone`. Using `Arc<Mutex<Option<...>>>` allows `handle_action` (spawned as a Tokio task) to deposit/withdraw the handle without the Engine having to own it synchronously. The Engine's `shutdown()` takes the handle out of the slot and stops it.
+
+3. **TUI DAP wiring deferred to Task 06**: The `crates/fdemon-tui` internal APIs (`run_loop`, `startup`, `render`, `terminal`) are `pub(crate)` and not accessible from the binary crate. A thin `src/tui/runner.rs` wrapper was created that delegates to `fdemon_tui::run_with_project` for now. Task 06 modifies `fdemon-tui` to add DAP panel support and can wire the `--dap-port` override there.
+
+4. **Bridge task lifecycle**: The event bridge in `SpawnDapServer` runs inside the same `tokio::spawn` task as the server start. It runs until `event_rx` closes (server stopped) or `msg_tx` drops (Engine shut down). No separate cleanup needed.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace --lib` — Passed (2,948 tests across all crates)
+- `cargo test --workspace` — Passed (no regressions, 62 integration tests still ignored per known PTY timing issues)
+- `cargo clippy --workspace -- -D warnings` — Passed (clean)
+- `cargo fmt --all` — Applied, re-ran clippy to confirm clean
+
+### Risks/Limitations
+
+1. **TUI `--dap-port` not fully wired**: The TUI runner wrapper logs the flag but currently delegates to the standard `run_with_project` which doesn't apply the port override. Full integration is deferred to Task 06. The Engine-level action handling (`SpawnDapServer`/`StopDapServer`) works correctly in both modes.
+
+2. **Lock contention on `dap_server_handle`**: The `Arc<Mutex<>>` is locked briefly to deposit/withdraw the handle. Since the Engine is single-threaded and lock operations are instantaneous (no I/O inside the lock), this is safe with no deadlock risk.

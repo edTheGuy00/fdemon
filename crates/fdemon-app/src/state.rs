@@ -761,6 +761,52 @@ impl LoadingState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DAP Server State (DAP Server Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of the embedded DAP server.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DapStatus {
+    /// DAP server is not running.
+    #[default]
+    Off,
+    /// DAP server is starting up (binding port, initializing).
+    Starting,
+    /// DAP server is running and accepting connections.
+    Running {
+        /// The TCP port the server is listening on.
+        port: u16,
+        /// Number of currently connected DAP clients.
+        client_count: usize,
+    },
+    /// DAP server is shutting down (disconnecting clients, unbinding).
+    Stopping,
+}
+
+impl DapStatus {
+    /// Returns the port if the server is running.
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            DapStatus::Running { port, .. } => Some(*port),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the server is running.
+    pub fn is_running(&self) -> bool {
+        matches!(self, DapStatus::Running { .. })
+    }
+
+    /// Returns the client count if running, otherwise 0.
+    pub fn client_count(&self) -> usize {
+        match self {
+            DapStatus::Running { client_count, .. } => *client_count,
+            _ => 0,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -818,6 +864,9 @@ pub struct AppState {
 
     /// DevTools mode view state (Phase 4 DevTools Integration)
     pub devtools_view_state: DevToolsViewState,
+
+    /// Status of the embedded DAP debug adapter server.
+    pub dap_status: DapStatus,
 }
 
 impl Default for AppState {
@@ -855,6 +904,7 @@ impl AppState {
             bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
             devtools_view_state: DevToolsViewState::default(),
+            dap_status: DapStatus::Off,
         }
     }
 

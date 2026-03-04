@@ -42,6 +42,8 @@ pub struct StatusInfo<'a> {
     pub error_count: usize,
     /// Whether the VM Service WebSocket is connected (shows [VM] badge)
     pub vm_connected: bool,
+    /// DAP server port if running (shows [DAP :PORT] badge).
+    pub dap_port: Option<u16>,
 }
 
 /// Log view widget with rich formatting
@@ -836,6 +838,15 @@ impl<'a> LogView<'a> {
                 spans.push(Span::raw("  "));
                 spans.push(Span::styled(
                     "[VM]",
+                    Style::default().fg(palette::STATUS_GREEN),
+                ));
+            }
+
+            // DAP server indicator
+            if let Some(port) = status.dap_port {
+                spans.push(Span::raw("  "));
+                spans.push(Span::styled(
+                    format!("[DAP :{port}]"),
                     Style::default().fg(palette::STATUS_GREEN),
                 ));
             }

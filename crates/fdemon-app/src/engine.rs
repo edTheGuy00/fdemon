@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
@@ -25,9 +25,10 @@ use crate::services::{
 };
 use crate::session::SessionId;
 use crate::signals;
-use crate::state::AppState;
+use crate::state::{AppState, DapStatus};
 use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
 use fdemon_core::AppPhase;
+use fdemon_dap::{DapServerHandle, DapService};
 
 /// Lightweight snapshot of state for change detection.
 ///
@@ -122,6 +123,16 @@ pub struct Engine {
 
     /// Registered plugins
     plugins: Vec<Box<dyn EnginePlugin>>,
+
+    /// Handle for the running DAP server, if any.
+    ///
+    /// Wrapped in `Arc<Mutex<Option<>>>` so it can be passed to
+    /// `actions::handle_action` (which runs on the Tokio thread pool and needs
+    /// shared, mutable access to deposit or withdraw the handle).
+    ///
+    /// The Engine is the sole owner of this slot; `handle_action` only writes
+    /// (on `SpawnDapServer`) or reads-and-clears (on `StopDapServer`).
+    pub(crate) dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>,
 }
 
 impl Engine {
@@ -183,6 +194,7 @@ impl Engine {
             shared_state,
             event_tx,
             plugins: Vec::new(),
+            dap_server_handle: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -247,6 +259,7 @@ impl Engine {
             &self.session_tasks,
             &self.shutdown_rx,
             &self.project_path,
+            self.dap_server_handle.clone(),
         );
 
         // Snapshot state after processing
@@ -354,6 +367,7 @@ impl Engine {
             self.shutdown_rx.clone(),
             &self.project_path,
             Default::default(),
+            self.dap_server_handle.clone(),
         );
     }
 
@@ -396,13 +410,27 @@ impl Engine {
         &self.shared_state
     }
 
-    /// Initiate shutdown: stop watcher, signal background tasks, cleanup sessions.
+    /// Initiate shutdown: stop DAP server, watcher, signal background tasks, cleanup sessions.
     pub async fn shutdown(&mut self) {
         // Notify plugins first
         self.notify_plugins_shutdown();
 
         // Emit shutdown event
         self.emit(EngineEvent::Shutdown);
+
+        // Stop DAP server if running
+        let dap_handle = match self.dap_server_handle.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(e) => {
+                warn!("DAP handle lock poisoned during shutdown: {}", e);
+                None
+            }
+        };
+        if let Some(handle) = dap_handle {
+            info!("Stopping DAP server...");
+            DapService::stop(handle).await;
+            self.state.dap_status = DapStatus::Off;
+        }
 
         // Stop file watcher
         if let Some(ref mut watcher) = self.file_watcher {

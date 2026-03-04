@@ -3,6 +3,7 @@
 //! This is the binary entry point.
 
 mod headless;
+mod tui;
 
 use std::path::PathBuf;
 
@@ -26,6 +27,13 @@ struct Args {
     /// Run in headless mode (JSON output, no TUI)
     #[arg(long)]
     headless: bool,
+
+    /// Start the DAP server on a specific port (implies DAP enabled).
+    ///
+    /// Use 0 to let the OS assign an ephemeral port.
+    /// In headless mode the assigned port is printed as JSON: {"dapPort": 54321}
+    #[arg(long, value_name = "PORT")]
+    dap_port: Option<u16>,
 }
 
 #[tokio::main]
@@ -51,9 +59,9 @@ async fn main() -> Result<()> {
     if is_runnable_flutter_project(&base_path) {
         info!("Project path: {}", base_path.display());
         return if args.headless {
-            headless::runner::run_headless(&base_path).await
+            headless::runner::run_headless(&base_path, args.dap_port).await
         } else {
-            fdemon_tui::run_with_project(&base_path).await
+            tui::runner::run_with_project_and_dap(&base_path, args.dap_port).await
         };
     }
 
@@ -122,9 +130,9 @@ async fn main() -> Result<()> {
             eprintln!("✅ Found Flutter project: {}", project.display());
             info!("Project path: {}", project.display());
             if args.headless {
-                headless::runner::run_headless(project).await
+                headless::runner::run_headless(project, args.dap_port).await
             } else {
-                fdemon_tui::run_with_project(project).await
+                tui::runner::run_with_project_and_dap(project, args.dap_port).await
             }
         }
         _ => {
@@ -137,12 +145,12 @@ async fn main() -> Result<()> {
                     project.display()
                 );
                 info!("Project path: {}", project.display());
-                headless::runner::run_headless(project).await
+                headless::runner::run_headless(project, args.dap_port).await
             } else {
                 match select_project(&discovery.projects, &discovery.searched_from)? {
                     SelectionResult::Selected(project) => {
                         info!("Project path: {}", project.display());
-                        fdemon_tui::run_with_project(&project).await
+                        tui::runner::run_with_project_and_dap(&project, args.dap_port).await
                     }
                     SelectionResult::Cancelled => {
                         eprintln!("Selection cancelled.");

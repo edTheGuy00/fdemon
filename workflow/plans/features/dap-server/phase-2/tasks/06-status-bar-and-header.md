@@ -158,3 +158,34 @@ mod tests {
 - The `[D] DAP` header hint is always shown in Normal mode, regardless of whether the DAP server is currently running. This matches how `[d] DevTools` is always shown even when not in DevTools mode — it's a hint about available actions, not current state.
 - `dap_port` comes from `state.dap_status.port()` which is `Some(u16)` only when `DapStatus::Running`. During `Starting`/`Stopping` states, it returns `None` and no badge is shown. This is correct — the badge should only show the port when the server is actively listening.
 - Consider whether `dap_port: Option<u16>` or a richer `dap_status: &DapStatus` reference is better for `StatusInfo`. The simpler `Option<u16>` is sufficient for Phase 2 rendering and avoids coupling `fdemon-tui` to the full `DapStatus` enum.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `dap_port: Option<u16>` field to `StatusInfo`; added DAP badge rendering block after `[VM]` badge in `render_bottom_metadata()` |
+| `crates/fdemon-tui/src/render/mod.rs` | Populated `dap_port: state.dap_status.port()` in `StatusInfo` constructor |
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `[D] DAP` hint (3-span pattern) before `[q] Quit` in shortcuts; added assertion to `test_header_with_keybindings` |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `dap_port: None` to existing `StatusInfo` construction; added 4 new DAP badge tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`dap_port: Option<u16>` over `&DapStatus`**: Used the simpler field as specified in the task notes — avoids coupling fdemon-tui to the full `DapStatus` enum. The badge only needs the port number.
+2. **Compact mode guard**: The DAP badge is placed inside the existing `else` branch of `if compact { ... } else { ... }`, so it inherits the same non-compact guard as the `[VM]` badge with no extra logic.
+3. **Pre-existing fdemon-app errors**: Other in-progress tasks have left `fdemon-app` in a partially broken state (argument count mismatch in `engine.rs`/`process.rs`). These are pre-existing and unrelated to this task. `cargo test -p fdemon-tui` and `cargo clippy -p fdemon-tui -- -D warnings` both pass cleanly.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — Passed
+- `cargo test -p fdemon-tui` — Passed (796 tests, 0 failed; includes 4 new DAP badge tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **fdemon-app pre-existing build errors**: Other Phase 2 tasks have left `fdemon-app` in a partially broken state. The workspace-level `cargo check --workspace` fails, but this is not caused by this task's changes and is outside the task scope.

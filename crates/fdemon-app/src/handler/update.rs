@@ -13,8 +13,8 @@ use fdemon_core::{AppPhase, LogSource};
 use tracing::warn;
 
 use super::{
-    daemon::handle_session_daemon_event, devtools, keys::handle_key, log_view, new_session, scroll,
-    session_lifecycle, settings_dart_defines, settings_extra_args, settings_handlers, Task,
+    daemon::handle_session_daemon_event, dap, devtools, keys::handle_key, log_view, new_session,
+    scroll, session_lifecycle, settings_dart_defines, settings_extra_args, settings_handlers, Task,
     UpdateAction, UpdateResult,
 };
 
@@ -1856,6 +1856,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::SettingsExtraArgsConfirm => {
             settings_extra_args::handle_settings_extra_args_confirm(state)
         }
+
+        // ─────────────────────────────────────────────────────────
+        // DAP Server Messages (DAP Server Phase 2, Task 03)
+        // ─────────────────────────────────────────────────────────
+        Message::StartDapServer
+        | Message::StopDapServer
+        | Message::ToggleDap
+        | Message::DapServerStarted { .. }
+        | Message::DapServerStopped
+        | Message::DapServerFailed { .. }
+        | Message::DapClientConnected { .. }
+        | Message::DapClientDisconnected { .. } => dap::handle_dap_message(state, &message),
     }
 }
 

@@ -404,3 +404,44 @@ mod tests {
 - `DapEvent.seq` is set to 0 for simplicity in Phase 2 — the server session (Task 04) will assign monotonic seq numbers when sending events.
 - The codec uses fdemon-core's `Result<T>` type alias for error handling, with `Error::io()` or `Error::protocol()` for specific failure modes.
 - Additional DAP types for Phase 3 (SetBreakpointsArguments, StackTraceResponse, etc.) will be added to `types.rs` as needed — the module is designed to grow.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` (root) | Added `fdemon-dap = { path = "crates/fdemon-dap" }` to `[workspace.dependencies]` |
+| `crates/fdemon-dap/Cargo.toml` | **NEW** — Crate manifest with workspace dependencies (fdemon-core, fdemon-daemon, tokio, serde, serde_json, tracing) |
+| `crates/fdemon-dap/src/lib.rs` | **NEW** — Public API, module declarations, re-exports of all protocol types and codec functions |
+| `crates/fdemon-dap/src/protocol/mod.rs` | **UPDATED** — Added `pub mod codec;` and re-exports for `read_message`, `write_message`, `MAX_MESSAGE_SIZE` |
+| `crates/fdemon-dap/src/protocol/types.rs` | **NEW** — `DapMessage`, `DapRequest`, `DapResponse`, `DapEvent`, `Capabilities`, `InitializeRequestArguments` with helper constructors and 22 unit tests |
+| `crates/fdemon-dap/src/protocol/codec.rs` | **NEW** — `read_message()`, `write_message()`, `MAX_MESSAGE_SIZE` constant with 12 unit tests covering roundtrips, EOF, errors |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DapResponse` uses `#[serde(rename_all = "camelCase")]`**: The DAP spec requires `requestSeq` (camelCase) on the wire. Without this attribute the field serialized as `request_seq` (snake_case), failing the `test_dap_response_serialization` test.
+
+2. **`clientID` and `adapterID` use explicit `#[serde(rename)]`**: The DAP spec uses uppercase `ID` (not `Id`) for `clientID` and `adapterID`. `rename_all = "camelCase"` would produce `clientId`/`adapterId` (lowercase d), which would not match VS Code's real initialize payloads. Explicit renames override the `rename_all` for these two fields.
+
+3. **`fdemon-daemon` dependency included**: The task spec listed `fdemon-daemon` as a dependency. No daemon types are used in Phase 2's protocol module, but the dependency is declared so Phase 3 code (VM Service bridge) can access `VmRequestHandle` and debug types without changing `Cargo.toml`.
+
+4. **`MAX_MESSAGE_SIZE` is `pub`**: Exposed at the public API level so the test in `codec.rs` (which references it via `use super::*`) can also be used by callers wanting to document the same constraint.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap` — Passed (34 tests: 22 type tests + 12 codec tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-dap` — Applied (minor formatting normalization by rustfmt)
+- `cargo check --workspace` — Passed (entire workspace unaffected)
+
+### Risks/Limitations
+
+1. **`fdemon-daemon` dependency is unused in Phase 2**: The crate declares `fdemon-daemon` as a dependency per the task spec, but Phase 2's protocol module does not yet use any daemon types. This adds compile-time overhead. It will be consumed in Phase 3 when the VM Service bridge is implemented.
+
+2. **`seq` defaults to 0 in constructors**: `DapResponse::success`, `DapResponse::error`, and all `DapEvent` constructors set `seq = 0`. The server session (Task 04) must overwrite this with a monotonically increasing counter before writing each message to the wire.

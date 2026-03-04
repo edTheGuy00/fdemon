@@ -655,6 +655,7 @@ dependencies = [
  "dirs",
  "fdemon-core",
  "fdemon-daemon",
+ "fdemon-dap",
  "fs2",
  "mockall",
  "notify",
@@ -702,6 +703,18 @@ dependencies = [
  "tokio",
  "tokio-test",
  "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
+name = "fdemon-dap"
+version = "0.1.0"
+dependencies = [
+ "fdemon-core",
+ "fdemon-daemon",
+ "serde",
+ "serde_json",
+ "tokio",
  "tracing",
 ]
 

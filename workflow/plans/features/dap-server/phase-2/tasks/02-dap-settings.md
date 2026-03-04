@@ -233,3 +233,37 @@ mod tests {
 - The `dap.port = 0` default means auto-assign — the OS picks an available port. This avoids port conflicts when multiple fdemon instances run simultaneously. Users wanting stable ports set a fixed value.
 - `suppress_reload_on_pause` is a Phase 4 feature but the setting is defined now so the config schema is stable.
 - Settings items use the `id` format `"section.field"` (e.g., `"dap.port"`) — this must match exactly between `settings_items.rs` and `handler/settings.rs`. There is no compile-time check; keep them in sync manually.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `DapSettings` struct with 5 fields and helper functions; added `dap: DapSettings` field to `Settings` struct; added 5 tests for defaults, deserialization, and backwards-compatibility |
+| `crates/fdemon-app/src/config/mod.rs` | Added `DapSettings` to the `pub use types::{ ... }` re-export list |
+| `crates/fdemon-app/src/settings_items.rs` | Added 5 DAP Server items to `project_settings_items()` vec; added 4 tests covering presence, section, defaults, and custom values |
+| `crates/fdemon-app/src/handler/settings.rs` | Added 5 `dap.*` match arms to `apply_project_setting()`; added 7 tests covering each arm plus unknown-ID fallthrough |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing workspace breakage**: The `fdemon-dap` crate was missing `src/lib.rs` and `src/protocol/mod.rs`, preventing workspace compilation. I created minimal stubs to unblock `cargo check -p fdemon-app`. A linter subsequently enhanced these stubs with proper documentation and added a `codec.rs`. This was necessary since the task's verification commands require a compilable workspace.
+
+2. **Vec literal approach**: `project_settings_items()` uses a `vec![...]` literal; the 5 new DAP items were appended to the existing vec rather than converting to `items.push()` style, keeping it consistent with the existing code style.
+
+3. **Test coverage**: Added 17 new DAP-specific tests across 3 modules: `config::types`, `settings_items`, and `handler::settings`, matching all acceptance criteria.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (1232 unit tests + 1 doc test)
+- `cargo test -p fdemon-app -- dap` — Passed (17 DAP-specific tests)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **fdemon-dap stubs**: Created minimal `lib.rs` and `protocol/mod.rs` outside fdemon-app to unblock workspace compilation. These were required by the pre-existing broken state from task 01 and are correctly scoped to the fdemon-dap crate only.

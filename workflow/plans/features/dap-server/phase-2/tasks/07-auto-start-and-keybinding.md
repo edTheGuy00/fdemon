@@ -171,3 +171,51 @@ mod tests {
 - The `D` keybinding uses uppercase to avoid conflicting with `d` (DevTools). This is consistent with other uppercase/lowercase pairs in the keybinding scheme: `r`/`R` (reload/restart), `f`/`F` (level filter/source filter), `e`/`E` (next/prev error).
 - In headless mode, `println!` is used for the DAP port JSON output because headless mode doesn't own the terminal (no TUI). This follows the existing pattern for headless event output.
 - The auto-start check happens once at startup. If the user changes `dap.auto_start_in_ide` in settings at runtime, it doesn't retroactively start/stop the server — the user must press `D` for runtime toggle.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/settings.rs` | Added `should_auto_start_dap()` function with full doc comment; added 3 tests in the test module |
+| `crates/fdemon-app/src/config/mod.rs` | Exported `should_auto_start_dap` in the `settings` re-export |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `InputKey::Char('D') => Some(Message::ToggleDap)` in `handle_key_normal()`; added `dap_key_tests` module with 4 tests |
+| `crates/fdemon-tui/src/runner.rs` | Added `run_with_project_and_dap()` function that applies `--dap-port` override, calls `should_auto_start_dap()`, and processes `Message::StartDapServer`; added imports for `should_auto_start_dap`, `Message`, `info` |
+| `crates/fdemon-tui/src/lib.rs` | Exported `run_with_project_and_dap` from re-exports |
+| `src/tui/runner.rs` | Replaced placeholder implementation with thin wrapper that delegates to `fdemon_tui::run_with_project_and_dap` |
+| `src/headless/runner.rs` | Replaced direct `dap.enabled` check with `should_auto_start_dap()` call; added import for `should_auto_start_dap` |
+
+### Notable Decisions/Tradeoffs
+
+1. **TUI runner architecture**: The `crates/fdemon-tui/src/runner.rs` was extended with a new `run_with_project_and_dap()` function rather than modifying `run_with_project()`. This keeps the existing entry point clean and lets the binary wrapper `src/tui/runner.rs` be a simple delegation. The DAP settings are applied before terminal init (i.e. before `ratatui::init()`), which is the correct order to avoid any display artifacts.
+
+2. **`should_auto_start_dap` placement**: The function was placed in `crates/fdemon-app/src/config/settings.rs` (alongside `detect_parent_ide()`) rather than creating a new file. This is consistent with the file's purpose of housing editor/IDE detection logic and settings helpers.
+
+3. **Headless DAP JSON already implemented**: The `emit_dap_port_json()` function handling `Message::DapServerStarted` was already in `src/headless/runner.rs` from a prior task. No change was needed beyond replacing the direct `dap.enabled` check.
+
+4. **`D` keybinding has no session guard**: Intentional — the DAP server is a global service that can start before any Flutter session exists. The IDE connects to DAP first, then the user starts a Flutter session.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (all 1262+360+460+77+796 unit tests across crates)
+  - New tests: `config::settings::tests::test_should_auto_start_when_enabled` — ok
+  - New tests: `config::settings::tests::test_should_not_auto_start_when_disabled_no_ide` — ok
+  - New tests: `config::settings::tests::test_should_not_auto_start_when_auto_start_disabled` — ok
+  - New tests: `handler::keys::dap_key_tests::test_d_key_sends_toggle_dap` — ok
+  - New tests: `handler::keys::dap_key_tests::test_d_key_works_without_active_session` — ok
+  - New tests: `handler::keys::dap_key_tests::test_d_key_works_with_active_session` — ok
+  - New tests: `handler::keys::dap_key_tests::test_lowercase_d_requires_session` — ok
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed
+
+### Risks/Limitations
+
+1. **IDE env var test isolation**: The `test_should_not_auto_start_when_disabled_no_ide` test includes an explicit case where both `enabled=false` and `auto_start_in_ide=false`, which is deterministic regardless of environment. A fully environment-agnostic test for the `auto_start_in_ide=true` + no-IDE-detected path would require unsetting env vars, which could cause flakiness in certain CI environments with IDE vars set. The current approach tests the disabled case deterministically.
+
+2. **`process_message` in TUI before terminal init**: The `run_with_project_and_dap()` calls `engine.process_message(Message::StartDapServer)` before `ratatui::init()`. This is safe because `process_message` is synchronous TEA state update + queuing an `UpdateAction::SpawnDapServer`, which is dispatched asynchronously. No terminal output occurs during this call.

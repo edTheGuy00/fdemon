@@ -3,6 +3,7 @@
 //! Organized into submodules:
 //! - `update`: Main update() function and message dispatch
 //! - `daemon`: Multi-session daemon event handling
+//! - `dap`: DAP server lifecycle message handler
 //! - `session`: Session state helpers
 //! - `session_lifecycle`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
@@ -16,6 +17,7 @@
 //! - `log_view`: Log view operation handlers
 
 pub(crate) mod daemon;
+pub(crate) mod dap;
 pub(crate) mod devtools;
 pub(crate) mod helpers;
 pub(crate) mod keys;
@@ -345,6 +347,24 @@ pub enum UpdateAction {
         /// The new exception pause mode.
         mode: fdemon_daemon::vm_service::debugger_types::ExceptionPauseMode,
     },
+
+    // --- DAP Server Actions (DAP Server Phase 2, Task 03) ---
+    /// Spawn the DAP TCP server as a background task.
+    ///
+    /// Handled by the TUI/headless runner event loops (not by `actions/mod.rs`),
+    /// because the DAP server is an Engine-level service (like the file watcher),
+    /// not a session-scoped action.
+    SpawnDapServer {
+        /// The TCP port to bind the DAP server on.
+        port: u16,
+        /// The bind address (e.g. `"127.0.0.1"` or `"0.0.0.0"`).
+        bind_addr: String,
+    },
+
+    /// Stop the running DAP server and disconnect all clients.
+    ///
+    /// Handled by the TUI/headless runner event loops (not by `actions/mod.rs`).
+    StopDapServer,
 }
 
 /// Background tasks to spawn

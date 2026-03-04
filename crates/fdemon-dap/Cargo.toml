@@ -1,0 +1,17 @@
+[package]
+name = "fdemon-dap"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "DAP (Debug Adapter Protocol) implementation for Flutter Demon"
+
+[dependencies]
+fdemon-core.workspace = true
+fdemon-daemon.workspace = true
+tokio = { workspace = true, features = ["net", "io-util", "sync", "macros"] }
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "rt-multi-thread"] }

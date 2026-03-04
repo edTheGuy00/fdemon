@@ -112,6 +112,33 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
             }
         }
 
+        // DAP Server
+        "dap.enabled" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.dap.enabled = *v;
+            }
+        }
+        "dap.auto_start_in_ide" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.dap.auto_start_in_ide = *v;
+            }
+        }
+        "dap.port" => {
+            if let SettingValue::Number(v) = &item.value {
+                settings.dap.port = *v as u16;
+            }
+        }
+        "dap.bind_address" => {
+            if let SettingValue::String(v) = &item.value {
+                settings.dap.bind_address = v.clone();
+            }
+        }
+        "dap.suppress_reload_on_pause" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.dap.suppress_reload_on_pause = *v;
+            }
+        }
+
         _ => {
             tracing::warn!("Unknown project setting id: {}", item.id);
         }
@@ -588,6 +615,92 @@ mod tests {
     }
 
     /// An item whose ID does not start with "launch." is silently ignored.
+    // ─────────────────────────────────────────────────────────────────────────
+    // DAP Settings Handler Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_apply_dap_enabled_setting() {
+        let mut settings = Settings::default();
+        assert!(!settings.dap.enabled);
+
+        let item =
+            SettingItem::new("dap.enabled", "Always Enabled").value(SettingValue::Bool(true));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(settings.dap.enabled);
+    }
+
+    #[test]
+    fn test_apply_dap_auto_start_in_ide_setting() {
+        let mut settings = Settings::default();
+        assert!(settings.dap.auto_start_in_ide); // default is true
+
+        let item = SettingItem::new("dap.auto_start_in_ide", "Auto-Start in IDE")
+            .value(SettingValue::Bool(false));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(!settings.dap.auto_start_in_ide);
+    }
+
+    #[test]
+    fn test_apply_dap_port_setting() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.dap.port, 0);
+
+        let item = SettingItem::new("dap.port", "Port").value(SettingValue::Number(8080));
+
+        apply_project_setting(&mut settings, &item);
+        assert_eq!(settings.dap.port, 8080);
+    }
+
+    #[test]
+    fn test_apply_dap_bind_address_setting() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.dap.bind_address, "127.0.0.1");
+
+        let item = SettingItem::new("dap.bind_address", "Bind Address")
+            .value(SettingValue::String("0.0.0.0".to_string()));
+
+        apply_project_setting(&mut settings, &item);
+        assert_eq!(settings.dap.bind_address, "0.0.0.0");
+    }
+
+    #[test]
+    fn test_apply_dap_suppress_reload_on_pause_setting() {
+        let mut settings = Settings::default();
+        assert!(settings.dap.suppress_reload_on_pause); // default is true
+
+        let item = SettingItem::new("dap.suppress_reload_on_pause", "Suppress Reload on Pause")
+            .value(SettingValue::Bool(false));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(!settings.dap.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_apply_dap_port_large_value_truncates_to_u16() {
+        // i64 to u16 cast wraps; test that we handle reasonable port values
+        let mut settings = Settings::default();
+        let item = SettingItem::new("dap.port", "Port").value(SettingValue::Number(4711));
+
+        apply_project_setting(&mut settings, &item);
+        assert_eq!(settings.dap.port, 4711);
+    }
+
+    #[test]
+    fn test_apply_dap_unknown_id_falls_through_to_catch_all() {
+        // An unknown dap.* ID should not panic and leaves settings unchanged
+        let mut settings = Settings::default();
+        let original_port = settings.dap.port;
+
+        let item =
+            SettingItem::new("dap.nonexistent_field", "Unknown").value(SettingValue::Bool(true));
+
+        apply_project_setting(&mut settings, &item);
+        assert_eq!(settings.dap.port, original_port);
+    }
+
     #[test]
     fn test_apply_launch_config_change_wrong_prefix_is_noop() {
         let mut config = LaunchConfig {

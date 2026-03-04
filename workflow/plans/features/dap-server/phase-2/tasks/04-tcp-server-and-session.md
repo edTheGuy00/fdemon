@@ -505,3 +505,46 @@ mod tests {
 - Client sessions are fully independent — they share no mutable state. Each has its own seq counter and state. Phase 4 may add shared state for multi-client coordination.
 - The server binds to `127.0.0.1` by default for security. Binding to `0.0.0.0` (all interfaces) is supported but should be clearly documented as a security risk.
 - TCP keep-alive and connection timeouts are deferred to Phase 4 (production hardening).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/lib.rs` | Added `pub mod server;` and re-exported server types at crate root |
+| `crates/fdemon-dap/src/server/mod.rs` | NEW — `DapServerHandle`, `DapServerConfig`, `DapServerEvent`, `start()`, `accept_loop()`, TCP server tests |
+| `crates/fdemon-dap/src/server/session.rs` | NEW — `SessionState` enum, `DapClientSession` struct, full state machine with 39 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Error handling in `start()`**: Used `Error::protocol()` (not `Error::io()`) to wrap bind/local_addr failures because the `Error` enum has no `io()` constructor — `Error::Io` is only created via `From<std::io::Error>`. `Error::protocol()` is appropriate for DAP server infrastructure errors.
+
+2. **`biased` select! in accept_loop**: Used `biased;` in the `tokio::select!` to check for shutdown first on every iteration. This ensures a pending `accept()` doesn't prevent the shutdown signal from being observed promptly.
+
+3. **`DapServerEvent` enum over `DapEventSink` trait**: Chose `mpsc::Sender<DapServerEvent>` over the trait-based approach. The enum approach is simpler, avoids `dyn` dispatch, and fits the existing codebase patterns (e.g., `EngineEvent` enum).
+
+4. **`disconnect` from any state**: The `disconnect` handler accepts the request from any session state (Uninitialized, Initializing, Configured), not just Configured. This is intentional — a client should always be able to disconnect cleanly regardless of where it is in the handshake.
+
+5. **Seq counter starts at 1**: The first server-sent message gets `seq = 1`. This matches common DAP adapter implementations (VS Code Dart extension) and avoids confusion with the zero-initialized `seq` field in convenience constructors.
+
+6. **`DapClientSession::new()` is `pub`**: Made public to enable unit testing of the state machine without going through TCP. The `handle_request` method is also `pub` for the same reason.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (73 tests: 34 pre-existing protocol tests + 39 new session tests + 9 new TCP server tests + 1 existing doc-test pass)
+  - Session state machine: 30 unit tests
+  - TCP server: 9 integration tests (port binding, shutdown, events, full handshake over real TCP)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (zero warnings)
+- `cargo fmt -p fdemon-dap -- --check` - Passed
+
+### Risks/Limitations
+
+1. **TCP test port reuse**: Tests using `port = 0` rely on OS-assigned ports. If the system has port exhaustion these tests would fail (extremely unlikely in CI).
+2. **`test_client_connect_and_initialize` reads from split stream**: The TCP test helper splits the stream and reads from the read-half after writing. This works correctly but ties the read-half lifetime to the test scope — existing patterns in the session `run()` loop are unaffected.
+3. **Phase 2 `attach` stub**: The `attach` handler accepts the request and returns success but does no actual VM Service connection. Phase 3 must add a `DapAdapter` bridge here.

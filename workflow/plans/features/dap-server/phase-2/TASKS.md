@@ -47,13 +47,13 @@ Wave 4:       └──────────────┬──────
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-dap-crate-and-protocol](tasks/01-dap-crate-and-protocol.md) | Not Started | - | `fdemon-dap/` (new crate), `Cargo.toml` (workspace) |
-| 2 | [02-dap-settings](tasks/02-dap-settings.md) | Not Started | - | `fdemon-app/config/types.rs`, `settings_items.rs`, `handler/settings.rs` |
-| 3 | [03-dap-messages-and-handler](tasks/03-dap-messages-and-handler.md) | Not Started | 2 | `fdemon-app/message.rs`, `state.rs`, `handler/dap.rs` (new) |
-| 4 | [04-tcp-server-and-session](tasks/04-tcp-server-and-session.md) | Not Started | 1 | `fdemon-dap/server/mod.rs`, `server/session.rs` |
-| 5 | [05-dap-service-and-cli](tasks/05-dap-service-and-cli.md) | Not Started | 3, 4 | `fdemon-dap/service.rs`, `src/main.rs`, `engine.rs`, runners |
-| 6 | [06-status-bar-and-header](tasks/06-status-bar-and-header.md) | Not Started | 3 | `fdemon-tui/widgets/log_view/mod.rs`, `widgets/header.rs`, `render/mod.rs` |
-| 7 | [07-auto-start-and-keybinding](tasks/07-auto-start-and-keybinding.md) | Not Started | 5, 6 | `fdemon-app/handler/keys.rs`, `handler/dap.rs`, `config/settings.rs` |
+| 1 | [01-dap-crate-and-protocol](tasks/01-dap-crate-and-protocol.md) | Done | - | `fdemon-dap/` (new crate), `Cargo.toml` (workspace) |
+| 2 | [02-dap-settings](tasks/02-dap-settings.md) | Done | - | `fdemon-app/config/types.rs`, `settings_items.rs`, `handler/settings.rs` |
+| 3 | [03-dap-messages-and-handler](tasks/03-dap-messages-and-handler.md) | Done | 2 | `fdemon-app/message.rs`, `state.rs`, `handler/dap.rs` (new) |
+| 4 | [04-tcp-server-and-session](tasks/04-tcp-server-and-session.md) | Done | 1 | `fdemon-dap/server/mod.rs`, `server/session.rs` |
+| 5 | [05-dap-service-and-cli](tasks/05-dap-service-and-cli.md) | Done | 3, 4 | `fdemon-dap/service.rs`, `src/main.rs`, `engine.rs`, runners |
+| 6 | [06-status-bar-and-header](tasks/06-status-bar-and-header.md) | Done | 3 | `fdemon-tui/widgets/log_view/mod.rs`, `widgets/header.rs`, `render/mod.rs` |
+| 7 | [07-auto-start-and-keybinding](tasks/07-auto-start-and-keybinding.md) | Done | 5, 6 | `fdemon-app/handler/keys.rs`, `handler/dap.rs`, `config/settings.rs` |
 
 ## Success Criteria
 

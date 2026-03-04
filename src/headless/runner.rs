@@ -8,14 +8,23 @@ use std::path::Path;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
-use fdemon_app::{message::Message, state::AppState, Engine};
+use fdemon_app::{config::should_auto_start_dap, message::Message, state::AppState, Engine};
 use fdemon_core::prelude::*;
 use fdemon_daemon::devices;
+use serde_json::json;
 
 use super::HeadlessEvent;
 
-/// Run in headless mode - output JSON events instead of TUI
-pub async fn run_headless(project_path: &Path) -> Result<()> {
+/// Run in headless mode - output JSON events instead of TUI.
+///
+/// # Arguments
+///
+/// * `project_path` — Path to the Flutter project directory.
+/// * `dap_port` — If `Some(port)`, overrides `settings.dap.port` and forces
+///   `settings.dap.enabled = true`. The server's actual port is printed to
+///   stdout as `{"event":"dap_server_started","port":<N>}` once it is bound.
+///   Use `0` for an OS-assigned ephemeral port.
+pub async fn run_headless(project_path: &Path, dap_port: Option<u16>) -> Result<()> {
     info!("═══════════════════════════════════════════════════════");
     info!("Flutter Demon starting in HEADLESS mode");
     info!("Project: {}", project_path.display());
@@ -24,11 +33,28 @@ pub async fn run_headless(project_path: &Path) -> Result<()> {
     // Create engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
+    // Apply --dap-port override: sets port and forces enabled = true.
+    // CLI values override any config-file settings.
+    if let Some(port) = dap_port {
+        engine.settings.dap.port = port;
+        engine.settings.dap.enabled = true;
+        // Also mirror into AppState so the DAP handler reads the same values.
+        engine.state.settings.dap.port = port;
+        engine.state.settings.dap.enabled = true;
+        info!("DAP server port overridden by --dap-port: {}", port);
+    }
+
     // Spawn headless-specific stdin reader
     let stdin_tx = engine.msg_sender();
     std::thread::spawn(move || {
         spawn_stdin_reader_blocking(stdin_tx);
     });
+
+    // Evaluate DAP auto-start (covers --dap-port, config-enabled, and IDE-detected scenarios).
+    // --dap-port already sets dap.enabled=true above, so this single check handles all paths.
+    if should_auto_start_dap(&engine.settings) {
+        let _ = engine.msg_sender().send(Message::StartDapServer).await;
+    }
 
     // Auto-start: discover devices and spawn session
     // In headless mode, always auto-start regardless of config setting
@@ -108,7 +134,27 @@ fn emit_pre_message_events(_state: &AppState, msg: &Message) {
         Message::SessionReloadFailed { session_id, reason } => {
             HeadlessEvent::hot_reload_failed(&session_id.to_string(), reason.clone()).emit();
         }
+        // Emit DAP server port to stdout so external tooling can discover it.
+        Message::DapServerStarted { port } => {
+            emit_dap_port_json(*port);
+        }
         _ => {}
+    }
+}
+
+/// Emit the DAP server port as JSON to stdout for external tooling discovery.
+///
+/// Format: `{"event":"dap_server_started","dapPort":<N>}`
+fn emit_dap_port_json(port: u16) {
+    use std::io::Write;
+    let json = json!({
+        "event": "dap_server_started",
+        "dapPort": port,
+    });
+    let mut stdout = std::io::stdout().lock();
+    if let Ok(line) = serde_json::to_string(&json) {
+        let _ = writeln!(stdout, "{}", line);
+        let _ = stdout.flush();
     }
 }
 

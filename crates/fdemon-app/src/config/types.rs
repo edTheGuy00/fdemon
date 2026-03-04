@@ -123,6 +123,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub editor: EditorSettings,
+
+    #[serde(default)]
+    pub dap: DapSettings,
 }
 
 /// Behavior settings
@@ -462,6 +465,62 @@ impl Default for EditorSettings {
 
 fn default_open_pattern() -> String {
     "$EDITOR $FILE:$LINE".to_string()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAP Server Settings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Configuration for the embedded DAP (Debug Adapter Protocol) server.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct DapSettings {
+    /// Always enable DAP server on startup (overrides auto-detection).
+    /// Can also use --dap CLI flag.
+    #[serde(default)]
+    pub enabled: bool,
+
+    /// Auto-start DAP server when running inside a detected IDE terminal
+    /// (VS Code, Neovim, Helix, Zed, Emacs). No effect if enabled = true.
+    #[serde(default = "default_auto_start_in_ide")]
+    pub auto_start_in_ide: bool,
+
+    /// TCP port for DAP connections. 0 = auto-assign an available port.
+    /// Use a fixed port for stable IDE configs across restarts.
+    #[serde(default)]
+    pub port: u16,
+
+    /// Bind address for the DAP server.
+    #[serde(default = "default_bind_address")]
+    pub bind_address: String,
+
+    /// Suppress auto-reload while debugger is paused at a breakpoint.
+    #[serde(default = "default_suppress_reload")]
+    pub suppress_reload_on_pause: bool,
+}
+
+fn default_auto_start_in_ide() -> bool {
+    true
+}
+
+fn default_bind_address() -> String {
+    "127.0.0.1".to_string()
+}
+
+fn default_suppress_reload() -> bool {
+    true
+}
+
+impl Default for DapSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            auto_start_in_ide: default_auto_start_in_ide(),
+            port: 0,
+            bind_address: default_bind_address(),
+            suppress_reload_on_pause: default_suppress_reload(),
+        }
+    }
 }
 
 /// Detected parent IDE when running in an integrated terminal.
@@ -1200,5 +1259,77 @@ theme = "default"
         assert_eq!(settings.devtools.tree_max_depth, 0);
         assert!(!settings.devtools.auto_repaint_rainbow);
         assert!(!settings.devtools.auto_performance_overlay);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DapSettings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dap_settings_defaults() {
+        let settings = DapSettings::default();
+        assert!(!settings.enabled);
+        assert!(settings.auto_start_in_ide);
+        assert_eq!(settings.port, 0);
+        assert_eq!(settings.bind_address, "127.0.0.1");
+        assert!(settings.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_dap_settings_deserialize_from_toml() {
+        let toml = r#"
+            [dap]
+            enabled = true
+            port = 4711
+            bind_address = "0.0.0.0"
+        "#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(settings.dap.enabled);
+        assert_eq!(settings.dap.port, 4711);
+        assert_eq!(settings.dap.bind_address, "0.0.0.0");
+        // Unspecified fields use defaults
+        assert!(settings.dap.auto_start_in_ide);
+        assert!(settings.dap.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_settings_without_dap_section_uses_defaults() {
+        let toml = r#"
+            [behavior]
+            auto_start = true
+        "#;
+        let settings: Settings = toml::from_str(toml).unwrap();
+        assert!(!settings.dap.enabled);
+        assert!(settings.dap.auto_start_in_ide);
+        assert_eq!(settings.dap.port, 0);
+        assert_eq!(settings.dap.bind_address, "127.0.0.1");
+        assert!(settings.dap.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_dap_settings_full_deserialization() {
+        let toml = r#"
+            enabled = true
+            auto_start_in_ide = false
+            port = 8080
+            bind_address = "0.0.0.0"
+            suppress_reload_on_pause = false
+        "#;
+        let dap: DapSettings = toml::from_str(toml).unwrap();
+        assert!(dap.enabled);
+        assert!(!dap.auto_start_in_ide);
+        assert_eq!(dap.port, 8080);
+        assert_eq!(dap.bind_address, "0.0.0.0");
+        assert!(!dap.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_settings_includes_dap_defaults() {
+        let settings = Settings::default();
+        assert!(!settings.dap.enabled);
+        assert!(settings.dap.auto_start_in_ide);
+        assert_eq!(settings.dap.port, 0);
+        assert_eq!(settings.dap.bind_address, "127.0.0.1");
+        assert!(settings.dap.suppress_reload_on_pause);
     }
 }

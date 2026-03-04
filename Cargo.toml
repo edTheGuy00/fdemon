@@ -14,6 +14,7 @@ fdemon-core = { path = "crates/fdemon-core" }
 fdemon-daemon = { path = "crates/fdemon-daemon" }
 fdemon-app = { path = "crates/fdemon-app" }
 fdemon-tui = { path = "crates/fdemon-tui" }
+fdemon-dap = { path = "crates/fdemon-dap" }
 
 # Shared external dependencies (deduplicate versions)
 tokio = { version = "1", features = ["full"] }

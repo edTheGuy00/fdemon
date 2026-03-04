@@ -1047,4 +1047,31 @@ pub enum Message {
 
     /// Confirm the selected extra args value.
     SettingsExtraArgsConfirm,
+
+    // ─────────────────────────────────────────────────────────
+    // DAP Server Messages
+    // ─────────────────────────────────────────────────────────
+    /// Request to start the DAP server on the configured port.
+    StartDapServer,
+
+    /// Request to stop the DAP server and disconnect all clients.
+    StopDapServer,
+
+    /// Toggle DAP server on/off (keybinding handler).
+    ToggleDap,
+
+    /// DAP server successfully started and is listening.
+    DapServerStarted { port: u16 },
+
+    /// DAP server has been stopped.
+    DapServerStopped,
+
+    /// DAP server failed to start.
+    DapServerFailed { reason: String },
+
+    /// A DAP client connected to the server.
+    DapClientConnected { client_id: String },
+
+    /// A DAP client disconnected from the server.
+    DapClientDisconnected { client_id: String },
 }

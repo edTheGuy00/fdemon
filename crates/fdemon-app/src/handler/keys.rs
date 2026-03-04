@@ -169,6 +169,11 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
             }
         }
 
+        // 'D' for DAP server toggle — available regardless of session state.
+        // The DAP server is a global service; it can start before any Flutter
+        // session is running (IDE connects first, user starts session later).
+        InputKey::Char('D') => Some(Message::ToggleDap),
+
         // ─────────────────────────────────────────────────────────
         // Log Filtering (Phase 1 - Task 4)
         // ─────────────────────────────────────────────────────────
@@ -1748,6 +1753,72 @@ mod network_filter_key_tests {
         assert!(
             msg.is_none(),
             "Unknown key in filter mode should return None"
+        );
+    }
+}
+
+#[cfg(test)]
+mod dap_key_tests {
+    use super::*;
+
+    fn test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "android".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[test]
+    fn test_d_key_sends_toggle_dap() {
+        let state = AppState::new();
+        let result = handle_key_normal(&state, InputKey::Char('D'));
+        assert!(
+            matches!(result, Some(Message::ToggleDap)),
+            "'D' in Normal mode should emit Message::ToggleDap"
+        );
+    }
+
+    #[test]
+    fn test_d_key_works_without_active_session() {
+        // No sessions created — session_manager is empty
+        let state = AppState::new();
+        assert!(
+            state.session_manager.selected().is_none(),
+            "Test precondition: no active session"
+        );
+        let result = handle_key_normal(&state, InputKey::Char('D'));
+        assert!(
+            matches!(result, Some(Message::ToggleDap)),
+            "'D' should emit ToggleDap regardless of session state"
+        );
+    }
+
+    #[test]
+    fn test_d_key_works_with_active_session() {
+        let mut state = AppState::new();
+        let device = test_device();
+        state.session_manager.create_session(&device).unwrap();
+        let result = handle_key_normal(&state, InputKey::Char('D'));
+        assert!(
+            matches!(result, Some(Message::ToggleDap)),
+            "'D' should emit ToggleDap even when a session is active"
+        );
+    }
+
+    #[test]
+    fn test_lowercase_d_requires_session() {
+        // Lowercase 'd' (DevTools) still requires an active session
+        let state = AppState::new();
+        let result = handle_key_normal(&state, InputKey::Char('d'));
+        assert!(
+            result.is_none(),
+            "'d' (DevTools) should return None when no session is active"
         );
     }
 }

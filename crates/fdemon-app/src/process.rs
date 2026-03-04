@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch};
 
@@ -16,10 +16,12 @@ use crate::state::AppState;
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{parse_daemon_message, CommandSender};
+use fdemon_dap::DapServerHandle;
 
 use super::actions::handle_action;
 
 /// Process a message through the TEA update function
+#[allow(clippy::too_many_arguments)]
 pub fn process_message(
     state: &mut AppState,
     message: Message,
@@ -27,6 +29,7 @@ pub fn process_message(
     session_tasks: &Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>,
     shutdown_rx: &watch::Receiver<bool>,
     project_path: &Path,
+    dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>,
 ) {
     // Route JSON-RPC responses from SessionDaemon events to RequestTracker
     route_session_daemon_response(&message, state);
@@ -71,6 +74,7 @@ pub fn process_message(
                     shutdown_rx.clone(),
                     project_path,
                     state.tool_availability.clone(),
+                    dap_server_handle.clone(),
                 );
             } else {
                 // Hydration discarded the action. Send a failure message for

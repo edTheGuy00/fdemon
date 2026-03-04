@@ -987,6 +987,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         duration: Some(Duration::from_secs(5)),
         error_count: 0,
         vm_connected: false,
+        dap_port: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1178,5 +1179,131 @@ fn test_wrap_mode_scrollbar_present_for_many_entries() {
     assert!(
         state.total_lines > state.visible_lines,
         "with 20 entries in an 8-row terminal, a scrollbar should be needed"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// DAP badge rendering tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_status_bar_no_dap_badge_when_off() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        !term.buffer_contains("[DAP"),
+        "No DAP badge should appear when dap_port is None"
+    );
+}
+
+#[test]
+fn test_status_bar_shows_dap_badge_with_port() {
+    use crate::test_utils::TestTerminal;
+
+    // Wide terminal to ensure full (non-compact) mode
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: Some(4711),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[DAP :4711]"),
+        "DAP badge [DAP :4711] should appear when dap_port is Some(4711)"
+    );
+}
+
+#[test]
+fn test_status_bar_dap_badge_different_port() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: Some(54321),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[DAP :54321]"),
+        "DAP badge [DAP :54321] should appear when dap_port is Some(54321)"
+    );
+}
+
+#[test]
+fn test_dap_badge_hidden_in_compact_mode() {
+    use crate::test_utils::TestTerminal;
+
+    // Narrow terminal forces compact mode (< MIN_FULL_STATUS_WIDTH = 60)
+    let mut term = TestTerminal::with_size(40, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: Some(4711),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        !term.buffer_contains("[DAP"),
+        "DAP badge should not appear in compact mode (terminal width < 60)"
     );
 }
