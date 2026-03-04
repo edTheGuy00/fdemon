@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use tracing::{error, info};
+use tracing::error;
 
 use fdemon_app::config::should_auto_start_dap;
 use fdemon_app::message::Message;
@@ -74,15 +74,10 @@ pub async fn run_with_project_and_dap(project_path: &Path, dap_port: Option<u16>
     // Create the engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
-    // Apply --dap-port CLI override: sets port and forces enabled = true.
-    // CLI values override any config-file settings.
+    // Apply --dap-port CLI override: sets port and forces enabled = true in
+    // both settings copies, keeping them in sync.
     if let Some(port) = dap_port {
-        engine.settings.dap.port = port;
-        engine.settings.dap.enabled = true;
-        // Also mirror into AppState so the DAP handler reads the same values.
-        engine.state.settings.dap.port = port;
-        engine.state.settings.dap.enabled = true;
-        info!("DAP server port overridden by --dap-port: {}", port);
+        engine.apply_cli_dap_override(port);
     }
 
     // Evaluate DAP auto-start (covers config-enabled and IDE-detected scenarios).

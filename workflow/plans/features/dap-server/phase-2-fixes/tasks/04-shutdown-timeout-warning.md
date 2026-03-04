@@ -115,3 +115,29 @@ The existing `test_stop_sends_shutdown` test in `service.rs` verifies that `stop
 
 - The `let _ =` on `shutdown_tx.send()` is correct and should remain — the receiver may already be dropped if the server exited early.
 - A future enhancement (Task 07) could use `tokio::select!` with an `abort()` call, but the simple warning is sufficient for Phase 2.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/service.rs` | Replaced `let _ = tokio::time::timeout(...)` with `if .is_err()` check that calls `tracing::warn!`; updated doc comment to reflect new behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Simplest correct approach used**: The task explicitly recommends the `.is_err()` pattern (not the `match` variant with abort), because `handle.task` is consumed by `timeout` and cannot be aborted after the `Err(_elapsed)` arm without pinning. The warning is sufficient for Phase 2 observability.
+2. **Doc comment updated**: The method's doc comment now accurately says "a warning is logged" instead of "it is abandoned" to reflect the new observable behavior.
+
+### Testing Performed
+
+- `cargo test -p fdemon-dap` — Passed (78 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Timeout path not directly tested**: A test for the timeout path would require a server that deliberately hangs, which is fragile in CI. The task explicitly accepts this — the warning is a diagnostic aid, not a correctness requirement.

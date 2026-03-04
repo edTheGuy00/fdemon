@@ -31,7 +31,7 @@ struct Args {
     /// Start the DAP server on a specific port (implies DAP enabled).
     ///
     /// Use 0 to let the OS assign an ephemeral port.
-    /// In headless mode the assigned port is printed as JSON: {"dapPort": 54321}
+    /// In headless mode the assigned port is printed as JSON: {"event":"dap_server_started","port":54321,"timestamp":...}
     #[arg(long, value_name = "PORT")]
     dap_port: Option<u16>,
 }

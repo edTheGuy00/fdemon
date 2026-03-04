@@ -7,8 +7,8 @@
 //!
 //! 1. Call [`start`] with a [`DapServerConfig`] and an event channel sender.
 //! 2. [`start`] binds the TCP listener and returns a [`DapServerHandle`].
-//! 3. The handle's `port` field gives the actual port (useful when `port = 0`
-//!    is specified to get an OS-assigned port).
+//! 3. Call [`DapServerHandle::port`] to get the actual port (useful when
+//!    `port = 0` is specified to get an OS-assigned port).
 //! 4. The accept loop runs in a background task until `shutdown_tx.send(true)`
 //!    is called, which causes the loop to break and all active sessions to
 //!    receive a `terminated` event.
@@ -30,12 +30,21 @@ pub mod session;
 
 pub use session::{DapClientSession, SessionState};
 
+use std::sync::Arc;
+
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, watch},
+    sync::{mpsc, watch, Semaphore},
 };
 
 use fdemon_core::error::{Error, Result};
+
+/// Maximum number of concurrent DAP client connections.
+///
+/// Connections beyond this limit are rejected immediately (the TCP stream is
+/// dropped) and a warning is logged. This prevents unbounded task growth when
+/// a misbehaving client or port scanner hammers the server.
+const MAX_CONCURRENT_CLIENTS: usize = 8;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -61,21 +70,35 @@ pub enum DapServerEvent {
 /// Used by the Engine to track server lifecycle and initiate shutdown.
 /// When dropped the server task is **not** automatically cancelled — call
 /// `shutdown_tx.send(true)` first, then `.await` on `task` to join cleanly.
+///
+/// Use [`DapServerHandle::port`] to retrieve the listening port. The
+/// `shutdown_tx` and `task` fields are `pub(crate)` and are only accessed by
+/// [`crate::service::DapService::stop`] and tests within this crate.
 pub struct DapServerHandle {
     /// The actual port the server is listening on.
     ///
     /// This may differ from the configured port when `port = 0` was passed to
     /// [`start`], in which case the OS assigned an ephemeral port.
-    pub port: u16,
+    port: u16,
 
     /// Send `true` to signal the server and all active sessions to shut down.
-    pub shutdown_tx: watch::Sender<bool>,
+    pub(crate) shutdown_tx: watch::Sender<bool>,
 
     /// Join handle for the accept-loop task.
     ///
     /// Await this after sending the shutdown signal to ensure the server has
     /// fully stopped before releasing resources.
-    pub task: tokio::task::JoinHandle<()>,
+    pub(crate) task: tokio::task::JoinHandle<()>,
+}
+
+impl DapServerHandle {
+    /// Returns the port the server is listening on.
+    ///
+    /// This may differ from the configured port when `port = 0` was passed to
+    /// [`start`], in which case the OS assigned an ephemeral port.
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 }
 
 /// Configuration for starting a DAP TCP server.
@@ -131,7 +154,8 @@ pub async fn start(
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
-    let task = tokio::spawn(accept_loop(listener, shutdown_rx, event_tx));
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CLIENTS));
+    let task = tokio::spawn(accept_loop(listener, shutdown_rx, event_tx, semaphore));
 
     Ok(DapServerHandle {
         port: actual_port,
@@ -147,16 +171,23 @@ pub async fn start(
 /// Accept connections until a shutdown signal is received.
 ///
 /// For each accepted connection:
-/// 1. Emits a [`DapServerEvent::ClientConnected`] with the remote address.
-/// 2. Spawns a task running [`DapClientSession::run`].
-/// 3. On session completion, emits [`DapServerEvent::ClientDisconnected`].
+/// 1. Checks whether we are below [`MAX_CONCURRENT_CLIENTS`]; if full the
+///    connection is dropped immediately and a warning is logged.
+/// 2. Emits a [`DapServerEvent::ClientConnected`] with the remote address.
+/// 3. Spawns a task running [`DapClientSession::run`], holding a semaphore
+///    permit for the session lifetime so the slot is released on completion.
+/// 4. On session completion, emits [`DapServerEvent::ClientDisconnected`].
 ///
 /// When `shutdown_rx` receives `true`, the loop breaks. Each active session
 /// also watches the same `shutdown_rx` and terminates independently.
+///
+/// On accept errors a 100 ms back-off is applied before retrying to prevent
+/// a tight error-spam loop when the OS is under resource pressure.
 async fn accept_loop(
     listener: TcpListener,
     mut shutdown_rx: watch::Receiver<bool>,
     event_tx: mpsc::Sender<DapServerEvent>,
+    semaphore: Arc<Semaphore>,
 ) {
     loop {
         tokio::select! {
@@ -175,6 +206,23 @@ async fn accept_loop(
                 match result {
                     Ok((stream, addr)) => {
                         let client_id = addr.to_string();
+
+                        // Enforce the concurrent-connection cap. try_acquire_owned is
+                        // non-blocking so we never stall the accept loop waiting for a
+                        // slot — we reject immediately and keep the shutdown path clear.
+                        let permit = match semaphore.clone().try_acquire_owned() {
+                            Ok(permit) => permit,
+                            Err(_) => {
+                                tracing::warn!(
+                                    "DAP server: max concurrent clients ({}) reached, rejecting connection from {}",
+                                    MAX_CONCURRENT_CLIENTS,
+                                    addr
+                                );
+                                drop(stream);
+                                continue;
+                            }
+                        };
+
                         tracing::debug!("DAP client connected: {}", client_id);
 
                         // Notify the host that a client connected.
@@ -215,6 +263,9 @@ async fn accept_loop(
                                     client_id: session_client_id,
                                 })
                                 .await;
+
+                            // Release the semaphore slot so new connections can be accepted.
+                            drop(permit);
                         });
                     }
                     Err(e) => {
@@ -225,6 +276,9 @@ async fn accept_loop(
                                 reason: e.to_string(),
                             })
                             .await;
+                        // Backoff to prevent tight error loop on persistent OS failures
+                        // (e.g., file descriptor exhaustion).
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                     }
                 }
             }
@@ -255,7 +309,7 @@ mod tests {
             bind_addr: "127.0.0.1".to_string(),
         };
         let handle = start(config, event_tx).await.expect("server should start");
-        assert!(handle.port > 0, "OS-assigned port must be > 0");
+        assert!(handle.port() > 0, "OS-assigned port must be > 0");
         // Shut down cleanly.
         handle.shutdown_tx.send(true).unwrap();
         handle.task.await.unwrap();
@@ -270,7 +324,7 @@ mod tests {
             bind_addr: "127.0.0.1".to_string(),
         };
         let handle = start(config, event_tx).await.unwrap();
-        assert!(handle.port > 0);
+        assert!(handle.port() > 0);
         handle.shutdown_tx.send(true).unwrap();
         handle.task.await.unwrap();
     }
@@ -288,7 +342,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let occupied_port = handle1.port;
+        let occupied_port = handle1.port();
 
         let (event_tx2, _) = mpsc::channel(16);
         let result = start(
@@ -350,7 +404,7 @@ mod tests {
         .unwrap();
 
         // Connect a TCP client.
-        let _stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port))
+        let _stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port()))
             .await
             .expect("client should connect");
 
@@ -385,7 +439,7 @@ mod tests {
 
         // Connect and immediately drop (simulates clean EOF).
         {
-            let _stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port))
+            let _stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port()))
                 .await
                 .expect("client should connect");
             // Stream is dropped here, causing EOF on server side.
@@ -456,7 +510,7 @@ mod tests {
         .await
         .unwrap();
 
-        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port))
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port()))
             .await
             .unwrap();
 
@@ -505,7 +559,7 @@ mod tests {
         .await
         .unwrap();
 
-        let port = handle.port;
+        let port = handle.port();
 
         // Use a separate task so we can interact with the session freely.
         let client_task = tokio::spawn(async move {
@@ -587,7 +641,7 @@ mod tests {
         .await
         .unwrap();
 
-        let port = handle.port;
+        let port = handle.port();
 
         // Connect 3 clients simultaneously.
         let mut tasks = Vec::new();

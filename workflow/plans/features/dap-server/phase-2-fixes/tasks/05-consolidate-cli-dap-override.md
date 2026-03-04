@@ -86,3 +86,33 @@ No new unit test needed — this is a pure refactor with no behavior change. Exi
 
 - If future CLI flags need similar dual-write behavior (e.g., a `--bind-address` override), this pattern can be extended to a more general `apply_cli_overrides` method.
 - The `tracing::info!` log is moved into the Engine method to keep it centralized.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/engine.rs` | Added `apply_cli_dap_override(&mut self, port: u16)` public method that updates both `self.settings.dap` and `self.state.settings.dap` and logs with `tracing::info!` |
+| `crates/fdemon-tui/src/runner.rs` | Replaced 6-line inline dual-mutation block with `engine.apply_cli_dap_override(port)` call; removed now-unused `info` from `tracing` import |
+| `src/headless/runner.rs` | Replaced 6-line inline dual-mutation block with `engine.apply_cli_dap_override(port)` call |
+
+### Notable Decisions/Tradeoffs
+
+1. **Unused import removal**: After removing the inline `info!("DAP server port overridden...")` call in the TUI runner, the `info` import became unused. Removed it to keep clippy clean. The headless runner still uses `info!` elsewhere so its import was unchanged.
+2. **Pure refactor**: No behavioral change — the method body is identical to the code it replaced in both call sites. The `tracing::info!` log moved from two call sites into the Engine method, now centralized in one place.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (3 pre-existing warnings in `fdemon-dap` unrelated to this task)
+- `cargo test --workspace` - Passed (3,064 total tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: This is a pure DRY refactor with no logic change. All acceptance criteria are satisfied.

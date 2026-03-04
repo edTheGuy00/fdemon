@@ -98,3 +98,35 @@ Run `cargo check -p fdemon-dap` to verify nothing breaks.
 
 - The wire format change (`"dapPort"` -> `"port"`) should be documented if external tools parse headless JSON output. Consider using `#[serde(rename = "dapPort")]` if backward compatibility matters.
 - The `fdemon-daemon` dependency will be re-added when Phase 3 implements the VM Service bridge for debug operations.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/headless/mod.rs` | Added `DapServerStarted { port: u16, timestamp: i64 }` variant to `HeadlessEvent` enum; added `dap_server_started(port: u16) -> Self` constructor; added `test_dap_server_started_serialization` unit test |
+| `src/headless/runner.rs` | Replaced `emit_dap_port_json(*port)` call with `HeadlessEvent::dap_server_started(*port).emit()`; removed `emit_dap_port_json` function entirely; removed unused `use serde_json::json` import |
+| `crates/fdemon-dap/Cargo.toml` | Removed `fdemon-daemon.workspace = true` from `[dependencies]` |
+| `crates/fdemon-dap/src/lib.rs` | Updated module doc comment to reflect that `fdemon-daemon` is no longer a dependency |
+| `src/main.rs` | Updated CLI arg doc comment to reflect new wire format (`"port"` instead of `"dapPort"`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Wire format change**: The field name changed from `"dapPort"` to `"port"` (snake_case, per `HeadlessEvent` serde convention). No integration tests asserted on `"dapPort"`, so no backward compatibility annotation (`#[serde(rename = "dapPort")]`) was added. The doc comment in `src/main.rs` was updated to reflect the new format.
+2. **Doc comment in `runner.rs`**: The `run_headless` function's doc comment already used the new format (`"port"` not `"dapPort"`), so no change was needed there.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed (fdemon-dap compiles without fdemon-daemon)
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all tests pass; new `test_dap_server_started_serialization` test runs clean)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Wire format change**: External tools that parse headless JSON output and check for `"dapPort"` will need to be updated to use `"port"`. This is documented in the task and noted in the `src/main.rs` CLI arg doc comment.

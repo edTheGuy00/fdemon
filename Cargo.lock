@@ -711,7 +711,6 @@ name = "fdemon-dap"
 version = "0.1.0"
 dependencies = [
  "fdemon-core",
- "fdemon-daemon",
  "serde",
  "serde_json",
  "tokio",

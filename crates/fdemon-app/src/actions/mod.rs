@@ -423,7 +423,7 @@ pub fn handle_action(
                 // Start the TCP server
                 match DapService::start(port, bind_addr, event_tx).await {
                     Ok(server_handle) => {
-                        let actual_port = server_handle.port;
+                        let actual_port = server_handle.port();
 
                         // Deposit the handle into the shared slot so Engine::shutdown()
                         // can stop it, and StopDapServer can retrieve it.

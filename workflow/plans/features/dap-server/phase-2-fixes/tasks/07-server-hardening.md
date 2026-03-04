@@ -122,3 +122,41 @@ Update all callers that access `handle.port` directly to use `handle.port()`. `s
 - The semaphore `try_acquire_owned` approach is non-blocking — it rejects immediately rather than making the accept loop wait. This prevents a full semaphore from blocking the shutdown signal check.
 - The 100ms backoff is deliberately short — enough to break a tight loop but not so long that it delays recovery from transient errors.
 - `DapServerHandle` tests within `fdemon-dap` use `pub(crate)` fields directly, which is fine since tests are in the same crate.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/server/mod.rs` | Added `MAX_CONCURRENT_CLIENTS` constant (8), `Arc<Semaphore>` connection limit with `try_acquire_owned`, 100ms backoff on accept errors, restricted `DapServerHandle` field visibility (`port` private, `shutdown_tx`/`task` `pub(crate)`), added `port()` accessor, updated all internal test references from `handle.port` to `handle.port()` |
+| `crates/fdemon-dap/src/service.rs` | Updated 3 test references from `handle.port` to `handle.port()`, updated doc comment reference |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated 1 reference from `server_handle.port` to `server_handle.port()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Semaphore passed by parameter to `accept_loop`**: Rather than creating the semaphore inside `accept_loop`, it is created in `start()` and passed in. This is consistent with how `shutdown_rx` and `event_tx` are threaded through, and keeps the accept loop signature explicit about its dependencies.
+
+2. **`try_acquire_owned` over `acquire_owned`**: Non-blocking rejection ensures a fully-loaded semaphore never stalls the accept loop's shutdown signal path. Connections beyond the cap are rejected immediately — the TCP stream is dropped and the OS closes the connection on the client side.
+
+3. **Semaphore permit released explicitly with `drop(permit)` at end of client task**: The permit is moved into the spawned `async move` closure and released after the disconnect event is sent. This accounts for the full lifecycle of the connection including the disconnect notification, not just the session I/O.
+
+4. **`DapServerHandle::port` field stays private (not `pub(crate)`)**: The port is meaningful to external callers (e.g., `fdemon-app`) who need to know what port the server bound to. Making it accessible only via the `pub fn port()` accessor is the right level of encapsulation — readable but not settable from outside.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo check -p fdemon-app` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-dap` — Passed (78 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Connection limit test coverage**: The task noted that testing the connection limit is tricky in unit tests. No automated test for "9th connection is rejected" was added — this matches the task's guidance ("verify by code review"). The `test_multiple_clients_can_connect_concurrently` test confirms 3 concurrent connections work fine within the 8-slot limit.
+
+2. **Backoff in accept loop**: The 100ms backoff is inside the `tokio::select!` arm, not in the outer loop. On an accept error the backoff runs before the next `select!` iteration, which means the shutdown signal check is temporarily delayed by up to 100ms. This is acceptable given the backoff is only triggered on OS-level accept failures, not on normal operation.

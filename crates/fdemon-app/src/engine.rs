@@ -371,6 +371,18 @@ impl Engine {
         );
     }
 
+    /// Apply a CLI `--dap-port` override.
+    ///
+    /// Sets the DAP port and forces `enabled = true` in both the cached
+    /// settings and the embedded AppState settings, keeping them in sync.
+    pub fn apply_cli_dap_override(&mut self, port: u16) {
+        self.settings.dap.port = port;
+        self.settings.dap.enabled = true;
+        self.state.settings.dap.port = port;
+        self.state.settings.dap.enabled = true;
+        tracing::info!("DAP server port overridden by --dap-port: {}", port);
+    }
+
     /// Check if the application should quit.
     pub fn should_quit(&self) -> bool {
         self.state.should_quit()

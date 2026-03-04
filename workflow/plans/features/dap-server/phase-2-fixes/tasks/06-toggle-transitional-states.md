@@ -85,3 +85,29 @@ fn test_toggle_when_stopping_is_noop() {
 
 - This task pairs well with Task 02 (guard-start-starting-state). After both are applied, the double-start path is fully closed: both `StartDapServer` and `ToggleDap` are no-ops during `Starting`.
 - The explicit `match` is preferred over `if/else` per CODE_STANDARDS.md: "Exhaustive matches, avoid catch-all `_` when variants matter."
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/dap.rs` | Replaced `if/else` in `handle_toggle` with an exhaustive `match` on all four `DapStatus` variants; added `test_toggle_when_starting_is_noop` and `test_toggle_when_stopping_is_noop` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact task specification followed**: The `match` arms are in the order specified by the task (`Running { .. } => stop`, `Off => start`, `Starting | Stopping => none()`), which reads naturally: active state triggers the opposite action, transitional states are silently ignored.
+2. **No test updates needed for existing tests**: `test_toggle_when_off_starts` and `test_toggle_when_running_stops` were already correct and continued to pass unchanged — the new `match` preserves the same behavior for those two cases.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` - Passed (1264 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: This is a pure behavior fix with no side effects. The two transitional states (`Starting`, `Stopping`) were previously mishandled; now they are explicitly no-ops.

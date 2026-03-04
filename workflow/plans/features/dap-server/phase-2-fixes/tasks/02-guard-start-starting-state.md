@@ -83,3 +83,28 @@ Update the existing test and verify the other start/stop tests still pass. No ne
 
 - This is a one-line fix plus a test update.
 - The `Stopping` state is not guarded here because `StartDapServer` while `Stopping` is a less likely race (the stop flow is initiated by the user and completes quickly). If desired, Task 06 (toggle-transitional-states) addresses this more comprehensively post-merge.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/dap.rs` | Extended guard in `handle_start` to also reject `DapStatus::Starting`; renamed and updated test `test_start_when_starting_transitions_to_starting_with_action` to `test_start_when_starting_is_noop` asserting no action is returned |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard condition uses equality check**: `state.dap_status == DapStatus::Starting` is the direct, readable approach. `DapStatus` derives `PartialEq` so this compiles cleanly without any additional infrastructure.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` - Passed (1262 unit tests + 1 doc test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Stopping state not guarded**: Per task notes, `StartDapServer` while `Stopping` is not guarded here — addressed by Task 06 if needed.

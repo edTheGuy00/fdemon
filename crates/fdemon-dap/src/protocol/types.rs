@@ -316,12 +316,6 @@ impl Capabilities {
     pub fn fdemon_defaults() -> Self {
         Self {
             supports_configuration_done_request: Some(true),
-            support_terminate_debuggee: Some(true),
-            supports_evaluate_for_hovers: Some(true),
-            supports_exception_info_request: Some(true),
-            supports_loaded_sources_request: Some(true),
-            supports_log_points: Some(true),
-            supports_delayed_stack_trace_loading: Some(true),
             ..Default::default()
         }
     }
@@ -542,14 +536,16 @@ mod tests {
     #[test]
     fn test_capabilities_fdemon_defaults() {
         let caps = Capabilities::fdemon_defaults();
+        // Only the implemented capability is advertised.
         assert_eq!(caps.supports_configuration_done_request, Some(true));
-        assert_eq!(caps.support_terminate_debuggee, Some(true));
-        assert_eq!(caps.supports_evaluate_for_hovers, Some(true));
-        assert_eq!(caps.supports_exception_info_request, Some(true));
-        assert_eq!(caps.supports_loaded_sources_request, Some(true));
-        assert_eq!(caps.supports_log_points, Some(true));
-        assert_eq!(caps.supports_delayed_stack_trace_loading, Some(true));
-        // Not set by defaults
+        // Phase 3 capabilities are not yet implemented — must be None so clients
+        // do not send requests the adapter cannot handle.
+        assert!(caps.support_terminate_debuggee.is_none());
+        assert!(caps.supports_evaluate_for_hovers.is_none());
+        assert!(caps.supports_exception_info_request.is_none());
+        assert!(caps.supports_loaded_sources_request.is_none());
+        assert!(caps.supports_log_points.is_none());
+        assert!(caps.supports_delayed_stack_trace_loading.is_none());
         assert!(caps.supports_set_variable.is_none());
         assert!(caps.supports_value_formatting_options.is_none());
         assert!(caps.supports_breakpoint_locations_request.is_none());

@@ -80,3 +80,30 @@ Check existing tests in `types.rs` that reference `fdemon_defaults()`. The test 
 - This is a targeted change to `fdemon_defaults()` only — ~6 lines removed.
 - The struct fields, serde attributes, and `Default` derive all remain unchanged.
 - When Phase 3 implements a handler for a capability, re-add it to `fdemon_defaults()` in the same task that implements the handler.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Trimmed `fdemon_defaults()` to only set `supports_configuration_done_request: Some(true)`; updated `test_capabilities_fdemon_defaults` to assert `None` for all Phase 3 capabilities |
+
+### Notable Decisions/Tradeoffs
+
+1. **Struct fields preserved**: All 10 `Capabilities` fields remain defined per task instructions. Only the `fdemon_defaults()` method body changed. This allows Phase 3 to re-enable capabilities one at a time as handlers are implemented without any struct changes.
+
+2. **Test updated instead of deleted**: `test_capabilities_fdemon_defaults` was updated to assert `is_none()` for the 6 removed capabilities rather than deleted. This keeps coverage of the contract that these capabilities remain `None` until Phase 3 implements their handlers.
+
+### Testing Performed
+
+- `cargo test -p fdemon-dap` - Passed (78 tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Phase 3 re-enablement**: Each Phase 3 capability must be re-added to `fdemon_defaults()` in the same task that implements its handler, to keep the implementation and advertisement in sync. No risk for the current phase.

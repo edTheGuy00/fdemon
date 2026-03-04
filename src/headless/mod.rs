@@ -102,6 +102,9 @@ pub enum HeadlessEvent {
 
     /// Session removed/ended
     SessionRemoved { session_id: String, timestamp: i64 },
+
+    /// DAP server started and bound to a port
+    DapServerStarted { port: u16, timestamp: i64 },
 }
 
 #[allow(dead_code)] // Future functionality - constructors will be used when headless mode is fully implemented
@@ -233,6 +236,13 @@ impl HeadlessEvent {
             timestamp: Self::now(),
         }
     }
+
+    pub fn dap_server_started(port: u16) -> Self {
+        Self::DapServerStarted {
+            port,
+            timestamp: Self::now(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -320,6 +330,18 @@ mod tests {
         assert_eq!(value["device_id"], "linux-x64");
         assert_eq!(value["device_name"], "Linux Desktop");
         assert_eq!(value["platform"], "linux");
+        assert!(value["timestamp"].is_number());
+    }
+
+    #[test]
+    fn test_dap_server_started_serialization() {
+        let event = HeadlessEvent::dap_server_started(54321);
+        let json = serde_json::to_string(&event).expect("serialization failed");
+
+        let value: serde_json::Value = serde_json::from_str(&json).expect("invalid JSON");
+
+        assert_eq!(value["event"], "dap_server_started");
+        assert_eq!(value["port"], 54321);
         assert!(value["timestamp"].is_number());
     }
 }

@@ -776,8 +776,8 @@ pub enum DapStatus {
     Running {
         /// The TCP port the server is listening on.
         port: u16,
-        /// Number of currently connected DAP clients.
-        client_count: usize,
+        /// Set of currently connected DAP client IDs.
+        clients: HashSet<String>,
     },
     /// DAP server is shutting down (disconnecting clients, unbinding).
     Stopping,
@@ -797,10 +797,10 @@ impl DapStatus {
         matches!(self, DapStatus::Running { .. })
     }
 
-    /// Returns the client count if running, otherwise 0.
+    /// Returns the number of currently connected clients, or 0 if not running.
     pub fn client_count(&self) -> usize {
         match self {
-            DapStatus::Running { client_count, .. } => *client_count,
+            DapStatus::Running { clients, .. } => clients.len(),
             _ => 0,
         }
     }

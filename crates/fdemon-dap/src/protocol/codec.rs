@@ -32,6 +32,14 @@ use super::types::DapMessage;
 /// malicious `Content-Length` header before any bytes are read.
 pub const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
+/// Maximum allowed length for a single DAP header line (bytes).
+///
+/// DAP headers are simple key-value pairs (e.g., `Content-Length: 42\r\n`),
+/// so 4 KB is extremely generous. This limit prevents unbounded heap growth
+/// from a malicious or malformed client that sends a header line without a
+/// newline terminator.
+const MAX_HEADER_LINE_LENGTH: usize = 4096;
+
 /// Read a single DAP message from the given async reader.
 ///
 /// Reads the header section line-by-line, extracts the `Content-Length` value,
@@ -58,6 +66,13 @@ where
     loop {
         let mut line = String::new();
         let bytes_read = reader.read_line(&mut line).await?;
+
+        if bytes_read > MAX_HEADER_LINE_LENGTH {
+            return Err(Error::protocol(format!(
+                "DAP: header line exceeds maximum allowed length of {} bytes (got {})",
+                MAX_HEADER_LINE_LENGTH, bytes_read
+            )));
+        }
 
         // A zero-byte read on the very first line means clean EOF.
         if bytes_read == 0 {
@@ -369,6 +384,25 @@ mod tests {
         let mut reader = BufReader::new(&data[..]);
         let result = read_message(&mut reader).await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_read_message_oversized_header_line_rejected() {
+        // Build a header line that exceeds MAX_HEADER_LINE_LENGTH (4096 bytes)
+        let long_header = format!("Content-Length:{}\r\n\r\n", "9".repeat(4090));
+        assert!(long_header.len() > 4096);
+
+        let bytes = long_header.as_bytes();
+        let mut reader = BufReader::new(bytes);
+        let result = read_message(&mut reader).await;
+
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("header line exceeds maximum"),
+            "Expected header-line-too-long error, got: {}",
+            err_msg
+        );
     }
 
     #[tokio::test]

@@ -56,7 +56,7 @@ impl DapService {
     /// # Arguments
     ///
     /// * `port` — TCP port to bind on. Use `0` to let the OS assign an
-    ///   ephemeral port; the actual port is in [`DapServerHandle::port`].
+    ///   ephemeral port; the actual port is via [`DapServerHandle::port()`].
     /// * `bind_addr` — Bind address string (e.g. `"127.0.0.1"`).
     /// * `event_tx` — Channel for [`DapServerEvent`] notifications. The
     ///   caller is responsible for draining this channel.
@@ -80,7 +80,7 @@ impl DapService {
     ///
     /// Signals the server task to shut down, then awaits the task with a
     /// 5-second timeout. If the task does not complete within the timeout
-    /// it is abandoned (not cancelled forcefully).
+    /// a warning is logged and the handle is dropped (not cancelled forcefully).
     ///
     /// # Arguments
     ///
@@ -91,7 +91,12 @@ impl DapService {
         let _ = handle.shutdown_tx.send(true);
 
         // Wait for the accept-loop task to finish with a generous timeout.
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(5), handle.task).await;
+        if tokio::time::timeout(std::time::Duration::from_secs(5), handle.task)
+            .await
+            .is_err()
+        {
+            tracing::warn!("DAP server task did not complete within 5s shutdown timeout");
+        }
     }
 }
 
@@ -116,7 +121,7 @@ mod tests {
     #[tokio::test]
     async fn test_dap_service_start_returns_valid_port() {
         let (handle, _rx) = start_server().await;
-        assert!(handle.port > 0, "OS-assigned port must be nonzero");
+        assert!(handle.port() > 0, "OS-assigned port must be nonzero");
         DapService::stop(handle).await;
     }
 
@@ -130,7 +135,7 @@ mod tests {
     #[tokio::test]
     async fn test_dap_service_start_fails_on_port_in_use() {
         let (handle, _rx) = start_server().await;
-        let occupied_port = handle.port;
+        let occupied_port = handle.port();
 
         let (event_tx2, _rx2) = mpsc::channel(16);
         let result = DapService::start(occupied_port, "127.0.0.1".to_string(), event_tx2).await;
@@ -148,7 +153,7 @@ mod tests {
         use tokio::net::TcpStream;
 
         let (handle, mut event_rx) = start_server().await;
-        let port = handle.port;
+        let port = handle.port();
 
         // Connect a client so we get a ClientConnected event.
         let _stream = TcpStream::connect(format!("127.0.0.1:{}", port))

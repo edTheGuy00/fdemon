@@ -88,3 +88,33 @@ async fn test_read_message_oversized_header_line_rejected() {
 
 - The 4 KB limit is deliberately generous — a well-formed `Content-Length: <number>\r\n` header is at most ~30 bytes. The limit exists purely as a safety cap against malicious input.
 - This is the only unbounded allocation path in the codec; the body is already guarded by `MAX_MESSAGE_SIZE`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/codec.rs` | Added `MAX_HEADER_LINE_LENGTH` constant (4096 bytes); added length check after `read_line` in the header loop; added `test_read_message_oversized_header_line_rejected` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Check-after-read pattern**: Kept consistent with how `MAX_MESSAGE_SIZE` guards the body — check the returned `bytes_read` value immediately after `read_line` succeeds. Up to 4 KB may be allocated before the check triggers, but 4 KB is negligible and avoids the complexity of byte-by-byte reading.
+
+2. **Constant placement**: Placed `MAX_HEADER_LINE_LENGTH` directly below `MAX_MESSAGE_SIZE` so both allocation guards are co-located and visible together.
+
+3. **Test input construction**: Used `"9".repeat(4090)` to produce a header line of exactly 4096 + 2 (`\r\n`) bytes, reliably exceeding the 4096-byte limit with the shortest possible digit string.
+
+### Testing Performed
+
+- `cargo test -p fdemon-dap` — Passed (78 tests: 77 pre-existing + 1 new)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-dap -- --check` — Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **Allocation before check**: The check fires after `read_line` completes, meaning up to 4096 bytes are allocated before the error is returned. This is by design (matching the existing body-size guard pattern) and the 4 KB allocation is negligible even under attack conditions.

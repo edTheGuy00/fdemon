@@ -4,6 +4,8 @@
 //! The actual server start/stop is performed by UpdateAction handlers in
 //! the TUI/headless event loops — this module only manages AppState.
 
+use std::collections::HashSet;
+
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::Message;
 use crate::state::{AppState, DapStatus};
@@ -26,8 +28,8 @@ pub fn handle_dap_message(state: &mut AppState, message: &Message) -> UpdateResu
 }
 
 fn handle_start(state: &mut AppState) -> UpdateResult {
-    if state.dap_status.is_running() {
-        return UpdateResult::none(); // Already running, no-op
+    if state.dap_status.is_running() || state.dap_status == DapStatus::Starting {
+        return UpdateResult::none(); // Already running or starting, no-op
     }
     state.dap_status = DapStatus::Starting;
     let port = state.settings.dap.port;
@@ -44,17 +46,17 @@ fn handle_stop(state: &mut AppState) -> UpdateResult {
 }
 
 fn handle_toggle(state: &mut AppState) -> UpdateResult {
-    if state.dap_status.is_running() {
-        handle_stop(state)
-    } else {
-        handle_start(state)
+    match state.dap_status {
+        DapStatus::Running { .. } => handle_stop(state),
+        DapStatus::Off => handle_start(state),
+        DapStatus::Starting | DapStatus::Stopping => UpdateResult::none(),
     }
 }
 
 fn handle_started(state: &mut AppState, port: u16) -> UpdateResult {
     state.dap_status = DapStatus::Running {
         port,
-        client_count: 0,
+        clients: HashSet::new(),
     };
     tracing::info!(
         "DAP server listening on {}:{}",
@@ -77,16 +79,16 @@ fn handle_failed(state: &mut AppState, reason: &str) -> UpdateResult {
 }
 
 fn handle_client_connected(state: &mut AppState, client_id: &str) -> UpdateResult {
-    if let DapStatus::Running { client_count, .. } = &mut state.dap_status {
-        *client_count += 1;
+    if let DapStatus::Running { clients, .. } = &mut state.dap_status {
+        clients.insert(client_id.to_string());
         tracing::info!("DAP client connected: {}", client_id);
     }
     UpdateResult::none()
 }
 
 fn handle_client_disconnected(state: &mut AppState, client_id: &str) -> UpdateResult {
-    if let DapStatus::Running { client_count, .. } = &mut state.dap_status {
-        *client_count = client_count.saturating_sub(1);
+    if let DapStatus::Running { clients, .. } = &mut state.dap_status {
+        clients.remove(client_id);
         tracing::info!("DAP client disconnected: {}", client_id);
     }
     UpdateResult::none()
@@ -119,7 +121,7 @@ mod tests {
         assert_eq!(
             DapStatus::Running {
                 port: 4711,
-                client_count: 0
+                clients: HashSet::new(),
             }
             .port(),
             Some(4711)
@@ -133,7 +135,7 @@ mod tests {
         assert!(!DapStatus::Starting.is_running());
         assert!(DapStatus::Running {
             port: 4711,
-            client_count: 0
+            clients: HashSet::new(),
         }
         .is_running());
         assert!(!DapStatus::Stopping.is_running());
@@ -146,7 +148,9 @@ mod tests {
         assert_eq!(
             DapStatus::Running {
                 port: 4711,
-                client_count: 3
+                clients: ["a".to_string(), "b".to_string(), "c".to_string()]
+                    .into_iter()
+                    .collect(),
             }
             .client_count(),
             3
@@ -165,16 +169,12 @@ mod tests {
     }
 
     #[test]
-    fn test_start_when_starting_transitions_to_starting_with_action() {
+    fn test_start_when_starting_is_noop() {
         let mut state = test_state();
-        // Starting is not "running", so StartDapServer should still emit action
         state.dap_status = DapStatus::Starting;
-        // Actually per spec: StartDapServer when Starting is not explicitly
-        // covered, but since is_running() returns false for Starting,
-        // it should re-emit the action. Let's verify it does not panic.
         let result = handle_dap_message(&mut state, &Message::StartDapServer);
         assert_eq!(state.dap_status, DapStatus::Starting);
-        assert!(result.action.is_some());
+        assert!(result.action.is_none(), "Should not spawn a second server");
     }
 
     #[test]
@@ -182,7 +182,7 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
         let result = handle_dap_message(&mut state, &Message::StartDapServer);
         assert!(state.dap_status.is_running());
@@ -194,7 +194,7 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
         let result = handle_dap_message(&mut state, &Message::StopDapServer);
         assert_eq!(state.dap_status, DapStatus::Stopping);
@@ -223,11 +223,29 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
         let result = handle_dap_message(&mut state, &Message::ToggleDap);
         assert_eq!(state.dap_status, DapStatus::Stopping);
         assert!(result.action.is_some());
+    }
+
+    #[test]
+    fn test_toggle_when_starting_is_noop() {
+        let mut state = test_state();
+        state.dap_status = DapStatus::Starting;
+        let result = handle_dap_message(&mut state, &Message::ToggleDap);
+        assert_eq!(state.dap_status, DapStatus::Starting);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_toggle_when_stopping_is_noop() {
+        let mut state = test_state();
+        state.dap_status = DapStatus::Stopping;
+        let result = handle_dap_message(&mut state, &Message::ToggleDap);
+        assert_eq!(state.dap_status, DapStatus::Stopping);
+        assert!(result.action.is_none());
     }
 
     #[test]
@@ -239,7 +257,7 @@ mod tests {
             state.dap_status,
             DapStatus::Running {
                 port: 4711,
-                client_count: 0
+                clients: HashSet::new(),
             }
         );
         assert!(result.action.is_none());
@@ -273,7 +291,7 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
         handle_dap_message(
             &mut state,
@@ -285,11 +303,28 @@ mod tests {
     }
 
     #[test]
-    fn test_client_connected_multiple_times_increments_correctly() {
+    fn test_client_connected_duplicate_is_idempotent() {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 1,
+            clients: ["c1".to_string()].into_iter().collect(),
+        };
+        handle_dap_message(
+            &mut state,
+            &Message::DapClientConnected {
+                client_id: "c1".into(),
+            },
+        );
+        // Duplicate insert must not increase the count
+        assert_eq!(state.dap_status.client_count(), 1);
+    }
+
+    #[test]
+    fn test_client_connected_multiple_distinct_clients() {
+        let mut state = test_state();
+        state.dap_status = DapStatus::Running {
+            port: 4711,
+            clients: ["c1".to_string()].into_iter().collect(),
         };
         handle_dap_message(
             &mut state,
@@ -318,7 +353,7 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 2,
+            clients: ["c1".to_string(), "c2".to_string()].into_iter().collect(),
         };
         handle_dap_message(
             &mut state,
@@ -330,12 +365,13 @@ mod tests {
     }
 
     #[test]
-    fn test_client_disconnected_saturates_at_zero() {
+    fn test_client_disconnected_unknown_id_is_noop() {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
+        // Disconnecting an ID that was never connected is a silent no-op
         handle_dap_message(
             &mut state,
             &Message::DapClientDisconnected {
@@ -388,7 +424,7 @@ mod tests {
         let mut state = test_state();
         state.dap_status = DapStatus::Running {
             port: 4711,
-            client_count: 0,
+            clients: HashSet::new(),
         };
         let result = handle_dap_message(&mut state, &Message::StopDapServer);
         assert!(matches!(result.action, Some(UpdateAction::StopDapServer)));

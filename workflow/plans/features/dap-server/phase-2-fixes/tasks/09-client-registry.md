@@ -119,3 +119,33 @@ fn test_client_connected_duplicate_is_idempotent() {
 - `HashSet<String>` requires `use std::collections::HashSet` in `state.rs`.
 - The `PartialEq` and `Eq` derives on `DapStatus` work with `HashSet<String>` since `String: Eq + Hash`.
 - For Phase 3, the client registry could be extended to store metadata (e.g., connected timestamp, client name from initialize request).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Changed `DapStatus::Running { client_count: usize }` to `{ clients: HashSet<String> }`; updated `client_count()` method to return `clients.len()`; `HashSet` was already imported |
+| `crates/fdemon-app/src/handler/dap.rs` | Added `use std::collections::HashSet`; updated `handle_started` to use `clients: HashSet::new()`; updated `handle_client_connected` to use `clients.insert()`; updated `handle_client_disconnected` to use `clients.remove()`; rewrote all tests referencing `client_count: N` to use `clients: HashSet` constructions; replaced `test_client_connected_multiple_times_increments_correctly` with `test_client_connected_duplicate_is_idempotent` and `test_client_connected_multiple_distinct_clients`; replaced `test_client_disconnected_saturates_at_zero` with `test_client_disconnected_unknown_id_is_noop` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`use std::collections::HashSet` already present in state.rs**: The import was already at the top of `state.rs` for other uses, so no new import was needed there. Added it to `handler/dap.rs` for the `HashSet::new()` calls in handler logic and tests.
+2. **Test semantics updated to match new model**: The old `test_client_connected_multiple_times_increments_correctly` test (which pre-seeded `client_count: 1`) was replaced with two clearer tests: one proving duplicate-ID inserts are idempotent and one proving distinct-ID inserts each count. The old `test_client_disconnected_saturates_at_zero` was replaced with `test_client_disconnected_unknown_id_is_noop` since `HashSet::remove` is already a no-op for missing keys.
+3. **`header.rs` unchanged**: The widget reads `dap_status.client_count()` whose signature is unchanged (`-> usize`), so no TUI changes were required.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` — Passed (1265 tests)
+- `cargo test --workspace` — Passed (all crates, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **None**: The change is purely mechanical — same external API (`client_count() -> usize`), stronger internal correctness guarantee (set semantics vs. integer arithmetic).

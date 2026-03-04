@@ -6,9 +6,10 @@
 //!
 //! ## Layer Boundary
 //!
-//! This crate depends on `fdemon-core` (domain types) and `fdemon-daemon`
-//! (VM Service client). It does **not** depend on `fdemon-app` or `fdemon-tui`.
-//! The `fdemon-app` crate depends on this crate, not the reverse.
+//! This crate depends on `fdemon-core` (domain types). It does **not** depend
+//! on `fdemon-app`, `fdemon-tui`, or `fdemon-daemon`. The `fdemon-daemon`
+//! dependency will be added in a future phase when the VM Service bridge for
+//! debug operations is implemented.
 //!
 //! ## Public API
 //!

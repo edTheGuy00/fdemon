@@ -11,7 +11,6 @@ use tracing::{error, info, warn};
 use fdemon_app::{config::should_auto_start_dap, message::Message, state::AppState, Engine};
 use fdemon_core::prelude::*;
 use fdemon_daemon::devices;
-use serde_json::json;
 
 use super::HeadlessEvent;
 
@@ -33,15 +32,10 @@ pub async fn run_headless(project_path: &Path, dap_port: Option<u16>) -> Result<
     // Create engine (handles all shared initialization)
     let mut engine = Engine::new(project_path.to_path_buf());
 
-    // Apply --dap-port override: sets port and forces enabled = true.
-    // CLI values override any config-file settings.
+    // Apply --dap-port override: sets port and forces enabled = true in
+    // both settings copies, keeping them in sync.
     if let Some(port) = dap_port {
-        engine.settings.dap.port = port;
-        engine.settings.dap.enabled = true;
-        // Also mirror into AppState so the DAP handler reads the same values.
-        engine.state.settings.dap.port = port;
-        engine.state.settings.dap.enabled = true;
-        info!("DAP server port overridden by --dap-port: {}", port);
+        engine.apply_cli_dap_override(port);
     }
 
     // Spawn headless-specific stdin reader
@@ -136,25 +130,9 @@ fn emit_pre_message_events(_state: &AppState, msg: &Message) {
         }
         // Emit DAP server port to stdout so external tooling can discover it.
         Message::DapServerStarted { port } => {
-            emit_dap_port_json(*port);
+            HeadlessEvent::dap_server_started(*port).emit();
         }
         _ => {}
-    }
-}
-
-/// Emit the DAP server port as JSON to stdout for external tooling discovery.
-///
-/// Format: `{"event":"dap_server_started","dapPort":<N>}`
-fn emit_dap_port_json(port: u16) {
-    use std::io::Write;
-    let json = json!({
-        "event": "dap_server_started",
-        "dapPort": port,
-    });
-    let mut stdout = std::io::stdout().lock();
-    if let Ok(line) = serde_json::to_string(&json) {
-        let _ = writeln!(stdout, "{}", line);
-        let _ = stdout.flush();
     }
 }
 
