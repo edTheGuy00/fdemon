@@ -144,6 +144,18 @@ pub struct Engine {
     /// forwarding path and correctly satisfies acceptance criterion: no output
     /// events are sent when no DAP session is active).
     dap_log_event_tx: Option<tokio::sync::broadcast::Sender<DapDebugEvent>>,
+
+    /// Shared VM handle slot for the DAP backend factory.
+    ///
+    /// The [`VmBackendFactory`] captures this `Arc` so it can supply the
+    /// active session's [`VmRequestHandle`] to each new DAP client connection
+    /// without knowing about `SessionManager` or the TEA update cycle.
+    ///
+    /// Updated in [`Engine::process_message`] after each TEA cycle via
+    /// [`Engine::sync_vm_handle_for_dap`].  Set to `Some` when the selected
+    /// session's VM Service is connected; `None` when disconnected or no
+    /// session is active.
+    pub(crate) vm_handle_for_dap: Arc<Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>>,
 }
 
 impl Engine {
@@ -207,6 +219,7 @@ impl Engine {
             plugins: Vec::new(),
             dap_server_handle: Arc::new(Mutex::new(None)),
             dap_log_event_tx: None,
+            vm_handle_for_dap: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -272,6 +285,7 @@ impl Engine {
             &self.shutdown_rx,
             &self.project_path,
             self.dap_server_handle.clone(),
+            self.vm_handle_for_dap.clone(),
         );
 
         // Snapshot state after processing
@@ -285,6 +299,9 @@ impl Engine {
         // on every log line. The sync is cheap (just cloning a sender) and
         // runs once per TEA cycle.
         self.sync_dap_log_sender();
+
+        // Keep the VM handle slot in sync with the selected session.
+        self.sync_vm_handle_for_dap();
 
         // Emit events for any state changes
         self.emit_events(&pre, &post);
@@ -389,6 +406,7 @@ impl Engine {
             &self.project_path,
             Default::default(),
             self.dap_server_handle.clone(),
+            self.vm_handle_for_dap.clone(),
         );
     }
 
@@ -512,6 +530,33 @@ impl Engine {
             }
             Err(_) => {
                 // Lock held by the action handler — skip this cycle, retry next.
+            }
+        }
+    }
+
+    /// Sync `vm_handle_for_dap` from the selected session's `vm_request_handle`.
+    ///
+    /// Called once per TEA cycle after message processing. The shared slot is
+    /// updated to match the selected session's current VM handle so that the
+    /// [`VmBackendFactory`] always produces a fresh clone for new DAP clients.
+    ///
+    /// - If the selected session has a connected VM Service, the slot is `Some`.
+    /// - If the session has no VM handle (not yet connected, or disconnected),
+    ///   the slot is set to `None`.
+    /// - If no session is selected, the slot is set to `None`.
+    fn sync_vm_handle_for_dap(&self) {
+        let new_handle = self
+            .state
+            .session_manager
+            .selected()
+            .and_then(|sh| sh.vm_request_handle.clone());
+
+        match self.vm_handle_for_dap.try_lock() {
+            Ok(mut guard) => {
+                *guard = new_handle;
+            }
+            Err(_) => {
+                // Lock held by the factory — skip this cycle, retry next.
             }
         }
     }

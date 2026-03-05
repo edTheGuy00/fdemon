@@ -3,7 +3,9 @@
 //! Defines the transport modes for the DAP server. The two supported modes are:
 //!
 //! - **TCP** — Listen on a TCP port for client connections (multi-client, long-lived server).
+//!   The TCP server implementation lives in [`crate::server`].
 //! - **Stdio** — Use stdin/stdout for a single client connection (adapter subprocess mode).
+//!   The stdio session implementation lives in [`stdio`].
 //!
 //! ## Why both modes?
 //!
@@ -19,7 +21,6 @@
 //! child process and communicates over the process's stdin/stdout pipes.
 
 pub mod stdio;
-pub mod tcp;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Transport mode

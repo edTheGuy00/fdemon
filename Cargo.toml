@@ -47,6 +47,9 @@ futures-util = "0.3"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# URL parsing
+url = "2"
+
 # Misc
 rand = "0.8"
 

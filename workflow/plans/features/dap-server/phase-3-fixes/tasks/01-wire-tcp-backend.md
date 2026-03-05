@@ -116,3 +116,50 @@ Engine (fdemon-app)
 - The `run_on_with_backend` method uses `mpsc::Receiver<DebugEvent>` while `run_on` uses `broadcast::Receiver<DebugEvent>` — the factory approach must account for this difference.
 - Task 04 (consolidate session loops) will clean up the duplication between `run_on` and `run_on_with_backend` after this task establishes the correct wiring.
 - Consider whether multiple DAP clients should be able to debug the same Flutter session simultaneously. For Phase 3, single-client-per-session is acceptable.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `DynDebugBackendInner` (object-safe vtable trait with `Pin<Box<dyn Future>>` methods) and `DynDebugBackend` (concrete type implementing `DebugBackend` by delegating through the vtable). This solves the dyn-compatibility issue with `DebugBackend`. |
+| `crates/fdemon-dap/src/server/mod.rs` | Updated `BackendHandle` to include `backend: DynDebugBackend`; updated `start()` to accept `backend_factory: Option<Arc<dyn BackendFactory>>`; updated `accept_loop()` to use the factory per connection (real backend or NoopBackend fallback); added factory tests with `MockBackendInner`, `AlwaysBackendFactory`, `NeverBackendFactory`. |
+| `crates/fdemon-dap/src/service.rs` | Added `start_tcp_with_factory()` method that accepts a `BackendFactory`; kept legacy `start_tcp()` and `start()` as pass-`None` wrappers for backward compat. |
+| `crates/fdemon-dap/src/lib.rs` | Re-exported `DynDebugBackend` and `DynDebugBackendInner` at crate root for `fdemon-app` consumers. |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Added `DynDebugBackendInner` impl for `VmServiceBackend` (boxes each async fn return); added `VmBackendFactory` struct implementing `fdemon_dap::server::BackendFactory` using `Arc<Mutex<Option<VmRequestHandle>>>`. |
+| `crates/fdemon-app/src/engine.rs` | Added `vm_handle_for_dap: Arc<Mutex<Option<VmRequestHandle>>>` field; initialized in `new()`; passes it to `process::process_message` and `dispatch_spawn_session`; added `sync_vm_handle_for_dap()` called after each TEA cycle. |
+| `crates/fdemon-app/src/process.rs` | Added `vm_handle_for_dap` parameter to `process_message()`; threads it to `handle_action()`. |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `vm_handle_for_dap` parameter to `handle_action()`; `SpawnDapServer` arm now creates `VmBackendFactory` and calls `DapService::start_tcp_with_factory()`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DynDebugBackend` pattern instead of `Box<dyn DebugBackend>`**: `DebugBackend` is not dyn-compatible because `trait_variant::make` generates `impl Future` return types (RPIT). Created `DynDebugBackendInner` with `Pin<Box<dyn Future>>` methods as a vtable, and `DynDebugBackend` as a concrete wrapper. This avoids modifying the public `DebugBackend` trait.
+
+2. **`Arc<Mutex<Option<VmRequestHandle>>>` slot pattern**: The factory needs the VM handle at connection time, not at server-start time. Using a shared slot (updated each TEA cycle via `sync_vm_handle_for_dap`) means the factory always gets the freshest handle without needing `AppState` access inside the Tokio task.
+
+3. **Legacy `DapService::start()` kept with `None` factory**: To avoid breaking existing callers (tests, binary), `start()` and `start_tcp()` were kept with their original 3-argument signatures, passing `None` to `server::start()`. The new `start_tcp_with_factory()` is the production entry point.
+
+4. **Per-session debug event channel sender dropped in factory**: The `mpsc::Sender<DebugEvent>` from the per-session channel is currently dropped in `VmBackendFactory::create()`. Task 06 will wire the sender back to the Engine so VM pause/stopped/breakpoint events are forwarded to connected DAP clients.
+
+5. **`sync_vm_handle_for_dap` uses `try_lock`**: Non-blocking, same pattern as `sync_dap_log_sender`. If the lock is held by the factory, the slot is not updated this cycle; it will be retried next TEA cycle.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace --lib` — Passed (3,259 unit tests: 1267 fdemon-core, 360 fdemon-daemon, 460 fdemon-app, 376 fdemon-dap, 796 fdemon-tui)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all` — Passed (no formatting changes)
+- New tests in `server/mod.rs`: `test_factory_returning_none_falls_back_to_noop`, `test_factory_returning_some_backend_initializes_cleanly` — Both pass
+
+### Risks/Limitations
+
+1. **Per-session debug event routing not yet wired (Task 06)**: The `mpsc::Sender<DebugEvent>` created in `VmBackendFactory::create()` is currently dropped. VM Service debug events (paused, resumed, breakpoint hit) will not reach the DAP client until Task 06 registers the sender with the Engine. Sessions work (initialize/attach/disconnect), but stopped events won't arrive automatically.
+
+2. **Single-client-per-session assumption**: The factory clones the VM handle for each connection, so multiple clients could technically attach. However, the Engine's event routing (Task 06) may only support one sender per session. Multi-client support is deferred to after Phase 3.
+
+3. **Linter interaction during development**: The project's automated linter (rustfmt + likely clippy-fix) modified some intermediate states of `server/mod.rs` during development. All changes were correctly reapplied and the final state passes all quality checks.

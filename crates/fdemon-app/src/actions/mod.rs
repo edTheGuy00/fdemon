@@ -11,7 +11,7 @@ use crate::handler::Task;
 use crate::message::Message;
 use crate::session::SessionId;
 use crate::UpdateAction;
-use fdemon_daemon::{CommandSender, ToolAvailability};
+use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, ToolAvailability};
 use fdemon_dap::{DapServerEvent, DapServerHandle, DapService};
 
 use super::spawn;
@@ -33,6 +33,9 @@ pub type SessionTaskMap = Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::J
 /// (on `StopDapServer`) without taking ownership of the Engine.
 pub type DapHandleSlot = Arc<Mutex<Option<DapServerHandle>>>;
 
+/// Channel capacity for DAP server events (connect/disconnect/error notifications).
+const DAP_EVENT_CHANNEL_CAPACITY: usize = 32;
+
 /// Execute an action by spawning a background task
 #[allow(clippy::too_many_arguments)]
 pub fn handle_action(
@@ -45,6 +48,7 @@ pub fn handle_action(
     project_path: &Path,
     tool_availability: ToolAvailability,
     dap_server_handle: DapHandleSlot,
+    vm_handle_for_dap: Arc<Mutex<Option<VmRequestHandle>>>,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
@@ -416,12 +420,22 @@ pub fn handle_action(
         UpdateAction::SpawnDapServer { port, bind_addr } => {
             let msg_tx_clone = msg_tx.clone();
             let handle_slot = dap_server_handle.clone();
+            // Construct a factory from the current VM handle slot so each
+            // accepted DAP client gets a real backend when a Flutter session
+            // is attached.
+            let factory = Arc::new(crate::handler::dap_backend::VmBackendFactory::new(
+                vm_handle_for_dap,
+            ));
             tokio::spawn(async move {
                 // Create the event channel: DapServerEvent → Message bridge
-                let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<DapServerEvent>(32);
+                let (event_tx, mut event_rx) =
+                    tokio::sync::mpsc::channel::<DapServerEvent>(DAP_EVENT_CHANNEL_CAPACITY);
 
-                // Start the TCP server
-                match DapService::start(port, bind_addr, event_tx).await {
+                // Keep a copy of bind_addr for logging after the move below.
+                let bind_addr_log = bind_addr.clone();
+
+                // Start the TCP server with the backend factory.
+                match DapService::start_tcp_with_factory(port, bind_addr, event_tx, factory).await {
                     Ok(server_handle) => {
                         let actual_port = server_handle.port();
 
@@ -441,21 +455,24 @@ pub fn handle_action(
                             .send(Message::DapServerStarted { port: actual_port })
                             .await;
 
-                        // Print DAP connection info to stderr so IDE users can
-                        // find the port without navigating the TUI status bar.
-                        // eprintln! is intentional here: tracing output goes to
-                        // a log file, not the terminal, so this is the only way
-                        // to surface actionable connection info. Never use stdout
-                        // (it would corrupt the DAP stdio protocol in --dap-stdio
-                        // mode, but that path never reaches SpawnDapServer).
-                        eprintln!("DAP server listening on 127.0.0.1:{}", actual_port);
-                        eprintln!("Connect with:");
-                        eprintln!(
-                            "  Zed:   set port {} in .zed/debug.json tcp_connection",
+                        // Log DAP connection info so IDE users can find the port.
+                        // In TUI mode the port is shown in the status bar;
+                        // in headless mode the tracing subscriber forwards to
+                        // stderr, making this visible in the terminal.
+                        tracing::info!(
+                            port = actual_port,
+                            bind_addr = %bind_addr_log,
+                            "DAP server listening on {}:{}",
+                            bind_addr_log, actual_port
+                        );
+                        tracing::info!(
+                            "Connect with: Zed (port {} in .zed/debug.json), \
+                             Helix (:debug-remote {}:{}), nvim (port {} in dap.adapters)",
+                            actual_port,
+                            bind_addr_log,
+                            actual_port,
                             actual_port
                         );
-                        eprintln!("  Helix: :debug-remote 127.0.0.1:{}", actual_port);
-                        eprintln!("  nvim:  set port {} in dap.adapters config", actual_port);
 
                         // Bridge DapServerEvent → Message
                         // Runs until the server stops (event_rx closes) or Engine channel drops.

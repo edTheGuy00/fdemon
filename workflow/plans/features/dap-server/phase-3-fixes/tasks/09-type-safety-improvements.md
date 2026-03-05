@@ -170,3 +170,43 @@ self.backend.set_exception_pause_mode(isolate_id, mode).await?;
 - If `thiserror` is not already a dependency of `fdemon-dap`, add it. Check `Cargo.toml`.
 - The `BackendError` enum may grow in future phases — keep variants focused on current needs, not hypothetical future errors.
 - Consider whether `BackendError` should implement `From<fdemon_core::Error>` for ergonomic conversion from the core error type.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/Cargo.toml` | Added `thiserror.workspace = true` to `[dependencies]` |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `BackendError` enum (with `Clone` derive), added `DapExceptionPauseMode` enum, updated `LocalDebugBackend`/`DebugBackend` trait to use `BackendError` return types and `DapExceptionPauseMode` parameter, updated `DynDebugBackendInner` and `DynDebugBackend` wrappers, updated `DapAdapter.exception_mode` field type, updated `handle_set_exception_breakpoints` to validate unknown filters and return DAP error, updated `exception_filter_to_mode` to return `DapExceptionPauseMode`, updated all test mock backends, added new tests |
+| `crates/fdemon-dap/src/lib.rs` | Added `BackendError` and `DapExceptionPauseMode` to re-exports |
+| `crates/fdemon-dap/src/server/session.rs` | Updated `NoopBackend` impl to use `BackendError`, updated `MockBackend` in tests to use `BackendError` and `DapExceptionPauseMode` |
+| `crates/fdemon-dap/src/server/mod.rs` | Updated `MockBackendInner` in tests to use `BackendError` and `DapExceptionPauseMode` |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Updated `get_root_library_id` to call `.map_err(|e| e.to_string())?` on backend, updated error propagation in `handle_evaluate`, updated `MockBackend` in tests to use `BackendError` and `DapExceptionPauseMode` |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Updated `VmServiceBackend` `DebugBackend` impl to return `BackendError` (via `.map_err(|e| BackendError::VmServiceError(e.to_string()))`), changed `set_exception_pause_mode` to take `DapExceptionPauseMode` and match on enum variants, updated `DynDebugBackendInner` impl to use `BackendError` types and `DapExceptionPauseMode` parameter |
+
+### Notable Decisions/Tradeoffs
+
+1. **`BackendError` derives `Clone`**: The `MockBackend` in `evaluate.rs` stores `eval_result: Result<serde_json::Value, BackendError>` and calls `.clone()` to return it from multiple async fns. Adding `Clone` to `BackendError` was the cleanest fix. All variants hold `String` or are unit variants, so `Clone` is cheap.
+
+2. **`get_root_library_id` stays `Result<String, String>`**: This internal helper (called only by `handle_evaluate`) keeps its `String` error type to avoid a two-step propagation. The call site converts to `BackendError::VmServiceError(e)` before returning.
+
+3. **`DynDebugBackendInner.set_exception_pause_mode_boxed` takes `DapExceptionPauseMode` by value**: Since it's `Copy`, no lifetime is needed. This is cleaner than the original `&'a str` design.
+
+4. **Unknown exception filter returns DAP error**: The adapter now validates all filters before calling the backend. Any unknown filter string produces a `DapResponse::error(...)` instead of a silent fallback to `None`.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (3,387 tests: 0 failed, 69 ignored)
+- `cargo fmt --all` — Passed (no formatting issues)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`BackendError::Clone`**: Adding `Clone` makes the error type slightly heavier, but all variants are already `Clone`-capable (`String` is `Clone`, unit variants copy trivially). No semantic risk.
+2. **String-based error wrapping**: All VM Service errors are wrapped via `BackendError::VmServiceError(e.to_string())`, losing the original error type. This is acceptable for Phase 3 — future phases can add structured error conversion if needed.

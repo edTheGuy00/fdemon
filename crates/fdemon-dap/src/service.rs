@@ -36,13 +36,15 @@
 //! DapService::stop(handle).await;
 //! ```
 
+use std::sync::Arc;
+
 use tokio::sync::{broadcast, mpsc, watch};
 
 use fdemon_core::error::Result;
 
 use crate::{
     adapter::DebugEvent,
-    server::{DapServerConfig, DapServerEvent, DapServerHandle},
+    server::{BackendFactory, DapServerConfig, DapServerEvent, DapServerHandle},
 };
 
 /// Manages the DAP server lifecycle.
@@ -88,7 +90,33 @@ impl DapService {
         event_tx: mpsc::Sender<DapServerEvent>,
     ) -> Result<DapServerHandle> {
         let config = DapServerConfig { port, bind_addr };
-        crate::server::start(config, event_tx).await
+        crate::server::start(config, event_tx, None).await
+    }
+
+    /// Start the DAP TCP server with a real backend factory.
+    ///
+    /// Like [`DapService::start_tcp`] but threads a [`BackendFactory`] through
+    /// to the accept loop so each accepted connection can be wired to a real
+    /// VM Service session instead of falling back to [`NoopBackend`].
+    ///
+    /// This is the production entry point used by the Engine when a Flutter
+    /// session's VM Service is available. The factory is typically constructed
+    /// in `fdemon-app` and captures an `Arc<Mutex<Option<VmRequestHandle>>>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` — TCP port to bind on. Use `0` for OS-assigned.
+    /// * `bind_addr` — Bind address string (e.g. `"127.0.0.1"`).
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications.
+    /// * `backend_factory` — Factory invoked once per accepted connection.
+    pub async fn start_tcp_with_factory(
+        port: u16,
+        bind_addr: String,
+        event_tx: mpsc::Sender<DapServerEvent>,
+        backend_factory: Arc<dyn BackendFactory>,
+    ) -> Result<DapServerHandle> {
+        let config = DapServerConfig { port, bind_addr };
+        crate::server::start(config, event_tx, Some(backend_factory)).await
     }
 
     /// Start a DAP session over stdin/stdout (adapter subprocess mode).
@@ -185,7 +213,7 @@ mod tests {
     use super::*;
     use tokio::sync::mpsc;
 
-    /// Helper: start a server on port 0 (OS-assigned) and return the handle.
+    /// Helper: start a server on port 0 (OS-assigned).
     async fn start_server() -> (DapServerHandle, mpsc::Receiver<DapServerEvent>) {
         let (event_tx, event_rx) = mpsc::channel(16);
         let handle = DapService::start(0, "127.0.0.1".to_string(), event_tx)

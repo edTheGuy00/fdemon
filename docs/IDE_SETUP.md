@@ -7,24 +7,44 @@ Flutter Demon exposes a DAP interface so that editors with DAP support can set
 breakpoints, step through code, inspect variables, and evaluate expressions
 while `fdemon` manages the Flutter process.
 
-## Quick Start
+## Transport Modes
 
-### TCP Mode (Any IDE)
+Flutter Demon supports two DAP transport modes. **TCP is the recommended mode
+for real debugging.** Stdio mode is available for protocol testing and IDE
+integration validation.
+
+### TCP Mode — Recommended
+
+TCP mode connects your IDE to a running `fdemon` TUI session that manages the
+Flutter process. This is the production-ready path for debugging.
 
 1. Run `fdemon` in your Flutter project directory.
 2. Press `D` to start the DAP server (or pass `--dap-port <PORT>` at startup).
 3. Note the port shown in the status bar: `[DAP :4711]`.
 4. Connect your IDE to `127.0.0.1:<port>`.
 
-### Stdio Mode (Recommended for Zed and Helix)
+### Stdio Mode — Protocol Testing Only
+
+> **Important Limitation**: Stdio mode (`--dap-stdio`) is currently a
+> transport-only implementation for protocol validation and IDE integration
+> testing. It does **not** start a Flutter Engine or Flutter process, and does
+> **not** route `attach` commands to the Dart VM Service. Real debugging
+> (breakpoints, stepping, variables) requires **TCP mode** with a running
+> `fdemon` TUI session.
+>
+> Full stdio debugging support (wire stdio to a real VM Service session) is
+> planned for Phase 4. Until then, use TCP mode for all debugging workflows.
+
+When you need stdio transport for IDE integration testing:
 
 1. Configure your IDE to launch `fdemon --dap-stdio` as an adapter subprocess.
 2. The IDE manages the adapter lifecycle automatically — no manual `fdemon`
    instance is needed.
+3. DAP protocol messages (initialize, configurationDone, disconnect) are
+   processed correctly. `attach` and debug commands return errors because no
+   VM Service backend is connected.
 
-> **Note:** In stdio mode the TUI is not started. `fdemon` acts purely as a
-> DAP adapter: it attaches to the Flutter VM Service and routes DAP messages
-> between the IDE and the Dart VM. All log output goes to stderr.
+All non-DAP output (tracing, logs) goes to stderr in stdio mode.
 
 ---
 
@@ -33,7 +53,7 @@ while `fdemon` manages the Flutter process.
 Zed's Dart/Flutter debugging is not built-in (as of early 2026). Flutter Demon
 fills this gap.
 
-### Option A: TCP (Connect to a Running fdemon)
+### Option A: TCP — Recommended (Connect to a Running fdemon)
 
 Start `fdemon` in your Flutter project and press `D` to activate the DAP
 server, then add a debug configuration in `.zed/debug.json` at the root of
@@ -75,7 +95,11 @@ connections may take a moment on first attach):
 }
 ```
 
-### Option B: Stdio (Zed Launches fdemon)
+### Option B: Stdio — Protocol Testing Only (Zed Launches fdemon)
+
+> **Limitation**: This option is for protocol validation and IDE integration
+> testing only. Real debugging requires Option A (TCP). See the
+> [Transport Modes](#transport-modes) section for details.
 
 Override an existing adapter's binary in Zed's `settings.json` to point to
 `fdemon`:
@@ -96,7 +120,7 @@ Then add a debug configuration in `.zed/debug.json`:
 ```json
 [
   {
-    "label": "Flutter Demon",
+    "label": "Flutter Demon (stdio — protocol testing only)",
     "adapter": "Delve",
     "request": "attach"
   }
@@ -133,7 +157,7 @@ Helix marks DAP support as experimental. Known limitations:
 - The `:debug-remote` command connects over TCP; stdio requires a
   `languages.toml` entry.
 
-### Option A: TCP (Connect to a Running fdemon)
+### Option A: TCP — Recommended (Connect to a Running fdemon)
 
 Start `fdemon` in your Flutter project, press `D` to activate the DAP server,
 then connect from Helix with:
@@ -144,43 +168,7 @@ then connect from Helix with:
 
 No configuration file changes are needed for TCP mode.
 
-### Option B: Stdio (Helix Launches fdemon)
-
-Add a debugger configuration for Dart/Flutter in
-`~/.config/helix/languages.toml`:
-
-```toml
-[[language]]
-name = "dart"
-
-[language.debugger]
-name = "fdemon-dap"
-transport = "stdio"
-command = "fdemon"
-args = ["--dap-stdio"]
-
-[[language.debugger.templates]]
-name = "attach"
-request = "attach"
-completion = []
-args = {}
-
-[[language.debugger.templates]]
-name = "attach-uri"
-request = "attach"
-completion = [{ name = "VM Service URI", completion = "text" }]
-args = { vmServiceUri = "{0}" }
-```
-
-**Usage:**
-
-1. Open a Dart file in Helix.
-2. Run `<space>Gl` (dap launch) and select the `attach` template.
-3. Helix starts `fdemon --dap-stdio` as a subprocess and connects.
-
-> **Requirement:** `fdemon` must be on your `PATH`.
-
-### Option C: TCP with Port Argument (Helix-managed port)
+### Option B: TCP with Port Argument (Helix-managed port)
 
 If you want Helix to pick the port and pass it to fdemon:
 
@@ -201,6 +189,44 @@ args = {}
 
 Helix picks a free port, calls `fdemon --dap-port <PORT>`, then connects.
 
+### Option C: Stdio — Protocol Testing Only (Helix Launches fdemon)
+
+> **Limitation**: This option is for protocol validation and IDE integration
+> testing only. Real debugging requires Option A or B (TCP). See the
+> [Transport Modes](#transport-modes) section for details.
+
+Add a debugger configuration for Dart/Flutter in
+`~/.config/helix/languages.toml`:
+
+```toml
+[[language]]
+name = "dart"
+
+[language.debugger]
+name = "fdemon-dap"
+transport = "stdio"
+command = "fdemon"
+args = ["--dap-stdio"]
+
+[[language.debugger.templates]]
+name = "attach (protocol testing only)"
+request = "attach"
+completion = []
+args = {}
+```
+
+**Usage:**
+
+1. Open a Dart file in Helix.
+2. Run `<space>Gl` (dap launch) and select the `attach (protocol testing only)` template.
+3. Helix starts `fdemon --dap-stdio` as a subprocess and connects.
+
+Note: DAP handshake messages (initialize, configurationDone, disconnect) will
+succeed. The `attach` command will return an error because no VM Service backend
+is wired up in stdio mode.
+
+> **Requirement:** `fdemon` must be on your `PATH`.
+
 ---
 
 ## Neovim (nvim-dap)
@@ -212,35 +238,44 @@ following to your Neovim configuration (e.g.,
 ```lua
 local dap = require('dap')
 
--- Option A: Stdio — nvim-dap launches fdemon as a subprocess
-dap.adapters.fdemon = {
-  type = 'executable',
-  command = 'fdemon',
-  args = { '--dap-stdio' },
-}
-
--- Option B: TCP — connect to an already-running fdemon instance
+-- Recommended: TCP — connect to an already-running fdemon instance
 dap.adapters.fdemon_tcp = {
   type = 'server',
   host = '127.0.0.1',
   port = 4711,
 }
 
+-- Protocol testing only: Stdio — nvim-dap launches fdemon as a subprocess.
+-- NOTE: Real debugging (breakpoints, stepping) is NOT supported in stdio mode.
+-- Use fdemon_tcp above for actual debugging workflows.
+dap.adapters.fdemon = {
+  type = 'executable',
+  command = 'fdemon',
+  args = { '--dap-stdio' },
+}
+
 -- Debug configurations for Dart/Flutter files
 dap.configurations.dart = {
   {
-    type = 'fdemon',       -- use 'fdemon_tcp' for TCP mode
+    type = 'fdemon_tcp',   -- recommended: TCP mode for real debugging
     request = 'attach',
-    name = 'Flutter Demon (attach)',
+    name = 'Flutter Demon (TCP)',
+  },
+  {
+    type = 'fdemon',       -- protocol testing only
+    request = 'attach',
+    name = 'Flutter Demon stdio (protocol testing only)',
   },
 }
 ```
 
-**Usage:**
+**Usage (TCP mode — recommended):**
 
-1. Open a Dart file.
-2. Set a breakpoint with `:lua require('dap').toggle_breakpoint()`.
-3. Start debugging with `:lua require('dap').continue()`.
+1. Run `fdemon` in your Flutter project and press `D` to start the DAP server.
+2. Open a Dart file in Neovim.
+3. Set a breakpoint with `:lua require('dap').toggle_breakpoint()`.
+4. Start debugging with `:lua require('dap').continue()` and select
+   `Flutter Demon (TCP)`.
 
 ---
 
@@ -317,23 +352,30 @@ If fdemon reports the DAP port is already in use, either:
 
 Flutter Demon's DAP adapter currently supports:
 
-| Capability | Status |
-|---|---|
-| Initialize / attach | Supported |
-| Set breakpoints | Supported |
-| Set exception breakpoints | Supported |
-| Continue / pause | Supported |
-| Step over / in / out | Supported |
-| Stack traces | Supported |
-| Scopes and variables | Supported |
-| Variable expansion (objects, lists) | Supported |
-| Evaluate expression | Supported |
-| Output events (stdout, stderr) | Supported |
-| Configuration done | Supported |
-| Disconnect | Supported |
-| Launch request | Not supported (attach only) |
-| Restart | Not supported |
-| Hot reload via DAP | Not supported (use `r` in fdemon TUI) |
+| Capability | TCP Mode | Stdio Mode |
+|---|---|---|
+| Initialize | Supported | Supported |
+| Attach | Supported | Not supported (no VM backend) |
+| Set breakpoints | Supported | Not supported (no VM backend) |
+| Set exception breakpoints | Supported | Not supported (no VM backend) |
+| Continue / pause | Supported | Not supported (no VM backend) |
+| Step over / in / out | Supported | Not supported (no VM backend) |
+| Stack traces | Supported | Not supported (no VM backend) |
+| Scopes and variables | Supported | Not supported (no VM backend) |
+| Variable expansion (objects, lists) | Supported | Not supported (no VM backend) |
+| Evaluate expression | Supported | Not supported (no VM backend) |
+| Output events (stdout, stderr) | Supported | Not supported (no VM backend) |
+| Configuration done | Supported | Supported |
+| Disconnect | Supported | Supported |
+| Launch request | Not supported (attach only) | Not supported |
+| Restart | Not supported | Not supported |
+| Hot reload via DAP | Not supported (use `r` in fdemon TUI) | Not supported |
 
 All configurations should use `"request": "attach"` — fdemon attaches to an
 already-running Flutter process rather than launching one itself.
+
+> **Note on stdio mode**: Stdio transport handles the DAP wire protocol
+> (message framing, handshake, unknown-command responses) correctly, but does
+> not route any debug commands to a real Flutter VM Service. This makes it
+> useful for verifying IDE integration plumbing without a running Flutter app.
+> Full stdio debugging support is planned for Phase 4.

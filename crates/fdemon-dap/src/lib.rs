@@ -48,8 +48,12 @@ pub use protocol::{
 
 // Re-export server types at the crate root for ergonomic usage.
 pub use server::{
-    DapClientSession, DapServerConfig, DapServerEvent, DapServerHandle, NoopBackend, SessionState,
+    BackendFactory, BackendHandle, DapClientSession, DapServerConfig, DapServerEvent,
+    DapServerHandle, NoopBackend, SessionState,
 };
+
+// Re-export adapter dyn-compatibility types for fdemon-app.
+pub use adapter::{BackendError, DapExceptionPauseMode, DynDebugBackend, DynDebugBackendInner};
 
 // Re-export DapService for ergonomic usage.
 pub use service::DapService;

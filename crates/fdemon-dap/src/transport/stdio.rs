@@ -92,7 +92,10 @@ pub async fn run_stdio_session(
     // state-machine logic from DapClientSession without any TCP-specific code.
     // Create a dummy broadcast channel — stdio sessions don't receive log events
     // from the TCP server's broadcast, but the session loop needs a receiver.
-    let (_, log_event_rx) = tokio::sync::broadcast::channel(1);
+    // Keep `_log_event_tx` alive for the session duration so the channel is not
+    // immediately closed; an immediately-dropped sender causes the broadcast
+    // receiver to return `Err(Closed)` on every poll, busy-spinning the loop.
+    let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
     let result = DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await;
 
     match &result {
@@ -138,7 +141,9 @@ mod tests {
         tokio::spawn(async move {
             let reader = BufReader::new(server_reader);
             let writer = BufWriter::new(server_writer);
-            let (_, log_event_rx) = tokio::sync::broadcast::channel(1);
+            // Keep `_log_event_tx` alive so the channel remains open for the
+            // session lifetime and does not immediately return `Err(Closed)`.
+            let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
             DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
         })
     }
@@ -254,7 +259,7 @@ mod tests {
             .unwrap();
         assert!(matches!(r3, DapMessage::Response(ref resp) if resp.success));
 
-        // disconnect → success response; session exits
+        // disconnect → terminated event then success response; session exits
         write_message(
             &mut writer,
             &DapMessage::Request(DapRequest {
@@ -265,12 +270,27 @@ mod tests {
         )
         .await
         .unwrap();
+        // DAP spec: terminated event before disconnect response.
         let r4 = tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
             .await
             .unwrap()
             .unwrap()
             .unwrap();
-        assert!(matches!(r4, DapMessage::Response(ref resp) if resp.success));
+        assert!(
+            matches!(r4, DapMessage::Event(ref e) if e.event == "terminated"),
+            "Expected terminated event, got {:?}",
+            r4
+        );
+        let r5 = tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(r5, DapMessage::Response(ref resp) if resp.success),
+            "Expected disconnect success response, got {:?}",
+            r5
+        );
 
         // Server session should exit on its own after disconnect.
         tokio::time::timeout(std::time::Duration::from_secs(2), server)
@@ -481,7 +501,9 @@ mod tests {
 
             let reader = BufReader::new(server_reader);
             let writer = BufWriter::new(server_writer);
-            let (_, log_event_rx) = tokio::sync::broadcast::channel(1);
+            // Keep `_log_event_tx` alive so the channel remains open for the
+            // session lifetime and does not immediately return `Err(Closed)`.
+            let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
             let result = DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await;
 
             event_tx
@@ -650,7 +672,7 @@ mod tests {
             attach_resp
         );
 
-        // disconnect
+        // disconnect: terminated event then success response
         write_message(
             &mut writer,
             &DapMessage::Request(DapRequest {
@@ -661,6 +683,18 @@ mod tests {
         )
         .await
         .unwrap();
+        // DAP spec: terminated event before disconnect response.
+        let disc_terminated =
+            tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+        assert!(
+            matches!(disc_terminated, DapMessage::Event(ref e) if e.event == "terminated"),
+            "Expected terminated event, got {:?}",
+            disc_terminated
+        );
         let disc_resp =
             tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
                 .await

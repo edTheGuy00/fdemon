@@ -39,7 +39,44 @@ use tokio::{
 
 use fdemon_core::error::{Error, Result};
 
-use crate::adapter::DebugEvent;
+use crate::adapter::{DebugEvent, DynDebugBackend};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BackendFactory
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-client backend produced by [`BackendFactory::create`].
+///
+/// Bundles the type-erased [`DynDebugBackend`] with a per-session debug event
+/// receiver. The receiver carries VM debug events (paused, resumed, breakpoint
+/// hit) forwarded from the Engine to the DAP session loop.
+pub struct BackendHandle {
+    /// The type-erased debug backend for this session.
+    ///
+    /// Uses [`DynDebugBackend`] rather than `Box<dyn DebugBackend>` because
+    /// [`crate::adapter::DebugBackend`] is not object-safe (its methods return
+    /// `impl Future` via `trait_variant::make`).
+    pub backend: DynDebugBackend,
+
+    /// Receiver for per-session VM debug events (stopped, resumed, etc.).
+    pub debug_event_rx: mpsc::Receiver<DebugEvent>,
+}
+
+/// Factory that creates a [`BackendHandle`] for each accepted DAP client.
+///
+/// Implemented in `fdemon-app` (which depends on both `fdemon-dap` and
+/// `fdemon-daemon`) so this crate does not need to depend on either.
+///
+/// The factory is invoked once per TCP connection. If no Flutter session is
+/// active it should return `None`, causing the connection to fall back to
+/// [`NoopBackend`] (all debug commands return errors but the handshake still
+/// completes normally).
+pub trait BackendFactory: Send + Sync + 'static {
+    /// Create a backend handle for a new DAP client connection.
+    ///
+    /// Returns `None` if no active Flutter session is available.
+    fn create(&self) -> Option<BackendHandle>;
+}
 
 /// Maximum number of concurrent DAP client connections.
 ///
@@ -47,6 +84,10 @@ use crate::adapter::DebugEvent;
 /// dropped) and a warning is logged. This prevents unbounded task growth when
 /// a misbehaving client or port scanner hammers the server.
 const MAX_CONCURRENT_CLIENTS: usize = 8;
+
+/// Backoff duration after a TCP accept error to prevent tight error loops
+/// (e.g., file descriptor exhaustion).
+const ACCEPT_ERROR_BACKOFF: std::time::Duration = std::time::Duration::from_millis(100);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public types
@@ -109,6 +150,14 @@ pub struct DapServerHandle {
     pub(crate) log_event_tx: broadcast::Sender<DebugEvent>,
 }
 
+impl std::fmt::Debug for DapServerHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DapServerHandle")
+            .field("port", &self.port)
+            .finish_non_exhaustive()
+    }
+}
+
 impl DapServerHandle {
     /// Returns the port the server is listening on.
     ///
@@ -151,10 +200,17 @@ pub struct DapServerConfig {
 /// Binds a TCP listener to `config.bind_addr:config.port`, then spawns a
 /// background task that accepts connections until shutdown is signalled.
 ///
+/// When `backend_factory` is `Some`, each accepted connection calls the
+/// factory once. If the factory returns `Some(handle)`, the session is run
+/// with [`DapClientSession::run_on_with_backend`] so real VM Service debugging
+/// works. If the factory returns `None` (no active Flutter session), or if
+/// `backend_factory` is `None`, the connection falls back to [`NoopBackend`].
+///
 /// # Arguments
 ///
 /// * `config` — Address/port configuration.
 /// * `event_tx` — Channel used to emit [`DapServerEvent`] to the host.
+/// * `backend_factory` — Optional factory for creating per-session backends.
 ///
 /// # Returns
 ///
@@ -167,6 +223,7 @@ pub struct DapServerConfig {
 pub async fn start(
     config: DapServerConfig,
     event_tx: mpsc::Sender<DapServerEvent>,
+    backend_factory: Option<Arc<dyn BackendFactory>>,
 ) -> Result<DapServerHandle> {
     let addr = format!("{}:{}", config.bind_addr, config.port);
     let listener = TcpListener::bind(&addr)
@@ -183,6 +240,18 @@ pub async fn start(
         actual_port
     );
 
+    if config.bind_addr != "127.0.0.1"
+        && config.bind_addr != "::1"
+        && config.bind_addr != "localhost"
+    {
+        tracing::warn!(
+            bind_addr = %config.bind_addr,
+            "DAP server bound to non-loopback address. The 'evaluate' command allows \
+             arbitrary code execution — binding to a network interface exposes this \
+             to remote connections."
+        );
+    }
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Broadcast channel for forwarding debug events (e.g., LogOutput) to all
@@ -197,6 +266,7 @@ pub async fn start(
         event_tx,
         semaphore,
         log_event_tx.clone(),
+        backend_factory,
     ));
 
     Ok(DapServerHandle {
@@ -217,8 +287,10 @@ pub async fn start(
 /// 1. Checks whether we are below [`MAX_CONCURRENT_CLIENTS`]; if full the
 ///    connection is dropped immediately and a warning is logged.
 /// 2. Emits a [`DapServerEvent::ClientConnected`] with the remote address.
-/// 3. Spawns a task running [`DapClientSession::run`], holding a semaphore
-///    permit for the session lifetime so the slot is released on completion.
+/// 3. If a `backend_factory` is provided and returns `Some(handle)`, spawns a
+///    task running [`DapClientSession::run_on_with_backend`] with the real
+///    backend. Otherwise falls back to [`DapClientSession::run`] with
+///    [`NoopBackend`].
 /// 4. On session completion, emits [`DapServerEvent::ClientDisconnected`].
 ///
 /// When `shutdown_rx` receives `true`, the loop breaks. Each active session
@@ -236,6 +308,7 @@ async fn accept_loop(
     event_tx: mpsc::Sender<DapServerEvent>,
     semaphore: Arc<Semaphore>,
     log_event_tx: broadcast::Sender<DebugEvent>,
+    backend_factory: Option<Arc<dyn BackendFactory>>,
 ) {
     loop {
         tokio::select! {
@@ -290,33 +363,80 @@ async fn accept_loop(
                         let session_shutdown = shutdown_rx.clone();
                         let session_tx = event_tx.clone();
                         let session_client_id = client_id.clone();
-                        // Subscribe to the log event broadcast for this session.
-                        let log_event_rx = log_event_tx.subscribe();
 
-                        tokio::spawn(async move {
-                            if let Err(e) = DapClientSession::run(stream, session_shutdown, log_event_rx).await {
-                                tracing::warn!(
-                                    "DAP client session error ({}): {}",
-                                    session_client_id,
-                                    e
-                                );
-                            } else {
-                                tracing::debug!(
-                                    "DAP client session ended cleanly: {}",
-                                    session_client_id
-                                );
-                            }
+                        // Attempt to create a real backend for this connection.
+                        let maybe_backend = backend_factory.as_ref().and_then(|f| f.create());
 
-                            // Notify the host that the client disconnected.
-                            let _ = session_tx
-                                .send(DapServerEvent::ClientDisconnected {
-                                    client_id: session_client_id,
-                                })
+                        if let Some(backend_handle) = maybe_backend {
+                            // Real backend available — use run_on_with_backend.
+                            tokio::spawn(async move {
+                                let (reader, writer) = stream.into_split();
+                                let reader = tokio::io::BufReader::new(reader);
+
+                                let result = DapClientSession::<DynDebugBackend>::run_on_with_backend(
+                                    reader,
+                                    writer,
+                                    session_shutdown,
+                                    backend_handle.backend,
+                                    backend_handle.debug_event_rx,
+                                )
                                 .await;
 
-                            // Release the semaphore slot so new connections can be accepted.
-                            drop(permit);
-                        });
+                                if let Err(e) = result {
+                                    tracing::warn!(
+                                        "DAP client session error ({}): {}",
+                                        session_client_id,
+                                        e
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "DAP client session ended cleanly: {}",
+                                        session_client_id
+                                    );
+                                }
+
+                                // Notify the host that the client disconnected.
+                                let _ = session_tx
+                                    .send(DapServerEvent::ClientDisconnected {
+                                        client_id: session_client_id,
+                                    })
+                                    .await;
+
+                                // Release the semaphore slot.
+                                drop(permit);
+                            });
+                        } else {
+                            // No backend — fall back to NoopBackend via run().
+                            // Subscribe to the log event broadcast for this session.
+                            let log_event_rx = log_event_tx.subscribe();
+
+                            tokio::spawn(async move {
+                                if let Err(e) =
+                                    DapClientSession::run(stream, session_shutdown, log_event_rx).await
+                                {
+                                    tracing::warn!(
+                                        "DAP client session error ({}): {}",
+                                        session_client_id,
+                                        e
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "DAP client session ended cleanly: {}",
+                                        session_client_id
+                                    );
+                                }
+
+                                // Notify the host that the client disconnected.
+                                let _ = session_tx
+                                    .send(DapServerEvent::ClientDisconnected {
+                                        client_id: session_client_id,
+                                    })
+                                    .await;
+
+                                // Release the semaphore slot so new connections can be accepted.
+                                drop(permit);
+                            });
+                        }
                     }
                     Err(e) => {
                         tracing::error!("DAP server failed to accept connection: {}", e);
@@ -328,7 +448,7 @@ async fn accept_loop(
                             .await;
                         // Backoff to prevent tight error loop on persistent OS failures
                         // (e.g., file descriptor exhaustion).
-                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                        tokio::time::sleep(ACCEPT_ERROR_BACKOFF).await;
                     }
                 }
             }
@@ -351,14 +471,24 @@ mod tests {
 
     // ── Server startup ────────────────────────────────────────────────────────
 
+    /// Helper: start a server on port 0 (NoopBackend for all connections).
+    async fn start_test_server(event_tx: mpsc::Sender<DapServerEvent>) -> DapServerHandle {
+        start(
+            DapServerConfig {
+                port: 0,
+                bind_addr: "127.0.0.1".to_string(),
+            },
+            event_tx,
+            None, // no backend factory — uses NoopBackend
+        )
+        .await
+        .expect("server should start on port 0")
+    }
+
     #[tokio::test]
     async fn test_server_binds_to_port_zero_and_gets_assigned_port() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let config = DapServerConfig {
-            port: 0,
-            bind_addr: "127.0.0.1".to_string(),
-        };
-        let handle = start(config, event_tx).await.expect("server should start");
+        let handle = start_test_server(event_tx).await;
         assert!(handle.port() > 0, "OS-assigned port must be > 0");
         // Shut down cleanly.
         handle.shutdown_tx.send(true).unwrap();
@@ -368,12 +498,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_binds_to_specific_port() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        // port=0 lets OS pick; we verify we get a valid port back.
-        let config = DapServerConfig {
-            port: 0,
-            bind_addr: "127.0.0.1".to_string(),
-        };
-        let handle = start(config, event_tx).await.unwrap();
+        let handle = start_test_server(event_tx).await;
         assert!(handle.port() > 0);
         handle.shutdown_tx.send(true).unwrap();
         handle.task.await.unwrap();
@@ -383,15 +508,7 @@ mod tests {
     async fn test_server_start_fails_on_port_already_in_use() {
         // Bind once, then try to bind again on the same port.
         let (event_tx1, _) = mpsc::channel(16);
-        let handle1 = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx1,
-        )
-        .await
-        .unwrap();
+        let handle1 = start_test_server(event_tx1).await;
         let occupied_port = handle1.port();
 
         let (event_tx2, _) = mpsc::channel(16);
@@ -401,6 +518,7 @@ mod tests {
                 bind_addr: "127.0.0.1".to_string(),
             },
             event_tx2,
+            None,
         )
         .await;
 
@@ -418,15 +536,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_shutdown_stops_accept_loop() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         // Signal shutdown.
         handle.shutdown_tx.send(true).unwrap();
@@ -443,15 +553,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_connect_emits_connected_event() {
         let (event_tx, mut event_rx) = mpsc::channel(16);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         // Connect a TCP client.
         let _stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port()))
@@ -477,15 +579,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_disconnect_emits_disconnected_event() {
         let (event_tx, mut event_rx) = mpsc::channel(16);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         // Connect and immediately drop (simulates clean EOF).
         {
@@ -550,15 +644,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_connect_and_initialize() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         let mut stream = TcpStream::connect(format!("127.0.0.1:{}", handle.port()))
             .await
@@ -599,15 +685,7 @@ mod tests {
     #[tokio::test]
     async fn test_client_full_handshake_over_tcp() {
         let (event_tx, _event_rx) = mpsc::channel(16);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         let port = handle.port();
 
@@ -665,8 +743,19 @@ mod tests {
             .await
             .unwrap();
 
+            // DAP spec: terminated event before disconnect response.
             let r4 = read_message(&mut reader).await.unwrap().unwrap();
-            assert!(matches!(r4, DapMessage::Response(ref r) if r.success));
+            assert!(
+                matches!(r4, DapMessage::Event(ref e) if e.event == "terminated"),
+                "Expected terminated event, got {:?}",
+                r4
+            );
+            let r5 = read_message(&mut reader).await.unwrap().unwrap();
+            assert!(
+                matches!(r5, DapMessage::Response(ref r) if r.success),
+                "Expected disconnect success response, got {:?}",
+                r5
+            );
         });
 
         tokio::time::timeout(std::time::Duration::from_secs(5), client_task)
@@ -681,15 +770,7 @@ mod tests {
     #[tokio::test]
     async fn test_multiple_clients_can_connect_concurrently() {
         let (event_tx, mut event_rx) = mpsc::channel(64);
-        let handle = start(
-            DapServerConfig {
-                port: 0,
-                bind_addr: "127.0.0.1".to_string(),
-            },
-            event_tx,
-        )
-        .await
-        .unwrap();
+        let handle = start_test_server(event_tx).await;
 
         let port = handle.port();
 
@@ -738,6 +819,261 @@ mod tests {
             "Expected at least 3 ClientConnected events, got {}",
             connected_count
         );
+
+        handle.shutdown_tx.send(true).unwrap();
+        handle.task.await.unwrap();
+    }
+
+    // ── Factory tests ─────────────────────────────────────────────────────────
+
+    /// A mock backend that records calls for testing.
+    #[cfg(test)]
+    mod mock_backend {
+        use crate::adapter::{
+            BackendError, BreakpointResult, DapExceptionPauseMode, DebugEvent, DynDebugBackend,
+            DynDebugBackendInner,
+        };
+        use std::future::Future;
+        use std::pin::Pin;
+        use tokio::sync::mpsc;
+
+        pub struct MockBackendInner;
+
+        impl DynDebugBackendInner for MockBackendInner {
+            fn pause_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn resume_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _step: Option<crate::adapter::StepMode>,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn add_breakpoint_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _uri: &'a str,
+                _line: i32,
+                _column: Option<i32>,
+            ) -> Pin<Box<dyn Future<Output = Result<BreakpointResult, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async {
+                    Ok(BreakpointResult {
+                        vm_id: "bp1".into(),
+                        resolved: true,
+                        line: None,
+                        column: None,
+                    })
+                })
+            }
+
+            fn remove_breakpoint_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _bp_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn set_exception_pause_mode_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _mode: DapExceptionPauseMode,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn get_stack_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _limit: Option<i32>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"frames": []})) })
+            }
+
+            fn get_object_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _object_id: &'a str,
+                _offset: Option<i64>,
+                _count: Option<i64>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({})) })
+            }
+
+            fn evaluate_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _target_id: &'a str,
+                _expression: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"result": "42"})) })
+            }
+
+            fn evaluate_in_frame_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _frame_index: i32,
+                _expression: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"result": "42"})) })
+            }
+
+            fn get_vm_boxed(
+                &self,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + '_>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"isolates": []})) })
+            }
+
+            fn get_scripts_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"scripts": []})) })
+            }
+        }
+
+        /// A factory that always returns a mock backend.
+        pub struct AlwaysBackendFactory;
+
+        impl super::BackendFactory for AlwaysBackendFactory {
+            fn create(&self) -> Option<super::BackendHandle> {
+                let (_, debug_event_rx) = mpsc::channel::<DebugEvent>(8);
+                Some(super::BackendHandle {
+                    backend: DynDebugBackend::new(Box::new(MockBackendInner)),
+                    debug_event_rx,
+                })
+            }
+        }
+
+        /// A factory that never returns a backend.
+        pub struct NeverBackendFactory;
+
+        impl super::BackendFactory for NeverBackendFactory {
+            fn create(&self) -> Option<super::BackendHandle> {
+                None
+            }
+        }
+    }
+
+    /// When factory returns None, the session should still initialize cleanly.
+    #[tokio::test]
+    async fn test_factory_returning_none_falls_back_to_noop() {
+        let factory = Arc::new(mock_backend::NeverBackendFactory);
+
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let handle = start(
+            DapServerConfig {
+                port: 0,
+                bind_addr: "127.0.0.1".to_string(),
+            },
+            event_tx,
+            Some(factory),
+        )
+        .await
+        .expect("server should start");
+
+        let port = handle.port();
+
+        let client_task = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+                .await
+                .unwrap();
+
+            // initialize should still succeed with NoopBackend fallback.
+            let req = DapMessage::Request(DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            });
+            write_message(&mut stream, &req).await.unwrap();
+
+            let (read_half, _) = stream.split();
+            let mut reader = BufReader::new(read_half);
+            let resp =
+                tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+
+            assert!(
+                matches!(resp, DapMessage::Response(ref r) if r.success),
+                "initialize must succeed even with NoopBackend fallback"
+            );
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), client_task)
+            .await
+            .expect("client task should complete")
+            .expect("client task should not panic");
+
+        handle.shutdown_tx.send(true).unwrap();
+        handle.task.await.unwrap();
+    }
+
+    /// When factory returns Some(MockBackend), the session should initialize cleanly.
+    #[tokio::test]
+    async fn test_factory_returning_some_backend_initializes_cleanly() {
+        let factory = Arc::new(mock_backend::AlwaysBackendFactory);
+
+        let (event_tx, _event_rx) = mpsc::channel(16);
+        let handle = start(
+            DapServerConfig {
+                port: 0,
+                bind_addr: "127.0.0.1".to_string(),
+            },
+            event_tx,
+            Some(factory),
+        )
+        .await
+        .expect("server should start");
+
+        let port = handle.port();
+
+        let client_task = tokio::spawn(async move {
+            let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+                .await
+                .unwrap();
+
+            let req = DapMessage::Request(DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            });
+            write_message(&mut stream, &req).await.unwrap();
+
+            let (read_half, _) = stream.split();
+            let mut reader = BufReader::new(read_half);
+            let resp =
+                tokio::time::timeout(std::time::Duration::from_secs(2), read_message(&mut reader))
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .unwrap();
+
+            assert!(
+                matches!(resp, DapMessage::Response(ref r) if r.success),
+                "initialize must succeed with real backend"
+            );
+        });
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), client_task)
+            .await
+            .expect("client task should complete")
+            .expect("client task should not panic");
 
         handle.shutdown_tx.send(true).unwrap();
         handle.task.await.unwrap();

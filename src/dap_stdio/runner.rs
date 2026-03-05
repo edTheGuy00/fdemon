@@ -54,8 +54,11 @@ pub async fn run_dap_stdio() -> Result<()> {
                 }
                 DapServerEvent::ClientDisconnected { client_id } => {
                     tracing::info!("DAP client disconnected: {}", client_id);
-                    // In stdio mode, the client disconnecting ends the session.
-                    // The session task will exit on its own; we just log here.
+                    // In stdio mode, a single client owns the process lifetime.
+                    // Once it disconnects, there will be no further meaningful
+                    // events. Break immediately so the event consumer exits
+                    // without waiting for the channel to close naturally.
+                    break;
                 }
                 DapServerEvent::ServerError { reason } => {
                     tracing::error!("DAP server error: {}", reason);

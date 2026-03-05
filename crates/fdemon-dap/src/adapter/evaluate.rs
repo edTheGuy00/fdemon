@@ -35,7 +35,7 @@
 //! Complex objects (Lists, Maps, PlainInstances, etc.) get a non-zero
 //! `variablesReference` so the client can expand them.
 
-use crate::adapter::{DebugBackend, FrameStore, VariableRef, VariableStore};
+use crate::adapter::{BackendError, DebugBackend, FrameStore, VariableRef, VariableStore};
 use crate::protocol::types::{EvaluateArguments, EvaluateResponseBody};
 use crate::{DapRequest, DapResponse};
 
@@ -94,7 +94,7 @@ pub async fn handle_evaluate<B: DebugBackend>(
                     .evaluate(&isolate_id, &lib_id, &args.expression)
                     .await
             }
-            Err(e) => Err(e),
+            Err(e) => Err(BackendError::VmServiceError(e)),
         }
     };
 
@@ -129,7 +129,13 @@ pub async fn handle_evaluate<B: DebugBackend>(
                 indexed_variables: None,
                 presentation_hint: None,
             };
-            let body_json = serde_json::to_value(&body).unwrap_or_default();
+            let body_json = match serde_json::to_value(&body) {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::error!("Failed to serialize evaluate response: {}", e);
+                    return DapResponse::error(request, format!("Internal error: {}", e));
+                }
+            };
             DapResponse::success(request, Some(body_json))
         }
         Err(e) => {
@@ -139,7 +145,7 @@ pub async fn handle_evaluate<B: DebugBackend>(
             // The DAP spec allows either success=false (with message) or
             // success=true (with error in result field). We use success=false
             // so that both VS Code and Zed display a clear error to the user.
-            DapResponse::error(request, e)
+            DapResponse::error(request, e.to_string())
         }
     }
 }
@@ -163,7 +169,7 @@ pub async fn get_root_library_id<B: DebugBackend>(
     backend: &B,
     isolate_id: &str,
 ) -> Result<String, String> {
-    let vm_info = backend.get_vm().await?;
+    let vm_info = backend.get_vm().await.map_err(|e| e.to_string())?;
     let isolates = vm_info
         .get("isolates")
         .and_then(|i| i.as_array())
@@ -437,11 +443,12 @@ mod tests {
 
     // ── handle_evaluate (integration-style) ──────────────────────────────
 
-    use crate::adapter::{BreakpointResult, FrameRef, StepMode};
-    use crate::protocol::types::StepArguments;
+    use crate::adapter::{
+        BackendError, BreakpointResult, DapExceptionPauseMode, FrameRef, StepMode,
+    };
 
     struct MockBackend {
-        eval_result: Result<serde_json::Value, String>,
+        eval_result: Result<serde_json::Value, BackendError>,
     }
 
     impl MockBackend {
@@ -452,16 +459,16 @@ mod tests {
         }
         fn err(msg: &str) -> Self {
             Self {
-                eval_result: Err(msg.to_string()),
+                eval_result: Err(BackendError::VmServiceError(msg.to_string())),
             }
         }
     }
 
     impl crate::adapter::DebugBackend for MockBackend {
-        async fn pause(&self, _: &str) -> Result<(), String> {
+        async fn pause(&self, _: &str) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), String> {
+        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
             Ok(())
         }
         async fn add_breakpoint(
@@ -470,7 +477,7 @@ mod tests {
             _: &str,
             line: i32,
             column: Option<i32>,
-        ) -> Result<BreakpointResult, String> {
+        ) -> Result<BreakpointResult, BackendError> {
             Ok(BreakpointResult {
                 vm_id: format!("bp/line:{line}"),
                 resolved: true,
@@ -478,13 +485,21 @@ mod tests {
                 column,
             })
         }
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), String> {
+        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn set_exception_pause_mode(&self, _: &str, _: &str) -> Result<(), String> {
+        async fn set_exception_pause_mode(
+            &self,
+            _: &str,
+            _: DapExceptionPauseMode,
+        ) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn get_stack(&self, _: &str, _: Option<i32>) -> Result<serde_json::Value, String> {
+        async fn get_stack(
+            &self,
+            _: &str,
+            _: Option<i32>,
+        ) -> Result<serde_json::Value, BackendError> {
             Ok(json!({}))
         }
         async fn get_object(
@@ -493,10 +508,15 @@ mod tests {
             _: &str,
             _: Option<i64>,
             _: Option<i64>,
-        ) -> Result<serde_json::Value, String> {
+        ) -> Result<serde_json::Value, BackendError> {
             Ok(json!({}))
         }
-        async fn evaluate(&self, _: &str, _: &str, _: &str) -> Result<serde_json::Value, String> {
+        async fn evaluate(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<serde_json::Value, BackendError> {
             self.eval_result.clone()
         }
         async fn evaluate_in_frame(
@@ -504,10 +524,10 @@ mod tests {
             _: &str,
             _: i32,
             _: &str,
-        ) -> Result<serde_json::Value, String> {
+        ) -> Result<serde_json::Value, BackendError> {
             self.eval_result.clone()
         }
-        async fn get_vm(&self) -> Result<serde_json::Value, String> {
+        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
             // Return an isolate with a rootLib so that frameless evaluation works.
             Ok(json!({
                 "isolates": [
@@ -519,7 +539,7 @@ mod tests {
                 ]
             }))
         }
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, String> {
+        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
             Ok(json!({}))
         }
     }

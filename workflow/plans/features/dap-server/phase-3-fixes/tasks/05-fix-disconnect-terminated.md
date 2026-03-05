@@ -90,3 +90,37 @@ async fn test_disconnect_sends_terminated_event() {
 
 - The `DapEvent::terminated()` constructor should already exist (used in the shutdown arm of the select loop). Verify it's available.
 - Check if any tests assert the exact response count from `handle_disconnect` — they may need updating to expect 2 messages instead of 1.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/server/session.rs` | `handle_disconnect` now emits `terminated` event before the response; updated all unit tests and integration tests that expected 1 message from disconnect to expect 2; added new `test_disconnect_sends_terminated_event_before_response` test |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Removed `"disconnect" => self.handle_disconnect(request).await` arm from `handle_request`; removed `handle_disconnect` method entirely; removed two now-dead adapter tests (`test_handle_disconnect_returns_success`, `test_handle_disconnect_sends_terminated_event`) |
+| `crates/fdemon-dap/src/server/mod.rs` | Updated `test_client_full_handshake_over_tcp` to read terminated event before disconnect response |
+| `crates/fdemon-dap/src/transport/stdio.rs` | Updated `test_run_on_full_handshake_initialize_configure_disconnect` and `test_run_on_multiple_requests_over_single_stream` to consume terminated event before disconnect response |
+
+### Notable Decisions/Tradeoffs
+
+1. **Adapter tests removed, not updated**: The two adapter tests (`test_handle_disconnect_returns_success`, `test_handle_disconnect_sends_terminated_event`) tested dead code (`DapAdapter::handle_disconnect`). Since that method was fully removed, the tests were deleted rather than updated — there is nothing to test in the adapter for disconnect anymore.
+
+2. **`test_run_on_session_lifecycle_connect_initialize_disconnect` not changed**: This test uses `let _ = read_message(...)` to discard the disconnect response. With 2 messages now, one is still discarded, but the test only cares about the `ClientDisconnected` server event (not the message count). The extra buffered message does not cause the server to stall, so the test still passes without modification.
+
+3. **`test_disconnect_returns_success_response` renamed**: Renamed to `test_disconnect_returns_terminated_event_then_success_response` to accurately describe the new two-message behaviour.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (all tests across all crates, including 62 ignored integration tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Wire-level behaviour change**: Any real DAP client connected to fdemon will now receive a `terminated` event before the disconnect response. This is spec-correct and IDEs (VS Code, Zed, Helix) expect this ordering, so this is strictly an improvement.

@@ -170,3 +170,43 @@ if config.bind_addr != "127.0.0.1" && config.bind_addr != "::1" && config.bind_a
 
 - These are all independent, low-risk changes. If any single fix causes unexpected issues, it can be reverted without affecting the others.
 - Fix 14 (remove tcp.rs) may require checking if any external code (tests, examples, docs) references `transport::tcp`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Fix 8: Changed `pub mod dap_backend` to `pub(crate) mod dap_backend` |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Fix 9: Removed `#[allow(dead_code)]` from `backend` field, updated doc comment |
+| `crates/fdemon-dap/src/server/session.rs` | Fix 10a: Replaced `unwrap_or_default()` with logged error match for `Capabilities` serialization |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Fix 10b: Replaced `unwrap_or_default()` with logged error + early return for `EvaluateResponseBody` serialization |
+| `crates/fdemon-dap/src/server/mod.rs` | Fix 13a: Extracted `ACCEPT_ERROR_BACKOFF` constant; Fix 15: Added non-loopback security warning |
+| `crates/fdemon-app/src/actions/mod.rs` | Fix 13b: Extracted `DAP_EVENT_CHANNEL_CAPACITY` constant, replaced magic `32` |
+| `crates/fdemon-dap/src/transport/mod.rs` | Fix 14: Removed `pub mod tcp;` declaration, updated doc comment |
+| `crates/fdemon-dap/src/transport/tcp.rs` | Fix 14: **Deleted** — empty re-export file removed |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fix 10b `evaluate.rs` — early return vs. empty object**: The task specified returning `DapResponse::error(...)` instead of falling through to `DapResponse::success(request, Some(Value::Null))`. This is more correct: if serialization fails, returning a success response with null body would confuse the IDE. An explicit error is better.
+
+2. **Fix 14 — `transport/tcp.rs` removal**: Confirmed no external code used `transport::tcp::start_server`. The only reference was the file's own module doc comment. The `transport/mod.rs` doc was updated to point callers to `crate::server` directly for TCP operations.
+
+3. **Fix 9 — `#[allow(dead_code)]` removal**: Confirmed the `backend` field IS used in `handle_attach`, `handle_continue`, `handle_pause`, etc. via `self.backend`. Clippy did not re-introduce the warning, confirming the annotation was genuinely stale.
+
+4. **Clippy fixup during Fix 10b**: The `&format!(...)` borrow was redundant (clippy `needless_borrows_for_generic_args`). Changed to `format!(...)` directly as suggested.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 errors)
+- `cargo test --workspace` - Passed (3384+ tests, 0 failures, 74 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Fix 15 — Non-loopback warning is log-only**: The warning is emitted at `tracing::warn!` level and goes to the tracing subscriber. No test was added for this (the task marked it as "may require tracing test subscriber"). The warning fires correctly for any non-loopback bind address.

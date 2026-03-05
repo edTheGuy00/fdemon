@@ -109,3 +109,39 @@ Option A is the best balance of simplicity and correctness. The enum is local to
 - Wait for tasks 01 and 02 to land first, as both modify the select loop and we don't want to refactor twice.
 - The `run_on` method is on `impl DapClientSession<NoopBackend>` while `run_on_with_backend` is on `impl<B: DebugBackend> DapClientSession<B>`. The consolidated method should be on the generic impl.
 - Consider whether `run_on` (NoopBackend entry point) should be kept as a thin convenience wrapper that constructs `DebugEventSource::Broadcast` and delegates, or removed entirely in favor of the unified entry point.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/server/session.rs` | Added `DebugEventSource` enum with `recv()` method; added `run_inner` private method on `impl<B: DebugBackend> DapClientSession<B>`; refactored `run_on` and `run_on_with_backend` to thin wrappers; added two new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (enum wrapper) implemented as specified**: `DebugEventSource` is a module-private enum in `session.rs`. The `recv()` method encapsulates all channel-specific error handling (lag warnings, closed-branch disable). `run_inner` holds a single `tokio::select!` loop shared by both entry points.
+
+2. **`run_inner` takes `event_rx: &mut mpsc::Receiver<DapMessage>` as a parameter**: Both `run_on` and `run_on_with_backend` create their own `mpsc::channel` for adapter-generated DAP events and pass the receiver to `run_inner`. This avoids storing the channel in `self` and keeps the method signature clean.
+
+3. **`run_on` kept on `impl DapClientSession<NoopBackend>`**: Preserved the existing public API surface. It constructs `DebugEventSource::Broadcast(Some(log_event_rx))` and delegates to `run_inner`. The `run` (TCP convenience) method is unchanged.
+
+4. **Busy-poll fix from task 02 is preserved**: `DebugEventSource::recv()` transitions `Broadcast(Some(_))` to `None` on `RecvError::Closed`, then parks on `std::future::pending()` — same semantics as the `Option<broadcast::Receiver>` fix, now encapsulated in the enum.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-dap server::session` — Passed (38 tests including 2 new)
+- `cargo test --workspace` — Passed (all crates, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`DebugEventSource` is module-private**: It cannot be used outside `session.rs`. This is intentional — it is an implementation detail. If future tasks need to construct sessions with custom event sources from outside the module, the enum would need to be made `pub(crate)`.
+
+2. **`run_inner` has a slightly larger parameter list than the task sketch**: The task sketch omitted `event_rx` from the signature, but the actual implementation needs it since both entry points create their own channel. This is consistent with the design and has no correctness impact.

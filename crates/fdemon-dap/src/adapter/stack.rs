@@ -314,16 +314,27 @@ pub fn extract_line_column(frame: &serde_json::Value) -> (Option<i32>, Option<i3
 /// DAP clients that use `pathFormat: "path"` (Zed, Helix) expect a plain
 /// filesystem path, **not** a `file://` URI.
 ///
-/// | Input URI               | Output                          |
-/// |-------------------------|---------------------------------|
-/// | `file:///home/app/main.dart` | `"/home/app/main.dart"` |
-/// | `dart:core/list.dart`   | `None` (no local path in Phase 3) |
-/// | `package:myapp/main.dart` | `None` (deferred to Phase 4) |
-/// | anything else           | `None`                          |
+/// Uses [`url::Url::parse`] to correctly handle all `file://` URI forms,
+/// including percent-encoded characters and Windows drive-letter paths.
+///
+/// | Input URI                        | Output (Unix)                    |
+/// |----------------------------------|----------------------------------|
+/// | `file:///home/app/main.dart`     | `Some("/home/app/main.dart")`    |
+/// | `file:///C:/Users/app/main.dart` | `Some("C:\\Users\\app\\main.dart")` (Windows only) |
+/// | `file:///home/my%20app/main.dart`| `Some("/home/my app/main.dart")` |
+/// | `dart:core/list.dart`            | `None` (no local path in Phase 3) |
+/// | `package:myapp/main.dart`        | `None` (deferred to Phase 4)     |
+/// | anything else                    | `None`                           |
 pub fn dart_uri_to_path(uri: &str) -> Option<String> {
-    if let Some(path) = uri.strip_prefix("file://") {
-        // Strip the file:// prefix to obtain an absolute filesystem path.
-        Some(path.to_string())
+    if uri.starts_with("file://") {
+        // Use the `url` crate for correct cross-platform handling:
+        // - Strips `file://` properly (three slashes for absolute paths)
+        // - Decodes percent-encoded characters (e.g. %20 → space)
+        // - Handles Windows drive letters (file:///C:/path → C:\path on Windows)
+        url::Url::parse(uri)
+            .ok()
+            .and_then(|u| u.to_file_path().ok())
+            .map(|p| p.to_string_lossy().into_owned())
     } else if uri.starts_with("dart:") || uri.starts_with("package:") {
         // SDK and package URIs cannot be resolved to a local path in Phase 3.
         // Phase 4 will add package resolution via .dart_tool/package_config.json.
@@ -701,7 +712,7 @@ mod tests {
 
     #[test]
     fn test_dart_uri_to_path_file_uri_strips_prefix_only() {
-        // Ensure the path starts with / after stripping file://.
+        // Ensure the path starts with / after converting file:/// URI.
         let result = dart_uri_to_path("file:///tmp/app.dart");
         assert_eq!(result, Some("/tmp/app.dart".to_string()));
     }
@@ -722,6 +733,111 @@ mod tests {
     fn test_dart_uri_to_path_unknown_scheme_returns_none() {
         assert!(dart_uri_to_path("http://example.com/file.dart").is_none());
         assert!(dart_uri_to_path("").is_none());
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_unix_absolute() {
+        assert_eq!(
+            dart_uri_to_path("file:///home/user/app/lib/main.dart"),
+            Some("/home/user/app/lib/main.dart".to_string())
+        );
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_windows_drive_letter() {
+        // The url crate's to_file_path() is platform-specific.
+        //
+        // On Windows: file:///C:/Users/app/lib/main.dart → "C:\Users\app\lib\main.dart"
+        //   (the leading slash before the drive letter is correctly stripped)
+        //
+        // On Unix: the url crate parses file:///C:/... as a valid file URI
+        // with empty host and path /C:/... — to_file_path() succeeds and
+        // returns /C:/Users/app/lib/main.dart. This is not meaningful as a
+        // local path, but it does not panic and is an inherent limitation
+        // of cross-platform path handling (documented in the function).
+        //
+        // In both cases the function must return Some (not panic/return None
+        // for a syntactically valid file:/// URI).
+        let result = dart_uri_to_path("file:///C:/Users/app/lib/main.dart");
+        assert!(
+            result.is_some(),
+            "Expected Some for a well-formed file:/// URI, got None"
+        );
+        if cfg!(windows) {
+            let path = result.unwrap();
+            assert!(
+                !path.starts_with("/C:"),
+                "On Windows, path must not have leading / before drive letter, got: {path}"
+            );
+            assert!(
+                path.starts_with("C:"),
+                "On Windows, path must start with drive letter, got: {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_percent_encoded() {
+        // Percent-encoded characters in the path should be decoded.
+        // file:///home/my%20project/main.dart → /home/my project/main.dart
+        assert_eq!(
+            dart_uri_to_path("file:///home/my%20project/main.dart"),
+            Some("/home/my project/main.dart".to_string())
+        );
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_percent_encoded_special_chars() {
+        // Parentheses and other characters that may be percent-encoded
+        // by some tools or systems.
+        assert_eq!(
+            dart_uri_to_path("file:///home/user/my%28app%29/main.dart"),
+            Some("/home/user/my(app)/main.dart".to_string())
+        );
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_dart_scheme_core() {
+        // dart: URIs for SDK sources should return None.
+        assert!(dart_uri_to_path("dart:core/list.dart").is_none());
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_dart_scheme_async() {
+        assert!(dart_uri_to_path("dart:async").is_none());
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_package_scheme_user() {
+        // package: URIs should return None (resolved in Phase 4).
+        assert!(dart_uri_to_path("package:my_app/main.dart").is_none());
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_package_scheme_flutter() {
+        assert!(dart_uri_to_path("package:flutter/widgets.dart").is_none());
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_nested_path_preserved() {
+        // Deep paths should be preserved verbatim.
+        assert_eq!(
+            dart_uri_to_path("file:///home/user/projects/my_app/lib/src/widgets/home.dart"),
+            Some("/home/user/projects/my_app/lib/src/widgets/home.dart".to_string())
+        );
+    }
+
+    #[test]
+    fn test_dart_uri_to_path_two_slash_file_uri_returns_none() {
+        // file:// with a hostname component (two slashes) is unusual but
+        // valid per RFC 8089. The url crate parses it but to_file_path()
+        // rejects non-empty hosts, so we return None gracefully.
+        // Flutter's VM Service always produces three-slash file:/// URIs.
+        let result = dart_uri_to_path("file://hostname/path/to/file.dart");
+        assert!(
+            result.is_none(),
+            "file:// URIs with a non-empty host should return None"
+        );
     }
 
     // ── FrameStore::lookup_by_index ───────────────────────────────────────

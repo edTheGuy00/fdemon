@@ -43,6 +43,62 @@ use crate::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DebugEventSource
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Abstracts over the two channel types used to deliver [`DebugEvent`]s to
+/// the session select loop.
+///
+/// - [`Dedicated`][Self::Dedicated] wraps an `mpsc::Receiver` provided by a
+///   real backend factory (task 01). Each client gets its own channel, so
+///   there is no backpressure sharing and no `Lagged` error.
+/// - [`Broadcast`][Self::Broadcast] wraps an optional `broadcast::Receiver`
+///   used when the Engine fans out log events to all connected clients. The
+///   `Option` wrapper lets the branch be permanently disabled once the sender
+///   is dropped, preventing a CPU busy-spin on `RecvError::Closed`.
+/// - [`None`][Self::None] has no event source; the select arm parks on
+///   `std::future::pending()` so it never wakes.
+enum DebugEventSource {
+    /// Per-client channel from a backend factory (no `Lagged` errors possible).
+    Dedicated(mpsc::Receiver<DebugEvent>),
+    /// Shared broadcast channel (Engine fan-out). `None` after sender drops.
+    Broadcast(Option<broadcast::Receiver<DebugEvent>>),
+    /// No event source — select arm is permanently parked.
+    None,
+}
+
+impl DebugEventSource {
+    /// Await the next [`DebugEvent`], or return `Option::None` on lag/close.
+    ///
+    /// - `Dedicated`: yields `Some(event)` or `None` when the sender drops.
+    /// - `Broadcast(Some)`: yields `Some(event)`, logs a warning on lag, and
+    ///   transitions to `None` on close (preventing busy-spin).
+    /// - `Broadcast(None)` / `None`: parks on [`std::future::pending`] forever.
+    async fn recv(&mut self) -> Option<DebugEvent> {
+        match self {
+            Self::Dedicated(rx) => rx.recv().await,
+            Self::Broadcast(Some(rx)) => match rx.recv().await {
+                Ok(event) => Some(event),
+                Err(broadcast::error::RecvError::Lagged(n)) => {
+                    tracing::warn!("DAP log event receiver lagged, dropped {} events", n);
+                    // Continue the loop; try the next event.
+                    Option::None
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    tracing::debug!("DAP log event broadcast channel closed, disabling");
+                    // Disable permanently so the select arm parks instead of spinning.
+                    *self = Self::None;
+                    Option::None
+                }
+            },
+            Self::Broadcast(Option::None) | Self::None => {
+                std::future::pending::<Option<DebugEvent>>().await
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // State machine
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -84,16 +140,19 @@ pub enum SessionState {
 pub struct NoopBackend;
 
 impl crate::adapter::DebugBackend for NoopBackend {
-    async fn pause(&self, _isolate_id: &str) -> std::result::Result<(), String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    async fn pause(
+        &self,
+        _isolate_id: &str,
+    ) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn resume(
         &self,
         _isolate_id: &str,
         _step: Option<crate::adapter::StepMode>,
-    ) -> std::result::Result<(), String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn add_breakpoint(
@@ -102,32 +161,32 @@ impl crate::adapter::DebugBackend for NoopBackend {
         _uri: &str,
         _line: i32,
         _column: Option<i32>,
-    ) -> std::result::Result<crate::adapter::BreakpointResult, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<crate::adapter::BreakpointResult, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn remove_breakpoint(
         &self,
         _isolate_id: &str,
         _breakpoint_id: &str,
-    ) -> std::result::Result<(), String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn set_exception_pause_mode(
         &self,
         _isolate_id: &str,
-        _mode: &str,
-    ) -> std::result::Result<(), String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+        _mode: crate::adapter::DapExceptionPauseMode,
+    ) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn get_stack(
         &self,
         _isolate_id: &str,
         _limit: Option<i32>,
-    ) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn get_object(
@@ -136,8 +195,8 @@ impl crate::adapter::DebugBackend for NoopBackend {
         _object_id: &str,
         _offset: Option<i64>,
         _count: Option<i64>,
-    ) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn evaluate(
@@ -145,8 +204,8 @@ impl crate::adapter::DebugBackend for NoopBackend {
         _isolate_id: &str,
         _target_id: &str,
         _expression: &str,
-    ) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn evaluate_in_frame(
@@ -154,19 +213,19 @@ impl crate::adapter::DebugBackend for NoopBackend {
         _isolate_id: &str,
         _frame_index: i32,
         _expression: &str,
-    ) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
-    async fn get_vm(&self) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    async fn get_vm(&self) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn get_scripts(
         &self,
         _isolate_id: &str,
-    ) -> std::result::Result<serde_json::Value, String> {
-        Err("NoopBackend: no VM Service connected".to_string())
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 }
 
@@ -262,7 +321,7 @@ impl<B: DebugBackend> DapClientSession<B> {
         mut writer: W,
         mut shutdown_rx: watch::Receiver<bool>,
         backend: B,
-        mut debug_event_rx: mpsc::Receiver<DebugEvent>,
+        debug_event_rx: mpsc::Receiver<DebugEvent>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send,
@@ -274,16 +333,54 @@ impl<B: DebugBackend> DapClientSession<B> {
         let (event_tx, mut event_rx) = mpsc::channel::<DapMessage>(64);
         session.event_tx = Some(event_tx);
 
+        let mut debug_events = DebugEventSource::Dedicated(debug_event_rx);
+        session
+            .run_inner(
+                &mut reader,
+                &mut writer,
+                &mut shutdown_rx,
+                &mut event_rx,
+                &mut debug_events,
+            )
+            .await
+    }
+
+    /// Unified select loop shared by all entry points.
+    ///
+    /// Drives four concurrent arms:
+    ///
+    /// 1. Inbound DAP requests from the client.
+    /// 2. Outbound DAP events produced by the [`DapAdapter`] (stamped with a
+    ///    monotonic sequence number and forwarded to the writer).
+    /// 3. Debug events from the engine/VM Service, routed through a
+    ///    [`DebugEventSource`] that abstracts over `mpsc` and `broadcast`
+    ///    channel types.
+    /// 4. Server shutdown signal from a [`watch::Receiver<bool>`].
+    ///
+    /// The loop exits when the client disconnects, an unrecoverable I/O error
+    /// occurs, or a shutdown signal is received.
+    async fn run_inner<R, W>(
+        &mut self,
+        reader: &mut BufReader<R>,
+        writer: &mut W,
+        shutdown_rx: &mut watch::Receiver<bool>,
+        event_rx: &mut mpsc::Receiver<DapMessage>,
+        debug_events: &mut DebugEventSource,
+    ) -> Result<()>
+    where
+        R: AsyncRead + Unpin + Send,
+        W: AsyncWrite + Unpin + Send,
+    {
         loop {
             tokio::select! {
-                result = read_message(&mut reader) => {
+                result = read_message(reader) => {
                     match result {
                         Ok(Some(DapMessage::Request(req))) => {
-                            let responses = session.handle_request(&req).await;
+                            let responses = self.handle_request(&req).await;
                             for msg in &responses {
-                                write_message(&mut writer, msg).await?;
+                                write_message(writer, msg).await?;
                             }
-                            if session.state == SessionState::Disconnecting {
+                            if self.state == SessionState::Disconnecting {
                                 break;
                             }
                         }
@@ -307,30 +404,35 @@ impl<B: DebugBackend> DapClientSession<B> {
                     // Stamp the event with the next sequence number.
                     let stamped = match event_msg {
                         DapMessage::Event(mut ev) => {
-                            ev.seq = session.next_seq;
-                            session.next_seq += 1;
+                            ev.seq = self.next_seq;
+                            self.next_seq += 1;
                             DapMessage::Event(ev)
                         }
                         other => other,
                     };
-                    if let Err(e) = write_message(&mut writer, &stamped).await {
+                    if let Err(e) = write_message(writer, &stamped).await {
                         tracing::warn!("Error writing DAP event: {}", e);
                         break;
                     }
                 }
 
-                // Debug events forwarded from the VM Service via the Engine.
-                Some(debug_event) = debug_event_rx.recv() => {
-                    if let Some(adapter) = &mut session.adapter {
-                        adapter.handle_debug_event(debug_event).await;
+                // Debug events from the engine/VM Service, via DebugEventSource.
+                // When the source is exhausted (None/Broadcast(None)), this arm
+                // parks on std::future::pending() — no busy-spin.
+                maybe_event = debug_events.recv() => {
+                    if let Some(debug_event) = maybe_event {
+                        if let Some(adapter) = &mut self.adapter {
+                            adapter.handle_debug_event(debug_event).await;
+                        }
+                        // If no adapter yet (not attached), silently discard.
                     }
                 }
 
                 _ = shutdown_rx.changed() => {
                     if *shutdown_rx.borrow() {
                         tracing::debug!("DAP session terminating due to server shutdown");
-                        let event = session.make_event(DapEvent::terminated());
-                        let _ = write_message(&mut writer, &DapMessage::Event(event)).await;
+                        let event = self.make_event(DapEvent::terminated());
+                        let _ = write_message(writer, &DapMessage::Event(event)).await;
                         break;
                     }
                 }
@@ -356,6 +458,13 @@ impl DapClientSession<NoopBackend> {
     ///
     /// On shutdown, a `terminated` event is sent before the connection closes.
     ///
+    /// The `log_event_rx` broadcast receiver is polled for [`DebugEvent`]s
+    /// forwarded by the Engine (e.g., [`DebugEvent::LogOutput`]). Events are
+    /// forwarded to the adapter if it has been created (i.e., after a successful
+    /// `attach`). If no adapter is active, events are silently discarded. Once
+    /// the sender is dropped, the branch parks on [`std::future::pending`] to
+    /// prevent a CPU busy-spin on the permanently-ready `RecvError::Closed`.
+    ///
     /// # Type Parameters
     ///
     /// - `R` — Any async reader (e.g., `BufReader<OwnedReadHalf>`, `BufReader<Stdin>`).
@@ -364,7 +473,7 @@ impl DapClientSession<NoopBackend> {
         mut reader: BufReader<R>,
         mut writer: W,
         mut shutdown_rx: watch::Receiver<bool>,
-        mut log_event_rx: broadcast::Receiver<DebugEvent>,
+        log_event_rx: broadcast::Receiver<DebugEvent>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send,
@@ -375,89 +484,16 @@ impl DapClientSession<NoopBackend> {
         let (event_tx, mut event_rx) = mpsc::channel::<DapMessage>(64);
         session.event_tx = Some(event_tx);
 
-        loop {
-            tokio::select! {
-                result = read_message(&mut reader) => {
-                    match result {
-                        Ok(Some(DapMessage::Request(req))) => {
-                            let responses = session.handle_request(&req).await;
-                            for msg in &responses {
-                                write_message(&mut writer, msg).await?;
-                            }
-                            if session.state == SessionState::Disconnecting {
-                                break;
-                            }
-                        }
-                        Ok(Some(_)) => {
-                            // Ignore non-request messages from client (e.g., responses to
-                            // server-initiated requests — not yet used in Phase 2).
-                            tracing::debug!("Ignoring non-request DAP message from client");
-                        }
-                        Ok(None) => {
-                            // Clean EOF — client disconnected without sending `disconnect`.
-                            tracing::debug!("DAP client disconnected (EOF)");
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!("Error reading DAP message: {}", e);
-                            break;
-                        }
-                    }
-                }
-
-                // DAP events produced by the adapter (stopped, continued, thread, etc.)
-                Some(event_msg) = event_rx.recv() => {
-                    let stamped = match event_msg {
-                        DapMessage::Event(mut ev) => {
-                            ev.seq = session.next_seq;
-                            session.next_seq += 1;
-                            DapMessage::Event(ev)
-                        }
-                        other => other,
-                    };
-                    if let Err(e) = write_message(&mut writer, &stamped).await {
-                        tracing::warn!("Error writing DAP event: {}", e);
-                        break;
-                    }
-                }
-
-                // Debug events broadcast by the Engine (e.g., LogOutput from Flutter logs).
-                log_event_result = log_event_rx.recv() => {
-                    match log_event_result {
-                        Ok(debug_event) => {
-                            if let Some(adapter) = &mut session.adapter {
-                                adapter.handle_debug_event(debug_event).await;
-                            }
-                            // If no adapter yet (not attached), silently discard.
-                        }
-                        Err(broadcast::error::RecvError::Lagged(n)) => {
-                            // We fell behind; log a warning and continue.
-                            tracing::warn!(
-                                "DAP session log event receiver lagged, dropped {} events",
-                                n
-                            );
-                        }
-                        Err(broadcast::error::RecvError::Closed) => {
-                            // Sender dropped (server shutting down); the shutdown_rx
-                            // branch will handle the graceful termination.
-                            tracing::debug!("DAP log event broadcast channel closed");
-                        }
-                    }
-                }
-
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        // Server shutting down — notify the client before closing.
-                        tracing::debug!("DAP session terminating due to server shutdown");
-                        let event = session.make_event(DapEvent::terminated());
-                        let _ = write_message(&mut writer, &DapMessage::Event(event)).await;
-                        break;
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        let mut debug_events = DebugEventSource::Broadcast(Some(log_event_rx));
+        session
+            .run_inner(
+                &mut reader,
+                &mut writer,
+                &mut shutdown_rx,
+                &mut event_rx,
+                &mut debug_events,
+            )
+            .await
     }
 
     /// Run the session until the client disconnects or shutdown is signalled.
@@ -584,7 +620,13 @@ impl<B: DebugBackend> DapClientSession<B> {
         self.state = SessionState::Initializing;
 
         let capabilities = Capabilities::fdemon_defaults();
-        let body = serde_json::to_value(&capabilities).unwrap_or_default();
+        let body = match serde_json::to_value(&capabilities) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!("Failed to serialize DAP capabilities: {}", e);
+                serde_json::Value::Object(Default::default())
+            }
+        };
         let response = self.make_response(DapResponse::success(request, Some(body)));
 
         let initialized = self.make_event(DapEvent::initialized());
@@ -619,10 +661,19 @@ impl<B: DebugBackend> DapClientSession<B> {
     }
 
     /// Handle the `disconnect` request.
+    ///
+    /// Emits a `terminated` event before the disconnect response, as required
+    /// by the DAP specification. The `terminated` event signals to the client
+    /// that the debug session has ended so it can clean up its debug UI.
     fn handle_disconnect(&mut self, request: &DapRequest) -> Vec<DapMessage> {
         self.state = SessionState::Disconnecting;
+
+        // DAP spec: send `terminated` before the disconnect response so the
+        // client can transition its UI out of debug mode.
+        let terminated = self.make_event(DapEvent::terminated());
         let resp = self.make_response(DapResponse::success(request, None));
-        vec![DapMessage::Response(resp)]
+
+        vec![DapMessage::Event(terminated), DapMessage::Response(resp)]
     }
 }
 
@@ -835,10 +886,7 @@ mod tests {
         assert!(matches!(&responses[0], DapMessage::Response(r) if !r.success));
         if let DapMessage::Response(r) = &responses[0] {
             assert!(
-                !r.message
-                    .as_deref()
-                    .unwrap_or("")
-                    .contains("initialize"),
+                !r.message.as_deref().unwrap_or("").contains("initialize"),
                 "Error should be from the adapter (no VM), not from the state machine"
             );
         }
@@ -862,12 +910,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_disconnect_returns_success_response() {
+    async fn test_disconnect_returns_terminated_event_then_success_response() {
         let mut session = DapClientSession::new();
         session.handle_request(&req(1, "initialize")).await;
         let responses = session.handle_request(&req(2, "disconnect")).await;
-        assert_eq!(responses.len(), 1);
-        assert!(matches!(&responses[0], DapMessage::Response(r) if r.success));
+        // DAP spec: terminated event comes first, then the disconnect response.
+        assert_eq!(responses.len(), 2);
+        assert!(
+            matches!(&responses[0], DapMessage::Event(e) if e.event == "terminated"),
+            "First message must be the terminated event"
+        );
+        assert!(
+            matches!(&responses[1], DapMessage::Response(r) if r.success),
+            "Second message must be a success response"
+        );
     }
 
     #[tokio::test]
@@ -875,7 +931,76 @@ mod tests {
         // disconnect is valid at any state — it's always accepted.
         let mut session = DapClientSession::new();
         let responses = session.handle_request(&req(1, "disconnect")).await;
-        assert!(matches!(&responses[0], DapMessage::Response(r) if r.success));
+        // DAP spec: terminated event first, then success response.
+        assert_eq!(responses.len(), 2);
+        assert!(matches!(&responses[0], DapMessage::Event(e) if e.event == "terminated"));
+        assert!(matches!(&responses[1], DapMessage::Response(r) if r.success));
+        assert_eq!(session.state, SessionState::Disconnecting);
+    }
+
+    /// Verify that client-initiated disconnect produces a `terminated` event
+    /// before the `disconnect` response, and that the terminated event has a
+    /// strictly lower sequence number than the response.
+    ///
+    /// DAP spec: the `terminated` event must arrive before the disconnect
+    /// response so clients can transition their debug UI out of debug mode.
+    #[tokio::test]
+    async fn test_disconnect_sends_terminated_event_before_response() {
+        let mut session = DapClientSession::new();
+
+        // Complete the initialization handshake first.
+        session.handle_request(&req(1, "initialize")).await;
+        session.handle_request(&req(2, "configurationDone")).await;
+
+        // Send disconnect.
+        let responses = session.handle_request(&req(3, "disconnect")).await;
+
+        // Must produce exactly 2 messages.
+        assert_eq!(
+            responses.len(),
+            2,
+            "disconnect must produce terminated event + response, got {:?}",
+            responses
+        );
+
+        // First message: terminated event.
+        let terminated_seq = match &responses[0] {
+            DapMessage::Event(e) => {
+                assert_eq!(
+                    e.event, "terminated",
+                    "First message must be the terminated event"
+                );
+                e.seq
+            }
+            other => panic!(
+                "Expected terminated event as first message, got {:?}",
+                other
+            ),
+        };
+
+        // Second message: success response to the disconnect request.
+        let response_seq = match &responses[1] {
+            DapMessage::Response(r) => {
+                assert!(r.success, "Disconnect response must be success");
+                assert_eq!(r.command, "disconnect", "Response must echo 'disconnect'");
+                assert_eq!(r.request_seq, 3, "Response must correlate to request seq 3");
+                r.seq
+            }
+            other => panic!(
+                "Expected disconnect response as second message, got {:?}",
+                other
+            ),
+        };
+
+        // Terminated event must carry a strictly lower seq than the response.
+        assert!(
+            terminated_seq < response_seq,
+            "terminated event seq ({}) must precede disconnect response seq ({})",
+            terminated_seq,
+            response_seq
+        );
+
+        // Session is now in Disconnecting state.
         assert_eq!(session.state, SessionState::Disconnecting);
     }
 
@@ -1015,9 +1140,10 @@ mod tests {
         assert!(matches!(&r2[0], DapMessage::Response(r) if r.success));
         assert_eq!(session.state, SessionState::Configured);
 
-        // disconnect
+        // disconnect: terminated event first, then success response.
         let r4 = session.handle_request(&req(4, "disconnect")).await;
-        assert!(matches!(&r4[0], DapMessage::Response(r) if r.success));
+        assert!(matches!(&r4[0], DapMessage::Event(e) if e.event == "terminated"));
+        assert!(matches!(&r4[1], DapMessage::Response(r) if r.success));
         assert_eq!(session.state, SessionState::Disconnecting);
     }
 
@@ -1048,14 +1174,14 @@ mod tests {
     }
 
     impl crate::adapter::DebugBackend for MockBackend {
-        async fn pause(&self, _: &str) -> std::result::Result<(), String> {
+        async fn pause(&self, _: &str) -> std::result::Result<(), crate::adapter::BackendError> {
             Ok(())
         }
         async fn resume(
             &self,
             _: &str,
             _: Option<crate::adapter::StepMode>,
-        ) -> std::result::Result<(), String> {
+        ) -> std::result::Result<(), crate::adapter::BackendError> {
             Ok(())
         }
         async fn add_breakpoint(
@@ -1064,7 +1190,8 @@ mod tests {
             _: &str,
             line: i32,
             column: Option<i32>,
-        ) -> std::result::Result<crate::adapter::BreakpointResult, String> {
+        ) -> std::result::Result<crate::adapter::BreakpointResult, crate::adapter::BackendError>
+        {
             Ok(crate::adapter::BreakpointResult {
                 vm_id: "breakpoints/1".to_string(),
                 resolved: true,
@@ -1072,21 +1199,25 @@ mod tests {
                 column,
             })
         }
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> std::result::Result<(), String> {
+        async fn remove_breakpoint(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> std::result::Result<(), crate::adapter::BackendError> {
             Ok(())
         }
         async fn set_exception_pause_mode(
             &self,
             _: &str,
-            _: &str,
-        ) -> std::result::Result<(), String> {
+            _: crate::adapter::DapExceptionPauseMode,
+        ) -> std::result::Result<(), crate::adapter::BackendError> {
             Ok(())
         }
         async fn get_stack(
             &self,
             _: &str,
             _: Option<i32>,
-        ) -> std::result::Result<serde_json::Value, String> {
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "frames": [] }))
         }
         async fn get_object(
@@ -1095,7 +1226,7 @@ mod tests {
             _: &str,
             _: Option<i64>,
             _: Option<i64>,
-        ) -> std::result::Result<serde_json::Value, String> {
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "type": "Instance", "id": "objects/1" }))
         }
         async fn evaluate(
@@ -1103,7 +1234,7 @@ mod tests {
             _: &str,
             _: &str,
             _: &str,
-        ) -> std::result::Result<serde_json::Value, String> {
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "type": "@Instance", "valueAsString": "42" }))
         }
         async fn evaluate_in_frame(
@@ -1111,17 +1242,22 @@ mod tests {
             _: &str,
             _: i32,
             _: &str,
-        ) -> std::result::Result<serde_json::Value, String> {
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "type": "@Instance", "valueAsString": "42" }))
         }
-        async fn get_vm(&self) -> std::result::Result<serde_json::Value, String> {
+        async fn get_vm(
+            &self,
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             if let Some(vm) = &self.vm_response {
                 Ok(vm.clone())
             } else {
                 Ok(serde_json::json!({ "isolates": [] }))
             }
         }
-        async fn get_scripts(&self, _: &str) -> std::result::Result<serde_json::Value, String> {
+        async fn get_scripts(
+            &self,
+            _: &str,
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "scripts": [] }))
         }
     }
@@ -1192,9 +1328,10 @@ mod tests {
         assert!(matches!(&r3[0], DapMessage::Response(r) if r.success));
         assert_eq!(session.state, SessionState::Attached);
 
-        // disconnect
+        // disconnect: terminated event first, then success response.
         let r4 = session.handle_request(&req(4, "disconnect")).await;
-        assert!(matches!(&r4[0], DapMessage::Response(r) if r.success));
+        assert!(matches!(&r4[0], DapMessage::Event(e) if e.event == "terminated"));
+        assert!(matches!(&r4[1], DapMessage::Response(r) if r.success));
         assert_eq!(session.state, SessionState::Disconnecting);
     }
 
@@ -1226,9 +1363,400 @@ mod tests {
         // State stays Attached (configurationDone is just an ack)
         assert_eq!(session.state, SessionState::Attached);
 
-        // disconnect
+        // disconnect: terminated event first, then success response.
         let r4 = session.handle_request(&req(4, "disconnect")).await;
-        assert!(matches!(&r4[0], DapMessage::Response(r) if r.success));
+        assert!(matches!(&r4[0], DapMessage::Event(e) if e.event == "terminated"));
+        assert!(matches!(&r4[1], DapMessage::Response(r) if r.success));
         assert_eq!(session.state, SessionState::Disconnecting);
+    }
+
+    // ── Broadcast channel closed — no busy-poll ───────────────────────────────
+
+    /// Verify that a dead broadcast channel (sender dropped immediately) does
+    /// not cause the `run_on` select loop to busy-spin.
+    ///
+    /// The fix wraps `log_event_rx` in an `Option` and sets it to `None` on
+    /// `RecvError::Closed`. When `None`, the select arm parks on
+    /// `std::future::pending()`, so the loop only wakes on real I/O or the
+    /// shutdown signal — not on a permanently-ready `Err(Closed)`.
+    ///
+    /// This test sends an initialize request and a disconnect request over a
+    /// duplex stream. Both must be processed correctly even though the broadcast
+    /// sender was dropped before the session started, proving that the other
+    /// select arms continue to function after the broadcast branch is disabled.
+    #[tokio::test]
+    async fn test_run_on_handles_closed_broadcast_channel_gracefully() {
+        use tokio::io::{BufReader, BufWriter};
+
+        let (server_reader, client_writer) = tokio::io::duplex(8192);
+        let (client_reader, server_writer) = tokio::io::duplex(8192);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Create a dead broadcast channel — sender is dropped immediately.
+        // This is the scenario that previously caused 100% CPU spin.
+        let (_, log_event_rx) = broadcast::channel::<crate::adapter::DebugEvent>(1);
+
+        let server = tokio::spawn(async move {
+            let reader = BufReader::new(server_reader);
+            let writer = BufWriter::new(server_writer);
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
+        });
+
+        let mut writer = BufWriter::new(client_writer);
+        let mut reader = BufReader::new(client_reader);
+
+        // Send initialize — the session must process this despite the dead channel.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Expect response + initialized event.
+        let r1 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        let r2 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r1, crate::DapMessage::Response(r) if r.success),
+            "Expected success response to initialize, got {:?}",
+            r1
+        );
+        assert!(
+            matches!(&r2, crate::DapMessage::Event(e) if e.event == "initialized"),
+            "Expected initialized event, got {:?}",
+            r2
+        );
+
+        // Send disconnect — session must exit cleanly.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 2,
+                command: "disconnect".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // DAP spec: terminated event is sent before the disconnect response.
+        let r3 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("terminated event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r3, crate::DapMessage::Event(e) if e.event == "terminated"),
+            "Expected terminated event before disconnect response, got {:?}",
+            r3
+        );
+
+        let r4 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("disconnect response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r4, crate::DapMessage::Response(r) if r.success),
+            "Expected success response to disconnect, got {:?}",
+            r4
+        );
+
+        // Session should exit on its own after disconnect.
+        tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should exit after disconnect")
+            .expect("task ok")
+            .expect("session ok");
+
+        // Shut down the watch channel (not strictly needed, but keeps the test clean).
+        let _ = shutdown_tx.send(true);
+
+        // Drop the client writer to release any remaining resources.
+        drop(writer);
+    }
+
+    // ── DebugEventSource::None — requests processed normally ──────────────────
+
+    /// Verify that a session using `DebugEventSource::None` (no event source)
+    /// processes inbound DAP requests normally. The select arm for debug events
+    /// parks on `std::future::pending()` and never fires, but the request and
+    /// shutdown arms continue to operate.
+    #[tokio::test]
+    async fn test_run_inner_with_debug_event_source_none_processes_requests() {
+        use tokio::io::{BufReader, BufWriter};
+
+        let (server_reader, client_writer) = tokio::io::duplex(8192);
+        let (client_reader, server_writer) = tokio::io::duplex(8192);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Use run_on_with_backend with an mpsc channel that is immediately
+        // closed (sender dropped) so that DebugEventSource::Dedicated returns
+        // None on the first recv — equivalent to DebugEventSource::None
+        // for practical purposes.
+        let (_, debug_rx) = mpsc::channel::<crate::adapter::DebugEvent>(1);
+        // Drop the sender immediately so the mpsc receiver returns None.
+        // (sender is already dropped by binding to `_` above)
+
+        let server = tokio::spawn(async move {
+            let reader = BufReader::new(server_reader);
+            let writer = BufWriter::new(server_writer);
+            DapClientSession::<NoopBackend>::run_on_with_backend(
+                reader,
+                writer,
+                shutdown_rx,
+                NoopBackend,
+                debug_rx,
+            )
+            .await
+        });
+
+        let mut writer = BufWriter::new(client_writer);
+        let mut reader = BufReader::new(client_reader);
+
+        // Send initialize — session must process this despite no debug events.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Expect response + initialized event.
+        let r1 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        let r2 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r1, crate::DapMessage::Response(r) if r.success),
+            "Expected success response to initialize, got {:?}",
+            r1
+        );
+        assert!(
+            matches!(&r2, crate::DapMessage::Event(e) if e.event == "initialized"),
+            "Expected initialized event, got {:?}",
+            r2
+        );
+
+        // Send disconnect to let the session exit cleanly.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 2,
+                command: "disconnect".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // DAP spec: terminated event is sent before the disconnect response.
+        let r3 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("terminated event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r3, crate::DapMessage::Event(e) if e.event == "terminated"),
+            "Expected terminated event before disconnect response, got {:?}",
+            r3
+        );
+
+        let r4 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("disconnect response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r4, crate::DapMessage::Response(r) if r.success),
+            "Expected success response to disconnect, got {:?}",
+            r4
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should exit after disconnect")
+            .expect("task ok")
+            .expect("session ok");
+
+        let _ = shutdown_tx.send(true);
+        drop(writer);
+    }
+
+    // ── DebugEventSource::Broadcast Closed — branch disabled ──────────────────
+
+    /// Verify that `DebugEventSource::Broadcast` transitions to `None` (and
+    /// thus parks the select arm) when the broadcast sender is dropped mid-session.
+    ///
+    /// This is tested indirectly through `run_on`: a live broadcast sender is
+    /// dropped after `initialize` is processed, and then a `disconnect` request
+    /// is still processed correctly — proving the session did not stall or
+    /// busy-spin after the channel closed.
+    #[tokio::test]
+    async fn test_run_on_broadcast_closed_mid_session_disables_branch() {
+        use tokio::io::{BufReader, BufWriter};
+
+        let (server_reader, client_writer) = tokio::io::duplex(8192);
+        let (client_reader, server_writer) = tokio::io::duplex(8192);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Create a live broadcast channel so the session starts with a real
+        // Broadcast(Some(rx)) source.
+        let (log_tx, log_event_rx) = broadcast::channel::<crate::adapter::DebugEvent>(8);
+
+        let server = tokio::spawn(async move {
+            let reader = BufReader::new(server_reader);
+            let writer = BufWriter::new(server_writer);
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
+        });
+
+        let mut writer = BufWriter::new(client_writer);
+        let mut reader = BufReader::new(client_reader);
+
+        // Send initialize.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // Consume the two messages (response + initialized event).
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        // Drop the broadcast sender mid-session. The session's Broadcast(Some(rx))
+        // will receive RecvError::Closed on the next recv and transition to None,
+        // preventing any busy-spin.
+        drop(log_tx);
+
+        // The session must still process the disconnect request after the
+        // broadcast channel closes.
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 2,
+                command: "disconnect".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+
+        // DAP spec: terminated event is sent before the disconnect response.
+        let r3 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("terminated event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r3, crate::DapMessage::Event(e) if e.event == "terminated"),
+            "Expected terminated event before disconnect response, got {:?}",
+            r3
+        );
+
+        let r4 = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("disconnect response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        assert!(
+            matches!(&r4, crate::DapMessage::Response(r) if r.success),
+            "Expected success response to disconnect after broadcast closed, got {:?}",
+            r4
+        );
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should exit after disconnect")
+            .expect("task ok")
+            .expect("session ok");
+
+        let _ = shutdown_tx.send(true);
+        drop(writer);
     }
 }

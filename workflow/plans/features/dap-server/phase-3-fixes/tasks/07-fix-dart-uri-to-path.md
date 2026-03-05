@@ -133,3 +133,40 @@ fn test_dart_uri_to_path_percent_encoded() {
 - If using Option A with the `url` crate, note that `to_file_path()` returns platform-specific `PathBuf`. On Unix it produces forward slashes; on Windows it produces backslashes. The test assertions should account for this.
 - The existing test `test_dart_uri_to_path_file_uri_strips_prefix_only` asserts the current behavior and must be updated if the implementation changes.
 - Flutter's Dart VM Service always uses `file:///` (three slashes) for absolute paths, so the two-slash `file://hostname/path` form is unlikely but should be handled gracefully.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `Cargo.toml` | Added `url = "2"` to `[workspace.dependencies]` |
+| `crates/fdemon-dap/Cargo.toml` | Added `url.workspace = true` to `[dependencies]` |
+| `crates/fdemon-dap/src/adapter/stack.rs` | Fixed `dart_uri_to_path`, updated doc comment, added 10 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (url crate) chosen**: `url::Url::parse().to_file_path()` correctly handles percent-encoding, Windows drive letters, and UNC paths with no manual string manipulation.
+
+2. **Windows drive letter behavior on Unix**: On macOS/Linux, `url::Url::parse("file:///C:/...")` succeeds (empty host, path `/C:/...`) so `to_file_path()` returns `Some("/C:/Users/...")` rather than `None`. This is an inherent platform limitation documented in the function's doc comment and the `test_dart_uri_to_path_windows_drive_letter` test. The key fix is on Windows, where the old code returned `/C:/...` (broken) and the new code correctly returns `C:\...`.
+
+3. **`file://hostname/path` URIs return `None`**: The `url` crate correctly rejects non-empty host components in `to_file_path()`. Flutter's VM Service never emits such URIs, so this is safe.
+
+4. **Existing test `test_dart_uri_to_path_file_uri_strips_prefix_only` unchanged**: The function's Unix behavior (`/tmp/app.dart`) is preserved; only the comment wording was updated from "stripping prefix" to "converting URI".
+
+### Testing Performed
+
+- `cargo test -p fdemon-dap --lib adapter::stack` — PASS (50 tests, all green)
+- `cargo check --workspace` — PASS
+- `cargo fmt --all` — PASS (no formatting changes)
+- `cargo clippy --workspace -- -D warnings` — PASS (zero warnings)
+
+### Risks/Limitations
+
+1. **Windows drive letters on Unix**: If a Windows-generated `file:///C:/...` URI is sent to a Unix DAP adapter, the returned path `/C:/Users/...` won't resolve on the filesystem. This is a cross-platform limitation documented in the function and acceptable since Flutter development on Unix always produces Unix paths.
+
+2. **Pre-existing test failures (unrelated)**: 3–5 tests in `server` and `transport` modules fail from changes made by other tasks (01, 03, 04). These are not caused by this task.

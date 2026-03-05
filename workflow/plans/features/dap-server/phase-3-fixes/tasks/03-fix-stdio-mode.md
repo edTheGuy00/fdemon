@@ -83,3 +83,41 @@ After task 01 establishes the backend factory pattern:
 - The decision between Option A and Option B should be confirmed with the user before implementation.
 - If Option B is chosen, create a follow-up task for Phase 4 to implement full stdio debugging.
 - The `run_dap_stdio` function in `src/dap_stdio/runner.rs` also has an issue where the `ClientDisconnected` event handler doesn't break the event loop — this should be fixed as part of this task regardless of which option is chosen.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `src/dap_stdio/runner.rs` | Fixed `ClientDisconnected` handler to `break` the event loop immediately instead of continuing to wait for more events |
+| `docs/IDE_SETUP.md` | Implemented Option B: added Transport Modes section with prominent stdio limitations, marked TCP as primary/recommended transport, updated Zed/Helix/Neovim examples to prefer TCP, marked all stdio options as "Protocol Testing Only", updated capabilities table to show per-transport support |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option B chosen over Option A**: Full stdio-to-Engine wiring deferred to Phase 4 as recommended. TCP mode provides real debugging today; honest docs prevent user confusion.
+
+2. **Helix section restructured**: Options A/B/C re-ordered so TCP options (A: direct connect, B: port-arg) come first and stdio (now Option C) is clearly labeled as testing-only. This matches the principle that recommended paths appear first.
+
+3. **Neovim example updated**: Swapped adapter ordering so `fdemon_tcp` is the default in `dap.configurations.dart` rather than `fdemon` (stdio). Comments reinforce which is for production use.
+
+4. **Capabilities table expanded**: Added per-transport columns (TCP vs. Stdio) so users can see exactly which capabilities are available in each mode without reading prose.
+
+5. **`break` vs. channel-close**: The event consumer loop previously waited for the channel to close naturally after `ClientDisconnected`. In stdio mode the channel closes when the session task exits, but the exit sequence is: session ends → `ClientDisconnected` sent → session task drops `event_tx`. Adding `break` makes this explicit and eliminates any window where the event consumer spins between the `ClientDisconnected` send and the channel close.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (3,381 tests: 3,272 passed, 0 failed, 75 ignored across all crates + integration tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Stdio mode still not usable for real debugging**: This is intentional — Phase 4 will wire stdio to a real VM Service session. The docs now communicate this limitation clearly.
+
+2. **Helix option numbering change**: Helix options were re-lettered (TCP with port-arg moved from C to B, stdio from B to C). Any users who bookmarked option letters by name will need to re-read the section, but the content is more usable in the new order.
