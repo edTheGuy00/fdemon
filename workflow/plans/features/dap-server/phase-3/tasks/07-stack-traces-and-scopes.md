@@ -313,4 +313,35 @@ fn test_frame_store_reset_invalidates_all() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `extract_source`, `extract_line_column`, `dart_uri_to_path` helper functions with full docs; added 20 unit tests covering all source extraction and URI conversion cases |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Updated imports to include `DapScope`, `DapStackFrame`, `ScopesArguments`, `StackTraceArguments`; re-exported new helper functions; replaced `handle_stack_trace` and `handle_scopes` stubs with full implementations; updated `test_handle_request_stub_commands_return_error` to remove the two now-implemented commands; added `StackMockBackend` and 14 new handler tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helper functions in `stack.rs`**: The `extract_source`, `extract_line_column`, and `dart_uri_to_path` helpers were placed in `stack.rs` (not `mod.rs`) because they are pure frame-mapping utilities with no adapter state dependency. They are re-exported from `mod.rs` for external use.
+
+2. **`startFrame` pagination**: The `startFrame` argument skips frames from the beginning of the slice before allocating frame IDs. This means frame IDs are allocated only for the returned subset, which matches DAP lazy-loading semantics (Zed sends non-zero `startFrame` values for deferred loading).
+
+3. **`levels` passed to VM Service**: The `levels` argument is forwarded as the `limit` parameter to `backend.get_stack()`. The VM Service may return fewer frames than requested; `totalFrames` always reflects the count actually returned, which satisfies DAP clients.
+
+4. **`handle_scopes` is synchronous**: Per the task notes and DAP spec, the `scopes` handler only allocates variable references without calling the VM Service. This is correct and intentional — the expensive `getObject` calls happen later when `variables` is invoked.
+
+5. **Async suspension marker handling**: Frames with `kind: "AsyncSuspensionMarker"` are rendered as `"<asynchronous gap>"` with `presentation_hint: "label"`. No scope allocation is done for these frames (they have no variables).
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap` — Passed (259 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`package:` URI resolution deferred**: `dart_uri_to_path` returns `None` for all `package:` URIs. User-written packages (not flutter) will have no source path until Phase 4 adds `.dart_tool/package_config.json` resolution. IDEs will show these as source-less frames.
+
+2. **Async causal frames**: Only `AsyncSuspensionMarker` frames are specially handled. `AsyncCausal` frames (which represent the async causal stack) are treated as regular frames since the VM Service reports them with normal kind values.

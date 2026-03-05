@@ -347,4 +347,38 @@ fn test_source_breakpoint_with_condition() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added 22 new types, 5 new `DapEvent` constructors, expanded `Capabilities` with 5 new fields and updated `fdemon_defaults()`, updated `test_capabilities_fdemon_defaults` test to reflect new defaults, added 32 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`type_field` rename pattern**: Both `DapVariable` and `EvaluateResponseBody` use `#[serde(rename = "type")]` on the `type_field` member to correctly wire to the DAP spec's `"type"` field while avoiding the Rust keyword. This matches the existing `InitializeRequestArguments` pattern with `clientID`/`adapterID`.
+
+2. **`DapEvent::stopped` always sets `allThreadsStopped: true`**: The DAP spec says the adapter should set this when all threads are stopped (which is typical for Dart/Flutter on a pause event). This can be revisited when per-thread step semantics are needed.
+
+3. **`DapEvent::breakpoint` uses `serde_json::to_value`**: The breakpoint event constructor serializes the `DapBreakpoint` inline via `serde_json::to_value`. If serialization fails (which should never happen for well-formed types), it falls back to `null`. This keeps the API ergonomic without propagating `Result`.
+
+4. **Existing `test_capabilities_fdemon_defaults` updated**: The Phase 2 test asserted that most capabilities were `None`. With Phase 3 defaults now set, those assertions were updated to reflect the new enabled capabilities. The test still asserts that unimplemented capabilities remain `None`.
+
+5. **`DapSource` derives `Default`**: Added `Default` derive to `DapSource` to support the `..Default::default()` spread pattern used throughout tests (and needed by downstream adapter code in later tasks).
+
+6. **Types kept in single `types.rs` file**: Per task notes, all types are in one file rather than split into sub-modules. The file is ~600 lines of source + ~400 lines of tests, which is large but easily discoverable.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (109 tests: 66 in types, 14 in codec, 29 in server/session/service)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (zero warnings)
+- `cargo fmt -p fdemon-dap` - Applied (minor line wrap adjustments)
+- `cargo test --workspace --lib` - Passed (796 tests total, no regressions)
+
+### Risks/Limitations
+
+1. **`supports_restart_request` not set in `fdemon_defaults()`**: The task spec lists it as a new field but the `fdemon_defaults()` example in the spec omits it. It is defined on `Capabilities` but left `None` since the restart handler is not yet implemented. The test `test_capabilities_phase3_fields_in_json` explicitly asserts it is absent.
+
+2. **`DapSource.source_reference`**: Set to `None` in all Phase 3 usage per task notes. Phase 4 will use it for SDK/package source references — the field is already modelled but not populated.

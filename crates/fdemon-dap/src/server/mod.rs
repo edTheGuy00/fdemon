@@ -28,16 +28,18 @@
 
 pub mod session;
 
-pub use session::{DapClientSession, SessionState};
+pub use session::{DapClientSession, NoopBackend, SessionState};
 
 use std::sync::Arc;
 
 use tokio::{
     net::TcpListener,
-    sync::{mpsc, watch, Semaphore},
+    sync::{broadcast, mpsc, watch, Semaphore},
 };
 
 use fdemon_core::error::{Error, Result};
+
+use crate::adapter::DebugEvent;
 
 /// Maximum number of concurrent DAP client connections.
 ///
@@ -63,6 +65,10 @@ pub enum DapServerEvent {
     ClientDisconnected { client_id: String },
     /// The server encountered a fatal error (e.g., accept loop failed).
     ServerError { reason: String },
+    /// A DAP debug session became active (client sent `attach` and it succeeded).
+    DebugSessionStarted { client_id: String },
+    /// A DAP debug session ended (client disconnected or app exited).
+    DebugSessionEnded { client_id: String },
 }
 
 /// Handle returned when the DAP server starts successfully.
@@ -79,7 +85,9 @@ pub struct DapServerHandle {
     ///
     /// This may differ from the configured port when `port = 0` was passed to
     /// [`start`], in which case the OS assigned an ephemeral port.
-    port: u16,
+    /// `pub(crate)` so [`crate::service::DapService::start_stdio`] can
+    /// construct a handle with `port: 0` (stdio has no TCP port).
+    pub(crate) port: u16,
 
     /// Send `true` to signal the server and all active sessions to shut down.
     pub(crate) shutdown_tx: watch::Sender<bool>,
@@ -89,6 +97,16 @@ pub struct DapServerHandle {
     /// Await this after sending the shutdown signal to ensure the server has
     /// fully stopped before releasing resources.
     pub(crate) task: tokio::task::JoinHandle<()>,
+
+    /// Broadcast sender for forwarding [`DebugEvent`]s to all active sessions.
+    ///
+    /// The Engine uses this to send [`DebugEvent::LogOutput`] events (and
+    /// other debug events) to every connected DAP client. Each accepted
+    /// connection subscribes by calling `log_event_tx.subscribe()`.
+    ///
+    /// The capacity is intentionally small — log events are latency-tolerant
+    /// and a slow subscriber should lag rather than block the sender.
+    pub(crate) log_event_tx: broadcast::Sender<DebugEvent>,
 }
 
 impl DapServerHandle {
@@ -98,6 +116,19 @@ impl DapServerHandle {
     /// [`start`], in which case the OS assigned an ephemeral port.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Returns a clone of the broadcast sender for forwarding debug events to
+    /// all active DAP client sessions.
+    ///
+    /// The Engine uses this to push [`DebugEvent::LogOutput`] events (Flutter
+    /// app stdout/stderr) to every connected IDE debug console. Each accepted
+    /// TCP connection subscribes to this channel automatically.
+    ///
+    /// If there are no active subscribers (no clients connected), `send()`
+    /// returns an error which can be safely ignored.
+    pub fn log_event_sender(&self) -> broadcast::Sender<DebugEvent> {
+        self.log_event_tx.clone()
     }
 }
 
@@ -154,13 +185,25 @@ pub async fn start(
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
+    // Broadcast channel for forwarding debug events (e.g., LogOutput) to all
+    // active sessions. Capacity of 256 allows bursts of log lines without
+    // blocking; lagging receivers are dropped automatically by tokio.
+    let (log_event_tx, _) = broadcast::channel::<DebugEvent>(256);
+
     let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CLIENTS));
-    let task = tokio::spawn(accept_loop(listener, shutdown_rx, event_tx, semaphore));
+    let task = tokio::spawn(accept_loop(
+        listener,
+        shutdown_rx,
+        event_tx,
+        semaphore,
+        log_event_tx.clone(),
+    ));
 
     Ok(DapServerHandle {
         port: actual_port,
         shutdown_tx,
         task,
+        log_event_tx,
     })
 }
 
@@ -183,11 +226,16 @@ pub async fn start(
 ///
 /// On accept errors a 100 ms back-off is applied before retrying to prevent
 /// a tight error-spam loop when the OS is under resource pressure.
+///
+/// The `log_event_tx` broadcast sender is subscribed for each new connection
+/// so the session can receive [`DebugEvent::LogOutput`] (and other events)
+/// forwarded by the Engine.
 async fn accept_loop(
     listener: TcpListener,
     mut shutdown_rx: watch::Receiver<bool>,
     event_tx: mpsc::Sender<DapServerEvent>,
     semaphore: Arc<Semaphore>,
+    log_event_tx: broadcast::Sender<DebugEvent>,
 ) {
     loop {
         tokio::select! {
@@ -242,9 +290,11 @@ async fn accept_loop(
                         let session_shutdown = shutdown_rx.clone();
                         let session_tx = event_tx.clone();
                         let session_client_id = client_id.clone();
+                        // Subscribe to the log event broadcast for this session.
+                        let log_event_rx = log_event_tx.subscribe();
 
                         tokio::spawn(async move {
-                            if let Err(e) = DapClientSession::run(stream, session_shutdown).await {
+                            if let Err(e) = DapClientSession::run(stream, session_shutdown, log_event_rx).await {
                                 tracing::warn!(
                                     "DAP client session error ({}): {}",
                                     session_client_id,

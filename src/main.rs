@@ -2,6 +2,7 @@
 //!
 //! This is the binary entry point.
 
+mod dap_stdio;
 mod headless;
 mod tui;
 
@@ -34,6 +35,21 @@ struct Args {
     /// In headless mode the assigned port is printed as JSON: {"event":"dap_server_started","port":54321,"timestamp":...}
     #[arg(long, value_name = "PORT")]
     dap_port: Option<u16>,
+
+    /// Run as a DAP adapter over stdin/stdout (for IDE integration).
+    ///
+    /// When this flag is set, fdemon acts as a DAP adapter subprocess:
+    /// - The TUI is not started (stdin/stdout are used for the DAP wire protocol).
+    /// - All tracing/logging output is written to stderr.
+    /// - The process exits when the DAP client disconnects.
+    ///
+    /// This is the preferred transport for Zed, Helix, and nvim-dap. Example
+    /// Zed configuration:
+    ///   { "adapter": "fdemon", "command": "fdemon", "args": ["--dap-stdio"] }
+    ///
+    /// Cannot be combined with --dap-port (mutually exclusive transports).
+    #[arg(long, conflicts_with = "dap_port")]
+    dap_stdio: bool,
 }
 
 #[tokio::main]
@@ -49,6 +65,14 @@ async fn main() -> Result<()> {
     info!("═══════════════════════════════════════════════════════");
 
     let args = Args::parse();
+
+    // --dap-stdio: run as a DAP adapter subprocess over stdin/stdout.
+    // This mode does not require a Flutter project path and must not start the TUI.
+    // All tracing output is already going to a file (fdemon_core::logging::init above),
+    // so stdout is clean for the DAP wire protocol.
+    if args.dap_stdio {
+        return dap_stdio::runner::run_dap_stdio().await;
+    }
 
     // Get base path from args or use current directory
     let base_path = args

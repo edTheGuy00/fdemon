@@ -254,4 +254,38 @@ fn test_is_expandable_primitive() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Full implementation: `handle_evaluate`, `get_root_library_id`, `format_instance_value`, `is_expandable` with comprehensive unit tests |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `paused_isolates: Vec<String>` field; added `most_recent_paused_isolate()` helper; replaced stub `handle_evaluate` with real dispatch to `evaluate::handle_evaluate`; updated `handle_debug_event` Paused/Resumed arms to maintain `paused_isolates`; updated tests (replaced "not yet implemented" stub test with evaluate-specific integration tests) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Free-function API in evaluate.rs**: `handle_evaluate` takes the backend, frame_store, var_store, and paused isolate as explicit parameters (rather than taking `&mut DapAdapter`). This avoids borrow checker issues (mutable borrow of `var_store` alongside shared borrow of `frame_store` and `backend`) and makes the evaluate module independently testable without constructing a full adapter.
+
+2. **paused_isolates as Vec with last = most recent**: The adapter tracks paused isolates in insertion order with the most recent at the back. On resume, the isolate is removed. This correctly handles multi-isolate scenarios where evaluation should target the last-paused isolate.
+
+3. **Evaluation errors return `success=false`**: The DAP spec allows both approaches (success=false with message, or success=true with error text). We use `success=false` to give clear error feedback consistent with other error responses in the adapter.
+
+4. **Root library resolution uses `get_vm()`**: For frameless evaluation, the root library is resolved from the VM info's isolate list. Phase 4 may switch to `get_isolate()` for more reliable results, but `get_vm()` works for the Phase 3 use case.
+
+5. **`should_evaluate` function omitted**: The task spec included a `should_evaluate` context check that always returns `true`. Since all contexts use the same path in Phase 3, this was omitted as dead code. Phase 4 can add context-specific behavior when needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap` — Passed (325 tests: 57 new in evaluate.rs + 3 new in mod.rs integration tests; replaced 1 stub test)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-dap` — Applied (minor formatting normalization)
+
+### Risks/Limitations
+
+1. **Frameless evaluation depends on `get_vm()` rootLib**: If the VM Service doesn't include `rootLib` in the isolate refs (which can happen depending on Dart VM version), frameless evaluation will fail with "Could not find root library". Phase 4 should add a `get_isolate()` backend method as a fallback.
+
+2. **No context differentiation**: `"hover"` vs `"repl"` vs `"watch"` all use the same path. Phase 4 may want to restrict side-effects for `"hover"` and `"watch"` contexts.
+
+3. **Expandable objects without an `id`**: If a complex object (List, Map, etc.) lacks an `id` field in the VM Service response, `variablesReference` will be 0, making it non-expandable. This is a VM Service edge case and can be addressed if encountered in practice.

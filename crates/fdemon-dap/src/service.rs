@@ -1,17 +1,18 @@
 //! # DapService — DAP server lifecycle management
 //!
-//! Provides a thin wrapper around [`server::start`] that manages the
-//! DAP server lifecycle (start and stop). The event bridge from
-//! [`DapServerEvent`] to the host application's message type is handled
-//! by the caller (e.g., `fdemon-app`), which maps events to `Message`
-//! variants without creating a circular dependency.
+//! Provides a thin wrapper around [`server::start`] and
+//! [`transport::stdio::run_stdio_session`] that manages the DAP server lifecycle
+//! (start and stop). The event bridge from [`DapServerEvent`] to the host
+//! application's message type is handled by the caller (e.g., `fdemon-app`),
+//! which maps events to `Message` variants without creating a circular
+//! dependency.
 //!
-//! ## Usage
+//! ## Usage — TCP mode
 //!
 //! ```ignore
 //! // In fdemon-app (which depends on fdemon-dap):
 //! let (event_tx, event_rx) = mpsc::channel(32);
-//! let handle = DapService::start(port, bind_addr, event_tx).await?;
+//! let handle = DapService::start_tcp(port, bind_addr, event_tx).await?;
 //!
 //! // Bridge events in the app layer:
 //! tokio::spawn(async move {
@@ -23,12 +24,26 @@
 //! // On shutdown:
 //! DapService::stop(handle).await;
 //! ```
+//!
+//! ## Usage — Stdio mode
+//!
+//! ```ignore
+//! // In the binary crate (--dap-stdio flag):
+//! let (event_tx, event_rx) = mpsc::channel(32);
+//! let handle = DapService::start_stdio(event_tx).await?;
+//!
+//! // The stdio session runs for the lifetime of the process.
+//! DapService::stop(handle).await;
+//! ```
 
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc, watch};
 
 use fdemon_core::error::Result;
 
-use crate::server::{DapServerConfig, DapServerEvent, DapServerHandle};
+use crate::{
+    adapter::DebugEvent,
+    server::{DapServerConfig, DapServerEvent, DapServerHandle},
+};
 
 /// Manages the DAP server lifecycle.
 ///
@@ -67,13 +82,74 @@ impl DapService {
     /// unavailable.
     ///
     /// [`Error`]: fdemon_core::error::Error
-    pub async fn start(
+    pub async fn start_tcp(
         port: u16,
         bind_addr: String,
         event_tx: mpsc::Sender<DapServerEvent>,
     ) -> Result<DapServerHandle> {
         let config = DapServerConfig { port, bind_addr };
         crate::server::start(config, event_tx).await
+    }
+
+    /// Start a DAP session over stdin/stdout (adapter subprocess mode).
+    ///
+    /// Spawns a background task that runs a single DAP session over the
+    /// process's stdin/stdout streams. Returns a [`DapServerHandle`] for
+    /// lifecycle management; call [`DapService::stop`] to signal shutdown.
+    ///
+    /// **Important**: Before calling this function, ensure the tracing
+    /// subscriber writes to stderr (not stdout). Any stdout writes not part
+    /// of the DAP wire protocol will corrupt the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications. The
+    ///   caller is responsible for draining this channel.
+    ///
+    /// # Returns
+    ///
+    /// A [`DapServerHandle`] on success. The `port()` of the handle will
+    /// return `0` (no TCP port is used in stdio mode).
+    pub async fn start_stdio(event_tx: mpsc::Sender<DapServerEvent>) -> Result<DapServerHandle> {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        let task = tokio::spawn(async move {
+            crate::transport::stdio::run_stdio_session(shutdown_rx, event_tx)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("DAP stdio session error: {}", e);
+                });
+        });
+
+        // Stdio mode has no TCP accept loop, so no sessions subscribe to this
+        // broadcast. The sender is included so the Engine can call
+        // `log_event_sender()` without needing to know the transport mode.
+        let (log_event_tx, _) = broadcast::channel::<DebugEvent>(1);
+
+        Ok(DapServerHandle {
+            port: 0,
+            shutdown_tx,
+            task,
+            log_event_tx,
+        })
+    }
+
+    /// Start the DAP TCP server (alias for [`DapService::start_tcp`]).
+    ///
+    /// This method is preserved for backwards compatibility. New code should
+    /// use [`DapService::start_tcp`] to make the transport explicit.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` — TCP port to bind on.
+    /// * `bind_addr` — Bind address string.
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications.
+    pub async fn start(
+        port: u16,
+        bind_addr: String,
+        event_tx: mpsc::Sender<DapServerEvent>,
+    ) -> Result<DapServerHandle> {
+        Self::start_tcp(port, bind_addr, event_tx).await
     }
 
     /// Stop a running DAP server and wait for it to finish.

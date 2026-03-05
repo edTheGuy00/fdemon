@@ -441,6 +441,22 @@ pub fn handle_action(
                             .send(Message::DapServerStarted { port: actual_port })
                             .await;
 
+                        // Print DAP connection info to stderr so IDE users can
+                        // find the port without navigating the TUI status bar.
+                        // eprintln! is intentional here: tracing output goes to
+                        // a log file, not the terminal, so this is the only way
+                        // to surface actionable connection info. Never use stdout
+                        // (it would corrupt the DAP stdio protocol in --dap-stdio
+                        // mode, but that path never reaches SpawnDapServer).
+                        eprintln!("DAP server listening on 127.0.0.1:{}", actual_port);
+                        eprintln!("Connect with:");
+                        eprintln!(
+                            "  Zed:   set port {} in .zed/debug.json tcp_connection",
+                            actual_port
+                        );
+                        eprintln!("  Helix: :debug-remote 127.0.0.1:{}", actual_port);
+                        eprintln!("  nvim:  set port {} in dap.adapters config", actual_port);
+
                         // Bridge DapServerEvent → Message
                         // Runs until the server stops (event_rx closes) or Engine channel drops.
                         while let Some(event) = event_rx.recv().await {
@@ -453,6 +469,18 @@ pub fn handle_action(
                                 }
                                 DapServerEvent::ServerError { reason } => {
                                     Message::DapServerFailed { reason }
+                                }
+                                // Debug session lifecycle events — logged but not yet
+                                // mapped to specific Message variants. The DapStatus
+                                // already tracks connected clients; these events provide
+                                // finer-grained state for future UI indicators.
+                                DapServerEvent::DebugSessionStarted { client_id } => {
+                                    tracing::info!("DAP debug session started: {}", client_id);
+                                    continue;
+                                }
+                                DapServerEvent::DebugSessionEnded { client_id } => {
+                                    tracing::info!("DAP debug session ended: {}", client_id);
+                                    continue;
                                 }
                             };
                             if msg_tx_clone.send(msg).await.is_err() {

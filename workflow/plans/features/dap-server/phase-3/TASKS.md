@@ -56,18 +56,18 @@ Wave 7                       ├────────────────
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-expand-protocol-types](tasks/01-expand-protocol-types.md) | Not Started | - | 3-4h | `fdemon-dap/src/protocol/types.rs` |
-| 2 | [02-stdio-transport](tasks/02-stdio-transport.md) | Not Started | - | 3-4h | `fdemon-dap/src/transport/`, `flutter-demon/src/main.rs` |
-| 3 | [03-adapter-core-structure](tasks/03-adapter-core-structure.md) | Not Started | 1 | 4-5h | `fdemon-dap/src/adapter/mod.rs` |
-| 4 | [04-thread-management](tasks/04-thread-management.md) | Not Started | 3 | 3-4h | `fdemon-dap/src/adapter/threads.rs` |
-| 5 | [05-breakpoint-management](tasks/05-breakpoint-management.md) | Not Started | 3 | 4-5h | `fdemon-dap/src/adapter/breakpoints.rs` |
-| 6 | [06-execution-control](tasks/06-execution-control.md) | Not Started | 4 | 3-4h | `fdemon-dap/src/adapter/mod.rs` |
-| 7 | [07-stack-traces-and-scopes](tasks/07-stack-traces-and-scopes.md) | Not Started | 4 | 3-4h | `fdemon-dap/src/adapter/stack.rs` |
-| 8 | [08-variables](tasks/08-variables.md) | Not Started | 7 | 4-5h | `fdemon-dap/src/adapter/stack.rs` |
-| 9 | [09-evaluate](tasks/09-evaluate.md) | Not Started | 7 | 2-3h | `fdemon-dap/src/adapter/evaluate.rs` |
-| 10 | [10-session-integration](tasks/10-session-integration.md) | Not Started | 5, 6, 8, 9 | 5-7h | `fdemon-dap/src/server/session.rs`, `fdemon-app/src/engine.rs` |
-| 11 | [11-output-events](tasks/11-output-events.md) | Not Started | 10 | 2-3h | `fdemon-dap/src/adapter/mod.rs`, `fdemon-app/src/handler/dap.rs` |
-| 12 | [12-ide-config-zed-helix](tasks/12-ide-config-zed-helix.md) | Not Started | 2, 10 | 2-3h | `docs/`, `fdemon-dap/src/adapter/` |
+| 1 | [01-expand-protocol-types](tasks/01-expand-protocol-types.md) | Done | - | 3-4h | `fdemon-dap/src/protocol/types.rs` |
+| 2 | [02-stdio-transport](tasks/02-stdio-transport.md) | Done | - | 3-4h | `fdemon-dap/src/transport/`, `flutter-demon/src/main.rs` |
+| 3 | [03-adapter-core-structure](tasks/03-adapter-core-structure.md) | Done | 1 | 4-5h | `fdemon-dap/src/adapter/mod.rs` |
+| 4 | [04-thread-management](tasks/04-thread-management.md) | Done | 3 | 3-4h | `fdemon-dap/src/adapter/threads.rs` |
+| 5 | [05-breakpoint-management](tasks/05-breakpoint-management.md) | Done | 3 | 4-5h | `fdemon-dap/src/adapter/breakpoints.rs` |
+| 6 | [06-execution-control](tasks/06-execution-control.md) | Done | 4 | 3-4h | `fdemon-dap/src/adapter/mod.rs` |
+| 7 | [07-stack-traces-and-scopes](tasks/07-stack-traces-and-scopes.md) | Done | 4 | 3-4h | `fdemon-dap/src/adapter/stack.rs` |
+| 8 | [08-variables](tasks/08-variables.md) | Done | 7 | 4-5h | `fdemon-dap/src/adapter/stack.rs` |
+| 9 | [09-evaluate](tasks/09-evaluate.md) | Done | 7 | 2-3h | `fdemon-dap/src/adapter/evaluate.rs` |
+| 10 | [10-session-integration](tasks/10-session-integration.md) | Done | 5, 6, 8, 9 | 5-7h | `fdemon-dap/src/server/session.rs`, `fdemon-app/src/engine.rs` |
+| 11 | [11-output-events](tasks/11-output-events.md) | Done | 10 | 2-3h | `fdemon-dap/src/adapter/mod.rs`, `fdemon-app/src/handler/dap.rs` |
+| 12 | [12-ide-config-zed-helix](tasks/12-ide-config-zed-helix.md) | Done | 2, 10 | 2-3h | `docs/`, `fdemon-dap/src/adapter/` |
 
 ## Success Criteria
 

@@ -203,4 +203,43 @@ fn test_log_level_to_category() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `LogOutput` variant to `DebugEvent` enum; added `log_level_to_category` public helper function; added `emit_output` convenience method to `DapAdapter`; added `LogOutput` arm to `handle_debug_event` that emits a DAP `"output"` event with correct category, newline-terminated output, and optional source location; added 15 new unit tests. |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `broadcast::Sender<DebugEvent>` field (`log_event_tx`) to `DapServerHandle`; added `log_event_sender()` accessor; updated `start()` to create the broadcast channel; updated `accept_loop` signature to accept the sender; updated session spawn in accept loop to subscribe each session via `log_event_tx.subscribe()`. |
+| `crates/fdemon-dap/src/server/session.rs` | Added `broadcast` import; updated `DapClientSession::run` and `run_on` to accept a `broadcast::Receiver<DebugEvent>` for log events; added `event_tx/event_rx` channel to `run_on` so adapter-generated events are stamped and forwarded; added `log_event_rx` select arm that forwards received debug events to the adapter (if attached); handles `Lagged` and `Closed` broadcast errors gracefully. |
+| `crates/fdemon-dap/src/service.rs` | Updated `start_stdio` to create a dummy broadcast channel for the `log_event_tx` field in the returned `DapServerHandle` (stdio mode has no TCP accept loop but must satisfy the struct requirement). |
+| `crates/fdemon-dap/src/transport/stdio.rs` | Updated all `DapClientSession::run_on` call sites (both production and test) to pass a dummy broadcast receiver. |
+| `crates/fdemon-dap/src/lib.rs` | Added doc comment entry for `adapter::log_level_to_category`. |
+| `crates/fdemon-app/src/engine.rs` | Added `dap_log_event_tx: Option<broadcast::Sender<DapDebugEvent>>` field to `Engine`; added `sync_dap_log_sender` private method that reads the sender from `dap_server_handle` once per TEA cycle (using `try_lock` to avoid blocking); calls `sync_dap_log_sender` in `process_message` after the TEA cycle; in `emit_events`, when new logs arrive and DAP has active clients, sends `DebugEvent::LogOutput` for each log entry to the broadcast channel. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Broadcast channel over per-session mpsc**: Using `broadcast::Sender<DebugEvent>` in `DapServerHandle` lets the Engine push log events to all active sessions without tracking individual session channels. This matches the one-to-many nature of log forwarding (one Engine, multiple IDE clients). Lagging receivers are dropped automatically by tokio, preventing one slow client from blocking others.
+
+2. **Sender sync via `try_lock` once per TEA cycle**: Rather than storing the broadcast sender in the Engine and updating it through an explicit API, `sync_dap_log_sender` reads it from `dap_server_handle` once per `process_message` call. This keeps the action handler (which deposits the handle asynchronously) decoupled from the Engine while ensuring the Engine always has a current sender without holding the lock during log forwarding.
+
+3. **`DebugEvent::LogOutput` uses `String` for level**: Avoids adding `fdemon-core::LogLevel` as a dependency to the `DebugEvent` enum type signature. The engine converts `LogLevel` to a lowercase string before constructing the event, and the adapter uses `log_level_to_category` to map back to a DAP category.
+
+4. **`run_on` now owns the adapter event channel**: `run_on` was updated to create its own `(event_tx, event_rx)` pair and store `event_tx` in the session, matching the pattern in `run_on_with_backend`. This enables the `event_rx` select arm so adapter-generated events (e.g., from `LogOutput` handling) are forwarded to the client.
+
+5. **Dummy broadcast channel for stdio mode**: `DapService::start_stdio` creates a `broadcast::channel(1)` and immediately drops the receiver. This satisfies the `DapServerHandle` struct field without any functional impact on stdio sessions.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - Passed (3255 tests: 1267 + 360 + 460 + 372 + 796, up 15 from 3240)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Engine integration requires DAP server to be running**: `dap_log_event_tx` is only populated after the DAP server starts and the handle is deposited in `dap_server_handle`. Log events before `DapServerStarted` is processed are silently dropped. This is correct behavior (acceptance criterion 6: no output events when no DAP session is active).
+
+2. **No source location for Flutter log entries**: `LogEntry` in `fdemon-core` does not have `source_uri` or `line` fields, so all forwarded log events have `source_uri: None` and `line: None`. Source-linked output events (clickable links in IDE) require the VM Service to provide source info, which is not available at the log forwarding layer.
+
+3. **Session attachment still uses NoopBackend**: The TCP accept loop uses `NoopBackend` (no real VM Service connection). `LogOutput` events are forwarded to all sessions via the broadcast channel, but the adapter's `handle_debug_event` is only called when the session has an adapter (i.e., after `attach` succeeds). With `NoopBackend`, `attach` fails, so the adapter is never created and log events are silently discarded. Full end-to-end log forwarding requires Phase 4 Engine wiring (real backend construction on attach).

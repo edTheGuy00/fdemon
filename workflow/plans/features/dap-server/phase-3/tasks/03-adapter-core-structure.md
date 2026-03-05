@@ -335,4 +335,42 @@ fn test_frame_store_allocates_monotonic_ids() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | NEW — `DapAdapter<B>` struct, `LocalDebugBackend`/`DebugBackend` trait, `DebugEvent`, `PauseReason`, `StepMode`, `BreakpointResult`, `handle_request` dispatch, `handle_debug_event`, `on_resume`, 24 unit tests |
+| `crates/fdemon-dap/src/adapter/threads.rs` | NEW — `ThreadMap` with bidirectional isolate↔thread ID mapping, 12 unit tests |
+| `crates/fdemon-dap/src/adapter/stack.rs` | NEW — `VariableRef`, `ScopeKind`, `VariableStore`, `FrameRef`, `FrameStore` with allocation/lookup/reset, 26 unit tests |
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | NEW — `BreakpointEntry`, `BreakpointState` with add/remove/resolve/lookup, 17 unit tests |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | NEW — Stub module for Task 09 expression evaluation |
+| `crates/fdemon-dap/src/lib.rs` | Registered `adapter` module, updated doc comment to describe new public API |
+| `crates/fdemon-dap/Cargo.toml` | Added `trait-variant.workspace = true` dependency |
+
+### Notable Decisions/Tradeoffs
+
+1. **`trait-variant` instead of `async-trait`**: Used `#[trait_variant::make(DebugBackend: Send)]` on `LocalDebugBackend` to generate the `Send`-compatible `DebugBackend` trait. This matches the pattern already used in `fdemon-app/src/services/`. No new dependency was needed — `trait-variant` was already in `[workspace.dependencies]`. Test mock implements `DebugBackend` directly (not `LocalDebugBackend`) since the adapter struct is bounded on the `Send` trait.
+
+2. **Stub handlers return "not yet implemented"**: All 13 debugging command handlers (`attach`, `threads`, `setBreakpoints`, etc.) are stubs that return error responses. Each stub has a `tracing::debug!` call and a clear error message indicating which task will implement it. This satisfies acceptance criterion 4 and unblocks Tasks 04–09.
+
+3. **`VariableStore` and `FrameStore` reset counter to 1 on resume**: After `reset()`, IDs start at 1 again. This is correct: the DAP spec only requires variable references to be unique within a single stopped state, not globally unique across the session lifetime.
+
+4. **`BreakpointState` is not reset on resume**: Breakpoints are session-level state, not per-stop state. They persist across stop/resume cycles. Only `VariableStore` and `FrameStore` are reset on resume.
+
+5. **`#[allow(dead_code)]` on `backend` and `exception_mode`**: These fields are structurally required for Tasks 04–09 but not yet read. Using `#[allow(dead_code)]` with explanatory comments is cleaner than temporarily removing them.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed (no warnings)
+- `cargo test -p fdemon-dap` — Passed (184 tests: 79 pre-existing + 79 new adapter tests + 26 stack tests + 17 breakpoint tests + 12 thread tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-dap` — Passed (formatter applied minor style normalizations)
+- `cargo check --workspace` — Passed (no regressions in other crates)
+
+### Risks/Limitations
+
+1. **Stub handlers**: All command handlers (except `disconnect`) return error responses. This is intentional — Tasks 04–09 replace them. Any integration test that calls `attach`, `threads`, etc. through the adapter will receive errors until those tasks are complete.
+
+2. **`DebugBackend` vs `LocalDebugBackend` in tests**: Test code must implement `DebugBackend` (the `Send`-requiring generated trait), not `LocalDebugBackend`. This is documented in the `MockBackend` comment. Future task tests should follow the same pattern.

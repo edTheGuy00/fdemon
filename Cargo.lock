@@ -715,6 +715,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+ "trait-variant",
 ]
 
 [[package]]
@@ -795,6 +796,7 @@ dependencies = [
  "fdemon-app",
  "fdemon-core",
  "fdemon-daemon",
+ "fdemon-dap",
  "fdemon-tui",
  "insta",
  "mockall",

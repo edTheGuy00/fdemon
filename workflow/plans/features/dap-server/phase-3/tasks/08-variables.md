@@ -352,4 +352,34 @@ fn test_plain_instance_expandable() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Replaced `handle_variables` stub with full implementation; added `get_scope_variables`, `instance_ref_to_variable`, `expand_object` methods; added `DapVariable` and `VariablesArguments` imports; updated stub-commands test to remove "variables"; added `VarMockBackend` and 19 new unit tests |
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `FrameStore::lookup_by_index` method; added 4 unit tests for it |
+
+### Notable Decisions/Tradeoffs
+
+1. **`lookup_by_index` on `FrameStore`**: The `get_scope_variables` helper needs the isolate ID for a given frame index (not the frame DAP ID). Added a linear scan over the frame store to find by index. This is O(n) but frame counts are tiny (typically < 100) so the cost is negligible.
+
+2. **Cloning before iteration**: The `expand_object` and `get_scope_variables` methods clone the `Vec<serde_json::Value>` out of the JSON response before looping and calling `instance_ref_to_variable`. This avoids the borrow-checker conflict where `&self` (for the JSON) and `&mut self` (for `var_store.allocate`) would overlap.
+
+3. **Globals return empty**: Globals scope returns `Ok(Vec::new())` in Phase 3, consistent with the task spec. The `expensive: true` flag on the Globals scope already signals to IDEs to defer loading.
+
+4. **No recursive expansion**: `expand_object` only expands one level. Nested complex objects receive their own `variablesReference` allocated by `instance_ref_to_variable`, so the IDE drives further expansion lazily via subsequent `variables` requests.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (353 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+- `cargo fmt -p fdemon-dap` - Applied
+
+### Risks/Limitations
+
+1. **Globals are empty**: Phase 3 returns an empty list for the Globals scope. Phase 4 would need to use `getIsolate` to fetch library references and then iterate their top-level variables.
+
+2. **Helix flat popup**: The adapter allocates variablesReferences for nested objects correctly, but Helix's flat variable popup means deep nesting is not well represented. This is a client-side limitation per the task notes.

@@ -18,6 +18,7 @@
 
 pub(crate) mod daemon;
 pub(crate) mod dap;
+pub mod dap_backend;
 pub(crate) mod devtools;
 pub(crate) mod helpers;
 pub(crate) mod keys;

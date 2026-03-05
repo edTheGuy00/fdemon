@@ -276,4 +276,38 @@ fn test_breakpoint_resolved_updates_verification() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | Added `iter_for_uri` and `find_by_source_line` methods to `BreakpointState` |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Implemented `handle_set_breakpoints`, `handle_set_exception_breakpoints`, and `primary_isolate_id`; added `parse_args`, `path_to_dart_uri`, `entry_to_dap_breakpoint`, `exception_filter_to_mode` helpers; added `DapBreakpoint`/`DapSource` imports; removed `#[allow(dead_code)]` on `exception_mode`; updated stub-commands test list; added 17 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Diff strategy uses stored line, not requested line**: The `setBreakpoints` diff compares `entry.line` (the actual VM-resolved line) against the desired list. This matches the spec — if the VM moved a breakpoint to line 11 when line 10 was requested, subsequent requests for line 10 will not find it as "still wanted" and will re-add it. This is correct behavior: the VM line and requested line diverging means the client may not find the existing entry and will naturally replace it.
+
+2. **No-isolate breakpoints are not stored**: When no isolate is attached, unverified pending breakpoints are returned in the response but NOT added to `BreakpointState` (since there is no `vm_id` to store). The IDE will need to resend `setBreakpoints` after attach, which is the standard DAP flow.
+
+3. **MockBackend updated to echo requested line**: The existing `MockBackend` returned a fixed `vm_id: "bp/1"` and `line: Some(10)` for all breakpoints. This caused the diff test to fail because all breakpoints got the same stored line. Updated to return `vm_id: "bp/line:<N>"` and `line: Some(line)` so breakpoints at different lines can be distinguished in tests.
+
+4. **`path_to_dart_uri` passes through known URI schemes**: Detects `file://`, `package:`, and `dart:` prefixes. Full `package:` URI resolution via `.dart_tool/package_config.json` is explicitly noted as a Phase 4 item.
+
+5. **`primary_isolate_id` returns first registered isolate**: For breakpoint operations that need a target isolate, the adapter uses whichever isolate was registered first. In a typical Flutter app there is exactly one main isolate, so this is correct for Phase 3.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap` — Passed (215 tests, 0 failures)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (0 warnings)
+- `cargo check --workspace` — Passed
+
+### Risks/Limitations
+
+1. **Phase 3 URI limitation**: Only `file://` URIs are generated. `package:` URI resolution requires reading `.dart_tool/package_config.json`, deferred to Phase 4. The Dart VM Service accepts `file://` URIs so debugging will work, but breakpoint locations may be inexact in packages with complex path structures.
+
+2. **Conditions and log points not evaluated**: Conditional breakpoints and log points are stored in the request but behave as unconditional breakpoints. This is by design for Phase 3; evaluation requires `evaluateInFrame` (Phase 4).
+
+3. **Single isolate assumption**: `primary_isolate_id` picks the first registered isolate. Apps with multiple isolates (background workers) will only set breakpoints on the main isolate. Multi-isolate breakpoint propagation is a Phase 4 concern.

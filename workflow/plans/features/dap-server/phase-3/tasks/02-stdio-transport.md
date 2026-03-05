@@ -240,4 +240,47 @@ async fn test_stdio_session_initialization() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/lib.rs` | Added `pub mod transport` and re-export of `TransportMode` |
+| `crates/fdemon-dap/src/server/mod.rs` | Changed `DapServerHandle.port` from private to `pub(crate)` to allow stdio handle construction |
+| `crates/fdemon-dap/src/server/session.rs` | Added generic `run_on<R, W>` method; refactored `run(TcpStream)` to delegate to `run_on` |
+| `crates/fdemon-dap/src/service.rs` | Added `DapService::start_tcp` (renamed from `start`) and `DapService::start_stdio`; kept `start` as backwards-compat alias; added `watch` import |
+| `crates/fdemon-dap/src/transport/mod.rs` | NEW — `TransportMode` enum (`Tcp { port, bind_address }` and `Stdio`); tests |
+| `crates/fdemon-dap/src/transport/stdio.rs` | NEW — `run_stdio_session` function; comprehensive `run_on` test suite using `tokio::io::duplex` |
+| `crates/fdemon-dap/src/transport/tcp.rs` | NEW — thin re-export of `crate::server::start` for symmetric API |
+| `Cargo.toml` (workspace root) | Added `fdemon-dap.workspace = true` to binary `[dependencies]` |
+| `src/main.rs` | Added `mod dap_stdio`; added `--dap-stdio` CLI flag (conflicts with `--dap-port`); added early-exit handling for `--dap-stdio` mode |
+| `src/dap_stdio/mod.rs` | NEW — module header |
+| `src/dap_stdio/runner.rs` | NEW — `run_dap_stdio` entry point for `--dap-stdio` mode |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DapClientSession::run_on` generics**: Made generic over `BufReader<R>` + `W` where `R: AsyncRead + Unpin + Send` and `W: AsyncWrite + Unpin + Send`. The `run(TcpStream)` method is preserved as a convenience wrapper that splits the stream, wraps in `BufReader`, then delegates to `run_on`. This satisfies the task requirement with zero breaking changes.
+
+2. **`DapServerHandle.port` visibility**: Changed from private to `pub(crate)` to allow `DapService::start_stdio` to construct a handle with `port: 0`. Consistent with how `shutdown_tx` and `task` are already `pub(crate)`.
+
+3. **Stdio runner does not start the Engine**: Per the task instruction "Focus on the transport layer. Do NOT implement adapter/debugging logic", the `run_dap_stdio` runner only starts the DAP session over stdio and bridges lifecycle events to tracing. Engine/adapter integration is deferred to later tasks (03, 10).
+
+4. **`DapService::start_tcp` + backwards-compat `start` alias**: Added `start_tcp` as the explicit name and preserved `start` as an alias to avoid breaking any callers in the existing codebase.
+
+5. **In-memory duplex streams for tests**: All stdio transport tests use `tokio::io::duplex(8192)` pairs to avoid touching real stdin/stdout in the test harness. This provides full coverage of the session lifecycle without corrupting the test runner's terminal.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-dap` — Passed (123 tests; 35 new tests added by this task)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (0 warnings)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+- `cargo fmt --all -- --check` — Passed (formatting applied and verified clean)
+
+### Risks/Limitations
+
+1. **Real stdin/stdout not exercised in tests**: `run_stdio_session` binds to `tokio::io::stdin()`/`stdout()` which cannot be safely tested in a multi-test harness. The session logic is fully covered via `DapClientSession::run_on` with duplex streams. A separate E2E test with a real subprocess would be needed to verify the actual stdin/stdout plumbing.
+
+2. **Engine not yet wired**: `run_dap_stdio` starts the DAP protocol session but does not start a Flutter Engine or route debug commands to the Dart VM. This is intentional — adapter integration is task 03/10.

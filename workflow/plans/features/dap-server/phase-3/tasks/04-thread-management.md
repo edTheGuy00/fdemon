@@ -220,4 +220,34 @@ fn test_thread_map_remove_unknown_returns_none() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/threads.rs` | Added `remove()` method to `ThreadMap` with full docs; added 8 new tests covering removal semantics, monotonicity, and bidirectional cleanup |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `thread_names: HashMap<i64, String>` field; implemented `handle_attach` (discovers isolates via `get_vm()`, emits thread events, stores names); implemented `handle_threads` (returns sorted `DapThread` list with name fallback); updated `handle_debug_event` to store names on `IsolateStart` and clean them on `IsolateExit` (which now uses `thread_map.remove()`); added 14 new tests across 3 test groups |
+
+### Notable Decisions/Tradeoffs
+
+1. **`remove()` in `ThreadMap`**: The task spec called for a `remove` method; the pre-existing code used `thread_id_for` (read-only) for `IsolateExit`. Updated `IsolateExit` handler to call `thread_map.remove()` instead, which also removes from `thread_to_isolate`, ensuring the map never leaks stale entries.
+
+2. **`handle_threads` takes `&mut self`**: Even though the method only reads state, using `&mut self` keeps the signature consistent with all other handlers dispatched from `handle_request(&mut self, …)`, avoiding borrow checker complexity with async dispatch.
+
+3. **Thread name stored separately from `ThreadMap`**: The `thread_names: HashMap<i64, String>` keeps name lookup orthogonal to ID mapping, matching the task spec's guidance. Names default to `"Thread N"` when absent.
+
+4. **Sorted threads response**: The `threads` response sorts by thread ID for deterministic output, which is beneficial for test assertions and IDE display order.
+
+5. **Two new mock backends in tests**: `AttachMockBackend` (returns two named isolates) and `FailingVmBackend` (get_vm returns error) were added inline in the test module to cover attach success, event emission, name storage, and error handling paths.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo test -p fdemon-dap` — Passed (226 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **No thread name persistence across re-attach**: If the same isolate ID is removed and then re-registered (e.g., hot restart), it receives a new thread ID and requires a fresh `IsolateStart` event to populate the name. This is correct per DAP semantics.
+2. **Phase 4 multi-session namespace**: As noted in the task, thread IDs will need per-session namespacing (e.g., session 0 uses 1000–1999). The current single-namespace implementation is consistent with Phase 3 scope.

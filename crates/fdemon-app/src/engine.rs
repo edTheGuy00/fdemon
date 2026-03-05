@@ -27,8 +27,8 @@ use crate::session::SessionId;
 use crate::signals;
 use crate::state::{AppState, DapStatus};
 use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
-use fdemon_core::AppPhase;
-use fdemon_dap::{DapServerHandle, DapService};
+use fdemon_core::{AppPhase, LogLevel};
+use fdemon_dap::{adapter::DebugEvent as DapDebugEvent, DapServerHandle, DapService};
 
 /// Lightweight snapshot of state for change detection.
 ///
@@ -133,6 +133,17 @@ pub struct Engine {
     /// The Engine is the sole owner of this slot; `handle_action` only writes
     /// (on `SpawnDapServer`) or reads-and-clears (on `StopDapServer`).
     pub(crate) dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>,
+
+    /// Broadcast sender for forwarding [`DapDebugEvent`]s to connected DAP sessions.
+    ///
+    /// Set when the DAP server starts (via `set_dap_log_sender`) and cleared when
+    /// the server stops. The Engine uses this to push `LogOutput` events derived
+    /// from Flutter app stdout/stderr to every connected IDE debug console.
+    ///
+    /// `None` when no DAP server is running (avoids unnecessary work in the log
+    /// forwarding path and correctly satisfies acceptance criterion: no output
+    /// events are sent when no DAP session is active).
+    dap_log_event_tx: Option<tokio::sync::broadcast::Sender<DapDebugEvent>>,
 }
 
 impl Engine {
@@ -195,6 +206,7 @@ impl Engine {
             event_tx,
             plugins: Vec::new(),
             dap_server_handle: Arc::new(Mutex::new(None)),
+            dap_log_event_tx: None,
         }
     }
 
@@ -264,6 +276,15 @@ impl Engine {
 
         // Snapshot state after processing
         let post = StateSnapshot::capture(&self.state);
+
+        // Sync the DAP log event sender from the server handle.
+        //
+        // The sender lives in `DapServerHandle` (deposited by the async action
+        // handler when the TCP server starts). We keep a copy here so that
+        // `emit_events` can broadcast log events without acquiring the mutex
+        // on every log line. The sync is cheap (just cloning a sender) and
+        // runs once per TEA cycle.
+        self.sync_dap_log_sender();
 
         // Emit events for any state changes
         self.emit_events(&pre, &post);
@@ -475,6 +496,26 @@ impl Engine {
         }
     }
 
+    /// Synchronize the cached DAP log event sender from the server handle.
+    ///
+    /// Called once per TEA cycle in [`process_message`]. Acquires the DAP
+    /// handle slot (non-blocking, using `try_lock`) and clones the log event
+    /// sender if a handle is present. Clears the cached sender when the handle
+    /// is absent (server stopped).
+    ///
+    /// This keeps `dap_log_event_tx` in sync without holding the mutex lock
+    /// during the hot log-forwarding path in `emit_events`.
+    fn sync_dap_log_sender(&mut self) {
+        match self.dap_server_handle.try_lock() {
+            Ok(guard) => {
+                self.dap_log_event_tx = guard.as_ref().map(|handle| handle.log_event_sender());
+            }
+            Err(_) => {
+                // Lock held by the action handler — skip this cycle, retry next.
+            }
+        }
+    }
+
     /// Emit EngineEvents based on state changes after processing.
     ///
     /// Called after process_message() and flush_pending_logs().
@@ -525,6 +566,30 @@ impl Engine {
                         .rev()
                         .cloned()
                         .collect();
+
+                    // Forward new log entries to DAP sessions (if any are connected).
+                    // Only forward when DAP is running with at least one client.
+                    if let Some(dap_tx) = &self.dap_log_event_tx {
+                        if self.state.dap_status.client_count() > 0 {
+                            for log in &logs {
+                                let level = match log.level {
+                                    LogLevel::Error => "error",
+                                    LogLevel::Info => "info",
+                                    LogLevel::Warning => "warning",
+                                    LogLevel::Debug => "debug",
+                                }
+                                .to_string();
+                                let dap_event = DapDebugEvent::LogOutput {
+                                    message: log.message.clone(),
+                                    level,
+                                    source_uri: None,
+                                    line: None,
+                                };
+                                // Ignore send errors — no subscribers means no clients.
+                                let _ = dap_tx.send(dap_event);
+                            }
+                        }
+                    }
 
                     // Use batch emission for multiple logs (more efficient)
                     if logs.len() > 1 {
