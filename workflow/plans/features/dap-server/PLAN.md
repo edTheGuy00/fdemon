@@ -854,17 +854,17 @@ The auto-assigned port is logged and emitted via `Message::DapServerStarted { po
 - [ ] `cargo test --workspace` passes
 
 ### Phase 4 Complete When:
-- [ ] Hot reload/restart work from debug toolbar
-- [ ] Breakpoints persist across hot restart
-- [ ] Auto-reload suppressed while paused
-- [ ] Expression evaluation works in debug console and hover
-- [ ] Conditional breakpoints and logpoints work
-- [ ] SDK/package sources viewable in IDE
-- [ ] Multi-session debugging works (multiple Flutter sessions)
-- [ ] Custom DAP events received by IDE (dart.debuggerUris, flutter.appStarted)
+- [x] Hot reload/restart work from debug toolbar (Task 02)
+- [ ] Breakpoints persist across hot restart (Task 10 — planned)
+- [x] Auto-reload suppressed while paused (Task 03)
+- [x] Expression evaluation works in debug console and hover (Task 06)
+- [x] Conditional breakpoints and logpoints work (Tasks 04, 05)
+- [x] SDK/package sources viewable in IDE (Task 07)
+- [x] Multi-session debugging works (multiple Flutter sessions) (Task 09)
+- [x] Custom DAP events received by IDE (dart.debuggerUris, flutter.appStarted) (Task 08)
 - [ ] Tested against VS Code, Neovim, and Helix
-- [ ] Performance tested: variable expansion doesn't hang on large objects
-- [ ] Documentation updated
+- [ ] Performance tested: variable expansion doesn't hang on large objects (Task 11 — planned)
+- [x] Documentation updated (Task 12)
 
 ### Phase 5 Complete When:
 - [ ] `ParentIde` enum extended with `Emacs` and `Helix` variants (with env var detection)

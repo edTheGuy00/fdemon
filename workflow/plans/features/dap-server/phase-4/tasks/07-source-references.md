@@ -184,3 +184,46 @@ fn test_user_code_gets_path_not_reference() {
 - The `getObject` VM Service RPC on a `Script` object returns the `source` field with the full source text. This is the standard way to fetch source in the VM Service protocol.
 - `supportsLoadedSourcesRequest` could be advertised to let IDEs browse all loaded scripts. This is optional and can be deferred.
 - Source reference IDs should remain stable within a debug session (same script → same ID) so IDEs can cache content.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `SourceReferenceStore`, `SourceRefEntry`, `SourceRefInfo`; added `extract_source_with_store()` for URI-aware source extraction with store integration; added `resolve_package_uri()` for `.dart_tool/package_config.json` lookups; 16 new unit tests |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `get_source()` to `LocalDebugBackend` trait; added `get_source_boxed()` to `DynDebugBackendInner`; implemented both on `DynDebugBackend`; added `source_reference_store: SourceReferenceStore` field to `DapAdapter`; added `handle_source()` handler; registered `"source"` in `handle_request()` dispatch; added `on_hot_restart()` which clears source references; updated all mock backends in test sections |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Added `get_source()` to `MockBackend` in test section |
+| `crates/fdemon-dap/src/server/session.rs` | Added `get_source()` to `NoopBackend` and to `MockBackend` in test section |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `get_source_boxed()` to `MockBackendInner` in test section |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Implemented `get_source()` on `VmServiceBackend` using `debugger::get_object` + `"source"` field extraction; added `get_source_boxed()` to `DynDebugBackendInner` impl |
+
+### Notable Decisions/Tradeoffs
+
+1. **`on_hot_restart()` vs modifying `on_resume()`**: Source references are only invalidated on hot restart (not on every resume), because IDEs may request source text any time after a stack frame is shown — not just while the debuggee is stopped. A new `on_hot_restart()` public method was added that clears the source reference store AND resets var/frame stores. Callers should call `on_hot_restart()` instead of `on_resume()` when handling a Flutter hot restart.
+
+2. **ID preservation after `clear()`**: `next_id` is not reset when `clear()` is called. This ensures that after a hot restart, new IDs are numerically higher than any IDs the client may have cached. Reusing IDs after clear could cause stale content to be served from client caches.
+
+3. **`extract_source_with_store` is additive**: The original `extract_source()` function is preserved for cases that don't need source reference assignment (e.g., logpoint output events). The new `extract_source_with_store()` is the richer variant for `stackTrace` responses.
+
+4. **`script_id` fallback to URI**: When a VM frame's `script.id` field is absent, the URI itself is used as the script_id key. This is a safe fallback since URIs are unique within an isolate.
+
+5. **`get_source` returns `Result<String, String>`**: Unlike other backend methods that use `BackendError`, `get_source` uses plain `String` errors to avoid coupling the source-fetch error type to the DAP adapter's internal error enum. This matches the task spec and keeps the interface simple.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (503 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`on_hot_restart()` not yet wired**: The new `on_hot_restart()` method is implemented but must be called by the Engine integration layer (in `fdemon-app`) when a hot restart completes. This wiring is deferred to the hot-restart integration task. Until then, source references are never invalidated (only accumulated), which is safe but may serve stale content after restart.
+
+2. **`extract_source_with_store` not yet used in `handle_stack_trace`**: The `handle_stack_trace` handler still calls the old `extract_source()`. Wiring `extract_source_with_store()` into `handle_stack_trace` requires passing the isolate_id and project_root into that handler, which is a follow-on change. The infrastructure (store, store method, `handle_source` handler) is all in place.

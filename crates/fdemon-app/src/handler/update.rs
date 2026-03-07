@@ -18,8 +18,15 @@ use super::{
     UpdateAction, UpdateResult,
 };
 
-/// Process a message and update state
-/// Returns optional follow-up message and/or action
+/// Process a message and update state.
+///
+/// VM debug events (`VmServiceDebugEvent`, `VmServiceIsolateEvent`) are
+/// forwarded to connected DAP adapters via the sender registry stored in
+/// `state.dap_debug_senders` after updating the per-session `DebugState`.
+/// Stale senders (disconnected clients) are pruned automatically by the
+/// `retain` pattern in [`devtools::debug::handle_debug_event`].
+///
+/// Returns optional follow-up message and/or action.
 pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
     match message {
         Message::RequestQuit => {
@@ -271,11 +278,61 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::FilesChanged { count } => {
             tracing::debug!("{} file(s) changed", count);
+
+            // Phase 4, Task 03: gate auto-reload while the debugger is paused.
+            // When `suppress_reload_on_pause` is enabled and the watcher is
+            // suspended, queue the changes without triggering a reload.
+            if state.file_watcher_suspended && state.settings.dap.suppress_reload_on_pause {
+                state.pending_file_changes += count;
+                tracing::debug!(
+                    "Auto-reload suppressed (debugger paused); {} change(s) queued \
+                     ({} total pending)",
+                    count,
+                    state.pending_file_changes
+                );
+                return UpdateResult::none();
+            }
+
             UpdateResult::none()
         }
 
         Message::WatcherError { message } => {
             tracing::error!("Watcher error: {}", message);
+            UpdateResult::none()
+        }
+
+        // ── Coordinated Pause / File-Watcher Gate (Phase 4, Task 03) ─────────
+
+        // Suspend file-watcher auto-reload while the debugger is paused.
+        // Idempotent — if already suspended, does nothing (avoids double-suspend
+        // in multi-DAP-client or rapid-event scenarios).
+        Message::SuspendFileWatcher => {
+            if !state.file_watcher_suspended {
+                state.file_watcher_suspended = true;
+                tracing::debug!("File-watcher auto-reload suspended (debugger paused)");
+            }
+            UpdateResult::none()
+        }
+
+        // Resume file-watcher auto-reload after the debugger continues.
+        // If any file changes were queued while suspended, triggers a single
+        // `AutoReloadTriggered` before clearing the queue.
+        Message::ResumeFileWatcher => {
+            state.file_watcher_suspended = false;
+
+            if state.pending_file_changes > 0 {
+                let queued = state.pending_file_changes;
+                state.pending_file_changes = 0;
+                tracing::info!(
+                    "File-watcher auto-reload resumed; triggering reload for \
+                     {} queued change(s)",
+                    queued
+                );
+                // Emit AutoReloadTriggered so the existing reload logic fires.
+                return UpdateResult::message(Message::AutoReloadTriggered);
+            }
+
+            tracing::debug!("File-watcher auto-reload resumed (no pending changes)");
             UpdateResult::none()
         }
 
@@ -1466,6 +1523,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         // ─────────────────────────────────────────────────────────────────────
         // VM Service Debug Messages (DAP Server Phase 1, Task 05)
+        // Phase 4, Task 01: forward events to connected DAP adapters.
         // ─────────────────────────────────────────────────────────────────────
         Message::VmServiceDebugEvent { session_id, event } => {
             devtools::debug::handle_debug_event(state, session_id, event)

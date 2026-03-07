@@ -135,3 +135,47 @@ async fn test_unknown_custom_request_returns_error() {
 - Hot restart creates a new isolate — breakpoint re-application is handled by Task 10 (breakpoint persistence).
 - The `reason` field in arguments is optional and informational — it does not change behavior.
 - Consider whether `hotReload` should be blocked while the debugger is paused. The official Dart adapter allows it, so we should too.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `hot_reload()` and `hot_restart()` to `LocalDebugBackend` trait and `DynDebugBackendInner` vtable; added `handle_hot_reload()` and `handle_hot_restart()` handlers; registered `"hotReload"` and `"hotRestart"` in `handle_request()` dispatch; updated all 6 test mock backends; added 14 new unit tests |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Added `hot_reload()` and `hot_restart()` to test `MockBackend` impl |
+| `crates/fdemon-dap/src/server/session.rs` | Added `hot_reload()` and `hot_restart()` to `NoopBackend` and test `MockBackend` |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `hot_reload_boxed()` and `hot_restart_boxed()` to test `MockBackendInner` |
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `supports_restart_request: Some(true)` to `fdemon_defaults()`; updated the phase 3 capabilities test |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Added `msg_tx: Option<mpsc::Sender<Message>>` to `VmServiceBackend`; implemented `hot_reload()` and `hot_restart()` via TEA message bus; added `new_with_msg_tx()` constructor; added `hot_reload_boxed()` and `hot_restart_boxed()` to `DynDebugBackendInner` impl; updated `VmBackendFactory::new()` to accept `Option<mpsc::Sender<Message>>`; added tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated `VmBackendFactory::new()` call to pass `Some(msg_tx_clone)` enabling hot reload/restart in live sessions |
+
+### Notable Decisions/Tradeoffs
+
+1. **`VmBackendFactory::new()` signature change**: Changed from 2-arg to 3-arg (`Option<mpsc::Sender<Message>>`). This required modifying `actions/mod.rs` (outside the original scope), but was necessary to avoid dead_code clippy errors and to actually wire `msg_tx` to backends. The change is backward-compatible: old callers can pass `None`.
+
+2. **`msg_tx` as `Option` on `VmServiceBackend`**: The task description assumed `msg_tx` was already on the backend, but it wasn't. Added it as `Option<>` so `VmServiceBackend::new()` (used in other paths) continues to work without a sender.
+
+3. **14 unit tests (exceeds 10+ requirement)**: Added `HotOpMockBackend` with configurable success/failure results to enable both happy-path and error-path coverage. Tests also verify `NoopBackend` returns errors (simulating no active Flutter session).
+
+4. **`supportsRestartRequest: true` in capabilities**: This signals to VS Code and Zed that the adapter supports the `restart` request, which is how they discover custom hot-reload/restart commands. Updated the existing phase 3 test that previously asserted this field was absent.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 warnings)
+- `cargo test -p fdemon-dap` - Passed (404 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 errors)
+- `cargo test --workspace` - fdemon-dap: 404 tests pass; fdemon-app pre-existing compilation errors in `debug.rs` (from task 01 concurrent work, not from this task)
+
+### Risks/Limitations
+
+1. **Pre-existing compilation errors in `debug.rs`**: `fdemon-app` tests cannot compile due to errors in `handler/devtools/debug.rs` introduced by a concurrent task (01). These are not caused by this task's changes and do not affect `fdemon-dap` tests.
+
+2. **`msg_tx` not guaranteed**: If the factory is constructed with `None` for `msg_tx` (e.g., in tests), hot reload/restart will return `BackendError::NotConnected`. The production path (via `actions/mod.rs`) now passes `Some(msg_tx)`.
+
+3. **Fire-and-forget semantics**: The adapter returns success as soon as the message is dispatched to the TEA bus, not after reload actually completes. The IDE will receive a separate `dart.hotReloadComplete` event when the Engine emits `ReloadCompleted` — that event routing is deferred to Task 08 (custom DAP events).

@@ -156,6 +156,20 @@ pub struct Engine {
     /// session's VM Service is connected; `None` when disconnected or no
     /// session is active.
     pub(crate) vm_handle_for_dap: Arc<Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>>,
+
+    /// Per-DAP-client debug event senders.
+    ///
+    /// Each `mpsc::Sender<DebugEvent>` in this list corresponds to one active
+    /// DAP client session. When the TEA handler receives a VM Service debug
+    /// event (`PauseBreakpoint`, `Resume`, `IsolateStart`, etc.) it iterates
+    /// this list and forwards the translated [`DapDebugEvent`] to all connected
+    /// adapters using `try_send`. Stale entries (where the receiver has been
+    /// dropped because the client disconnected) are pruned automatically via
+    /// the `retain` pattern — `try_send` returns `Err` for a closed channel.
+    ///
+    /// [`VmBackendFactory::create`] registers a new sender here each time a
+    /// DAP client connects and the VM Service is available.
+    pub(crate) dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>>,
 }
 
 impl Engine {
@@ -181,7 +195,7 @@ impl Engine {
         let settings = config::load_settings(&project_path);
 
         // 3. Create state
-        let state = AppState::with_settings(project_path.clone(), settings.clone());
+        let mut state = AppState::with_settings(project_path.clone(), settings.clone());
 
         // 4. Create message channel
         let (msg_tx, msg_rx) = mpsc::channel::<Message>(256);
@@ -204,6 +218,13 @@ impl Engine {
         // 10. Create broadcast channel for engine events (capacity 256)
         let (event_tx, _) = broadcast::channel(256);
 
+        // 11. Create the shared DAP debug sender registry and inject it into
+        // AppState so that `handle_debug_event` can forward events without
+        // extra parameters. Both Engine and AppState share the same Arc.
+        let dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        state.dap_debug_senders = dap_debug_senders.clone();
+
         Self {
             state,
             msg_tx,
@@ -220,6 +241,7 @@ impl Engine {
             dap_server_handle: Arc::new(Mutex::new(None)),
             dap_log_event_tx: None,
             vm_handle_for_dap: Arc::new(Mutex::new(None)),
+            dap_debug_senders,
         }
     }
 
@@ -286,6 +308,7 @@ impl Engine {
             &self.project_path,
             self.dap_server_handle.clone(),
             self.vm_handle_for_dap.clone(),
+            self.dap_debug_senders.clone(),
         );
 
         // Snapshot state after processing
@@ -407,7 +430,18 @@ impl Engine {
             Default::default(),
             self.dap_server_handle.clone(),
             self.vm_handle_for_dap.clone(),
+            self.dap_debug_senders.clone(),
         );
+    }
+
+    /// Returns a clone of the shared DAP debug sender registry.
+    ///
+    /// The registry is an `Arc<Mutex<Vec<mpsc::Sender<DebugEvent>>>>`. The
+    /// [`VmBackendFactory`] uses this to register per-session event senders
+    /// when a new DAP client connects. The TEA handler reads the same `Arc`
+    /// when forwarding VM debug events to connected DAP adapters.
+    pub fn dap_debug_senders(&self) -> Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>> {
+        self.dap_debug_senders.clone()
     }
 
     /// Apply a CLI `--dap-port` override.

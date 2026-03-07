@@ -25,15 +25,12 @@ Flutter process. This is the production-ready path for debugging.
 
 ### Stdio Mode — Protocol Testing Only
 
-> **Important Limitation**: Stdio mode (`--dap-stdio`) is currently a
-> transport-only implementation for protocol validation and IDE integration
-> testing. It does **not** start a Flutter Engine or Flutter process, and does
-> **not** route `attach` commands to the Dart VM Service. Real debugging
-> (breakpoints, stepping, variables) requires **TCP mode** with a running
-> `fdemon` TUI session.
->
-> Full stdio debugging support (wire stdio to a real VM Service session) is
-> planned for Phase 4. Until then, use TCP mode for all debugging workflows.
+> **Important Limitation**: Stdio mode (`--dap-stdio`) is a transport-only
+> implementation for protocol validation and IDE integration testing. It does
+> **not** start a Flutter Engine or Flutter process, and does **not** route
+> `attach` commands to the Dart VM Service. Real debugging (breakpoints,
+> stepping, variables) requires **TCP mode** with a running `fdemon` TUI
+> session.
 
 When you need stdio transport for IDE integration testing:
 
@@ -95,6 +92,27 @@ connections may take a moment on first attach):
 }
 ```
 
+To trace the raw DAP wire protocol for troubleshooting, enable:
+
+```json
+{
+  "debugger": {
+    "log_dap_communications": true
+  }
+}
+```
+
+DAP messages will appear in Zed's log panel (`View → Debug → DAP Log`).
+
+#### Zed DAP Client Behaviour
+
+- Zed's play/pause button state depends on receiving `stopped` and `continued`
+  DAP events — fdemon emits both correctly.
+- The Zed debug UI does not yet support all DAP capabilities (e.g., logpoints
+  may not have a dedicated UI). Use Neovim or VS Code for full feature coverage.
+- Hot reload and hot restart must be triggered from fdemon's TUI (`r` / `R`),
+  or via custom DAP requests if your IDE supports them.
+
 ### Option B: Stdio — Protocol Testing Only (Zed Launches fdemon)
 
 > **Limitation**: This option is for protocol validation and IDE integration
@@ -143,7 +161,7 @@ Then add a debug configuration in `.zed/debug.json`:
 
 A proper Zed WASM extension that registers the `FlutterDemon` adapter in the
 `DapRegistry`, provides `get_dap_binary`, and auto-detects Flutter projects
-via `pubspec.yaml` is planned for Phase 5. Phase 3 covers manual configuration
+via `pubspec.yaml` is planned for Phase 5. Phase 4 covers manual configuration
 only.
 
 ---
@@ -305,6 +323,137 @@ use fdemon's TUI alongside VS Code's debug UI), add a launch configuration to
 
 ---
 
+## Phase 4 Debugging Features
+
+The following features are implemented and available when connecting over TCP
+mode to a running fdemon session.
+
+### Debug Event Flow
+
+fdemon correctly emits `stopped`, `continued`, and `thread` DAP events when the
+Dart VM pauses, resumes, or creates/destroys isolates. IDEs that drive their
+play/pause button state from these events (such as Zed) will reflect the correct
+debugger state.
+
+### Hot Reload and Hot Restart via DAP
+
+The DAP server exposes two custom requests that trigger fdemon's existing reload
+and restart lifecycle:
+
+| Custom Request | Effect |
+|---|---|
+| `hotReload` | Triggers a Flutter hot reload (same as pressing `r` in the TUI) |
+| `hotRestart` | Triggers a Flutter hot restart (same as pressing `R` in the TUI) |
+
+These go through the TEA pipeline — reload suppression, phase tracking, and
+EngineEvent broadcasting all work as normal. IDEs can send them via the DAP
+`customRequest` mechanism. For example in VS Code (with a Dart extension that
+supports custom requests):
+
+```json
+{ "command": "hotReload" }
+```
+
+### Auto-Reload Suppression While Paused
+
+When the debugger pauses an isolate (breakpoint, exception, step), fdemon
+automatically suspends file-watcher triggered auto-reloads. This prevents hot
+reload from invalidating the paused stack frame mid-inspection.
+
+- File changes that arrive during a pause are queued.
+- When the debugger resumes, fdemon flushes the queue and performs a single
+  reload if any files changed.
+- If the DAP client disconnects while paused, the watcher is automatically
+  re-enabled.
+
+This behaviour is controlled by `settings.dap.suppress_reload_on_pause`
+(default: `true`) in `.fdemon/config.toml`.
+
+### Conditional Breakpoints
+
+fdemon supports the full DAP conditional breakpoint model:
+
+| Breakpoint Property | Behaviour |
+|---|---|
+| `condition` | A Dart expression; the breakpoint fires only when the expression evaluates to truthy |
+| `hitCondition` | A hit-count expression (e.g., `">= 3"`, `"% 2 == 0"`); checked before `condition` |
+
+Both properties are set from your IDE's breakpoint UI. No special configuration
+is required on the fdemon side.
+
+### Logpoints
+
+A breakpoint with a `logMessage` is treated as a *logpoint*. When it triggers:
+
+1. All applicable conditions are evaluated (hit condition, then expression
+   condition).
+2. `{expression}` placeholders in the message template are evaluated via the
+   Dart VM's `evaluateInFrame` RPC.
+3. The interpolated message is emitted as a DAP `output` event in the IDE's
+   debug console.
+4. Execution is **not** paused — the isolate auto-resumes.
+
+Example log message template: `"x = {x}, counter = {counter.value}"`
+
+### Expression Evaluation
+
+The `evaluate` DAP request supports all standard contexts:
+
+| Context | Behaviour |
+|---|---|
+| `hover` | Evaluates an expression hovered in the editor. Long strings are truncated to 100 chars; no expandable references. |
+| `watch` | Full evaluation with expandable object references for the watch panel. |
+| `variables` | Sub-expression evaluation from the variable tree; same as `watch`. |
+| `repl` | Debug console evaluation; full output, side effects allowed. |
+| `clipboard` | Full representation with no truncation; suitable for copy-to-clipboard. |
+
+Evaluation requires the isolate to be paused. If a `frameId` is provided, the
+expression is evaluated in that stack frame's scope. Without a `frameId`, it
+evaluates in the root library context.
+
+### Source References (SDK and Package Sources)
+
+When stepping into Dart SDK code (`dart:core`, `dart:async`, etc.) or into
+package sources that are not present on the local filesystem, fdemon assigns a
+`sourceReference` integer to the source. The IDE can then request the source
+text via the `source` DAP request, and fdemon fetches it from the Dart VM.
+
+This allows you to step into and read SDK source code directly in your editor
+without any extra setup. Source references persist across pause/resume
+transitions but are invalidated on hot restart.
+
+### Custom DAP Events
+
+fdemon emits the following custom events after a successful `attach`:
+
+| Event | When | Body |
+|---|---|---|
+| `dart.debuggerUris` | Immediately after attach | `{ "vmServiceUri": "ws://127.0.0.1:PORT/..." }` |
+| `flutter.appStart` | Immediately after attach | `{ "deviceId": "...", "mode": "debug", "supportsRestart": true }` |
+| `flutter.appStarted` | When the VM signals the app is fully started | `{}` |
+
+IDEs can consume `dart.debuggerUris` to connect supplementary tooling (such as
+Dart DevTools) to the same VM Service connection that fdemon is using.
+
+### Multi-Session Debugging
+
+When multiple Flutter sessions are running simultaneously (up to 9), fdemon
+namespaces DAP thread IDs so isolates from different sessions cannot collide:
+
+| Session Index | Thread ID Range |
+|---|---|
+| 0 | 1000–1999 |
+| 1 | 2000–2999 |
+| … | … |
+| 8 | 9000–9999 |
+
+The IDE sees a flat list of threads. The session that owns each thread can be
+determined from `thread_id / 1000 - 1`. All standard DAP requests
+(`stackTrace`, `scopes`, `variables`, `evaluate`) are routed to the correct
+session based on the thread ID.
+
+---
+
 ## Troubleshooting
 
 ### Zed: TCP connection times out
@@ -346,36 +495,71 @@ If fdemon reports the DAP port is already in use, either:
 - **Stdio mode:** The IDE manages the lifecycle; check the IDE's debug console
   for adapter errors.
 
+### Breakpoints not hitting after hot restart
+
+Hot restart creates a new Dart isolate with new internal IDs. Re-set your
+breakpoints in the IDE after a hot restart to ensure they are registered against
+the new isolate. (Automatic breakpoint re-application across hot restart is
+planned for a future release.)
+
+### IDE shows "Debugger paused" but fdemon's TUI shows "Running"
+
+This can happen if an isolate paused at startup (PauseStart). Press the
+"Continue" button in your IDE to let the isolate proceed past the initial pause.
+fdemon's phase reflects the Flutter app phase, not the debugger state, so the
+TUI can show "Running" while an isolate is paused for debugging.
+
+### Auto-reload not triggering after saving files
+
+If you are actively debugging (isolate paused at a breakpoint), auto-reload is
+suppressed to protect the paused stack frame. Resume or disconnect the debugger
+to re-enable file-watcher triggered reloads.
+
+### Zed: play/pause button stuck
+
+This typically means Zed did not receive a `stopped` or `continued` DAP event.
+Enable `debugger.log_dap_communications` in Zed's `settings.json` to inspect
+the raw message stream and confirm fdemon is sending the events.
+
+### Stale `.zed/debug.json` from Phase 3
+
+If you have an existing `.zed/debug.json` with `"adapter": "custom"`, replace
+`"custom"` with `"Delve"`. The `"custom"` adapter name is not valid in Zed and
+will launch CodeLLDB instead of connecting to fdemon.
+
 ---
 
 ## Implemented DAP Capabilities
 
-Flutter Demon's DAP adapter currently supports:
+Flutter Demon's DAP adapter supports the following capabilities in TCP mode:
 
-| Capability | TCP Mode | Stdio Mode |
-|---|---|---|
-| Initialize | Supported | Supported |
-| Attach | Supported | Not supported (no VM backend) |
-| Set breakpoints | Supported | Not supported (no VM backend) |
-| Set exception breakpoints | Supported | Not supported (no VM backend) |
-| Continue / pause | Supported | Not supported (no VM backend) |
-| Step over / in / out | Supported | Not supported (no VM backend) |
-| Stack traces | Supported | Not supported (no VM backend) |
-| Scopes and variables | Supported | Not supported (no VM backend) |
-| Variable expansion (objects, lists) | Supported | Not supported (no VM backend) |
-| Evaluate expression | Supported | Not supported (no VM backend) |
-| Output events (stdout, stderr) | Supported | Not supported (no VM backend) |
-| Configuration done | Supported | Supported |
-| Disconnect | Supported | Supported |
-| Launch request | Not supported (attach only) | Not supported |
-| Restart | Not supported | Not supported |
-| Hot reload via DAP | Not supported (use `r` in fdemon TUI) | Not supported |
+| Capability | TCP Mode |
+|---|---|
+| Initialize | Supported |
+| Attach | Supported |
+| Set breakpoints | Supported |
+| Conditional breakpoints (`condition`, `hitCondition`) | Supported |
+| Logpoints (`logMessage` with `{expression}`) | Supported |
+| Set exception breakpoints | Supported |
+| Continue / pause | Supported |
+| Step over / in / out | Supported |
+| Stack traces | Supported |
+| Scopes and variables | Supported |
+| Variable expansion (objects, lists) | Supported |
+| Evaluate expression (hover, watch, repl, clipboard) | Supported |
+| Source references (SDK / unresolvable package sources) | Supported |
+| Output events (stdout, stderr) | Supported |
+| Custom request: `hotReload` | Supported |
+| Custom request: `hotRestart` | Supported |
+| Custom event: `dart.debuggerUris` | Supported |
+| Custom event: `flutter.appStart` | Supported |
+| Custom event: `flutter.appStarted` | Supported |
+| Multi-session thread ID namespacing | Supported |
+| Auto-reload suppression while paused | Supported |
+| Configuration done | Supported |
+| Disconnect | Supported |
+| Launch request | Not supported (attach only) |
+| Breakpoint persistence across hot restart | Planned |
 
 All configurations should use `"request": "attach"` — fdemon attaches to an
 already-running Flutter process rather than launching one itself.
-
-> **Note on stdio mode**: Stdio transport handles the DAP wire protocol
-> (message framing, handshake, unknown-command responses) correctly, but does
-> not route any debug commands to a real Flutter VM Service. This makes it
-> useful for verifying IDE integration plumbing without a running Flutter app.
-> Full stdio debugging support is planned for Phase 4.

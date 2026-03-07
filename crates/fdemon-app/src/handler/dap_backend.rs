@@ -23,6 +23,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use fdemon_daemon::vm_service::{
     debugger,
@@ -30,9 +31,12 @@ use fdemon_daemon::vm_service::{
     VmRequestHandle,
 };
 use fdemon_dap::adapter::{
-    BackendError, BreakpointResult, DapExceptionPauseMode, DebugBackend, DynDebugBackendInner,
-    StepMode,
+    BackendError, BreakpointResult, DapExceptionPauseMode, DebugBackend, DebugEvent,
+    DynDebugBackendInner, StepMode,
 };
+use tokio::sync::mpsc;
+
+use crate::message::Message;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VmServiceBackend
@@ -44,15 +48,86 @@ use fdemon_dap::adapter::{
 /// Constructed by the Engine when a DAP client attaches to an active Flutter
 /// session. The handle is cloned so it can be shared safely across the session
 /// task and any concurrent requests.
+///
+/// The optional `msg_tx` field enables hot reload and hot restart by sending
+/// `Message::HotReload` / `Message::HotRestart` into the TEA pipeline. When
+/// `None`, those operations return [`BackendError::NotConnected`].
 #[derive(Clone)]
 pub struct VmServiceBackend {
     handle: VmRequestHandle,
+    /// Sender into the TEA message bus.
+    ///
+    /// Used exclusively by [`hot_reload`] and [`hot_restart`] to dispatch
+    /// through the existing Engine reload/restart lifecycle without calling
+    /// VM Service RPCs directly. Set to `None` when the backend is constructed
+    /// without a message sender (legacy path).
+    msg_tx: Option<mpsc::Sender<Message>>,
+
+    /// VM Service WebSocket URI for this debug session.
+    ///
+    /// Forwarded to the DAP client as `dart.debuggerUris.vmServiceUri` after
+    /// a successful `attach`. Populated by [`VmBackendFactory::create`] from
+    /// the session metadata slot.
+    ws_uri: Option<String>,
+
+    /// Device ID for this debug session (e.g., `"emulator-5554"`).
+    ///
+    /// Forwarded to the DAP client in the `flutter.appStart` event body.
+    /// Populated by [`VmBackendFactory::create`] from the session metadata slot.
+    device_id: Option<String>,
+
+    /// Build mode for this debug session (`"debug"`, `"profile"`, `"release"`).
+    ///
+    /// Forwarded to the DAP client in the `flutter.appStart` event body.
+    /// Defaults to `"debug"` if not set.
+    build_mode: String,
 }
 
 impl VmServiceBackend {
     /// Create a new backend wrapping the given VM Service request handle.
+    ///
+    /// Hot reload and hot restart will return [`BackendError::NotConnected`]
+    /// until the backend is given a message sender via [`new_with_msg_tx`].
     pub fn new(handle: VmRequestHandle) -> Self {
-        Self { handle }
+        Self {
+            handle,
+            msg_tx: None,
+            ws_uri: None,
+            device_id: None,
+            build_mode: "debug".to_string(),
+        }
+    }
+
+    /// Create a new backend with a TEA message sender for hot reload/restart.
+    ///
+    /// The `msg_tx` sender is used to dispatch `Message::HotReload` and
+    /// `Message::HotRestart` through the existing Engine reload/restart
+    /// lifecycle, avoiding direct VM Service RPC calls.
+    pub fn new_with_msg_tx(handle: VmRequestHandle, msg_tx: mpsc::Sender<Message>) -> Self {
+        Self {
+            handle,
+            msg_tx: Some(msg_tx),
+            ws_uri: None,
+            device_id: None,
+            build_mode: "debug".to_string(),
+        }
+    }
+
+    /// Set session metadata for custom DAP event emission.
+    ///
+    /// Provides the VM Service WebSocket URI, device ID, and build mode that
+    /// are emitted in `dart.debuggerUris` and `flutter.appStart` custom DAP
+    /// events after a successful `attach`.
+    pub fn with_session_metadata(
+        mut self,
+        ws_uri: Option<String>,
+        device_id: Option<String>,
+        build_mode: String,
+    ) -> Self {
+        self.ws_uri = ws_uri;
+        self.device_id = device_id;
+        self.build_mode = build_mode;
+        self
     }
 }
 
@@ -189,6 +264,58 @@ impl DebugBackend for VmServiceBackend {
             .map_err(|e| BackendError::VmServiceError(e.to_string()))?;
         serde_json::to_value(&scripts).map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
+
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+        // getObject on a Script object returns a Script with a "source" field
+        // containing the full source text.
+        let result = debugger::get_object(&self.handle, isolate_id, script_id, None, None)
+            .await
+            .map_err(|e| e.to_string())?;
+        result["source"]
+            .as_str()
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("Script '{}' has no source field", script_id))
+    }
+
+    async fn hot_reload(&self) -> Result<(), BackendError> {
+        match &self.msg_tx {
+            Some(tx) => tx.send(Message::HotReload).await.map_err(|e| {
+                BackendError::VmServiceError(format!("Failed to send hot reload: {e}"))
+            }),
+            None => Err(BackendError::NotConnected),
+        }
+    }
+
+    async fn hot_restart(&self) -> Result<(), BackendError> {
+        match &self.msg_tx {
+            Some(tx) => tx.send(Message::HotRestart).await.map_err(|e| {
+                BackendError::VmServiceError(format!("Failed to send hot restart: {e}"))
+            }),
+            None => Err(BackendError::NotConnected),
+        }
+    }
+
+    async fn stop_app(&self) -> Result<(), BackendError> {
+        match &self.msg_tx {
+            Some(tx) => tx
+                .send(Message::StopApp)
+                .await
+                .map_err(|e| BackendError::VmServiceError(format!("Failed to send stop app: {e}"))),
+            None => Err(BackendError::NotConnected),
+        }
+    }
+
+    async fn ws_uri(&self) -> Option<String> {
+        self.ws_uri.clone()
+    }
+
+    async fn device_id(&self) -> Option<String> {
+        self.device_id.clone()
+    }
+
+    async fn build_mode(&self) -> String {
+        self.build_mode.clone()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -295,11 +422,79 @@ impl DynDebugBackendInner for VmServiceBackend {
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
         Box::pin(self.get_scripts(isolate_id))
     }
+
+    fn get_source_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        script_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+        Box::pin(self.get_source(isolate_id, script_id))
+    }
+
+    fn hot_reload_boxed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+        Box::pin(self.hot_reload())
+    }
+
+    fn hot_restart_boxed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+        Box::pin(self.hot_restart())
+    }
+
+    fn stop_app_boxed(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+        Box::pin(self.stop_app())
+    }
+
+    fn ws_uri_boxed(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+        Box::pin(self.ws_uri())
+    }
+
+    fn device_id_boxed(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+        Box::pin(self.device_id())
+    }
+
+    fn build_mode_boxed(&self) -> Pin<Box<dyn Future<Output = String> + Send + '_>> {
+        Box::pin(self.build_mode())
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VmBackendFactory — per-connection backend factory for the TCP accept loop
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Session metadata used to populate Flutter/Dart custom DAP events.
+///
+/// Shared via `Arc<Mutex<Option<...>>>` between the Engine TEA handler and
+/// [`VmBackendFactory`] so that newly connecting DAP clients receive fresh
+/// metadata without requiring a restart of the factory.
+#[derive(Debug, Clone, Default)]
+pub struct DapSessionMetadata {
+    /// VM Service WebSocket URI (e.g., `"ws://127.0.0.1:8181/ws"`).
+    pub ws_uri: Option<String>,
+    /// Device ID (e.g., `"emulator-5554"` or `"00008020-000264DC0AD2003A"`).
+    pub device_id: Option<String>,
+    /// Build mode (`"debug"`, `"profile"`, or `"release"`).
+    pub build_mode: String,
+}
+
+impl DapSessionMetadata {
+    /// Create metadata with a known URI and debug mode defaults.
+    // Allow dead_code: this constructor is the primary creation path for the
+    // TEA handler wiring (Phase 4, Task 08 follow-up). Suppress the warning
+    // until the Engine integration is wired.
+    #[allow(dead_code)]
+    pub fn new(ws_uri: impl Into<String>) -> Self {
+        Self {
+            ws_uri: Some(ws_uri.into()),
+            device_id: None,
+            build_mode: "debug".to_string(),
+        }
+    }
+}
 
 /// Factory that creates a [`fdemon_dap::server::BackendHandle`] for each
 /// accepted DAP client connection.
@@ -311,28 +506,92 @@ impl DynDebugBackendInner for VmServiceBackend {
 /// ## Lifecycle
 ///
 /// 1. On `SpawnDapServer`, the Engine creates a `VmBackendFactory` from the
-///    active session's `VmRequestHandle` slot.
+///    active session's `VmRequestHandle` slot and the shared debug sender
+///    registry.
 /// 2. The factory is passed to [`fdemon_dap::DapService::start_tcp_with_factory`].
 /// 3. Each time a DAP client connects, the accept loop calls `factory.create()`.
 ///    - If the slot is `Some`, a [`VmServiceBackend`] is constructed and the
 ///      session uses real VM Service debugging.
 ///    - If the slot is `None` (VM not yet connected or disconnected), the
 ///      session falls back to [`fdemon_dap::server::NoopBackend`].
-/// 4. The per-session `mpsc::Sender<DebugEvent>` is registered somewhere so
-///    the Engine can forward VM pause/stopped events. (Task 06 wires this up.)
+/// 4. A new per-session `mpsc::Sender<DebugEvent>` is registered in the
+///    shared `dap_debug_senders` registry so the TEA handler can forward VM
+///    pause/resumed/isolate events to all connected DAP adapters.
 pub struct VmBackendFactory {
     /// Shared slot for the active session's VM request handle.
     ///
     /// The Engine holds a `Mutex<Option<VmRequestHandle>>` and updates it
     /// as sessions start and stop. The factory clones the handle out of the
     /// slot so the session gets its own clone for exclusive use.
-    vm_handle_slot: std::sync::Arc<std::sync::Mutex<Option<VmRequestHandle>>>,
+    vm_handle_slot: Arc<Mutex<Option<VmRequestHandle>>>,
+
+    /// Shared registry of per-DAP-client event senders (Phase 4, Task 01).
+    ///
+    /// Each call to `create()` pushes a new `mpsc::Sender<DebugEvent>` here.
+    /// The corresponding `Receiver` is given to the per-session task so it
+    /// can receive VM debug events forwarded by the TEA handler.
+    ///
+    /// Stale senders (where the receiver has been dropped because the client
+    /// disconnected) are pruned by the `retain` call in
+    /// `devtools::debug::handle_debug_event`.
+    dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DebugEvent>>>>,
+
+    /// Optional sender into the TEA message bus.
+    ///
+    /// When `Some`, each created [`VmServiceBackend`] is given this sender
+    /// so that `hotReload` and `hotRestart` DAP requests can dispatch
+    /// `Message::HotReload` / `Message::HotRestart` through the existing
+    /// Engine reload/restart lifecycle.
+    ///
+    /// Set via [`VmBackendFactory::new_with_msg_tx`]. When `None` (legacy path),
+    /// hot reload and hot restart return `BackendError::NotConnected`.
+    msg_tx: Option<mpsc::Sender<Message>>,
+
+    /// Shared session metadata slot for Flutter/Dart custom DAP events.
+    ///
+    /// Updated by the TEA handler when a VM Service connection is established
+    /// (stores `ws_uri`, `device_id`, `build_mode`). Each call to `create()`
+    /// snapshots the current metadata and passes it to the new backend via
+    /// [`VmServiceBackend::with_session_metadata`].
+    ///
+    /// `None` means the metadata has not been set yet; the backend defaults
+    /// are used in that case.
+    session_metadata: Arc<Mutex<Option<DapSessionMetadata>>>,
 }
 
 impl VmBackendFactory {
-    /// Create a new factory from a shared VM handle slot.
-    pub fn new(vm_handle_slot: std::sync::Arc<std::sync::Mutex<Option<VmRequestHandle>>>) -> Self {
-        Self { vm_handle_slot }
+    /// Create a new factory from a shared VM handle slot, sender registry, and
+    /// an optional TEA message sender.
+    ///
+    /// When `msg_tx` is `Some`, backends created by this factory will support
+    /// `hotReload` and `hotRestart` DAP requests by dispatching
+    /// `Message::HotReload` / `Message::HotRestart` through the TEA pipeline.
+    ///
+    /// When `msg_tx` is `None`, those operations return
+    /// [`BackendError::NotConnected`].
+    pub fn new(
+        vm_handle_slot: Arc<Mutex<Option<VmRequestHandle>>>,
+        dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DebugEvent>>>>,
+        msg_tx: Option<mpsc::Sender<Message>>,
+    ) -> Self {
+        Self {
+            vm_handle_slot,
+            dap_debug_senders,
+            msg_tx,
+            session_metadata: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Return a shared reference to the session metadata slot.
+    ///
+    /// The TEA handler can update this slot when a VM Service connection is
+    /// established so that newly connecting DAP clients receive up-to-date
+    /// metadata in `dart.debuggerUris` and `flutter.appStart` events.
+    // Allow dead_code: this accessor is the Engine wiring point for Phase 4, Task 08
+    // follow-up. Suppress until the Engine integration is wired.
+    #[allow(dead_code)]
+    pub fn session_metadata_slot(&self) -> Arc<Mutex<Option<DapSessionMetadata>>> {
+        self.session_metadata.clone()
     }
 }
 
@@ -349,14 +608,50 @@ impl fdemon_dap::server::BackendFactory for VmBackendFactory {
 
         let vm_handle = vm_handle?;
 
-        let backend = VmServiceBackend::new(vm_handle);
+        // Snapshot the current session metadata (ws_uri, device_id, build_mode).
+        // If the lock is poisoned or the slot is None, defaults apply.
+        let metadata = self
+            .session_metadata
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
 
-        // Create a per-session debug event channel. The receiver goes to the
-        // session loop; the sender is used by the Engine to forward VM events.
-        // Task 06 will wire the sender back to the Engine; for now it is
-        // dropped (sessions still work, but won't receive stopped/resumed events
-        // until the full event routing is in place).
-        let (_, debug_event_rx) = tokio::sync::mpsc::channel::<fdemon_dap::adapter::DebugEvent>(64);
+        // Construct the backend: with msg_tx if available (enables hot reload/restart),
+        // otherwise fall back to the legacy path (hot reload/restart return NotConnected).
+        let backend = match &self.msg_tx {
+            Some(tx) => VmServiceBackend::new_with_msg_tx(vm_handle, tx.clone()),
+            None => VmServiceBackend::new(vm_handle),
+        };
+
+        // Apply session metadata so that dart.debuggerUris / flutter.appStart
+        // custom DAP events are populated with the correct URI, device, and mode.
+        let backend = if let Some(meta) = metadata {
+            backend.with_session_metadata(meta.ws_uri, meta.device_id, meta.build_mode)
+        } else {
+            backend
+        };
+
+        // Create a per-session debug event channel.
+        // The receiver goes to the session loop; the sender is registered in
+        // `dap_debug_senders` so the TEA handler can forward VM events.
+        let (debug_event_tx, debug_event_rx) = tokio::sync::mpsc::channel::<DebugEvent>(64);
+
+        // Register the sender so the TEA handler can forward events to this
+        // DAP session. If the registry lock is poisoned (should never happen
+        // in normal operation) we log a warning but still return the handle —
+        // the session will work for commands; it just won't receive events.
+        match self.dap_debug_senders.lock() {
+            Ok(mut senders) => {
+                senders.push(debug_event_tx);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "VmBackendFactory: dap_debug_senders lock poisoned, \
+                     debug events will not be forwarded to this session: {}",
+                    e
+                );
+            }
+        }
 
         Some(fdemon_dap::server::BackendHandle {
             backend: fdemon_dap::DynDebugBackend::new(Box::new(backend)),
@@ -393,5 +688,17 @@ mod tests {
     fn test_vm_service_backend_is_clone() {
         fn assert_clone<T: Clone>() {}
         assert_clone::<VmServiceBackend>();
+    }
+
+    /// Verify that `VmBackendFactory::new` exists and has the expected signature.
+    ///
+    /// A live `VmRequestHandle` cannot be constructed in unit tests (it requires
+    /// a WebSocket connection), so we only verify that the type system accepts
+    /// the function signature. The actual behavior is exercised by integration
+    /// tests against a real Flutter app.
+    #[test]
+    fn test_vm_backend_factory_new_type_checks() {
+        // Taking the function address verifies the signature compiles correctly.
+        let _ = VmBackendFactory::new;
     }
 }

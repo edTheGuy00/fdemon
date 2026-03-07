@@ -171,3 +171,43 @@ async fn test_conditional_breakpoint_resumes_when_false() {
 - The Dart VM does NOT support native conditional breakpoints. All conditions are evaluated adapter-side. This adds latency on each breakpoint hit (one evaluate RPC round-trip) but is the standard approach used by all DAP adapters.
 - `evaluateInFrame` at frame index 0 evaluates in the context of the top (current) stack frame.
 - `SourceBreakpoint.condition` and `.hit_condition` fields already exist in `protocol/types.rs:432-438`. The adapter's `setBreakpoints` handler just needs to read and store them.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | Added `BreakpointCondition` struct; extended `BreakpointEntry` with `condition`, `hit_condition`, `hit_count` fields; added `add_with_condition()` and `increment_hit_count()` methods; added `evaluate_hit_condition()` and `is_truthy()` module-level functions; 22 new unit tests |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Extended `DebugEvent::Paused` with `breakpoint_id: Option<String>`; updated `handle_debug_event` to evaluate conditions on `Paused + Breakpoint`; updated `handle_set_breakpoints` to store conditions via `add_with_condition()`; exported `BreakpointCondition`; updated 7 existing test calls; added 10 new integration tests |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Updated `PauseBreakpoint` handler to extract and pass breakpoint ID to `DapDebugEvent::Paused`; added `breakpoint_id: None` to all non-breakpoint pause events; updated 6 pattern matches to use `..` for forward-compatibility |
+
+### Notable Decisions/Tradeoffs
+
+1. **`BreakpointCondition` struct instead of extra args**: The `add_with_condition()` function would have exceeded clippy's 7-argument limit (`too_many_arguments`). Introducing `BreakpointCondition { condition, hit_condition }` keeps the API clean and matches the task's mention of a `BreakpointCondition` struct.
+
+2. **Extended `DebugEvent::Paused` with `breakpoint_id`**: To evaluate conditions adapter-side, we need to know which VM breakpoint was hit. This required updating `fdemon-app/debug.rs` to pass through the breakpoint ID from the `PauseBreakpoint` VM event. All existing pattern matches were updated to use `..` for forward-compatibility.
+
+3. **Condition evaluation only when `breakpoint_id` is Some**: If no `breakpoint_id` is supplied (e.g., from older code or non-breakpoint pauses), the adapter skips condition checking and always emits `stopped`. This is the safe default.
+
+4. **Hit count incremented before all checks**: The hit count is always incremented on every VM breakpoint hit (even if the hit condition fails). This matches standard debugger behavior — the count reflects actual hits regardless of whether the debugger paused.
+
+5. **`is_truthy` and `evaluate_hit_condition` are public**: Both functions are pub in `breakpoints.rs` so they can be used in integration tests. The doc example in `evaluate_hit_condition` also serves as a doc-test.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (464 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied (formatter reformatted `debug.rs` pattern matches)
+
+### Risks/Limitations
+
+1. **`fdemon-app/debug.rs` is modified**: The task scope said "you CAN modify `breakpoints.rs` and `adapter/mod.rs`". `debug.rs` was also modified to pass the breakpoint ID through. This is necessary for the feature to work end-to-end. The change is minimal (adding `breakpoint_id` field propagation).
+
+2. **Single breakpoint per pause**: The `PauseBreakpoint` VM event can include multiple breakpoints (`pause_breakpoints: Vec<Breakpoint>`). This implementation uses only the first breakpoint (`breakpoint.as_ref().map(|bp| bp.id.clone())`). In practice, simultaneous multi-breakpoint hits are rare, and using the primary breakpoint is consistent with the existing behavior.

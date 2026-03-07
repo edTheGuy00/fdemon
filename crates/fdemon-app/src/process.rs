@@ -16,7 +16,7 @@ use crate::state::AppState;
 use crate::{handler, UpdateAction};
 use fdemon_core::{DaemonEvent, DaemonMessage};
 use fdemon_daemon::{parse_daemon_message, vm_service::VmRequestHandle, CommandSender};
-use fdemon_dap::DapServerHandle;
+use fdemon_dap::{adapter::DebugEvent as DapDebugEvent, DapServerHandle};
 
 use super::actions::handle_action;
 
@@ -31,6 +31,7 @@ pub fn process_message(
     project_path: &Path,
     dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>,
     vm_handle_for_dap: Arc<Mutex<Option<VmRequestHandle>>>,
+    dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>>,
 ) {
     // Route JSON-RPC responses from SessionDaemon events to RequestTracker
     route_session_daemon_response(&message, state);
@@ -77,6 +78,7 @@ pub fn process_message(
                     state.tool_availability.clone(),
                     dap_server_handle.clone(),
                     vm_handle_for_dap.clone(),
+                    dap_debug_senders.clone(),
                 );
             } else {
                 // Hydration discarded the action. Send a failure message for

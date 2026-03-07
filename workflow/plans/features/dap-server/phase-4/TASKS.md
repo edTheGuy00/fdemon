@@ -48,18 +48,18 @@ Wave 5 (Hardening — parallel, depend on 02)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-wire-debug-event-channel](tasks/01-wire-debug-event-channel.md) | Not Started | - | 5–7h | `fdemon-app/handler/dap_backend.rs`, `fdemon-app/handler/devtools/debug.rs`, `fdemon-app/engine.rs`, `fdemon-app/session.rs`, `fdemon-dap/server/session.rs` |
-| 2 | [02-hot-reload-restart-dap](tasks/02-hot-reload-restart-dap.md) | Not Started | 1 | 3–4h | `fdemon-dap/adapter/mod.rs`, `fdemon-app/handler/dap_backend.rs` |
-| 3 | [03-coordinated-pause](tasks/03-coordinated-pause.md) | Not Started | 1 | 3–4h | `fdemon-app/handler/devtools/debug.rs`, `fdemon-app/engine.rs`, `fdemon-app/watcher.rs` |
-| 4 | [04-conditional-breakpoints](tasks/04-conditional-breakpoints.md) | Not Started | 1 | 3–5h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
-| 5 | [05-logpoints](tasks/05-logpoints.md) | Not Started | 1 | 3–4h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
-| 6 | [06-expression-eval-enhancements](tasks/06-expression-eval-enhancements.md) | Not Started | 1 | 3–4h | `fdemon-dap/adapter/evaluate.rs` |
-| 7 | [07-source-references](tasks/07-source-references.md) | Not Started | 1 | 3–5h | `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/mod.rs` |
-| 8 | [08-custom-dap-events](tasks/08-custom-dap-events.md) | Not Started | 1 | 2–3h | `fdemon-dap/adapter/mod.rs`, `fdemon-dap/server/session.rs` |
-| 9 | [09-multi-session-threads](tasks/09-multi-session-threads.md) | Not Started | 1 | 4–6h | `fdemon-dap/adapter/threads.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-app/handler/dap_backend.rs` |
-| 10 | [10-breakpoint-persistence](tasks/10-breakpoint-persistence.md) | Not Started | 2 | 3–4h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
-| 11 | [11-production-hardening](tasks/11-production-hardening.md) | Not Started | 2 | 3–5h | `fdemon-dap/server/session.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-dap/server/mod.rs` |
-| 12 | [12-documentation-update](tasks/12-documentation-update.md) | Not Started | 2 | 2–3h | `docs/IDE_SETUP.md`, `docs/ARCHITECTURE.md` |
+| 1 | [01-wire-debug-event-channel](tasks/01-wire-debug-event-channel.md) | Done | - | 5–7h | `fdemon-app/handler/dap_backend.rs`, `fdemon-app/handler/devtools/debug.rs`, `fdemon-app/engine.rs`, `fdemon-app/session.rs`, `fdemon-dap/server/session.rs` |
+| 2 | [02-hot-reload-restart-dap](tasks/02-hot-reload-restart-dap.md) | Done | 1 | 3–4h | `fdemon-dap/adapter/mod.rs`, `fdemon-app/handler/dap_backend.rs` |
+| 3 | [03-coordinated-pause](tasks/03-coordinated-pause.md) | Done | 1 | 3–4h | `fdemon-app/handler/devtools/debug.rs`, `fdemon-app/engine.rs`, `fdemon-app/watcher.rs` |
+| 4 | [04-conditional-breakpoints](tasks/04-conditional-breakpoints.md) | Done | 1 | 3–5h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
+| 5 | [05-logpoints](tasks/05-logpoints.md) | Done | 1 | 3–4h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
+| 6 | [06-expression-eval-enhancements](tasks/06-expression-eval-enhancements.md) | Done | 1 | 3–4h | `fdemon-dap/adapter/evaluate.rs` |
+| 7 | [07-source-references](tasks/07-source-references.md) | Done | 1 | 3–5h | `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/mod.rs` |
+| 8 | [08-custom-dap-events](tasks/08-custom-dap-events.md) | Done | 1 | 2–3h | `fdemon-dap/adapter/mod.rs`, `fdemon-dap/server/session.rs` |
+| 9 | [09-multi-session-threads](tasks/09-multi-session-threads.md) | Done | 1 | 4–6h | `fdemon-dap/adapter/threads.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-app/handler/dap_backend.rs` |
+| 10 | [10-breakpoint-persistence](tasks/10-breakpoint-persistence.md) | Done | 2 | 3–4h | `fdemon-dap/adapter/breakpoints.rs`, `fdemon-dap/adapter/mod.rs` |
+| 11 | [11-production-hardening](tasks/11-production-hardening.md) | Done | 2 | 3–5h | `fdemon-dap/server/session.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-dap/server/mod.rs` |
+| 12 | [12-documentation-update](tasks/12-documentation-update.md) | Done | 2 | 2–3h | `docs/IDE_SETUP.md`, `docs/ARCHITECTURE.md` |
 
 ## Success Criteria
 

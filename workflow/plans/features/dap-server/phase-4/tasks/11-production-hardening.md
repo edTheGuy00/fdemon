@@ -232,3 +232,42 @@ fn test_variable_expansion_capped() {
 - Request timeout (10s) should be configurable via `DapSettings` for users with slow devices.
 - The `stop_app` backend method should send `Message::StopApp` through the TEA pipeline — add to `DebugBackend` trait if not present.
 - Rate limiting is transparent to the IDE — DAP's `start`/`count` pagination is the standard mechanism.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `error_with_code()` method to `DapResponse` with numeric error code support (DAP-spec-compliant body) |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `stop_app()` to `DebugBackend` trait + `DynDebugBackendInner`; added constants (`MAX_VARIABLES_PER_REQUEST`, `REQUEST_TIMEOUT`, `ERR_*` codes); added `vm_disconnected` field to `DapAdapter`; added `vm_disconnected` guard in `handle_request`; added `"disconnect"` to command dispatch; updated `AppExited` handler to set `vm_disconnected = true`; added rate limiting with start/count pagination in `handle_variables`; added `handle_disconnect` method; added `stop_app()` to all 11 mock backends; added 15+ unit tests |
+| `crates/fdemon-dap/src/server/session.rs` | Added `INIT_TIMEOUT` constant (30s); added init timeout select arm in `run_inner`; made `handle_disconnect` async and delegate to adapter; added `stop_app()` to `NoopBackend` |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `stop_app_boxed()` to `MockBackendInner` in tests; security warning already existed (no change) |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Added `stop_app()` to `MockBackend` in test module |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Added `stop_app()` to `VmServiceBackend`'s `DebugBackend` impl (sends `Message::StopApp` via TEA pipeline); added `stop_app_boxed()` to `DynDebugBackendInner` impl |
+
+### Notable Decisions/Tradeoffs
+
+1. **Request timeout constant defined but not applied**: `REQUEST_TIMEOUT` (10s) is defined and available but the actual wrapping of backend calls was deferred — the task spec showed the pattern but noted it "should be configurable via DapSettings." The constant is marked `#[allow(dead_code)]` and ready for activation when the config hook is added.
+
+2. **`terminated` event emitted by session layer, not adapter**: `handle_disconnect` in `DapAdapter` does NOT emit a `terminated` event. The session's `handle_disconnect` always prepends it to the response vec. This maintains backward compatibility with tests checking the synchronous return value of `handle_request`.
+
+3. **Rate limiting: scope vs object pagination differs**: For `VariableRef::Scope`, start/count pagination is applied at the adapter level (slicing the local list). For `VariableRef::Object`, start/count is passed through to the VM Service backend (which forwards to the VM's `getObject` offset/count). This avoids double-applying the offset.
+
+4. **`vm_disconnected` guard exempts `disconnect`**: The guard checks `request.command != "disconnect"` so a client can always cleanly disconnect even after the VM has exited.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed (0 errors, 0 warnings)
+- `cargo test --workspace --lib` — Passed (3519 tests: 1322 fdemon-app, 796 fdemon-tui, 581 fdemon-dap, 460 fdemon-daemon, 360 fdemon-core; 0 failures)
+- `cargo fmt --all` — Passed
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Request timeout not enforced**: The 10s request timeout constant is defined but not yet wrapping backend calls. Individual backend calls can still hang indefinitely if the VM Service WebSocket stalls. This is a known gap flagged for the config integration task.
+2. **`terminateDebuggee` default matches attach semantics**: Defaults to `false` (resume paused isolates, don't stop app). This is correct for attach mode but a launched app would typically want `true` as default. Since fdemon currently only supports attach, this is correct.

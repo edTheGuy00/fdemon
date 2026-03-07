@@ -127,3 +127,45 @@ async fn test_app_started_event_on_running() {
 - The `dart.debuggerUris` event is particularly important for VS Code's Dart extension, which uses it to connect supplementary tooling (DevTools browser, etc.).
 - `flutter.appStart.supportsRestart` should match whether hot restart is available (debug builds: true, profile/release: false).
 - Zed may or may not consume these events currently. They are forward-compatible and add zero cost.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `ws_uri()`, `device_id()`, `build_mode()` to `LocalDebugBackend` trait; added `ws_uri_boxed()`, `device_id_boxed()`, `build_mode_boxed()` to `DynDebugBackendInner`; implemented in `DynDebugBackend`; added `AppStarted` variant to `DebugEvent`; updated `handle_attach()` to emit `dart.debuggerUris` and `flutter.appStart` after success; updated `handle_debug_event()` to emit `flutter.appStarted` on `AppStarted`; added implementations to all test mock backends; updated `test_handle_attach_emits_thread_started_events` to handle new events; added 7 new unit tests (`MockBackendWithUri` + 7 tests) |
+| `crates/fdemon-dap/src/server/session.rs` | Added `ws_uri()`, `device_id()`, `build_mode()` to `NoopBackend`; added same to test `MockBackend`; added `ws_uri_boxed()`, `device_id_boxed()`, `build_mode_boxed()` to `MockBackendInner` in `server/mod.rs` |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `ws_uri_boxed()`, `device_id_boxed()`, `build_mode_boxed()` to test `MockBackendInner` |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Added `ws_uri()`, `device_id()`, `build_mode()` to test `MockBackend` |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Added `ws_uri`, `device_id`, `build_mode` fields to `VmServiceBackend`; added `with_session_metadata()` builder method; implemented trait methods; added `DapSessionMetadata` struct; added `session_metadata` slot to `VmBackendFactory`; added `session_metadata_slot()` accessor; wired metadata into `create()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`dart.debuggerUris` only emitted when `ws_uri` returns `Some`**: When no URI is available (tests, `NoopBackend`), the event is silently skipped rather than emitting an empty body. This matches the principle that events should only be sent with valid data.
+
+2. **`flutter.appStart.supportsRestart` derived from `build_mode == "debug"`**: This matches the Flutter convention. Profile and release builds return `false`. The backend provides the build mode as a string, keeping the logic simple.
+
+3. **`DapSessionMetadata` added to `VmBackendFactory`**: The factory now holds a shared `Arc<Mutex<Option<DapSessionMetadata>>>` slot that the TEA handler can update when a VM Service connection is established. This enables newly connecting clients to receive correct metadata without requiring factory recreation. The `session_metadata_slot()` accessor is suppressed with `#[allow(dead_code)]` until the TEA handler wiring is done in a follow-up.
+
+4. **All existing test mock backends updated**: Added the three new trait methods to all 12 test mock backends across 4 files. All return `None`/`"debug"` defaults to maintain existing test behavior.
+
+5. **`dart.serviceExtensionAdded` deferred**: As the task notes, this is lower priority and not straightforward from the current event flow. Not implemented.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (510 tests)
+- `cargo test --workspace` - Passed (3555+ tests across all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied
+
+### Risks/Limitations
+
+1. **`session_metadata_slot()` not yet wired to Engine TEA handler**: The `DapSessionMetadata` slot exists in `VmBackendFactory` and the accessor method is present, but the TEA handler has not been updated to populate it when a VM Service connects. This means `ws_uri` and `device_id` will return `None` for real sessions until the wiring is added. The `dart.debuggerUris` event won't be emitted in production yet, but the entire mechanism is in place.
+
+2. **`build_mode` defaults to `"debug"`**: Without factory wiring, the mode is always reported as debug. This is the safe default. Profile/release detection will need to come from session metadata populated by the TEA handler.

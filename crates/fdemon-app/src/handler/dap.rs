@@ -91,6 +91,19 @@ fn handle_client_disconnected(state: &mut AppState, client_id: &str) -> UpdateRe
         clients.remove(client_id);
         tracing::info!("DAP client disconnected: {}", client_id);
     }
+
+    // Phase 4, Task 03: if the watcher was suspended (debugger was paused when
+    // the client disconnected) resume it so auto-reload is not stuck disabled.
+    // Emit ResumeFileWatcher as a follow-up message so the existing resume
+    // handler handles the pending-changes flush in a single place.
+    if state.file_watcher_suspended {
+        tracing::info!(
+            "DAP client '{}' disconnected while watcher was suspended — resuming",
+            client_id
+        );
+        return UpdateResult::message(crate::message::Message::ResumeFileWatcher);
+    }
+
     UpdateResult::none()
 }
 

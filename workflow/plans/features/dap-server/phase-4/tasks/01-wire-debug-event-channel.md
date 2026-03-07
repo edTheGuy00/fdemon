@@ -196,3 +196,49 @@ fn test_pause_exception_includes_reason() {
 - The `dap_debug_senders` `Arc<Mutex<Vec<...>>>` is passed through the Engine → `process_message` → `handle_action` → `VmBackendFactory` chain. Follow the same pattern as `vm_handle_for_dap`.
 - The `handle_debug_event` function signature must be extended to accept the sender registry. Thread it through `update()` → `devtools::debug::handle_debug_event()`.
 - Consider using `tokio::sync::broadcast` instead of `Vec<mpsc::Sender>` for the many-sender pattern — but `mpsc` with retain is simpler and each sender gets independent backpressure.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `dap_debug_senders: Arc<Mutex<Vec<mpsc::Sender<DapDebugEvent>>>>` field to `AppState`; initialized in `with_settings()` |
+| `crates/fdemon-app/src/engine.rs` | Added `dap_debug_senders` field to `Engine`; injects the same `Arc` into `state.dap_debug_senders` during `new()`; exposes `dap_debug_senders()` accessor; passes the registry through `process::process_message()` and `dispatch_spawn_session()` |
+| `crates/fdemon-app/src/process.rs` | Added `dap_debug_senders` parameter to `process_message()`; passes it to `handle_action()` |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `dap_debug_senders` parameter to `handle_action()`; passes it to `VmBackendFactory::new()` on `SpawnDapServer` |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Updated `VmBackendFactory` to accept `dap_debug_senders` registry; `create()` now creates the channel, pushes the sender to the registry, and returns the receiver; removed the "sender dropped" TODO |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Updated `handle_debug_event()` and `handle_isolate_event()` to translate VM events to `DapDebugEvent` and forward via `forward_dap_event()`; added `forward_dap_event()` internal helper with `retain`-based pruning; added 31 new unit tests for event forwarding |
+
+### Notable Decisions/Tradeoffs
+
+1. **`dap_debug_senders` stored in `AppState`**: Instead of threading the registry through `update()` → `handle_debug_event()` function signatures (which would require updating 100+ test call sites), the registry is stored in `AppState`. Both `Engine` and `AppState` share the same `Arc`, so the factory's writes are immediately visible to the handler.
+
+2. **`try_send` with `retain` for backpressure**: Uses `try_send` (non-blocking) to avoid stalling the TEA loop on a slow DAP client. Full channels retain the sender but drop the event (logged at debug). Closed channels (disconnected clients) prune the sender via `retain`. This gives independent per-client backpressure.
+
+3. **`IsolateRunnable` forwarded as `IsolateStart`**: The DAP adapter needs to know when isolates are ready. Since `IsolateRunnable` semantics ("ready for VM Service commands") overlap with `IsolateStart` from the adapter's perspective, it is forwarded as `IsolateStart` to ensure thread maps stay accurate even on reconnect.
+
+4. **`PausePostRequest` mapped to `Interrupted`**: There is no dedicated DAP `stopped` reason for `PausePostRequest`. The closest semantic match is `"pause"` (user-initiated), so `PausePostRequest` is mapped to `DapPauseReason::Interrupted` which renders as `"pause"` in DAP.
+
+5. **`PauseReason::Exit` already correct**: The existing `pause_reason_to_dap_str` in `fdemon-dap/adapter/mod.rs` already maps `PauseReason::Exit` to `"exit"` (not `"breakpoint"` as the task spec suspected). No fix needed.
+
+6. **`DebugEvent` already derives `Clone`**: Verified that `DebugEvent` in `fdemon-dap/adapter/mod.rs` already has `#[derive(Debug, Clone)]`. No change required.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all existing tests + 31 new tests in `handler::devtools::debug`)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Arc sharing between Engine and AppState**: The `dap_debug_senders` `Arc` is shared. If `AppState` is ever cloned (e.g., for snapshot testing), the clone shares the same registry. This is intentional — the sender list is per-process state, not per-snapshot state.
+
+2. **Event channel capacity is 64**: The `mpsc` channel created in `VmBackendFactory::create()` has capacity 64. A very fast VM producing many events faster than the DAP adapter can consume them will cause events to be silently dropped (logged at debug). This is acceptable for typical debugging workloads.
+
+3. **No session-scoping of forwarded events**: The current implementation forwards ALL VM debug events from the selected session to ALL connected DAP adapters. Multiple concurrent Flutter sessions sharing one DAP client could produce mixed events. This is acceptable for the Phase 4 single-session DAP use case.

@@ -52,3 +52,35 @@ Document the Zed-specific behavior:
 - Only update documentation for features that are actually implemented and working. If a feature is deferred, do not document it.
 - Remove any Phase 3 leftover documentation that mentions NoopBackend or non-functional states.
 - Keep documentation concise — developers should be able to get started quickly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/IDE_SETUP.md` | Added "Phase 4 Debugging Features" section covering all 9 implemented features. Updated capabilities table to reflect implemented features. Expanded troubleshooting section with 5 new entries. Removed stale "planned for Phase 4" notes. Updated Phase 5 reference (was "Phase 3 covers manual configuration only"). |
+| `docs/ARCHITECTURE.md` | Added full "DAP Server Subsystem" section with architecture overview, debug event flow diagram, `dap_debug_senders` channel architecture, breakpoint state model, multi-session thread ID namespacing table, coordinated pause flow, custom DAP events, and `DebugBackend` trait diagram. Added `fdemon-dap` crate to project structure tree, layered architecture table, dependency flow, module reference, and API surface. Updated workspace crate count from 4 to 5. |
+| `workflow/plans/features/dap-server/PLAN.md` | Marked Phase 4 acceptance criteria items as done/planned per implementation status. |
+
+### Notable Decisions/Tradeoffs
+
+1. **NoopBackend retained in ARCHITECTURE.md**: The task said to remove stale NoopBackend references from user-facing docs. `NoopBackend` is a legitimate test helper in the codebase (used in `fdemon-dap` unit tests); it was only removed from `IDE_SETUP.md` where it was misleadingly described as a limitation rather than a test utility. It is now listed correctly in the `fdemon-dap` API surface as a test-only backend.
+
+2. **Tasks 10 and 11 not documented as features**: Neither task had a completion summary in the task file and the source code showed no implementation (no `desired_breakpoints` field, no timeout/rate-limiting code). These were documented in IDE_SETUP.md only as "Planned" in the capability table, and in PLAN.md as `[ ]` items with notes.
+
+3. **Debug event flow diagram placement**: The debug event flow diagram was placed in ARCHITECTURE.md under the new "DAP Server Subsystem" section rather than inside the existing "Data Flow" section. This keeps all DAP-specific architecture in one browsable section.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed (docs-only change, no source modifications)
+
+### Risks/Limitations
+
+1. **ARCHITECTURE.md project structure tree**: The `fdemon-dap` crate was added to the file tree. If the actual directory layout differs from what was documented, the tree will need updating. The layout was verified against the actual source files found via `find`.
+
+2. **Breakpoint persistence note**: The troubleshooting section documents that breakpoints need to be re-set after hot restart. This matches the current behavior (Task 10 not implemented). When Task 10 lands, remove this note.

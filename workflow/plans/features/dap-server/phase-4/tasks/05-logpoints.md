@@ -150,3 +150,37 @@ async fn test_logpoint_emits_output_and_resumes() {
 - `SourceBreakpoint.log_message` field already exists in `protocol/types.rs:442`. The adapter just needs to read and store it during `setBreakpoints`.
 - Performance: logpoints add one round-trip per `{expression}` per hit. For hot code paths, this could be noticeable. Document this tradeoff.
 - Escaped braces: The DAP spec does not define an escape mechanism for literal `{` in logpoints. Most adapters don't support `\{`. Follow suit — any `{` starts an expression until the matching `}`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | Added `LogSegment` enum, `parse_log_message()` function, `log_message: Option<String>` to `BreakpointCondition` and `BreakpointEntry`, updated `add_with_condition()` to populate it; added 12 new unit tests |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added logpoint evaluation step in `handle_debug_event` Paused handler (after condition checks, before `stopped` emission); added `interpolate_log_message()` helper method; updated `handle_set_breakpoints` to pass `log_message` from `SourceBreakpoint`; re-exported `LogSegment` and `parse_log_message`; added 12 new integration tests; fixed 3 existing test `BreakpointCondition` structs to include the new `log_message: None` field |
+
+### Notable Decisions/Tradeoffs
+
+1. **Struct update syntax avoided in tests**: Existing tests that explicitly initialize `BreakpointCondition` without `..Default::default()` were updated to add `log_message: None` explicitly. This keeps existing test clarity (explicit intent) while satisfying the compiler.
+2. **Empty expression segments supported**: `parse_log_message("before {} after")` produces `Expression("")` for `{}`. This matches the "any `{` starts an expression" spec language.
+3. **Literal-only segments not emitted for empty strings**: The `parse_log_message` function skips empty literal segments (when the template starts with `{` or has adjacent expressions), preventing unnecessary empty `Literal("")` entries.
+4. **Logpoint evaluation order**: Hit condition → expression condition → logpoint. This means a falsy condition also suppresses logpoint output, satisfying the "condition gates the log" acceptance criterion.
+5. **Performance documented inline**: The `interpolate_log_message` doc comment warns that each `{expression}` adds one `evaluateInFrame` RPC round-trip, consistent with the task's performance note.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (487 tests, 0 failed)
+- `cargo test --workspace` - Passed (all crates, 0 failed)
+- `cargo clippy --workspace` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Per-expression RPC latency**: Each `{expression}` placeholder in a logpoint message requires one `evaluateInFrame` RPC call. Hot code paths with many placeholders may noticeably slow down due to the network round-trips to the Dart VM Service.
+2. **Empty expression `{}`**: An empty `{}` in a logpoint template is parsed as `Expression("")`. The VM will likely return an error for an empty expression, resulting in `<error>` in the output. This is technically correct per the spec but may surprise users.

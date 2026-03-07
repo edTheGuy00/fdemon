@@ -43,6 +43,17 @@ use crate::{
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Timeout constants
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum time to wait for the `initialize` request after a client connects.
+///
+/// VS Code typically sends `initialize` within 100 ms of connecting. This 30 s
+/// timeout primarily catches broken or abandoned connections (e.g., a port
+/// scanner that opens a TCP connection but never sends any data).
+const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DebugEventSource
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -227,6 +238,38 @@ impl crate::adapter::DebugBackend for NoopBackend {
     ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
         Err(crate::adapter::BackendError::NotConnected)
     }
+
+    async fn get_source(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+    ) -> std::result::Result<String, String> {
+        Err("not connected".to_string())
+    }
+
+    async fn hot_reload(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn hot_restart(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn stop_app(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn ws_uri(&self) -> Option<String> {
+        None
+    }
+
+    async fn device_id(&self) -> Option<String> {
+        None
+    }
+
+    async fn build_mode(&self) -> String {
+        "debug".to_string()
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -357,6 +400,12 @@ impl<B: DebugBackend> DapClientSession<B> {
     ///    channel types.
     /// 4. Server shutdown signal from a [`watch::Receiver<bool>`].
     ///
+    /// ## Connection timeout
+    ///
+    /// If the client does not send an `initialize` request within [`INIT_TIMEOUT`]
+    /// (30 s), the connection is closed cleanly. This catches broken or abandoned
+    /// connections (e.g., port scanners) that never send any DAP data.
+    ///
     /// The loop exits when the client disconnects, an unrecoverable I/O error
     /// occurs, or a shutdown signal is received.
     async fn run_inner<R, W>(
@@ -371,7 +420,30 @@ impl<B: DebugBackend> DapClientSession<B> {
         R: AsyncRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
     {
+        // Connection timeout: track when we last received *any* message so we
+        // can close connections that never send `initialize`. The deadline is
+        // only active while in the `Uninitialized` state.
+        let init_deadline = tokio::time::Instant::now() + INIT_TIMEOUT;
+
         loop {
+            // Compute the remaining time until the init deadline.
+            // Once the session transitions out of `Uninitialized`, the timeout
+            // is effectively disabled (the deadline has passed or we skip it).
+            let init_timed_out = self.state == SessionState::Uninitialized
+                && tokio::time::Instant::now() >= init_deadline;
+
+            if init_timed_out {
+                tracing::warn!(
+                    "DAP client did not send initialize within {}s, closing connection",
+                    INIT_TIMEOUT.as_secs()
+                );
+                return Ok(());
+            }
+
+            // Build a sleep future that fires at the init deadline (only
+            // meaningful while still Uninitialized).
+            let init_sleep = tokio::time::sleep_until(init_deadline);
+
             tokio::select! {
                 result = read_message(reader) => {
                     match result {
@@ -435,6 +507,15 @@ impl<B: DebugBackend> DapClientSession<B> {
                         let _ = write_message(writer, &DapMessage::Event(event)).await;
                         break;
                     }
+                }
+
+                // Connection initialization timeout: only fires when still Uninitialized.
+                _ = init_sleep, if self.state == SessionState::Uninitialized => {
+                    tracing::warn!(
+                        "DAP client did not send initialize within {}s, closing connection",
+                        INIT_TIMEOUT.as_secs()
+                    );
+                    return Ok(());
                 }
             }
         }
@@ -551,7 +632,7 @@ impl<B: DebugBackend> DapClientSession<B> {
         match request.command.as_str() {
             "initialize" => self.handle_initialize(request),
             "configurationDone" => self.handle_configuration_done(request),
-            "disconnect" => self.handle_disconnect(request),
+            "disconnect" => self.handle_disconnect(request).await,
 
             // All other commands are delegated to the adapter once the
             // session has been initialized (Initializing, Configured, or Attached).
@@ -665,15 +746,30 @@ impl<B: DebugBackend> DapClientSession<B> {
     /// Emits a `terminated` event before the disconnect response, as required
     /// by the DAP specification. The `terminated` event signals to the client
     /// that the debug session has ended so it can clean up its debug UI.
-    fn handle_disconnect(&mut self, request: &DapRequest) -> Vec<DapMessage> {
+    ///
+    /// When an adapter is attached, also delegates to [`DapAdapter::handle_request`]
+    /// for the `disconnect` command so that `terminateDebuggee` is respected:
+    /// the adapter either resumes paused isolates (when `terminateDebuggee: false`)
+    /// or stops the Flutter app (when `terminateDebuggee: true`). The `terminated`
+    /// event is always emitted by this session handler, not the adapter.
+    async fn handle_disconnect(&mut self, request: &DapRequest) -> Vec<DapMessage> {
         self.state = SessionState::Disconnecting;
 
         // DAP spec: send `terminated` before the disconnect response so the
         // client can transition its UI out of debug mode.
         let terminated = self.make_event(DapEvent::terminated());
-        let resp = self.make_response(DapResponse::success(request, None));
 
-        vec![DapMessage::Event(terminated), DapMessage::Response(resp)]
+        if let Some(adapter) = &mut self.adapter {
+            // The adapter handles terminateDebuggee logic (resume isolates or
+            // stop the Flutter app). The `terminated` event is always our responsibility.
+            let adapter_resp = adapter.handle_request(request).await;
+            let resp = self.make_response(adapter_resp);
+            vec![DapMessage::Event(terminated), DapMessage::Response(resp)]
+        } else {
+            // No adapter attached — just return terminated + success.
+            let resp = self.make_response(DapResponse::success(request, None));
+            vec![DapMessage::Event(terminated), DapMessage::Response(resp)]
+        }
     }
 }
 
@@ -1259,6 +1355,34 @@ mod tests {
             _: &str,
         ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "scripts": [] }))
+        }
+
+        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+            Ok(String::new())
+        }
+
+        async fn hot_reload(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+            Ok(())
+        }
+
+        async fn hot_restart(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+            Ok(())
+        }
+
+        async fn stop_app(&self) -> std::result::Result<(), crate::adapter::BackendError> {
+            Ok(())
+        }
+
+        async fn ws_uri(&self) -> Option<String> {
+            None
+        }
+
+        async fn device_id(&self) -> Option<String> {
+            None
+        }
+
+        async fn build_mode(&self) -> String {
+            "debug".to_string()
         }
     }
 

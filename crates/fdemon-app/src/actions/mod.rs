@@ -49,6 +49,7 @@ pub fn handle_action(
     tool_availability: ToolAvailability,
     dap_server_handle: DapHandleSlot,
     vm_handle_for_dap: Arc<Mutex<Option<VmRequestHandle>>>,
+    dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>>,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
@@ -422,9 +423,13 @@ pub fn handle_action(
             let handle_slot = dap_server_handle.clone();
             // Construct a factory from the current VM handle slot so each
             // accepted DAP client gets a real backend when a Flutter session
-            // is attached.
+            // is attached. Pass `msg_tx_clone` so that `hotReload`/`hotRestart`
+            // custom DAP requests can dispatch through the TEA pipeline
+            // (Phase 4, Task 02).
             let factory = Arc::new(crate::handler::dap_backend::VmBackendFactory::new(
                 vm_handle_for_dap,
+                dap_debug_senders,
+                Some(msg_tx_clone.clone()),
             ));
             tokio::spawn(async move {
                 // Create the event channel: DapServerEvent → Message bridge

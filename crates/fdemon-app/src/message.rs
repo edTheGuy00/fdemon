@@ -143,6 +143,26 @@ pub enum Message {
     /// Watcher error occurred
     WatcherError { message: String },
 
+    // ── Coordinated Pause / File-Watcher Gate (Phase 4, Task 03) ─────────────
+    /// Suspend auto-reload while the debugger is paused.
+    ///
+    /// Emitted by `handle_debug_event` on any `PauseBreakpoint`, `PauseException`,
+    /// `PauseInterrupted`, `PausePostRequest`, or `PauseStart` event when
+    /// `settings.dap.suppress_reload_on_pause` is `true`.
+    ///
+    /// The update handler sets `state.file_watcher_suspended = true`.
+    SuspendFileWatcher,
+
+    /// Resume auto-reload after the debugger continues execution.
+    ///
+    /// Emitted by `handle_debug_event` on `Resume` events and by
+    /// `handle_client_disconnected` when a DAP client disconnects while the
+    /// watcher was suspended.
+    ///
+    /// The update handler clears `state.file_watcher_suspended` and triggers
+    /// `AutoReloadTriggered` if `pending_file_changes > 0`.
+    ResumeFileWatcher,
+
     // ─────────────────────────────────────────────────────────
     // Device Selector Messages
     // ─────────────────────────────────────────────────────────

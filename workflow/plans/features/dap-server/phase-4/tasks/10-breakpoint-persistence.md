@@ -153,3 +153,39 @@ fn test_breakpoint_events_during_restart() {
 - `addBreakpointWithScriptUri` may resolve to a different line than requested (due to recompilation). The `BreakpointResolved` event updates the actual line — forward this as a `breakpoint changed` event.
 - Hot reload (not restart) does NOT invalidate breakpoints — VM breakpoint IDs survive hot reload. Only hot restart needs re-application.
 - Variable reference invalidation (`on_resume()`) should clear frame stores, variable stores, AND source reference stores.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | Added `DesiredBreakpoint` struct, `DesiredBreakpointSpec` type alias, `BreakpointManager` struct with desired/active separation; added `drain_all` and `insert_with_id` methods to `BreakpointState`; 13 new tests |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `IsolateRunnable` variant to `DebugEvent`; added `desired_breakpoints` field to `DapAdapter`; updated `handle_set_breakpoints` to record desired state; updated `IsolateExit` handler to clear active and emit unverified events; added `IsolateRunnable` handler for re-application; updated `on_hot_restart` to also drain active breakpoints; exported new types; 9 new integration tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept `breakpoint_state: BreakpointState` alongside `desired_breakpoints`**: Instead of replacing `breakpoint_state` with a full `BreakpointManager`, I kept the existing `BreakpointState` field (used by ~20 call sites in tests and handlers) and added a separate `desired_breakpoints: HashMap<String, Vec<DesiredBreakpoint>>` field. This minimized churn to existing code while adding the desired/active separation. `BreakpointManager` is available as a standalone struct for callers who want the cleaner API.
+
+2. **Step 0 + Step 3 two-pass desired sync in `handle_set_breakpoints`**: The desired breakpoints are first recorded with placeholder IDs in Step 0 before the active state is built, then re-synced with actual DAP IDs in Step 3 once the active state is populated. This ensures the desired state always has real stable IDs.
+
+3. **`IsolateRunnable` added to `DebugEvent`**: This is the correct trigger per the task notes. The VM Service emits `IsolateRunnable` when the isolate is fully initialized and can receive breakpoint RPCs. Added the variant before `BreakpointResolved` in the match block.
+
+4. **`on_hot_restart` also clears active breakpoints**: Since hot restart creates a new isolate, active breakpoints are invalid. The `IsolateExit` event handles clearing during normal restart flow; `on_hot_restart` is a safety net for cases where the adapter is reset without going through the event sequence.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (561 tests, 23 new)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+- `cargo fmt --all` - Passed
+
+### Risks/Limitations
+
+1. **Desired state uses second `set_desired` call for same URI replaces IDs**: When `handle_set_breakpoints` is called twice for the same URI, new DAP IDs are allocated. This is correct per DAP spec (setBreakpoints replaces the full set), but callers who cache DAP IDs will see new ones. This matches standard IDE behavior.
+
+2. **`IsolateRunnable` must be forwarded by fdemon-app**: The `IsolateRunnable` variant is now defined in `DebugEvent` but the Engine integration layer in `fdemon-app` must forward the VM Service `IsolateRunnable` event through this channel. This wiring is outside the scope of this task.

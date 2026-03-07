@@ -943,6 +943,45 @@ mod tests {
             {
                 Box::pin(async { Ok(serde_json::json!({"scripts": []})) })
             }
+
+            fn get_source_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _script_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(String::new()) })
+            }
+
+            fn hot_reload_boxed(
+                &self,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn hot_restart_boxed(
+                &self,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn stop_app_boxed(
+                &self,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + '_>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn ws_uri_boxed(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+                Box::pin(async { None })
+            }
+
+            fn device_id_boxed(&self) -> Pin<Box<dyn Future<Output = Option<String>> + Send + '_>> {
+                Box::pin(async { None })
+            }
+
+            fn build_mode_boxed(&self) -> Pin<Box<dyn Future<Output = String> + Send + '_>> {
+                Box::pin(async { "debug".to_string() })
+            }
         }
 
         /// A factory that always returns a mock backend.

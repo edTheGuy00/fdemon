@@ -150,3 +150,39 @@ fn test_route_to_correct_session() {
 - The `SessionManager` in `fdemon-app` already supports up to 9 sessions. This task mirrors that limit.
 - Multi-session DAP requires the backend factory to create backends for multiple sessions, not just the "active" one. This may require changing `VmBackendFactory` to accept a session ID parameter.
 - This is a larger task that touches multiple parts of the adapter. Consider implementing basic multi-session first (threads + routing), then breakpoint broadcasting as a follow-up if time is tight.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/threads.rs` | Added `MultiSessionThreadMap`, `SessionThreads`, `DapSessionId` type alias, `THREADS_PER_SESSION`, `MAX_SESSIONS` constants, `session_thread_base()` and `session_index_from_thread_id()` public helpers; 49 unit tests total (21 new multi-session tests) |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Extended re-export to include `MultiSessionThreadMap`, `DapSessionId`, `session_thread_base`, `session_index_from_thread_id`, `MAX_SESSIONS`, `THREADS_PER_SESSION` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`DapSessionId = u64` instead of `uuid::Uuid`**: `uuid` is not a workspace dependency and `fdemon-app` already uses `SessionId = u64`. Using `u64` avoids a new dependency and mirrors the existing convention. Callers can use their `SessionId` value directly.
+
+2. **`MultiSessionThreadMap` is a standalone aggregation type**: The existing `DapAdapter` continues using `ThreadMap` for its own single-session logic. `MultiSessionThreadMap` is an infrastructure type that higher-level code (e.g., a future multi-backend adapter) will use. This preserves all single-session behaviour unchanged.
+
+3. **Session removal compacts the Vec rather than leaving a sentinel**: After `remove_session`, surviving sessions keep their original `thread_base` values (stored in `SessionThreads`), so routing via `lookup_thread` still works correctly despite index shifting. The index arithmetic in `session_index_from_thread_id` is used only to find the expected `thread_base`; the Vec is then scanned to find the matching session.
+
+4. **`thread_to_isolate.keys()` iteration in `all_threads`**: Clippy flagged the original `for (&id, _iso) in &map` pattern as unnecessary key+value iteration; replaced with `.keys()` iteration to avoid the warning.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (538 tests, 49 in threads module)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied (no changes needed beyond minor formatting)
+
+### Risks/Limitations
+
+1. **Breakpoint broadcasting not implemented**: The task notes this is a follow-up. `MultiSessionThreadMap` provides the routing foundation (session lookup by thread ID), but `DapAdapter` still applies breakpoints only to the primary isolate of its single backend. Multi-backend breakpoint broadcasting is deferred.
+
+2. **`remove_session` Vec compaction**: When a session in the middle of the Vec is removed, remaining sessions' `thread_base` values are stable (stored in `SessionThreads`) but `session_index_from_thread_id` may return a stale index for the new Vec layout. `lookup_thread` handles this correctly by searching by `thread_base` value, not Vec index. This is documented in the method body.

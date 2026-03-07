@@ -168,6 +168,13 @@ pub struct Capabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_restart_request: Option<bool>,
 
+    /// The debug adapter supports the `clipboard` context in the `evaluate` request.
+    ///
+    /// When `true`, IDEs may send `evaluate` requests with `context: "clipboard"`
+    /// to retrieve a full, untruncated representation of a value for pasting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_clipboard_context: Option<bool>,
+
     /// Available exception filter options for the `setExceptionBreakpoints` request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_breakpoint_filters: Option<Vec<ExceptionBreakpointsFilter>>,
@@ -694,6 +701,41 @@ impl DapResponse {
             body: None,
         }
     }
+
+    /// Create an error response with a numeric error code.
+    ///
+    /// Produces a well-formed DAP error response with:
+    /// - `success: false`
+    /// - `message`: short human-readable description
+    /// - `body.error.id`: numeric error code for programmatic handling
+    /// - `body.error.format`: detailed error message (same as `message`)
+    ///
+    /// ## Error Code Conventions
+    ///
+    /// | Code | Meaning                          |
+    /// |------|----------------------------------|
+    /// | 1000 | VM Service not connected         |
+    /// | 1001 | No active debug session          |
+    /// | 1002 | Thread / isolate not found       |
+    /// | 1003 | Evaluation failed                |
+    /// | 1004 | Request timed out                |
+    /// | 1005 | VM Service disconnected          |
+    pub fn error_with_code(request: &DapRequest, code: i64, message: impl Into<String>) -> Self {
+        let msg: String = message.into();
+        Self {
+            seq: 0,
+            request_seq: request.seq,
+            success: false,
+            command: request.command.clone(),
+            message: Some(msg.clone()),
+            body: Some(serde_json::json!({
+                "error": {
+                    "id": code,
+                    "format": msg,
+                }
+            })),
+        }
+    }
 }
 
 impl DapEvent {
@@ -821,8 +863,10 @@ impl Capabilities {
             supports_conditional_breakpoints: Some(true),
             supports_hit_conditional_breakpoints: Some(true),
             supports_evaluate_for_hovers: Some(true),
+            supports_clipboard_context: Some(true),
             supports_log_points: Some(true),
             supports_terminate_request: Some(true),
+            supports_restart_request: Some(true),
             supports_delayed_stack_trace_loading: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
@@ -1592,8 +1636,9 @@ mod tests {
         assert_eq!(json["supportsLogPoints"], true);
         assert_eq!(json["supportsTerminateRequest"], true);
         assert_eq!(json["supportsDelayedStackTraceLoading"], true);
+        // Phase 4: supportsRestartRequest is now enabled for hotReload/hotRestart
+        assert_eq!(json["supportsRestartRequest"], true);
         // Not yet implemented capabilities are absent
-        assert!(json.get("supportsRestartRequest").is_none());
         assert!(json.get("supportsExceptionInfoRequest").is_none());
     }
 }

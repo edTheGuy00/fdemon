@@ -11,6 +11,7 @@ This document describes the internal architecture of Flutter Demon, a high-perfo
 - [Module Reference](#module-reference)
 - [Key Patterns](#key-patterns)
 - [DevTools Subsystem](#devtools-subsystem)
+- [DAP Server Subsystem](#dap-server-subsystem)
 - [Data Flow](#data-flow)
 - [Key Types](#key-types)
 - [Future Considerations](#future-considerations)
@@ -168,19 +169,20 @@ The workspace crates enforce clean layer boundaries with **compile-time guarante
 
 | Crate | Responsibility | Dependencies |
 |-------|----------------|--------------|
-| **flutter-demon (binary)** | CLI, entry point, headless mode | fdemon-core, fdemon-daemon, fdemon-app, fdemon-tui |
+| **flutter-demon (binary)** | CLI, entry point, headless mode | fdemon-core, fdemon-daemon, fdemon-app, fdemon-tui, fdemon-dap |
 | **fdemon-tui** | Terminal UI presentation | fdemon-core, fdemon-app |
-| **fdemon-app** | State, orchestration, TEA, Engine, services, config, watcher | fdemon-core, fdemon-daemon |
+| **fdemon-app** | State, orchestration, TEA, Engine, services, config, watcher, DAP bridge | fdemon-core, fdemon-daemon, fdemon-dap |
+| **fdemon-dap** | DAP protocol types, adapter logic, TCP server, stdio transport | fdemon-core |
 | **fdemon-daemon** | Flutter process I/O, device/emulator management | fdemon-core |
 | **fdemon-core** | Domain types, events, discovery, error handling | **None** (zero internal deps) |
 
 **Dependency Flow:**
 ```
 fdemon-core (foundation)
-    ↓
-fdemon-daemon (Flutter I/O)
-    ↓
-fdemon-app (orchestration)
+    ↓               ↓
+fdemon-daemon    fdemon-dap (DAP protocol)
+    ↓               ↓
+fdemon-app (orchestration + DAP bridge)
     ↓
 fdemon-tui (presentation)
     ↓
@@ -212,7 +214,7 @@ The TUI crate depends on App because of the TEA pattern:
 
 ## Project Structure
 
-Flutter Demon is organized as a **Cargo workspace** with 4 library crates and 1 binary:
+Flutter Demon is organized as a **Cargo workspace** with 5 library crates and 1 binary:
 
 ```
 flutter-demon/
@@ -365,6 +367,27 @@ flutter-demon/
 │                       ├── request_table.rs
 │                       └── request_details.rs
 │
+├── crates/fdemon-dap/            # DAP server (protocol + adapter + transport)
+│   ├── Cargo.toml                # depends: fdemon-core (no daemon/app deps)
+│   └── src/
+│       ├── lib.rs
+│       ├── protocol/             # DAP wire protocol
+│       │   ├── mod.rs
+│       │   ├── types.rs          # All DAP request/response/event types
+│       │   └── codec.rs          # Content-Length framing encode/decode
+│       ├── adapter/              # DAP ↔ VM Service translation
+│       │   ├── mod.rs            # DapAdapter, DebugBackend trait, DebugEvent
+│       │   ├── breakpoints.rs    # BreakpointState, conditions, logpoints
+│       │   ├── evaluate.rs       # Expression evaluation, EvalContext
+│       │   ├── stack.rs          # FrameStore, VariableStore, SourceReferenceStore
+│       │   └── threads.rs        # ThreadMap, MultiSessionThreadMap, ID namespacing
+│       ├── server/               # TCP listener + session lifecycle
+│       │   ├── mod.rs            # DapServer, TCP accept loop
+│       │   └── session.rs        # DapClientSession, NoopBackend (test helper)
+│       └── transport/            # Stdio transport
+│           ├── mod.rs
+│           └── stdio.rs          # Stdio DAP transport for IDE integration testing
+│
 └── tests/                        # Integration tests (binary crate)
     ├── common/
     └── e2e/
@@ -515,10 +538,33 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `confirm_dialog.rs` | Confirmation dialog widget |
 | `new_session_dialog/` | New session creation dialog |
 
+### `fdemon-dap` — DAP Server
+
+**Location**: `crates/fdemon-dap/`
+**Dependencies**: `fdemon-core` only
+**Purpose**: Debug Adapter Protocol implementation — TCP server, protocol types, adapter logic, stdio transport
+
+**Key Design Constraint**: `fdemon-dap` has no dependency on `fdemon-daemon` or
+`fdemon-app`. The `DebugBackend` trait abstracts all VM Service operations;
+`fdemon-app` provides the concrete `VmServiceBackend` implementation.
+
+| Module | Purpose |
+|--------|---------|
+| `protocol/types.rs` | All DAP request, response, and event types |
+| `protocol/codec.rs` | Content-Length framing encoder/decoder |
+| `adapter/mod.rs` | `DapAdapter` struct, `DebugBackend` trait, `DebugEvent` enum |
+| `adapter/breakpoints.rs` | `BreakpointState` — DAP ID ↔ VM ID mapping, conditional breakpoints, logpoints |
+| `adapter/evaluate.rs` | Expression evaluation handler, `EvalContext` (hover/watch/repl/clipboard) |
+| `adapter/stack.rs` | `FrameStore`, `VariableStore`, `SourceReferenceStore` |
+| `adapter/threads.rs` | `ThreadMap`, `MultiSessionThreadMap`, session ID namespacing |
+| `server/mod.rs` | `DapServer` — TCP accept loop, client session spawning |
+| `server/session.rs` | `DapClientSession`, `NoopBackend` (test-only backend) |
+| `transport/stdio.rs` | Stdio transport for IDE integration testing |
+
 ### `flutter-demon` (Binary) — Headless Mode
 
 **Location**: `src/headless/`
-**Dependencies**: `fdemon-core`, `fdemon-daemon`, `fdemon-app`, `fdemon-tui`
+**Dependencies**: `fdemon-core`, `fdemon-daemon`, `fdemon-app`, `fdemon-tui`, `fdemon-dap`
 **Purpose**: Binary entry point, CLI parsing, headless NDJSON mode
 
 **Headless Mode:**
@@ -700,6 +746,232 @@ DevTools state lives at two levels:
 
 ---
 
+## DAP Server Subsystem
+
+The DAP server enables IDE debuggers (VS Code, Zed, Neovim, Helix) to attach to
+Flutter sessions managed by fdemon via the Debug Adapter Protocol.
+
+### Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      IDE (DAP client)                        │
+│              VS Code / Zed / Neovim / Helix                  │
+└────────────────────────┬─────────────────────────────────────┘
+                         │ TCP (DAP wire protocol)
+                         ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    fdemon-dap crate                          │
+│  ┌────────────────┐  ┌──────────────────────────────────┐   │
+│  │   DapServer    │  │         DapClientSession         │   │
+│  │ (TCP listener) │──│  (per-connection state machine)  │   │
+│  └────────────────┘  └──────────────┬───────────────────┘   │
+│                                     │                        │
+│                          ┌──────────▼──────────┐            │
+│                          │      DapAdapter      │            │
+│                          │  (protocol handler)  │            │
+│                          └──────────┬───────────┘            │
+│                                     │ DebugBackend trait     │
+└─────────────────────────────────────┼──────────────────────┘
+                                      │
+┌─────────────────────────────────────┼──────────────────────┐
+│               fdemon-app crate      │                       │
+│                                     ▼                       │
+│                          ┌──────────────────────┐          │
+│                          │  VmServiceBackend    │          │
+│                          │ (DebugBackend impl)  │          │
+│                          └──────────┬───────────┘          │
+│                                     │                       │
+│          ┌──────────────────────────┼──────────┐           │
+│          ▼                          ▼           ▼           │
+│  dap_debug_senders          TEA Engine    VmRequestHandle  │
+│  (DebugEvent channel)      (hot reload)   (VM Service RPC) │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Debug Event Flow
+
+VM Service debug events (breakpoint hit, resume, isolate created) are translated
+into DAP events and forwarded to connected IDE clients:
+
+```
+Dart VM Service
+    │
+    ├── "Debug" stream events ──────────────────────┐
+    │   (PauseBreakpoint, Resume, PauseException)   │
+    │                                               ▼
+    │                                  actions/vm_service.rs
+    │                                  (VM event forwarding loop)
+    │                                               │
+    │                                               ▼
+    │                                  Message::VmServiceDebugEvent
+    │                                               │
+    │                                               ▼
+    │                                  handler/devtools/debug.rs
+    │                                  handle_debug_event()
+    │                                               │
+    │                               ┌───────────────┴─────────────────┐
+    │                               ▼                                 ▼
+    │                    Mutate per-session DebugState        Translate to DapDebugEvent
+    │                    (paused/resumed/isolate state)       (Paused/Resumed/ThreadExited)
+    │                                                                  │
+    └── "Isolate" stream events                                        ▼
+        (IsolateStart, IsolateExit)                     dap_debug_senders registry
+                │                                       (one mpsc::Sender per DAP client)
+                ▼                                                       │
+        handler/devtools/debug.rs                                       ▼
+        handle_isolate_event()                             DapAdapter.process_debug_event()
+                                                                        │
+                                                                        ▼
+                                                           IDE receives stopped/continued/
+                                                           thread DAP events
+```
+
+### Channel Architecture: `dap_debug_senders`
+
+The `dap_debug_senders` registry is the bridge between the TEA message loop and
+the per-connection DAP adapters:
+
+```
+AppState
+└── dap_debug_senders: Arc<Mutex<Vec<mpsc::Sender<DebugEvent>>>>
+          │
+          │ (one entry per connected DAP client)
+          │
+          ├── Sender → DapClientSession 1 (IDE window 1)
+          ├── Sender → DapClientSession 2 (IDE window 2)
+          └── ...
+```
+
+- When a DAP client attaches, the Engine creates an `mpsc` channel and registers
+  the `Sender` in `dap_debug_senders`.
+- The TEA handler calls `try_send` on each sender when a debug event arrives.
+- Stale senders (where the DAP client disconnected) are pruned automatically:
+  `try_send` returns `Err` for a closed channel, and the handler uses `retain`
+  to remove them.
+
+### Breakpoint State Model
+
+Each `DapAdapter` instance holds a `BreakpointState` that tracks the mapping
+between DAP breakpoint IDs (integers) and VM Service breakpoint IDs (strings):
+
+```
+setBreakpoints (IDE request)
+    │
+    ▼
+BreakpointState
+├── by_dap_id: HashMap<i64, BreakpointEntry>
+│   └── BreakpointEntry {
+│       dap_id, vm_id, uri, line, column, verified,
+│       condition, hit_condition, hit_count, log_message
+│   }
+└── vm_id_to_dap_id: HashMap<String, i64>
+
+When VM emits PauseBreakpoint (vm_id):
+  1. Look up dap_id via vm_id_to_dap_id
+  2. Increment hit_count
+  3. Evaluate hit_condition (if any) — cheap, no VM RPC
+  4. Evaluate condition via evaluateInFrame (if any)
+  5. If logpoint: interpolate {expression} and emit output event, auto-resume
+  6. If all conditions pass: emit stopped event to IDE
+```
+
+### Multi-Session Thread ID Namespacing
+
+Each Flutter session is assigned a dedicated thread ID range so that isolates
+from different sessions cannot collide:
+
+```
+Session index  │  Thread ID range  │  Formula
+───────────────┼───────────────────┼─────────────────────────────
+0              │  1000–1999        │  (0+1) × 1000 = 1000
+1              │  2000–2999        │  (1+1) × 1000 = 2000
+2              │  3000–3999        │  (2+1) × 1000 = 3000
+…              │  …                │  …
+8              │  9000–9999        │  (8+1) × 1000 = 9000
+```
+
+Given a thread ID, the session index is recovered as: `(thread_id / 1000) - 1`.
+The `ThreadMap` inside each session converts between Dart isolate IDs (strings
+like `"isolates/12345"`) and namespaced DAP thread IDs (integers).
+
+### Coordinated Pause: Auto-Reload Suppression
+
+When the Dart VM pauses an isolate (breakpoint, exception, step), file-watcher
+triggered hot reloads are suppressed to avoid invalidating the paused stack
+frame:
+
+```
+PauseBreakpoint event received
+    │
+    ▼
+handle_debug_event()
+    ├── Update DebugState (paused = true)
+    ├── Forward DapDebugEvent::Paused to IDE clients
+    └── Emit Message::SuspendFileWatcher (follow-up)
+            │
+            ▼
+    AppState.file_watcher_suspended = true
+    (file changes queued in pending_watcher_changes)
+
+Resume event received (or DAP client disconnects)
+    │
+    ▼
+    AppState.file_watcher_suspended = false
+    If pending_watcher_changes > 0: trigger single hot reload
+```
+
+### Custom DAP Events
+
+On successful `attach`, fdemon emits three custom events to the IDE:
+
+```
+dart.debuggerUris
+  body: { "vmServiceUri": "ws://127.0.0.1:PORT/..." }
+  → Allows IDE to connect supplementary tooling (Dart DevTools) to the same
+    VM Service connection
+
+flutter.appStart
+  body: { "deviceId": "...", "mode": "debug", "supportsRestart": true }
+  → Signals session metadata to the IDE debugger extension
+
+flutter.appStarted
+  body: {}
+  → Emitted when the VM signals the app is fully started (IsolateRunnable /
+    AppStarted VM event)
+```
+
+### `DebugBackend` Trait
+
+`fdemon-dap` defines the `DebugBackend` trait so it does not depend on
+`fdemon-daemon` or `fdemon-app`. The concrete implementation,
+`VmServiceBackend`, lives in `fdemon-app/src/handler/dap_backend.rs`:
+
+```
+fdemon-dap (defines trait)              fdemon-app (implements trait)
+┌───────────────────────────┐          ┌──────────────────────────┐
+│ pub trait DebugBackend {  │          │ pub struct VmServiceBackend {
+│   pause(isolate_id)       │◄─────────│   handle: VmRequestHandle │
+│   resume(isolate_id, step)│          │   msg_tx: mpsc::Sender     │
+│   add_breakpoint(...)     │          │   ws_uri: Option<String>   │
+│   evaluate_in_frame(...)  │          │   device_id: Option<String>│
+│   hot_reload()            │          │   build_mode: String       │
+│   hot_restart()           │          │ }                          │
+│   ws_uri()                │          │                            │
+│   get_source(...)         │          │ // hot_reload / hot_restart│
+│   ...                     │          │ // send Message::HotReload │
+│ }                         │          │ // into TEA pipeline       │
+└───────────────────────────┘          └──────────────────────────┘
+```
+
+`hot_reload()` and `hot_restart()` on `VmServiceBackend` send
+`Message::HotReload` / `Message::HotRestart` into the TEA pipeline rather than
+calling VM Service RPCs directly. This ensures reload lifecycle, phase tracking,
+and EngineEvent broadcasting all work consistently whether reload is triggered
+from the TUI, file watcher, or IDE.
+
+---
+
 ## Data Flow
 
 ### Startup Sequence
@@ -855,6 +1127,23 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - Process spawning logic (`process.rs`, `spawn.rs`)
 - Signal handling (`signals.rs`)
 - Action dispatching (`actions/` — modular directory with `mod.rs`, `session.rs`, `vm_service.rs`, `performance.rs`, `inspector/`, `network.rs`)
+
+#### `fdemon-dap` — DAP Server
+
+**Public API** (exported from `lib.rs`):
+- `DapServer`, `DapServerHandle` — TCP server lifecycle
+- `DapClientSession`, `NoopBackend` — Session and test backend
+- `DapMessage`, `DapRequest`, `DapResponse` — Protocol message types
+- `DebugBackend`, `DebugEvent`, `StepMode`, `BackendError` — Backend trait and types
+- `BreakpointState`, `BreakpointCondition`, `BreakpointResult` — Breakpoint tracking
+- `FrameStore`, `VariableStore`, `SourceReferenceStore` — Reference stores
+- `ThreadMap`, `MultiSessionThreadMap` — Thread ID mapping
+- `parse_log_message`, `LogSegment` — Logpoint interpolation
+- `run_dap_stdio()` — Stdio transport entry point
+
+**Internal** (`pub(crate)`):
+- Protocol codec (Content-Length framing)
+- Adapter handler methods
 
 #### `fdemon-tui` — Terminal UI
 

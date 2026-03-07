@@ -1,13 +1,18 @@
 //! # Frame and Variable Reference Stores
 //!
-//! Provides [`FrameStore`] and [`VariableStore`] for allocating and looking up
-//! DAP frame IDs and variable references.
+//! Provides [`FrameStore`], [`VariableStore`], and [`SourceReferenceStore`] for
+//! allocating and looking up DAP frame IDs, variable references, and source
+//! reference handles.
 //!
 //! ## Lifecycle
 //!
-//! Both stores are valid only while the debuggee is stopped. When the debuggee
-//! resumes, both stores must be reset via [`FrameStore::reset`] and
-//! [`VariableStore::reset`] (or equivalently via [`DapAdapter::on_resume`]).
+//! Both [`FrameStore`] and [`VariableStore`] are valid only while the debuggee
+//! is stopped. When the debuggee resumes, both stores must be reset via
+//! [`FrameStore::reset`] and [`VariableStore::reset`] (or equivalently via
+//! [`DapAdapter::on_resume`]).
+//!
+//! [`SourceReferenceStore`] persists across stop/resume transitions but is
+//! invalidated on hot restart via [`SourceReferenceStore::clear`].
 //!
 //! IDs are monotonically increasing integers starting at 1, allocated per stop
 //! cycle. They do **not** persist across stop/resume transitions.
@@ -18,12 +23,139 @@
 //! DAP protocol types:
 //!
 //! - [`extract_source`] — extract a [`DapSource`] from a VM Service frame
+//! - [`extract_source_with_store`] — extract a [`DapSource`], assigning
+//!   source references for SDK/package sources that cannot be resolved locally
 //! - [`extract_line_column`] — extract line and column from a frame's location
 //! - [`dart_uri_to_path`] — convert a Dart URI to a filesystem path
+//! - [`resolve_package_uri`] — try to resolve a `package:` URI to a local path
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::protocol::types::DapSource;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SourceReferenceStore
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Entry stored in [`SourceReferenceStore`] for each allocated reference.
+struct SourceRefEntry {
+    /// The Dart VM isolate ID that loaded this script.
+    isolate_id: String,
+    /// The VM Service script object ID (used in `getObject` calls).
+    script_id: String,
+    /// The original URI of the script (e.g. `"dart:core/string.dart"`).
+    uri: String,
+}
+
+/// Maps DAP `sourceReference` IDs to the script information needed to fetch
+/// source text via `getObject`.
+///
+/// ## Lifecycle
+///
+/// Source references are allocated on demand during `stackTrace` responses for
+/// any source URI that cannot be mapped to a local file (e.g., `dart:` SDK
+/// URIs and unresolvable `package:` URIs). Unlike frame IDs and variable
+/// references, source references persist across stop/resume transitions — the
+/// IDE may re-request source text at any time. They are only invalidated on
+/// hot restart (which creates a new isolate with new script IDs) via
+/// [`SourceReferenceStore::clear`].
+///
+/// ## ID stability
+///
+/// The same `(isolate_id, script_id)` pair always returns the same reference
+/// ID within a session so that IDEs can cache content without duplicate
+/// lookups.
+pub struct SourceReferenceStore {
+    next_id: i64,
+    /// reference_id → script information
+    references: HashMap<i64, SourceRefEntry>,
+}
+
+impl SourceReferenceStore {
+    /// Create a new empty store. The first allocated ID will be 1.
+    pub fn new() -> Self {
+        Self {
+            next_id: 1,
+            references: HashMap::new(),
+        }
+    }
+
+    /// Return the existing reference ID for `(isolate_id, script_id)`, or
+    /// allocate and store a new one.
+    ///
+    /// ID stability: the same `(isolate_id, script_id)` always produces the
+    /// same reference ID within a debug session.
+    pub fn get_or_create(&mut self, isolate_id: &str, script_id: &str, uri: &str) -> i64 {
+        // Check for an existing reference for this script.
+        for (&id, entry) in &self.references {
+            if entry.script_id == script_id && entry.isolate_id == isolate_id {
+                return id;
+            }
+        }
+        // Allocate a new reference.
+        let id = self.next_id;
+        self.next_id += 1;
+        self.references.insert(
+            id,
+            SourceRefEntry {
+                isolate_id: isolate_id.to_string(),
+                script_id: script_id.to_string(),
+                uri: uri.to_string(),
+            },
+        );
+        id
+    }
+
+    /// Look up the script information for a given reference ID.
+    ///
+    /// Returns `None` if the reference was never allocated or has been cleared.
+    pub fn get(&self, reference_id: i64) -> Option<SourceRefInfo> {
+        self.references.get(&reference_id).map(|e| SourceRefInfo {
+            isolate_id: e.isolate_id.clone(),
+            script_id: e.script_id.clone(),
+            uri: e.uri.clone(),
+        })
+    }
+
+    /// Invalidate all source references.
+    ///
+    /// Must be called on hot restart — a new isolate is created with new
+    /// script IDs, so old references are no longer valid.
+    ///
+    /// Note: `next_id` is **not** reset, because DAP clients may have cached
+    /// old reference IDs. Reusing them would cause stale cache hits.
+    pub fn clear(&mut self) {
+        self.references.clear();
+    }
+
+    /// Return the number of currently allocated references.
+    pub fn len(&self) -> usize {
+        self.references.len()
+    }
+
+    /// Return `true` if no references are currently allocated.
+    pub fn is_empty(&self) -> bool {
+        self.references.is_empty()
+    }
+}
+
+impl Default for SourceReferenceStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Resolved source reference information returned by [`SourceReferenceStore::get`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceRefInfo {
+    /// The Dart VM isolate ID that loaded this script.
+    pub isolate_id: String,
+    /// The VM Service script object ID.
+    pub script_id: String,
+    /// The original URI of the script.
+    pub uri: String,
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VariableRef
@@ -254,9 +386,12 @@ impl Default for FrameStore {
 /// - `dart:` URIs (SDK sources) → `"deemphasize"`, no `path`
 /// - `package:flutter/` URIs (framework sources) → `"deemphasize"`, no `path`
 /// - `file://` URIs (user code) → no hint, absolute filesystem path
-/// - Other URIs → no path (Phase 4 will add package resolution)
+/// - Other URIs → no path
 ///
 /// Returns `None` when the frame has no `location.script.uri` field.
+///
+/// For source references (SDK/unresolvable package URIs), use
+/// [`extract_source_with_store`] instead.
 pub fn extract_source(frame: &serde_json::Value) -> Option<DapSource> {
     let location = frame.get("location")?;
     let script = location.get("script")?;
@@ -287,6 +422,159 @@ pub fn extract_source(frame: &serde_json::Value) -> Option<DapSource> {
         source_reference: None,
         presentation_hint: hint,
     })
+}
+
+/// Extract a [`DapSource`] from a VM Service frame, assigning source references
+/// for SDK and unresolvable package sources.
+///
+/// ## Source strategy by URI type
+///
+/// | URI prefix              | Strategy                                              |
+/// |-------------------------|-------------------------------------------------------|
+/// | `file://`               | Local path via [`dart_uri_to_path`]; `sourceReference: 0` |
+/// | `dart:`                 | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `org-dartlang-sdk:`     | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `package:`              | Try resolving via `.dart_tool/package_config.json`. If found: use `path`. If not: `sourceReference > 0`. |
+///
+/// `isolate_id` is required to allocate a unique source reference per
+/// `(isolate, script)` pair. `project_root` is used to locate
+/// `.dart_tool/package_config.json` for package resolution.
+///
+/// Returns `None` when the frame has no `location.script.uri` field.
+pub fn extract_source_with_store(
+    frame: &serde_json::Value,
+    store: &mut SourceReferenceStore,
+    isolate_id: &str,
+    project_root: Option<&Path>,
+) -> Option<DapSource> {
+    let location = frame.get("location")?;
+    let script = location.get("script")?;
+    let uri = script.get("uri")?.as_str()?;
+    // script_id is the VM object ID used for getObject (the script's `id` field).
+    let script_id = script.get("id").and_then(|v| v.as_str()).unwrap_or(uri);
+
+    let name = uri.rsplit('/').next().unwrap_or(uri).to_string();
+
+    if uri.starts_with("file://") {
+        // User code — map to local filesystem path, no source reference.
+        let path = dart_uri_to_path(uri);
+        return Some(DapSource {
+            name: Some(name),
+            path,
+            source_reference: None,
+            presentation_hint: None,
+        });
+    }
+
+    if uri.starts_with("package:") {
+        // Try to resolve to a local path via package_config.json.
+        let resolved = project_root.and_then(|root| resolve_package_uri(uri, root));
+        if let Some(local_path) = resolved {
+            // Found locally — use path so the IDE opens an editable file.
+            let hint = if uri.starts_with("package:flutter/") {
+                Some("deemphasize".to_string())
+            } else {
+                None
+            };
+            return Some(DapSource {
+                name: Some(name),
+                path: Some(local_path.to_string_lossy().into_owned()),
+                source_reference: None,
+                presentation_hint: hint,
+            });
+        }
+        // Not resolvable — fall through to assign a source reference.
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        let hint = if uri.starts_with("package:flutter/") {
+            Some("deemphasize".to_string())
+        } else {
+            None
+        };
+        return Some(DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: hint,
+        });
+    }
+
+    // dart: and org-dartlang-sdk: URIs — SDK sources, always fetch via VM Service.
+    if uri.starts_with("dart:") || uri.starts_with("org-dartlang-sdk:") {
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        return Some(DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: Some("deemphasize".to_string()),
+        });
+    }
+
+    // Unknown URI scheme — return without path or source reference.
+    Some(DapSource {
+        name: Some(name),
+        path: None,
+        source_reference: None,
+        presentation_hint: None,
+    })
+}
+
+/// Try to resolve a `package:` URI to a local filesystem path using
+/// `.dart_tool/package_config.json`.
+///
+/// Returns `None` if:
+/// - `uri` does not start with `"package:"`
+/// - `package_config.json` cannot be read or parsed
+/// - The named package is not in the config
+///
+/// # Package config format
+///
+/// The `package_config.json` file in `.dart_tool/` contains a `packages` array
+/// where each entry has:
+/// - `name` — the package name
+/// - `rootUri` — a URI pointing to the package root
+/// - `packageUri` — the relative lib path within the root (defaults to `"lib/"`)
+///
+/// ```json
+/// {
+///   "packages": [
+///     { "name": "my_pkg", "rootUri": "file:///home/user/my_pkg", "packageUri": "lib/" }
+///   ]
+/// }
+/// ```
+pub fn resolve_package_uri(uri: &str, project_root: &Path) -> Option<PathBuf> {
+    if !uri.starts_with("package:") {
+        return None;
+    }
+
+    let config_path = project_root.join(".dart_tool/package_config.json");
+    let config_text = std::fs::read_to_string(&config_path).ok()?;
+    let config: serde_json::Value = serde_json::from_str(&config_text).ok()?;
+
+    let package_name = uri.strip_prefix("package:")?.split('/').next()?;
+    let rest = uri.strip_prefix(&format!("package:{}/", package_name))?;
+
+    let packages = config["packages"].as_array()?;
+    for pkg in packages {
+        if pkg["name"].as_str() != Some(package_name) {
+            continue;
+        }
+        let root_uri = pkg["rootUri"].as_str()?;
+        let package_uri = pkg
+            .get("packageUri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("lib/");
+        let root: PathBuf = if root_uri.starts_with("file://") {
+            // Absolute file URI — use the url crate for correct decoding.
+            url::Url::parse(root_uri)
+                .ok()
+                .and_then(|u| u.to_file_path().ok())?
+        } else {
+            // Relative URI — resolve relative to the config directory.
+            config_path.parent()?.join(root_uri)
+        };
+        return Some(root.join(package_uri).join(rest));
+    }
+    None
 }
 
 /// Extract line and column numbers from a VM Service frame's `location` field.
@@ -351,6 +639,276 @@ pub fn dart_uri_to_path(uri: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SourceReferenceStore ──────────────────────────────────────────────
+
+    #[test]
+    fn test_source_reference_store_starts_empty() {
+        let store = SourceReferenceStore::new();
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn test_source_reference_store_get_or_create_returns_same_id_for_same_script() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        let id2 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        assert_eq!(
+            id1, id2,
+            "Same (isolate, script) must produce the same reference ID"
+        );
+    }
+
+    #[test]
+    fn test_source_reference_store_get_or_create_different_scripts_get_different_ids() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        let id2 = store.get_or_create("isolate/1", "script/2", "dart:core/list.dart");
+        assert_ne!(
+            id1, id2,
+            "Different scripts must get different reference IDs"
+        );
+    }
+
+    #[test]
+    fn test_source_reference_store_get_returns_correct_info() {
+        let mut store = SourceReferenceStore::new();
+        let id = store.get_or_create("isolate/1", "script/42", "dart:core/string.dart");
+        let info = store.get(id).expect("Should find the allocated reference");
+        assert_eq!(info.isolate_id, "isolate/1");
+        assert_eq!(info.script_id, "script/42");
+        assert_eq!(info.uri, "dart:core/string.dart");
+    }
+
+    #[test]
+    fn test_source_reference_store_get_unknown_returns_none() {
+        let store = SourceReferenceStore::new();
+        assert!(store.get(999).is_none());
+    }
+
+    #[test]
+    fn test_source_reference_store_clear_removes_all_entries() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        let id2 = store.get_or_create("isolate/1", "script/2", "dart:core/list.dart");
+        assert_eq!(store.len(), 2);
+
+        store.clear();
+
+        assert!(store.is_empty());
+        assert!(store.get(id1).is_none(), "id1 should be None after clear");
+        assert!(store.get(id2).is_none(), "id2 should be None after clear");
+    }
+
+    #[test]
+    fn test_source_reference_store_clear_preserves_next_id() {
+        // After clear, next allocated ID must be higher than the last one
+        // so that stale client caches don't get false hits.
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        store.clear();
+        let id2 = store.get_or_create("isolate/1", "script/1", "dart:core/string.dart");
+        // After clear, IDs continue from where they left off (not reset to 1).
+        assert!(
+            id2 > id1,
+            "IDs must not be reused after clear (got id1={id1}, id2={id2})"
+        );
+    }
+
+    // ── extract_source_with_store — file:// user code ─────────────────────
+
+    #[test]
+    fn test_extract_source_with_store_file_uri_gets_path_no_source_reference() {
+        let mut store = SourceReferenceStore::new();
+        let frame = serde_json::json!({
+            "location": {
+                "script": { "uri": "file:///home/user/app/lib/main.dart", "id": "scripts/1" },
+                "line": 42,
+                "column": 5
+            }
+        });
+        let source = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        assert_eq!(source.path.as_deref(), Some("/home/user/app/lib/main.dart"));
+        assert!(
+            source.source_reference.is_none(),
+            "User code must not have a source reference"
+        );
+        assert!(
+            source.presentation_hint.is_none(),
+            "User code must not be deemphasized"
+        );
+        assert!(
+            store.is_empty(),
+            "Store must not be modified for file:// URIs"
+        );
+    }
+
+    // ── extract_source_with_store — dart: SDK sources ─────────────────────
+
+    #[test]
+    fn test_extract_source_with_store_dart_sdk_uri_gets_source_reference() {
+        let mut store = SourceReferenceStore::new();
+        let frame = serde_json::json!({
+            "location": {
+                "script": { "uri": "dart:core/string.dart", "id": "scripts/sdk/1" },
+                "line": 100
+            }
+        });
+        let source = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        assert!(source.path.is_none(), "SDK sources must have no path");
+        let src_ref = source
+            .source_reference
+            .expect("SDK sources must have a source reference");
+        assert!(
+            src_ref > 0,
+            "Source reference must be positive, got {src_ref}"
+        );
+        assert_eq!(source.presentation_hint.as_deref(), Some("deemphasize"));
+        assert_eq!(store.len(), 1);
+    }
+
+    #[test]
+    fn test_extract_source_with_store_org_dartlang_sdk_uri_gets_source_reference() {
+        let mut store = SourceReferenceStore::new();
+        let frame = serde_json::json!({
+            "location": {
+                "script": { "uri": "org-dartlang-sdk:///sdk/lib/core/string.dart", "id": "scripts/sdk/2" },
+                "line": 10
+            }
+        });
+        let source = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        assert!(source.path.is_none());
+        assert!(source.source_reference.unwrap_or(0) > 0);
+        assert_eq!(source.presentation_hint.as_deref(), Some("deemphasize"));
+    }
+
+    // ── extract_source_with_store — same script returns same reference ─────
+
+    #[test]
+    fn test_extract_source_with_store_same_script_returns_same_source_reference() {
+        let mut store = SourceReferenceStore::new();
+        let frame = serde_json::json!({
+            "location": {
+                "script": { "uri": "dart:core/list.dart", "id": "scripts/sdk/list" },
+                "line": 50
+            }
+        });
+        let source1 = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        let source2 = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        assert_eq!(
+            source1.source_reference, source2.source_reference,
+            "Same script must yield the same source reference ID"
+        );
+        assert_eq!(store.len(), 1, "Only one entry should be stored");
+    }
+
+    // ── extract_source_with_store — package: unresolvable ─────────────────
+
+    #[test]
+    fn test_extract_source_with_store_unresolvable_package_gets_source_reference() {
+        let mut store = SourceReferenceStore::new();
+        let frame = serde_json::json!({
+            "location": {
+                "script": { "uri": "package:my_lib/src/util.dart", "id": "scripts/pkg/1" },
+                "line": 20
+            }
+        });
+        // No project_root → package resolution fails → source reference assigned.
+        let source = extract_source_with_store(&frame, &mut store, "isolate/1", None).unwrap();
+        assert!(source.path.is_none());
+        assert!(source.source_reference.unwrap_or(0) > 0);
+    }
+
+    // ── resolve_package_uri ───────────────────────────────────────────────
+
+    #[test]
+    fn test_resolve_package_uri_returns_none_for_non_package_uri() {
+        let tmp = tempdir_for_test();
+        assert!(resolve_package_uri("dart:core/list.dart", &tmp).is_none());
+        assert!(resolve_package_uri("file:///path/main.dart", &tmp).is_none());
+    }
+
+    #[test]
+    fn test_resolve_package_uri_returns_none_when_no_config_file() {
+        let tmp = tempdir_for_test();
+        // No .dart_tool/package_config.json present.
+        assert!(resolve_package_uri("package:my_pkg/main.dart", &tmp).is_none());
+    }
+
+    #[test]
+    fn test_resolve_package_uri_resolves_local_package() {
+        let tmp = tempdir_for_test();
+
+        // Create the package root directory.
+        std::fs::create_dir_all(tmp.join(".dart_tool")).unwrap();
+        std::fs::create_dir_all(tmp.join("packages/my_pkg/lib")).unwrap();
+
+        // Write a package_config.json with a relative rootUri.
+        let config = serde_json::json!({
+            "configVersion": 2,
+            "packages": [
+                {
+                    "name": "my_pkg",
+                    "rootUri": "../packages/my_pkg",
+                    "packageUri": "lib/"
+                }
+            ]
+        });
+        std::fs::write(
+            tmp.join(".dart_tool/package_config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        let resolved = resolve_package_uri("package:my_pkg/main.dart", &tmp);
+        assert!(
+            resolved.is_some(),
+            "Should resolve package:my_pkg/main.dart"
+        );
+        let path = resolved.unwrap();
+        assert!(
+            path.to_string_lossy().ends_with("main.dart"),
+            "Resolved path should end with main.dart, got: {:?}",
+            path
+        );
+    }
+
+    #[test]
+    fn test_resolve_package_uri_returns_none_for_unknown_package() {
+        let tmp = tempdir_for_test();
+        std::fs::create_dir_all(tmp.join(".dart_tool")).unwrap();
+        let config = serde_json::json!({
+            "configVersion": 2,
+            "packages": [
+                { "name": "other_pkg", "rootUri": "../other_pkg", "packageUri": "lib/" }
+            ]
+        });
+        std::fs::write(
+            tmp.join(".dart_tool/package_config.json"),
+            serde_json::to_string(&config).unwrap(),
+        )
+        .unwrap();
+
+        assert!(resolve_package_uri("package:my_pkg/main.dart", &tmp).is_none());
+    }
+
+    /// Create a temporary directory for file-based tests.
+    ///
+    /// Returns a [`PathBuf`] pointing to a unique temp directory. The directory
+    /// is created via [`std::env::temp_dir`] with a unique suffix derived from
+    /// the test thread ID for isolation.
+    fn tempdir_for_test() -> PathBuf {
+        let mut tmp = std::env::temp_dir();
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0);
+        tmp.push(format!("fdemon_stack_test_{}", ts));
+        std::fs::create_dir_all(&tmp).unwrap();
+        tmp
+    }
 
     // ── VariableStore ─────────────────────────────────────────────────────
 

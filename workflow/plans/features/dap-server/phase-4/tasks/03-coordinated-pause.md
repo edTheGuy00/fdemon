@@ -103,3 +103,47 @@ fn test_resume_no_reload_if_no_changes() {
 - The existing file watcher infrastructure uses `Message::FilesChanged { count }` and `Message::AutoReloadTriggered`. This task adds a gate in the handler, not in the watcher itself.
 - TUI should display a subtle indicator when auto-reload is suspended (e.g., dim the watcher status). This is optional and can be deferred.
 - The `SuspendFileWatcher` / `ResumeFileWatcher` messages should be emitted as follow-up messages from `handle_debug_event`, not as `UpdateAction`s, since they're internal state transitions.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `file_watcher_suspended: bool` and `pending_file_changes: usize` fields to `AppState`; initialized to `false`/`0` in constructor |
+| `crates/fdemon-app/src/message.rs` | Added `SuspendFileWatcher` and `ResumeFileWatcher` variants to `Message` enum (in File Watcher Messages section) |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Modified `handle_debug_event` to classify events as Pause/Resume/Other; emits `SuspendFileWatcher` on first pause (idempotent), `ResumeFileWatcher` on resume when suspended; added `use crate::message::Message`; added 10 new unit tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added gate in `FilesChanged` handler: queues changes when suspended+suppress enabled; added `SuspendFileWatcher` handler (sets flag idempotently); added `ResumeFileWatcher` handler (clears flag, emits `AutoReloadTriggered` if pending>0) |
+| `crates/fdemon-app/src/handler/dap.rs` | Modified `handle_client_disconnected` to emit `ResumeFileWatcher` when watcher was suspended at disconnect time |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 15 new unit tests for the coordinated pause feature |
+
+### Notable Decisions/Tradeoffs
+
+1. **Idempotent SuspendFileWatcher**: The handler only emits `SuspendFileWatcher` when `!state.file_watcher_suspended`. This prevents double-suspend in rapid-event scenarios (e.g., multiple Pause events from different isolates). The task spec says "use a counter or bool" — the bool was chosen since the suspend is app-global, not per-session.
+
+2. **Gate in FilesChanged, not in Watcher**: Per the task notes, the gate is a check in the TEA handler, not in the OS file-watcher itself. The watcher continues to detect changes; they are simply counted not acted upon.
+
+3. **Single reload on resume**: `pending_file_changes` counts changes but always triggers exactly one `AutoReloadTriggered` on resume. This matches the existing multi-session reload logic which handles all reloadable sessions in one pass.
+
+4. **DAP disconnect resets via message**: `handle_client_disconnected` emits `ResumeFileWatcher` as a follow-up message rather than directly mutating state. This keeps all state mutation in one place (the `ResumeFileWatcher` handler) and avoids code duplication.
+
+5. **Scope boundary**: Task 02 was running concurrently modifying `fdemon-dap`. The implementation stays strictly within `fdemon-app` per the task constraint. The `suppress_reload_on_pause` field in `DapSettings` already existed; no changes to `fdemon-core` were needed since the `Message` enum lives in `fdemon-app/message.rs`.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1322 tests; 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed
+
+**New tests added: 25 total** (10 in `debug.rs`, 15 in `tests.rs`)
+
+### Risks/Limitations
+
+1. **Multi-client pause state**: The spec mentions "if any client is in a paused state, suppress reload". The current implementation uses a single `file_watcher_suspended` bool which doesn't count how many clients are paused. If two DAP clients both pause and one resumes, the watcher will resume. A `pause_depth: u32` counter would handle this correctly, but the task spec says "Use a counter or bool" and the simpler bool was chosen to match the task's primary test cases. This can be upgraded later if multi-client scenarios are tested.
+
+2. **PauseExit not guarded**: `PauseExit` (isolate pausing just before exit) also emits `SuspendFileWatcher`. This is intentional per the task flow, since the pause/resume symmetry should hold for all pause kinds. The isolate will resume or exit, clearing the flag.
