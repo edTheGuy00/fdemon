@@ -20,11 +20,11 @@ use super::{
 
 /// Process a message and update state.
 ///
-/// VM debug events (`VmServiceDebugEvent`, `VmServiceIsolateEvent`) are
-/// forwarded to connected DAP adapters via the sender registry stored in
-/// `state.dap_debug_senders` after updating the per-session `DebugState`.
-/// Stale senders (disconnected clients) are pruned automatically by the
-/// `retain` pattern in [`devtools::debug::handle_debug_event`].
+/// VM debug events (`VmServiceDebugEvent`, `VmServiceIsolateEvent`) update
+/// per-session `DebugState` and return translated DAP events wrapped in
+/// `UpdateAction::ForwardDapDebugEvents`. The channel sends happen in
+/// `actions::handle_action` — outside the TEA update cycle — which holds
+/// the Engine's `dap_debug_senders` Arc directly (TEA purity, Task 03).
 ///
 /// Returns optional follow-up message and/or action.
 pub fn update(state: &mut AppState, message: Message) -> UpdateResult {

@@ -195,7 +195,7 @@ impl Engine {
         let settings = config::load_settings(&project_path);
 
         // 3. Create state
-        let mut state = AppState::with_settings(project_path.clone(), settings.clone());
+        let state = AppState::with_settings(project_path.clone(), settings.clone());
 
         // 4. Create message channel
         let (msg_tx, msg_rx) = mpsc::channel::<Message>(256);
@@ -218,12 +218,15 @@ impl Engine {
         // 10. Create broadcast channel for engine events (capacity 256)
         let (event_tx, _) = broadcast::channel(256);
 
-        // 11. Create the shared DAP debug sender registry and inject it into
-        // AppState so that `handle_debug_event` can forward events without
-        // extra parameters. Both Engine and AppState share the same Arc.
+        // 11. Create the shared DAP debug sender registry.
+        //
+        // Engine is the sole owner. `handle_action` (which runs on the Tokio
+        // thread pool) receives a clone of this Arc and uses it to forward VM
+        // debug events to connected DAP adapters via `ForwardDapDebugEvents`.
+        // `VmBackendFactory::create` also receives a clone so it can register
+        // per-client senders when a new DAP connection is established.
         let dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>> =
             Arc::new(Mutex::new(Vec::new()));
-        state.dap_debug_senders = dap_debug_senders.clone();
 
         Self {
             state,

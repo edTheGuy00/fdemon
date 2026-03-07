@@ -23,6 +23,12 @@ pub mod evaluate;
 pub mod stack;
 pub mod threads;
 
+/// Shared test infrastructure: [`test_helpers::MockTestBackend`] trait with
+/// default no-op implementations for all [`DebugBackend`] methods, plus a
+/// blanket [`DebugBackend`] impl for types that implement it.
+#[cfg(test)]
+pub(crate) mod test_helpers;
+
 use std::collections::HashMap;
 
 use tokio::sync::mpsc;
@@ -2840,129 +2846,21 @@ fn pause_reason_to_dap_str(reason: &PauseReason) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::test_helpers::MockTestBackend;
     use super::*;
 
     // ── Mock backend ──────────────────────────────────────────────────────
 
     /// A no-op backend for testing the adapter dispatch and state logic.
+    ///
+    /// Uses [`MockTestBackend`] defaults for all methods except `get_source`,
+    /// which returns a small synthetic Dart snippet so source-retrieval tests
+    /// have non-empty content to assert against.
     struct MockBackend;
 
-    impl DebugBackend for MockBackend {
-        async fn pause(&self, _isolate_id: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(
-            &self,
-            _isolate_id: &str,
-            _step: Option<StepMode>,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _isolate_id: &str,
-            _uri: &str,
-            line: i32,
-            column: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            // Echo the requested line and produce a unique-ish VM ID so that
-            // tests can distinguish breakpoints on different lines.
-            Ok(BreakpointResult {
-                vm_id: format!("bp/line:{}", line),
-                resolved: true,
-                line: Some(line),
-                column,
-            })
-        }
-
-        async fn remove_breakpoint(
-            &self,
-            _isolate_id: &str,
-            _breakpoint_id: &str,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _isolate_id: &str,
-            _mode: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _isolate_id: &str,
-            _limit: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _isolate_id: &str,
-            _object_id: &str,
-            _offset: Option<i64>,
-            _count: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _isolate_id: &str,
-            _target_id: &str,
-            _expression: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _isolate_id: &str,
-            _frame_index: i32,
-            _expression: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_scripts(&self, _isolate_id: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
+    impl MockTestBackend for MockBackend {
         async fn get_source(&self, _isolate_id: &str, _script_id: &str) -> Result<String, String> {
             Ok("// Mock source text\nvoid main() {}".to_string())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -2986,110 +2884,7 @@ mod tests {
         }
     }
 
-    impl DebugBackend for MockBackendWithUri {
-        async fn pause(&self, _isolate_id: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(
-            &self,
-            _isolate_id: &str,
-            _step: Option<StepMode>,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _isolate_id: &str,
-            _uri: &str,
-            line: i32,
-            column: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: format!("bp/line:{}", line),
-                resolved: true,
-                line: Some(line),
-                column,
-            })
-        }
-
-        async fn remove_breakpoint(
-            &self,
-            _isolate_id: &str,
-            _breakpoint_id: &str,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _isolate_id: &str,
-            _mode: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _isolate_id: &str,
-            _limit: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _isolate_id: &str,
-            _object_id: &str,
-            _offset: Option<i64>,
-            _count: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _isolate_id: &str,
-            _target_id: &str,
-            _expression: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _isolate_id: &str,
-            _frame_index: i32,
-            _expression: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_scripts(&self, _isolate_id: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _isolate_id: &str, _script_id: &str) -> Result<String, String> {
-            Ok("// Mock source text\nvoid main() {}".to_string())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for MockBackendWithUri {
         async fn ws_uri(&self) -> Option<String> {
             Some(self.uri.clone())
         }
@@ -3805,78 +3600,7 @@ mod tests {
     /// Backend that returns two named isolates from get_vm().
     struct AttachMockBackend;
 
-    impl DebugBackend for AttachMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            _: i32,
-            _: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: "bp/1".into(),
-                resolved: true,
-                line: Some(10),
-                column: None,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _: &str,
-            _: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<i64>,
-            _: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _: &str,
-            _: i32,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
+    impl MockTestBackend for AttachMockBackend {
         async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
             Ok(serde_json::json!({
                 "isolates": [
@@ -3885,52 +3609,17 @@ mod tests {
                 ]
             }))
         }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
-        }
     }
 
-    /// Backend whose get_vm() always fails.
+    /// Backend whose `get_vm()` always fails.
+    ///
+    /// Several methods (`add_breakpoint`, `get_stack`, `get_object`, `evaluate`,
+    /// `evaluate_in_frame`, `get_scripts`, `hot_reload`, `hot_restart`) also
+    /// return `Err(BackendError::NotConnected)` to simulate a fully disconnected
+    /// VM; `stop_app` succeeds so the adapter can still clean up.
     struct FailingVmBackend;
 
-    impl DebugBackend for FailingVmBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for FailingVmBackend {
         async fn add_breakpoint(
             &self,
             _: &str,
@@ -3939,18 +3628,6 @@ mod tests {
             _: Option<i32>,
         ) -> Result<BreakpointResult, BackendError> {
             Err(BackendError::NotConnected)
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
         }
 
         async fn get_stack(
@@ -3997,7 +3674,7 @@ mod tests {
             Err(BackendError::NotConnected)
         }
 
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+        async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
             Err("not connected".to_string())
         }
 
@@ -4007,22 +3684,6 @@ mod tests {
 
         async fn hot_restart(&self) -> Result<(), BackendError> {
             Err(BackendError::NotConnected)
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -4560,45 +4221,10 @@ mod tests {
 
     // ── handle_stack_trace / handle_scopes (Task 07) ──────────────────────
 
-    /// A backend that returns a realistic two-frame stack from `get_stack()`.
+    /// A backend that returns a realistic three-frame stack from `get_stack()`.
     struct StackMockBackend;
 
-    impl DebugBackend for StackMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            _: i32,
-            _: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: "bp/1".into(),
-                resolved: true,
-                line: Some(10),
-                column: None,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for StackMockBackend {
         async fn get_stack(
             &self,
             _isolate_id: &str,
@@ -4628,70 +4254,6 @@ mod tests {
                     }
                 ]
             }))
-        }
-
-        async fn get_object(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<i64>,
-            _: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _: &str,
-            _: i32,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -5175,42 +4737,7 @@ mod tests {
     /// Backend that returns a two-variable stack frame for variables tests.
     struct VarMockBackend;
 
-    impl DebugBackend for VarMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            _: i32,
-            _: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: "bp/1".into(),
-                resolved: true,
-                line: Some(10),
-                column: None,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for VarMockBackend {
         async fn get_stack(
             &self,
             _isolate_id: &str,
@@ -5292,60 +4819,6 @@ mod tests {
             } else {
                 Ok(serde_json::json!({ "type": "Instance", "kind": "Null" }))
             }
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _: &str,
-            _: i32,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -6083,10 +5556,12 @@ mod tests {
 
     // ── BackendError type safety ───────────────────────────────────────────
 
-    /// A backend that always returns `BackendError::NotConnected`.
+    /// A backend that always returns `BackendError::NotConnected` for all
+    /// operations except `stop_app`, `ws_uri`, `device_id`, and `build_mode`
+    /// which use the no-op defaults from [`MockTestBackend`].
     struct NotConnectedBackend;
 
-    impl DebugBackend for NotConnectedBackend {
+    impl MockTestBackend for NotConnectedBackend {
         async fn pause(&self, _: &str) -> Result<(), BackendError> {
             Err(BackendError::NotConnected)
         }
@@ -6161,7 +5636,7 @@ mod tests {
             Err(BackendError::NotConnected)
         }
 
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+        async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
             Err("not connected".to_string())
         }
 
@@ -6171,22 +5646,6 @@ mod tests {
 
         async fn hot_restart(&self) -> Result<(), BackendError> {
             Err(BackendError::NotConnected)
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -6273,112 +5732,13 @@ mod tests {
         }
     }
 
-    impl DebugBackend for HotOpMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            _: i32,
-            _: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: "bp/1".into(),
-                resolved: true,
-                line: Some(10),
-                column: None,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _: &str,
-            _: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<i64>,
-            _: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate_in_frame(
-            &self,
-            _: &str,
-            _: i32,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
+    impl MockTestBackend for HotOpMockBackend {
         async fn hot_reload(&self) -> Result<(), BackendError> {
             self.reload_result.clone()
         }
 
         async fn hot_restart(&self) -> Result<(), BackendError> {
             self.restart_result.clone()
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -6628,68 +5988,10 @@ mod tests {
         }
     }
 
-    impl DebugBackend for CondMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for CondMockBackend {
         async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
             *self.resume_calls.lock().unwrap() += 1;
             Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            line: i32,
-            column: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: format!("bp/line:{}", line),
-                resolved: true,
-                line: Some(line),
-                column,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _: &str,
-            _: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<i64>,
-            _: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
         }
 
         async fn evaluate_in_frame(
@@ -6703,38 +6005,6 @@ mod tests {
 
         async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
             Ok(serde_json::json!({"isolates": []}))
-        }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -6912,13 +6182,7 @@ mod tests {
         // A backend that returns an error from evaluate_in_frame.
         struct ErrorEvalBackend;
 
-        impl DebugBackend for ErrorEvalBackend {
-            async fn pause(&self, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-                Ok(())
-            }
+        impl MockTestBackend for ErrorEvalBackend {
             async fn add_breakpoint(
                 &self,
                 _: &str,
@@ -6927,46 +6191,13 @@ mod tests {
                 column: Option<i32>,
             ) -> Result<BreakpointResult, BackendError> {
                 Ok(BreakpointResult {
-                    vm_id: format!("bp/{}", line),
+                    vm_id: format!("bp/{line}"),
                     resolved: true,
                     line: Some(line),
                     column,
                 })
             }
-            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn set_exception_pause_mode(
-                &self,
-                _: &str,
-                _: DapExceptionPauseMode,
-            ) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn get_stack(
-                &self,
-                _: &str,
-                _: Option<i32>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_object(
-                &self,
-                _: &str,
-                _: &str,
-                _: Option<i64>,
-                _: Option<i64>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
+
             async fn evaluate_in_frame(
                 &self,
                 _: &str,
@@ -6975,33 +6206,9 @@ mod tests {
             ) -> Result<serde_json::Value, BackendError> {
                 Err(BackendError::VmServiceError("evaluation failed".into()))
             }
+
             async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
                 Ok(serde_json::json!({"isolates": []}))
-            }
-            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-                Ok(String::new())
-            }
-            async fn hot_reload(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn hot_restart(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-
-            async fn stop_app(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn ws_uri(&self) -> Option<String> {
-                None
-            }
-            async fn device_id(&self) -> Option<String> {
-                None
-            }
-            async fn build_mode(&self) -> String {
-                "debug".to_string()
             }
         }
 
@@ -7272,68 +6479,10 @@ mod tests {
         }
     }
 
-    impl DebugBackend for LogpointMockBackend {
-        async fn pause(&self, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
+    impl MockTestBackend for LogpointMockBackend {
         async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
             *self.resume_calls.lock().unwrap() += 1;
             Ok(())
-        }
-
-        async fn add_breakpoint(
-            &self,
-            _: &str,
-            _: &str,
-            line: i32,
-            column: Option<i32>,
-        ) -> Result<BreakpointResult, BackendError> {
-            Ok(BreakpointResult {
-                vm_id: format!("bp/line:{}", line),
-                resolved: true,
-                line: Some(line),
-                column,
-            })
-        }
-
-        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn set_exception_pause_mode(
-            &self,
-            _: &str,
-            _: DapExceptionPauseMode,
-        ) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn get_stack(
-            &self,
-            _: &str,
-            _: Option<i32>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_object(
-            &self,
-            _: &str,
-            _: &str,
-            _: Option<i64>,
-            _: Option<i64>,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn evaluate(
-            &self,
-            _: &str,
-            _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
         }
 
         async fn evaluate_in_frame(
@@ -7353,38 +6502,6 @@ mod tests {
 
         async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
             Ok(serde_json::json!({"isolates": []}))
-        }
-
-        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(serde_json::json!({}))
-        }
-
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
-            Ok(String::new())
-        }
-
-        async fn hot_reload(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn hot_restart(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn stop_app(&self) -> Result<(), BackendError> {
-            Ok(())
-        }
-
-        async fn ws_uri(&self) -> Option<String> {
-            None
-        }
-
-        async fn device_id(&self) -> Option<String> {
-            None
-        }
-
-        async fn build_mode(&self) -> String {
-            "debug".to_string()
         }
     }
 
@@ -8573,10 +7690,7 @@ mod tests {
             resumed: Arc<Mutex<Vec<String>>>,
         }
 
-        impl DebugBackend for TrackingBackend {
-            async fn pause(&self, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
+        impl MockTestBackend for TrackingBackend {
             async fn resume(
                 &self,
                 isolate_id: &str,
@@ -8585,6 +7699,7 @@ mod tests {
                 self.resumed.lock().unwrap().push(isolate_id.to_string());
                 Ok(())
             }
+
             async fn add_breakpoint(
                 &self,
                 _: &str,
@@ -8598,75 +7713,6 @@ mod tests {
                     line: Some(l),
                     column: c,
                 })
-            }
-            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn set_exception_pause_mode(
-                &self,
-                _: &str,
-                _: DapExceptionPauseMode,
-            ) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn get_stack(
-                &self,
-                _: &str,
-                _: Option<i32>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_object(
-                &self,
-                _: &str,
-                _: &str,
-                _: Option<i64>,
-                _: Option<i64>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate_in_frame(
-                &self,
-                _: &str,
-                _: i32,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-                Ok("".into())
-            }
-            async fn hot_reload(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn hot_restart(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn stop_app(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn ws_uri(&self) -> Option<String> {
-                None
-            }
-            async fn device_id(&self) -> Option<String> {
-                None
-            }
-            async fn build_mode(&self) -> String {
-                "debug".into()
             }
         }
 
@@ -8706,13 +7752,7 @@ mod tests {
             stop_called: Arc<Mutex<bool>>,
         }
 
-        impl DebugBackend for StopTrackingBackend {
-            async fn pause(&self, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-                Ok(())
-            }
+        impl MockTestBackend for StopTrackingBackend {
             async fn add_breakpoint(
                 &self,
                 _: &str,
@@ -8727,75 +7767,10 @@ mod tests {
                     column: c,
                 })
             }
-            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn set_exception_pause_mode(
-                &self,
-                _: &str,
-                _: DapExceptionPauseMode,
-            ) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn get_stack(
-                &self,
-                _: &str,
-                _: Option<i32>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_object(
-                &self,
-                _: &str,
-                _: &str,
-                _: Option<i64>,
-                _: Option<i64>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate_in_frame(
-                &self,
-                _: &str,
-                _: i32,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-                Ok("".into())
-            }
-            async fn hot_reload(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn hot_restart(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
+
             async fn stop_app(&self) -> Result<(), BackendError> {
                 *self.stop_called.lock().unwrap() = true;
                 Ok(())
-            }
-            async fn ws_uri(&self) -> Option<String> {
-                None
-            }
-            async fn device_id(&self) -> Option<String> {
-                None
-            }
-            async fn build_mode(&self) -> String {
-                "debug".into()
             }
         }
 
@@ -8829,13 +7804,7 @@ mod tests {
             stop_called: Arc<Mutex<bool>>,
         }
 
-        impl DebugBackend for StopTrackingBackend2 {
-            async fn pause(&self, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
-                Ok(())
-            }
+        impl MockTestBackend for StopTrackingBackend2 {
             async fn add_breakpoint(
                 &self,
                 _: &str,
@@ -8850,75 +7819,10 @@ mod tests {
                     column: c,
                 })
             }
-            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn set_exception_pause_mode(
-                &self,
-                _: &str,
-                _: DapExceptionPauseMode,
-            ) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn get_stack(
-                &self,
-                _: &str,
-                _: Option<i32>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_object(
-                &self,
-                _: &str,
-                _: &str,
-                _: Option<i64>,
-                _: Option<i64>,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate(
-                &self,
-                _: &str,
-                _: &str,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn evaluate_in_frame(
-                &self,
-                _: &str,
-                _: i32,
-                _: &str,
-            ) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-                Ok(serde_json::json!({}))
-            }
-            async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-                Ok("".into())
-            }
-            async fn hot_reload(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
-            async fn hot_restart(&self) -> Result<(), BackendError> {
-                Ok(())
-            }
+
             async fn stop_app(&self) -> Result<(), BackendError> {
                 *self.stop_called.lock().unwrap() = true;
                 Ok(())
-            }
-            async fn ws_uri(&self) -> Option<String> {
-                None
-            }
-            async fn device_id(&self) -> Option<String> {
-                None
-            }
-            async fn build_mode(&self) -> String {
-                "debug".into()
             }
         }
 
@@ -8997,8 +7901,8 @@ mod tests {
         };
         let resp = adapter.handle_request(&req).await;
 
-        // MockBackend's Globals scope returns empty — just verify the cap logic
-        // doesn't panic and returns a success response.
+        // ScopeKind::Globals returns empty (not advertised but enum variant still exists).
+        // Verify the count capping logic doesn't panic and returns a success response.
         assert!(resp.success, "variables request must succeed");
     }
 

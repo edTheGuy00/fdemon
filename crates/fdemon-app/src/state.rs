@@ -2,7 +2,6 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use rand::Rng;
@@ -13,7 +12,6 @@ use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
-use fdemon_dap::adapter::DebugEvent as DapDebugEvent;
 
 use super::session_manager::SessionManager;
 
@@ -870,22 +868,6 @@ pub struct AppState {
     /// Status of the embedded DAP debug adapter server.
     pub dap_status: DapStatus,
 
-    /// Per-DAP-client debug event senders (Phase 4, Task 01).
-    ///
-    /// Each `mpsc::Sender<DapDebugEvent>` in this list corresponds to one
-    /// active DAP client session. The TEA handler for `VmServiceDebugEvent`
-    /// and `VmServiceIsolateEvent` iterates this list and forwards translated
-    /// events to all connected adapters using `try_send`. Stale entries are
-    /// pruned automatically — `try_send` returns `Err` for a closed channel.
-    ///
-    /// This field is set by the Engine after construction via
-    /// [`Engine::dap_debug_senders`] and is `Arc`-shared so that
-    /// [`VmBackendFactory::create`] can register new senders.
-    ///
-    /// The `Arc<Mutex<...>>` wrapper allows `AppState` to remain `Clone`-like
-    /// for snapshots while the handler mutates the inner `Vec`.
-    pub dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>>,
-
     // ── Coordinated Pause / File-Watcher Gate (Phase 4, Task 03) ─────────────
     /// Whether the file watcher's auto-reload is currently suppressed because
     /// a DAP debugger is paused at a breakpoint, step, exception, etc.
@@ -944,7 +926,6 @@ impl AppState {
             tool_availability: ToolAvailability::default(),
             devtools_view_state: DevToolsViewState::default(),
             dap_status: DapStatus::Off,
-            dap_debug_senders: Arc::new(Mutex::new(Vec::new())),
             file_watcher_suspended: false,
             pending_file_changes: 0,
         }

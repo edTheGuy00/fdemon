@@ -542,6 +542,47 @@ pub fn handle_action(
                 }
             });
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // DAP Debug Event Forwarding (DAP Server Phase 4, Task 03)
+        //
+        // Forwards translated VM debug events to all connected DAP client
+        // adapters.  Runs outside the synchronous TEA `update()` cycle so
+        // that the blocking `std::sync::Mutex` lock and `try_send` calls do
+        // not stall the main loop (TEA purity).
+        //
+        // Stale senders (receivers dropped by disconnected clients) are pruned
+        // automatically via `retain` + `try_send` returning `Err(Closed)`.
+        // A full channel (`Err(Full)`) logs at `warn!` level and retains the
+        // sender — a full backlog suggests the client is misbehaving but may
+        // recover.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::ForwardDapDebugEvents(events) => {
+            match dap_debug_senders.lock() {
+                Ok(mut senders) => {
+                    for ev in &events {
+                        senders.retain(|tx| {
+                            match tx.try_send(ev.clone()) {
+                                Ok(()) => true,
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    warn!(
+                                        "DAP debug event channel full — event dropped, \
+                                         IDE may desync"
+                                    );
+                                    true // retain: client may recover
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    false // prune: client disconnected
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("dap_debug_senders lock poisoned: {}", e);
+                }
+            }
+        }
     }
 }
 

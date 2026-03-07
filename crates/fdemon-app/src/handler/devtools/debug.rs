@@ -13,10 +13,12 @@
 //! 3. The TEA `update()` function dispatches them here.
 //! 4. These handlers mutate per-session `DebugState` to reflect the current
 //!    debugger state.
-//! 5. **Phase 4, Task 01**: After updating `DebugState`, the handler forwards
-//!    a translated [`fdemon_dap::adapter::DebugEvent`] to all registered DAP
-//!    client senders in `state.dap_debug_senders`. Stale senders (dropped
-//!    receivers from disconnected clients) are pruned by the `retain` pattern.
+//! 5. **Phase 4, Task 01/03**: After updating `DebugState`, the handler returns
+//!    `UpdateAction::ForwardDapDebugEvents` carrying the translated DAP event.
+//!    The actual `try_send` calls happen in `actions::handle_action` — outside
+//!    the TEA update cycle — which holds the Engine's `dap_debug_senders` Arc.
+//!    Stale senders (dropped receivers from disconnected clients) are pruned
+//!    by the `retain` pattern in `handle_action`.
 //! 6. **Phase 4, Task 03**: Pause events emit `Message::SuspendFileWatcher`
 //!    and resume events emit `Message::ResumeFileWatcher` as follow-up
 //!    messages so the file-watcher gate is updated in the same TEA cycle.
@@ -24,7 +26,7 @@
 //! The `dap_attached` flag on `DebugState` guards whether DAP events should
 //! be emitted for DAP-specific use-cases.
 
-use crate::handler::UpdateResult;
+use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::Message;
 use crate::session::debug_state::PauseReason;
 use crate::session::SessionId;
@@ -35,17 +37,15 @@ use fdemon_dap::adapter::{DebugEvent as DapDebugEvent, PauseReason as DapPauseRe
 /// Handles a debug stream event for the given session.
 ///
 /// Updates the per-session `DebugState` based on the incoming VM Service debug
-/// event, then forwards a translated [`DapDebugEvent`] to all registered DAP
-/// client senders in `state.dap_debug_senders` (Phase 4, Task 01).
+/// event, then returns `UpdateAction::ForwardDapDebugEvents` so the engine can
+/// forward the translated DAP event to all connected DAP adapters (TEA purity,
+/// Phase 4 Task 03).  The actual channel sends happen in `actions::handle_action`
+/// — outside the synchronous TEA update cycle.
 ///
-/// **Phase 4, Task 03**: Pause events emit `Message::SuspendFileWatcher` as
-/// a follow-up message (when `settings.dap.suppress_reload_on_pause` is
-/// `true`) and resume events emit `Message::ResumeFileWatcher` so the TEA
-/// loop can update the file-watcher gate in the same cycle.
-///
-/// Stale senders (where the receiving DAP session has disconnected) are
-/// pruned automatically using the `retain` pattern — `try_send` returns `Err`
-/// for a closed channel.
+/// Pause events also emit `Message::SuspendFileWatcher` as a follow-up message
+/// (when `settings.dap.suppress_reload_on_pause` is `true`) and resume events
+/// emit `Message::ResumeFileWatcher` so the file-watcher gate is updated in the
+/// same TEA cycle.
 ///
 /// No-op if the session does not exist (e.g. race condition between session
 /// close and an in-flight event).
@@ -212,8 +212,10 @@ pub fn handle_debug_event(
         }
     }
 
-    // Forward the translated event to all connected DAP adapters (Phase 4).
-    forward_dap_event(&state.dap_debug_senders, dap_event);
+    // Wrap the translated DAP event (if any) in a ForwardDapDebugEvents action.
+    // The actual channel sends happen in `actions::handle_action` — outside the
+    // TEA update cycle — preserving TEA purity (Phase 4, Task 03 fix).
+    let dap_action = dap_event.map(|ev| UpdateAction::ForwardDapDebugEvents(vec![ev]));
 
     // Phase 4, Task 03: emit a file-watcher gate message when the debugger
     // transitions to/from a paused state and the setting is enabled.
@@ -222,17 +224,30 @@ pub fn handle_debug_event(
         match event_kind {
             DebugEventKind::Pause if !state.file_watcher_suspended => {
                 tracing::debug!("Debugger paused — suspending auto-reload");
-                return UpdateResult::message(Message::SuspendFileWatcher);
+                return match dap_action {
+                    Some(action) => {
+                        UpdateResult::message_and_action(Message::SuspendFileWatcher, action)
+                    }
+                    None => UpdateResult::message(Message::SuspendFileWatcher),
+                };
             }
             DebugEventKind::Resume if state.file_watcher_suspended => {
                 tracing::debug!("Debugger resumed — resuming auto-reload");
-                return UpdateResult::message(Message::ResumeFileWatcher);
+                return match dap_action {
+                    Some(action) => {
+                        UpdateResult::message_and_action(Message::ResumeFileWatcher, action)
+                    }
+                    None => UpdateResult::message(Message::ResumeFileWatcher),
+                };
             }
             _ => {}
         }
     }
 
-    UpdateResult::none()
+    match dap_action {
+        Some(action) => UpdateResult::action(action),
+        None => UpdateResult::none(),
+    }
 }
 
 /// Handles an isolate lifecycle event for the given session.
@@ -301,10 +316,12 @@ pub fn handle_isolate_event(
         }
     }
 
-    // Forward the translated event to all connected DAP adapters (Phase 4).
-    forward_dap_event(&state.dap_debug_senders, dap_event);
-
-    UpdateResult::none()
+    // Wrap the translated DAP event (if any) in a ForwardDapDebugEvents action.
+    // Channel sends happen in `actions::handle_action` — outside the TEA cycle.
+    match dap_event {
+        Some(ev) => UpdateResult::action(UpdateAction::ForwardDapDebugEvents(vec![ev])),
+        None => UpdateResult::none(),
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -320,6 +337,12 @@ pub fn handle_isolate_event(
 ///
 /// This function is a no-op when `dap_event` is `None` or when the registry
 /// is empty / the lock is poisoned.
+///
+/// Production code no longer calls this directly — the TEA-purity refactor
+/// (Phase 4, Task 03) routes events through `UpdateAction::ForwardDapDebugEvents`
+/// instead. This helper is retained for unit tests that verify the forwarding
+/// logic in isolation.
+#[cfg(test)]
 pub(crate) fn forward_dap_event(
     dap_debug_senders: &std::sync::Arc<
         std::sync::Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>,
@@ -382,6 +405,22 @@ mod tests {
         (state, session_id)
     }
 
+    /// Extract the single DAP event from a `ForwardDapDebugEvents` action.
+    ///
+    /// After the TEA-purity refactor (Task 03), handlers return DAP events
+    /// wrapped in `UpdateAction::ForwardDapDebugEvents` instead of calling
+    /// `forward_dap_event()` inline.  This helper unwraps the action for
+    /// assertion in tests.
+    fn extract_dap_event(result: UpdateResult) -> DapDebugEvent {
+        match result.action {
+            Some(UpdateAction::ForwardDapDebugEvents(mut events)) => {
+                assert_eq!(events.len(), 1, "Expected exactly one DAP event");
+                events.remove(0)
+            }
+            other => panic!("expected ForwardDapDebugEvents action, got {:?}", other),
+        }
+    }
+
     // -- handle_debug_event --------------------------------------------------
 
     #[test]
@@ -400,9 +439,13 @@ mod tests {
         };
 
         let result = handle_debug_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
         // Phase 4, Task 03: pause emits SuspendFileWatcher when suppress is enabled (default).
         assert!(matches!(result.message, Some(Message::SuspendFileWatcher)));
+        // After the TEA-purity refactor the DAP event is returned as an action.
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "PauseBreakpoint should produce a ForwardDapDebugEvents action"
+        );
 
         let debug = &state.session_manager.get(session_id).unwrap().session.debug;
         assert!(debug.paused);
@@ -427,9 +470,13 @@ mod tests {
         };
 
         let result = handle_debug_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
         // Setting disabled — no SuspendFileWatcher emitted.
         assert!(result.message.is_none());
+        // DAP event still forwarded even when file-watcher suppression is disabled.
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "PauseBreakpoint should still produce a ForwardDapDebugEvents action"
+        );
     }
 
     #[test]
@@ -589,7 +636,11 @@ mod tests {
             },
         };
         let result = handle_debug_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
+        // BreakpointResolved produces a ForwardDapDebugEvents action.
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "BreakpointResolved should produce a ForwardDapDebugEvents action"
+        );
 
         let debug = &state.session_manager.get(session_id).unwrap().session.debug;
         assert!(debug.breakpoints_for_uri("package:app/main.dart")[0].verified);
@@ -700,8 +751,9 @@ mod tests {
                 name: Some("main".into()),
             },
         };
-        let result = handle_isolate_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
+        // IsolateStart produces a ForwardDapDebugEvents action (TEA purity refactor).
+        // The important assertion here is that DebugState is updated.
+        handle_isolate_event(&mut state, session_id, event);
 
         let debug = &state.session_manager.get(session_id).unwrap().session.debug;
         assert_eq!(debug.isolates.len(), 1);
@@ -895,24 +947,19 @@ mod tests {
         assert!(result.message.is_none());
     }
 
-    // ── DAP event forwarding tests (Phase 4, Task 01) ──────────────────────
-
-    /// Helper: create a state with a session and one registered DAP sender.
-    /// Returns `(state, session_id, receiver)`.
-    fn make_state_with_dap_sender() -> (
-        AppState,
-        SessionId,
-        tokio::sync::mpsc::Receiver<DapDebugEvent>,
-    ) {
-        let (state, session_id) = make_state_with_session();
-        let (tx, rx) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx);
-        (state, session_id, rx)
-    }
+    // ── DAP event forwarding tests (Phase 4, Task 01 + Task 03) ─────────────
+    //
+    // After the TEA-purity refactor (Task 03), `handle_debug_event` and
+    // `handle_isolate_event` no longer call `forward_dap_event()` directly.
+    // Instead they wrap translated events in `UpdateAction::ForwardDapDebugEvents`
+    // and return them. The actual channel sends happen in `actions::handle_action`.
+    //
+    // Tests now inspect `result.action` rather than a channel receiver.
 
     #[test]
-    fn test_pause_breakpoint_forwarded_to_dap_sender() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+    fn test_handle_debug_event_returns_forward_dap_events_action_for_pause_breakpoint() {
+        // UpdateAction::ForwardDapDebugEvents instead of calling forward_dap_event().
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PauseBreakpoint {
             isolate: IsolateRef {
@@ -925,10 +972,31 @@ mod tests {
             at_async_suspension: false,
         };
 
-        handle_debug_event(&mut state, session_id, event);
+        let result = handle_debug_event(&mut state, session_id, event);
+        // Phase 4, Task 03 TEA fix: action carries the ForwardDapDebugEvents payload.
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "PauseBreakpoint should produce a ForwardDapDebugEvents action"
+        );
+    }
 
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+    #[test]
+    fn test_pause_breakpoint_forwarded_to_dap_sender() {
+        let (mut state, session_id) = make_state_with_session();
+
+        let event = DebugEvent::PauseBreakpoint {
+            isolate: IsolateRef {
+                id: "isolates/1".into(),
+                name: Some("main".into()),
+            },
+            top_frame: None,
+            breakpoint: None,
+            pause_breakpoints: vec![],
+            at_async_suspension: false,
+        };
+
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -941,7 +1009,7 @@ mod tests {
 
     #[test]
     fn test_pause_exception_forwarded_with_exception_reason() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PauseException {
             isolate: IsolateRef {
@@ -952,10 +1020,8 @@ mod tests {
             exception: None,
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -968,7 +1034,7 @@ mod tests {
 
     #[test]
     fn test_pause_interrupted_forwarded_with_interrupted_reason() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PauseInterrupted {
             isolate: IsolateRef {
@@ -979,10 +1045,8 @@ mod tests {
             at_async_suspension: false,
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -995,7 +1059,7 @@ mod tests {
 
     #[test]
     fn test_pause_exit_forwarded_with_exit_reason() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PauseExit {
             isolate: IsolateRef {
@@ -1005,10 +1069,8 @@ mod tests {
             top_frame: None,
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -1021,7 +1083,7 @@ mod tests {
 
     #[test]
     fn test_pause_start_forwarded_with_entry_reason() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PauseStart {
             isolate: IsolateRef {
@@ -1031,10 +1093,8 @@ mod tests {
             top_frame: None,
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -1047,7 +1107,7 @@ mod tests {
 
     #[test]
     fn test_resume_event_forwarded_to_dap_sender() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::Resume {
             isolate: IsolateRef {
@@ -1056,10 +1116,8 @@ mod tests {
             },
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Resumed { isolate_id } => {
                 assert_eq!(isolate_id, "isolates/1");
             }
@@ -1071,7 +1129,7 @@ mod tests {
     fn test_breakpoint_resolved_forwarded_to_dap_sender() {
         use crate::session::debug_state::TrackedBreakpoint;
 
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         // Pre-track the breakpoint.
         state
@@ -1103,10 +1161,13 @@ mod tests {
             },
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        // BreakpointResolved produces a ForwardDapDebugEvents action (TEA purity fix).
+        assert!(
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "BreakpointResolved should produce a ForwardDapDebugEvents action"
+        );
+        match extract_dap_event(result) {
             DapDebugEvent::BreakpointResolved {
                 vm_breakpoint_id,
                 line,
@@ -1122,7 +1183,7 @@ mod tests {
 
     #[test]
     fn test_breakpoint_added_does_not_forward_dap_event() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::BreakpointAdded {
             isolate: IsolateRef {
@@ -1138,18 +1199,17 @@ mod tests {
             },
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        // BreakpointAdded has no DAP equivalent — channel should be empty.
+        let result = handle_debug_event(&mut state, session_id, event);
+        // BreakpointAdded has no DAP equivalent — no action returned.
         assert!(
-            rx.try_recv().is_err(),
-            "BreakpointAdded should not produce a DAP event"
+            result.action.is_none(),
+            "BreakpointAdded should not produce a ForwardDapDebugEvents action"
         );
     }
 
     #[test]
     fn test_breakpoint_removed_does_not_forward_dap_event() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::BreakpointRemoved {
             isolate: IsolateRef {
@@ -1165,116 +1225,50 @@ mod tests {
             },
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        assert!(
-            rx.try_recv().is_err(),
-            "BreakpointRemoved should not produce a DAP event"
-        );
-    }
-
-    #[test]
-    fn test_stale_sender_pruned_on_debug_event() {
-        let (mut state, session_id) = make_state_with_session();
-
-        // Register two senders; drop the first receiver immediately to make it stale.
-        let (tx1, rx1) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx1);
-        state.dap_debug_senders.lock().unwrap().push(tx2);
-        drop(rx1); // rx1 is closed — tx1 becomes stale
-
-        let event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-        handle_debug_event(&mut state, session_id, event);
-
-        // The live receiver should have gotten the event.
-        assert!(
-            rx2.try_recv().is_ok(),
-            "Live sender should receive the event"
-        );
-
-        // The stale sender should have been pruned.
-        let count = state.dap_debug_senders.lock().unwrap().len();
-        assert_eq!(
-            count, 1,
-            "Stale sender should be pruned; only 1 should remain"
-        );
-    }
-
-    #[test]
-    fn test_multiple_senders_all_receive_event() {
-        let (mut state, session_id) = make_state_with_session();
-
-        let (tx1, mut rx1) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        let (tx3, mut rx3) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        {
-            let mut senders = state.dap_debug_senders.lock().unwrap();
-            senders.push(tx1);
-            senders.push(tx2);
-            senders.push(tx3);
-        }
-
-        let event = DebugEvent::PauseBreakpoint {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-            top_frame: None,
-            breakpoint: None,
-            pause_breakpoints: vec![],
-            at_async_suspension: false,
-        };
-
-        handle_debug_event(&mut state, session_id, event);
-
-        assert!(rx1.try_recv().is_ok(), "Sender 1 should receive the event");
-        assert!(rx2.try_recv().is_ok(), "Sender 2 should receive the event");
-        assert!(rx3.try_recv().is_ok(), "Sender 3 should receive the event");
-    }
-
-    #[test]
-    fn test_no_senders_no_panic_on_debug_event() {
-        // Registry is empty — forwarding should be a no-op, not a panic.
-        let (mut state, session_id) = make_state_with_session();
-
-        let event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-
-        // Should not panic.
         let result = handle_debug_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
+        assert!(
+            result.action.is_none(),
+            "BreakpointRemoved should not produce a ForwardDapDebugEvents action"
+        );
     }
 
     #[test]
-    fn test_debug_event_with_unknown_session_does_not_forward() {
-        let (mut state, _) = make_state_with_session();
+    fn test_no_panic_on_debug_event_with_no_senders() {
+        // After the TEA-purity refactor, the handler never touches senders —
+        // it just wraps the event in an action. So "no senders" doesn't matter;
+        // the handler returns an action regardless.
+        let (mut state, session_id) = make_state_with_session();
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx);
-
-        // Use a non-existent session ID.
         let event = DebugEvent::Resume {
             isolate: IsolateRef {
                 id: "isolates/1".into(),
                 name: None,
             },
         };
-        handle_debug_event(&mut state, 9999, event);
 
-        // No session means no forwarding.
+        // Should not panic. Resume produces a ForwardDapDebugEvents action.
+        let result = handle_debug_event(&mut state, session_id, event);
         assert!(
-            rx.try_recv().is_err(),
-            "Unknown session should not forward events"
+            matches!(result.action, Some(UpdateAction::ForwardDapDebugEvents(_))),
+            "Resume should produce a ForwardDapDebugEvents action"
+        );
+    }
+
+    #[test]
+    fn test_debug_event_with_unknown_session_returns_none_action() {
+        // Unknown session — handler returns early before building an action.
+        let mut state = AppState::new();
+
+        let event = DebugEvent::Resume {
+            isolate: IsolateRef {
+                id: "isolates/1".into(),
+                name: None,
+            },
+        };
+        let result = handle_debug_event(&mut state, 9999, event);
+        assert!(
+            result.action.is_none(),
+            "Unknown session should produce no ForwardDapDebugEvents action"
         );
     }
 
@@ -1282,7 +1276,7 @@ mod tests {
 
     #[test]
     fn test_isolate_start_forwarded_to_dap_sender() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateStart {
             isolate: IsolateRef {
@@ -1291,10 +1285,8 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_isolate_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::IsolateStart { isolate_id, name } => {
                 assert_eq!(isolate_id, "isolates/10");
                 assert_eq!(name, "worker");
@@ -1305,7 +1297,7 @@ mod tests {
 
     #[test]
     fn test_isolate_start_with_no_name_uses_empty_string() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateStart {
             isolate: IsolateRef {
@@ -1314,10 +1306,8 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_isolate_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::IsolateStart { isolate_id, name } => {
                 assert_eq!(isolate_id, "isolates/11");
                 assert_eq!(
@@ -1331,7 +1321,7 @@ mod tests {
 
     #[test]
     fn test_isolate_runnable_forwarded_as_isolate_start() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateRunnable {
             isolate: IsolateRef {
@@ -1340,12 +1330,9 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
-        // IsolateRunnable is forwarded as IsolateStart to the DAP adapter
-        // (the adapter needs to know the isolate is ready).
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_isolate_event(&mut state, session_id, event);
+        // IsolateRunnable is forwarded as IsolateStart to the DAP adapter.
+        match extract_dap_event(result) {
             DapDebugEvent::IsolateStart { isolate_id, .. } => {
                 assert_eq!(isolate_id, "isolates/12");
             }
@@ -1355,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_isolate_exit_forwarded_to_dap_sender() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         // First start the isolate.
         handle_isolate_event(
@@ -1368,7 +1355,6 @@ mod tests {
                 },
             },
         );
-        let _ = rx.try_recv(); // consume the IsolateStart event
 
         // Then exit it.
         let event = IsolateEvent::IsolateExit {
@@ -1378,12 +1364,8 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
-        let received = rx
-            .try_recv()
-            .expect("should have received a DAP IsolateExit event");
-        match received {
+        let result = handle_isolate_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::IsolateExit { isolate_id } => {
                 assert_eq!(isolate_id, "isolates/13");
             }
@@ -1393,7 +1375,7 @@ mod tests {
 
     #[test]
     fn test_isolate_update_does_not_forward_dap_event() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateUpdate {
             isolate: IsolateRef {
@@ -1402,17 +1384,16 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
+        let result = handle_isolate_event(&mut state, session_id, event);
         assert!(
-            rx.try_recv().is_err(),
-            "IsolateUpdate should not produce a DAP event"
+            result.action.is_none(),
+            "IsolateUpdate should not produce a ForwardDapDebugEvents action"
         );
     }
 
     #[test]
     fn test_isolate_reload_does_not_forward_dap_event() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateReload {
             isolate: IsolateRef {
@@ -1421,18 +1402,17 @@ mod tests {
             },
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
+        let result = handle_isolate_event(&mut state, session_id, event);
         // IsolateReload has no corresponding DAP event.
         assert!(
-            rx.try_recv().is_err(),
-            "IsolateReload should not produce a DAP event"
+            result.action.is_none(),
+            "IsolateReload should not produce a ForwardDapDebugEvents action"
         );
     }
 
     #[test]
     fn test_service_extension_added_does_not_forward_dap_event() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::ServiceExtensionAdded {
             isolate: IsolateRef {
@@ -1442,68 +1422,18 @@ mod tests {
             extension_rpc: "ext.flutter.inspector.show".to_string(),
         };
 
-        handle_isolate_event(&mut state, session_id, event);
-
+        let result = handle_isolate_event(&mut state, session_id, event);
         assert!(
-            rx.try_recv().is_err(),
-            "ServiceExtensionAdded should not produce a DAP event"
+            result.action.is_none(),
+            "ServiceExtensionAdded should not produce a ForwardDapDebugEvents action"
         );
     }
 
     #[test]
-    fn test_stale_sender_pruned_on_isolate_event() {
+    fn test_debug_state_still_updated_on_pause() {
+        // Verify DebugState is correctly updated (action-based forwarding must not
+        // interfere with state mutation).
         let (mut state, session_id) = make_state_with_session();
-
-        // Register two senders; drop the first receiver.
-        let (tx1, rx1) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        let (tx2, mut rx2) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx1);
-        state.dap_debug_senders.lock().unwrap().push(tx2);
-        drop(rx1); // stale
-
-        let event = IsolateEvent::IsolateStart {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: Some("main".into()),
-            },
-        };
-
-        handle_isolate_event(&mut state, session_id, event);
-
-        assert!(rx2.try_recv().is_ok(), "Live sender should receive event");
-
-        let count = state.dap_debug_senders.lock().unwrap().len();
-        assert_eq!(count, 1, "Stale sender should be pruned");
-    }
-
-    #[test]
-    fn test_all_senders_pruned_when_all_disconnected() {
-        let (mut state, session_id) = make_state_with_session();
-
-        let (tx1, rx1) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        let (tx2, rx2) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx1);
-        state.dap_debug_senders.lock().unwrap().push(tx2);
-        drop(rx1);
-        drop(rx2); // both receivers dropped
-
-        let event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-
-        handle_debug_event(&mut state, session_id, event);
-
-        let count = state.dap_debug_senders.lock().unwrap().len();
-        assert_eq!(count, 0, "All stale senders should be pruned");
-    }
-
-    #[test]
-    fn test_debug_state_still_updated_with_dap_senders() {
-        // Verify that adding DAP senders doesn't break the existing DebugState update.
-        let (mut state, session_id, _rx) = make_state_with_dap_sender();
 
         let event = DebugEvent::PauseBreakpoint {
             isolate: IsolateRef {
@@ -1521,31 +1451,14 @@ mod tests {
         let debug = &state.session_manager.get(session_id).unwrap().session.debug;
         assert!(
             debug.paused,
-            "DebugState must still be updated when DAP senders are registered"
+            "DebugState must be updated even when using action-based forwarding"
         );
         assert_eq!(debug.pause_reason, Some(PauseReason::Breakpoint));
     }
 
     #[test]
-    fn test_debug_state_still_updated_without_dap_senders() {
-        // Verify existing behavior is preserved when no DAP senders are registered.
-        let (mut state, session_id) = make_state_with_session();
-
-        let event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-
-        let result = handle_debug_event(&mut state, session_id, event);
-        assert!(result.action.is_none());
-        assert!(result.message.is_none());
-    }
-
-    #[test]
     fn test_pause_post_request_forwarded_as_interrupted() {
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         let event = DebugEvent::PausePostRequest {
             isolate: IsolateRef {
@@ -1555,10 +1468,8 @@ mod tests {
             top_frame: None,
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should have received a DAP event");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::Paused {
                 isolate_id, reason, ..
             } => {
@@ -1608,11 +1519,9 @@ mod tests {
     }
 
     #[test]
-    fn test_isolate_event_with_unknown_session_does_not_forward() {
-        let (mut state, _) = make_state_with_session();
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<DapDebugEvent>(16);
-        state.dap_debug_senders.lock().unwrap().push(tx);
+    fn test_isolate_event_with_unknown_session_returns_none_action() {
+        // Unknown session — handler returns early, no action produced.
+        let mut state = AppState::new();
 
         let event = IsolateEvent::IsolateStart {
             isolate: IsolateRef {
@@ -1620,68 +1529,19 @@ mod tests {
                 name: None,
             },
         };
-        handle_isolate_event(&mut state, 9999, event);
+        let result = handle_isolate_event(&mut state, 9999, event);
 
         assert!(
-            rx.try_recv().is_err(),
-            "Unknown session should not forward isolate events"
+            result.action.is_none(),
+            "Unknown session should produce no ForwardDapDebugEvents action"
         );
-    }
-
-    #[test]
-    fn test_full_channel_sender_retained_not_pruned() {
-        // When the channel is full, the sender should be retained (not pruned).
-        // The event is silently dropped but the sender stays for future events.
-        let (mut state, session_id) = make_state_with_session();
-
-        // Capacity of 1 — will fill up quickly.
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<DapDebugEvent>(1);
-        state.dap_debug_senders.lock().unwrap().push(tx);
-
-        // Fill the channel.
-        let fill_event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-        handle_debug_event(&mut state, session_id, fill_event);
-        assert_eq!(rx.try_recv().is_ok(), true, "Channel should have one event");
-
-        // Fill again without consuming.
-        let fill_event2 = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-        handle_debug_event(&mut state, session_id, fill_event2);
-
-        // Now send a 3rd event when channel is full.
-        let overflow_event = DebugEvent::Resume {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-        };
-        handle_debug_event(&mut state, session_id, overflow_event);
-
-        // Sender should still be in the registry even though events were dropped.
-        let count = state.dap_debug_senders.lock().unwrap().len();
-        assert_eq!(
-            count, 1,
-            "Full-channel sender should be retained, not pruned"
-        );
-
-        // Drain the channel.
-        let _ = rx.try_recv();
     }
 
     #[test]
     fn test_breakpoint_resolved_no_location_has_none_line_column() {
         use crate::session::debug_state::TrackedBreakpoint;
 
-        let (mut state, session_id, mut rx) = make_state_with_dap_sender();
+        let (mut state, session_id) = make_state_with_session();
 
         state
             .session_manager
@@ -1712,10 +1572,8 @@ mod tests {
             },
         };
 
-        handle_debug_event(&mut state, session_id, event);
-
-        let received = rx.try_recv().expect("should forward BreakpointResolved");
-        match received {
+        let result = handle_debug_event(&mut state, session_id, event);
+        match extract_dap_event(result) {
             DapDebugEvent::BreakpointResolved { line, column, .. } => {
                 assert!(line.is_none(), "No location should produce None line");
                 assert!(column.is_none(), "No location should produce None column");

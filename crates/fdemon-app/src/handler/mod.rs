@@ -366,6 +366,17 @@ pub enum UpdateAction {
     ///
     /// Handled by the TUI/headless runner event loops (not by `actions/mod.rs`).
     StopDapServer,
+
+    /// Forward translated VM debug events to all connected DAP adapters.
+    ///
+    /// Produced by `handle_debug_event` and `handle_isolate_event` after
+    /// updating per-session `DebugState`. The actual `try_send` calls happen
+    /// in `actions::handle_action`, outside the synchronous TEA update cycle,
+    /// which preserves TEA purity (no blocking mutex / channel ops in `update()`).
+    ///
+    /// Stale senders (where the DAP client has disconnected) are pruned
+    /// automatically inside `handle_action` via the `retain` + `try_send` pattern.
+    ForwardDapDebugEvents(Vec<fdemon_dap::adapter::DebugEvent>),
 }
 
 /// Background tasks to spawn
@@ -412,6 +423,19 @@ impl UpdateResult {
     pub fn action(action: UpdateAction) -> Self {
         Self {
             message: None,
+            action: Some(action),
+        }
+    }
+
+    /// Carry both a follow-up message and a side-effect action.
+    ///
+    /// Used when an event simultaneously triggers a state-gate message
+    /// (e.g. `SuspendFileWatcher` on a DAP pause) **and** must forward
+    /// translated debug events to connected DAP adapters via
+    /// `ForwardDapDebugEvents`.
+    pub fn message_and_action(msg: Message, action: UpdateAction) -> Self {
+        Self {
+            message: Some(msg),
             action: Some(action),
         }
     }
