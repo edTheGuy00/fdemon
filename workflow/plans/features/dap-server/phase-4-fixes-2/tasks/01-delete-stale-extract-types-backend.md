@@ -83,3 +83,41 @@ No new tests needed — this is a pure extraction refactor. All existing tests m
 - Some types like `BackendError` have `Display` and `Error` impls — ensure those move with the type
 - Constants may need `pub(crate)` visibility since they're used by sibling modules within `adapter/`
 - Don't forget to preserve doc comments on all extracted items
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Removed backend trait (~420 lines) and types/constants (~250 lines); added `pub mod backend;`, `pub mod types;` declarations and re-exports; moved test-only constants to test module imports |
+| `crates/fdemon-dap/src/adapter/types.rs` | Deleted stale version, recreated fresh from mod.rs with all types, enums, constants, and `log_level_to_category` |
+| `crates/fdemon-dap/src/adapter/backend.rs` | Deleted stale version, recreated fresh from mod.rs with `LocalDebugBackend`/`DebugBackend` trait and `DynDebugBackend` wrapper |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Deleted (stale file) |
+| `crates/fdemon-dap/src/adapter/events.rs` | Deleted (stale file) |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Deleted (stale file) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test-only constant imports**: Constants like `REQUEST_TIMEOUT`, `ERR_NOT_CONNECTED`, `ERR_NO_DEBUG_SESSION`, `ERR_THREAD_NOT_FOUND`, `ERR_EVAL_FAILED`, `ERR_TIMEOUT` are only used in tests. Rather than importing them at the production level (causing clippy's `-D warnings` to fail with "unused import"), they are imported only inside the `#[cfg(test)] mod tests` block via `use super::types::{...};`. Production-level imports only include constants used in production code: `ERR_VM_DISCONNECTED`, `EVENT_CHANNEL_CAPACITY`, `MAX_VARIABLES_PER_REQUEST`.
+
+2. **`BackendError` re-export from `backend.rs`**: The `backend.rs` module does `pub use crate::adapter::types::BackendError;` to make `BackendError` accessible at the `backend` module level, preserving the API surface used by external consumers.
+
+3. **Line reduction**: `mod.rs` reduced from 8,025 to 7,368 lines (657 line reduction), matching the ~670 target. `types.rs` has 255 lines and `backend.rs` has 433 lines.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed (no warnings)
+- `cargo test -p fdemon-dap` - Passed (581 tests)
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all tests across all crates)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Tasks 02-04 pending**: The stale `handlers.rs`, `events.rs`, and `variables.rs` files have been deleted as required. They will be recreated in their respective tasks (02, 03, 04) of this phase.

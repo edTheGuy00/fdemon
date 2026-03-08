@@ -47,12 +47,12 @@ Wave 6
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-delete-stale-extract-types-backend](tasks/01-delete-stale-extract-types-backend.md) | Not Started | - | `adapter/mod.rs`, `adapter/types.rs`, `adapter/backend.rs` |
-| 2 | [02-extract-events](tasks/02-extract-events.md) | Not Started | 01 | `adapter/mod.rs`, `adapter/events.rs` |
-| 3 | [03-extract-handlers](tasks/03-extract-handlers.md) | Not Started | 02 | `adapter/mod.rs`, `adapter/handlers.rs` |
-| 4 | [04-extract-variables](tasks/04-extract-variables.md) | Not Started | 03 | `adapter/mod.rs`, `adapter/variables.rs` |
-| 5 | [05-move-mocks-to-helpers](tasks/05-move-mocks-to-helpers.md) | Not Started | 04 | `adapter/mod.rs`, `adapter/test_helpers.rs` |
-| 6 | [06-split-test-module](tasks/06-split-test-module.md) | Not Started | 05 | `adapter/mod.rs`, `adapter/tests/*.rs` |
+| 1 | [01-delete-stale-extract-types-backend](tasks/01-delete-stale-extract-types-backend.md) | Done | - | `adapter/mod.rs`, `adapter/types.rs`, `adapter/backend.rs` |
+| 2 | [02-extract-events](tasks/02-extract-events.md) | Done | 01 | `adapter/mod.rs`, `adapter/events.rs` |
+| 3 | [03-extract-handlers](tasks/03-extract-handlers.md) | Done | 02 | `adapter/mod.rs`, `adapter/handlers.rs` |
+| 4 | [04-extract-variables](tasks/04-extract-variables.md) | Done | 03 | `adapter/mod.rs`, `adapter/variables.rs` |
+| 5 | [05-move-mocks-to-helpers](tasks/05-move-mocks-to-helpers.md) | Done | 04 | `adapter/mod.rs`, `adapter/test_helpers.rs` |
+| 6 | [06-split-test-module](tasks/06-split-test-module.md) | Done | 05 | `adapter/mod.rs`, `adapter/tests/*.rs` |
 
 ## Success Criteria
 

@@ -89,3 +89,37 @@ pub(crate) fn path_to_dart_uri(path: &str) -> String { ... }
 - `handle_evaluate` delegates to `crate::adapter::evaluate::handle_evaluate` — this import stays the same.
 - Free functions like `parse_args` need `pub(crate)` visibility since `variables.rs` (task 04) will need to call them.
 - `send_event` (now in `events.rs`) is called by handler methods. It must be accessible — verify its visibility after task 02.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Created new file with all 18 extracted handler methods and 4 free functions |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `mod handlers;`, removed 18 handler methods + 4 free functions, updated imports |
+
+### Notable Decisions/Tradeoffs
+
+1. **`parse_args` accessibility**: `parse_args` is `pub(crate)` in `handlers.rs`, used by the remaining `handle_stack_trace`, `handle_scopes`, `handle_variables` methods still in `mod.rs`. Added `use handlers::parse_args;` to `mod.rs` module level to make this work cleanly.
+
+2. **`ERR_VM_DISCONNECTED` in tests**: The constant was previously imported into `mod.rs` scope via `use types::{}` and then re-exported via `use super::*` to tests. After removing it from `mod.rs`'s module-level import, added it explicitly to the test module's `use super::types::{}` import list.
+
+3. **`path_to_dart_uri` and `exception_filter_to_mode` in tests**: These moved to `handlers.rs` as `pub(crate)`. Since `mod handlers;` is a private declaration, `use super::*` does not pull in items from submodules. Added explicit `use super::handlers::{exception_filter_to_mode, path_to_dart_uri};` to the test module.
+
+4. **Method visibility**: Private handler methods in `handlers.rs` use `pub(super)` so they remain accessible from within the `adapter` module (including tests in `mod.rs`). `handle_request` remains `pub`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap` — Passed (581 tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all` — Passed
+
+### Risks/Limitations
+
+1. **Remaining methods in mod.rs**: `handle_stack_trace`, `handle_scopes`, `handle_variables`, `get_scope_variables`, `instance_ref_to_variable`, `expand_object` remain in `mod.rs` and will be moved in task 04 (variables.rs extraction).

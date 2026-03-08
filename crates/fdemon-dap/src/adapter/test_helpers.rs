@@ -42,7 +42,9 @@
 //! as all captured `&self` fields implement `Send` (which is required by the
 //! `MockTestBackend: Send + Sync + 'static` bound).
 
+use std::collections::HashMap;
 use std::future::{self, Future};
+use std::sync::{Arc, Mutex};
 
 use super::{BackendError, BreakpointResult, DapExceptionPauseMode, DebugBackend, StepMode};
 
@@ -320,5 +322,500 @@ impl<T: MockTestBackend> DebugBackend for T {
 
     async fn build_mode(&self) -> String {
         MockTestBackend::build_mode(self).await
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Concrete mock backends
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// A no-op backend for testing the adapter dispatch and state logic.
+///
+/// Uses [`MockTestBackend`] defaults for all methods except `get_source`,
+/// which returns a small synthetic Dart snippet so source-retrieval tests
+/// have non-empty content to assert against.
+pub(crate) struct MockBackend;
+
+impl MockTestBackend for MockBackend {
+    async fn get_source(&self, _isolate_id: &str, _script_id: &str) -> Result<String, String> {
+        Ok("// Mock source text\nvoid main() {}".to_string())
+    }
+}
+
+/// A mock backend that returns a known VM Service URI.
+///
+/// Used in tests that verify `dart.debuggerUris` and `flutter.appStart`
+/// events are emitted with the correct data.
+pub(crate) struct MockBackendWithUri {
+    pub(crate) uri: String,
+    pub(crate) device: String,
+    pub(crate) mode: String,
+}
+
+impl MockBackendWithUri {
+    pub(crate) fn new(uri: &str, device: &str, mode: &str) -> Self {
+        Self {
+            uri: uri.to_string(),
+            device: device.to_string(),
+            mode: mode.to_string(),
+        }
+    }
+}
+
+impl MockTestBackend for MockBackendWithUri {
+    async fn ws_uri(&self) -> Option<String> {
+        Some(self.uri.clone())
+    }
+
+    async fn device_id(&self) -> Option<String> {
+        Some(self.device.clone())
+    }
+
+    async fn build_mode(&self) -> String {
+        self.mode.clone()
+    }
+}
+
+/// Backend that returns two named isolates from `get_vm()`.
+pub(crate) struct AttachMockBackend;
+
+impl MockTestBackend for AttachMockBackend {
+    async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({
+            "isolates": [
+                { "id": "isolates/1", "name": "main" },
+                { "id": "isolates/2", "name": "background" }
+            ]
+        }))
+    }
+}
+
+/// Backend whose `get_vm()` always fails.
+///
+/// Several methods (`add_breakpoint`, `get_stack`, `get_object`, `evaluate`,
+/// `evaluate_in_frame`, `get_scripts`, `hot_reload`, `hot_restart`) also
+/// return `Err(BackendError::NotConnected)` to simulate a fully disconnected
+/// VM; `stop_app` succeeds so the adapter can still clean up.
+pub(crate) struct FailingVmBackend;
+
+impl MockTestBackend for FailingVmBackend {
+    async fn add_breakpoint(
+        &self,
+        _: &str,
+        _: &str,
+        _: i32,
+        _: Option<i32>,
+    ) -> Result<BreakpointResult, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_stack(&self, _: &str, _: Option<i32>) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn evaluate(&self, _: &str, _: &str, _: &str) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn evaluate_in_frame(
+        &self,
+        _: &str,
+        _: i32,
+        _: &str,
+    ) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::VmServiceError("VM not reachable".to_string()))
+    }
+
+    async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
+        Err("not connected".to_string())
+    }
+
+    async fn hot_reload(&self) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn hot_restart(&self) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+}
+
+/// A backend that returns a realistic three-frame stack from `get_stack()`.
+pub(crate) struct StackMockBackend;
+
+impl MockTestBackend for StackMockBackend {
+    async fn get_stack(
+        &self,
+        _isolate_id: &str,
+        _limit: Option<i32>,
+    ) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({
+            "frames": [
+                {
+                    "kind": "Regular",
+                    "code": { "name": "main" },
+                    "location": {
+                        "script": { "uri": "file:///app/lib/main.dart" },
+                        "line": 42,
+                        "column": 5
+                    }
+                },
+                {
+                    "kind": "Regular",
+                    "code": { "name": "runApp" },
+                    "location": {
+                        "script": { "uri": "package:flutter/src/widgets/binding.dart" },
+                        "line": 100
+                    }
+                },
+                {
+                    "kind": "AsyncSuspensionMarker"
+                }
+            ]
+        }))
+    }
+}
+
+/// Backend that returns a two-variable stack frame for variables tests.
+pub(crate) struct VarMockBackend;
+
+impl MockTestBackend for VarMockBackend {
+    async fn get_stack(
+        &self,
+        _isolate_id: &str,
+        _limit: Option<i32>,
+    ) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({
+            "frames": [
+                {
+                    "kind": "Regular",
+                    "code": { "name": "main" },
+                    "location": {
+                        "script": { "uri": "file:///app/lib/main.dart" },
+                        "line": 42,
+                        "column": 5
+                    },
+                    "vars": [
+                        {
+                            "name": "count",
+                            "value": {
+                                "type": "InstanceRef",
+                                "kind": "Int",
+                                "valueAsString": "42",
+                                "id": "objects/int1"
+                            }
+                        },
+                        {
+                            "name": "label",
+                            "value": {
+                                "type": "InstanceRef",
+                                "kind": "String",
+                                "valueAsString": "hello",
+                                "id": "objects/str1"
+                            }
+                        }
+                    ]
+                }
+            ]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _isolate_id: &str,
+        object_id: &str,
+        _offset: Option<i64>,
+        _count: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        if object_id == "objects/list1" {
+            Ok(serde_json::json!({
+                "type": "Instance",
+                "kind": "List",
+                "elements": [
+                    { "kind": "Int", "valueAsString": "10", "id": "objects/e0" },
+                    { "kind": "Int", "valueAsString": "20", "id": "objects/e1" }
+                ]
+            }))
+        } else if object_id == "objects/map1" {
+            Ok(serde_json::json!({
+                "type": "Instance",
+                "kind": "Map",
+                "associations": [
+                    {
+                        "key": { "kind": "String", "valueAsString": "a" },
+                        "value": { "kind": "Int", "valueAsString": "1", "id": "objects/mv1" }
+                    }
+                ]
+            }))
+        } else if object_id == "objects/inst1" {
+            Ok(serde_json::json!({
+                "type": "Instance",
+                "kind": "PlainInstance",
+                "fields": [
+                    {
+                        "name": "width",
+                        "value": { "kind": "Double", "valueAsString": "3.14", "id": "objects/f1" }
+                    }
+                ]
+            }))
+        } else {
+            Ok(serde_json::json!({ "type": "Instance", "kind": "Null" }))
+        }
+    }
+}
+
+/// A backend that always returns `BackendError::NotConnected` for all
+/// operations except `stop_app`, `ws_uri`, `device_id`, and `build_mode`
+/// which use the no-op defaults from [`MockTestBackend`].
+pub(crate) struct NotConnectedBackend;
+
+impl MockTestBackend for NotConnectedBackend {
+    async fn pause(&self, _: &str) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn add_breakpoint(
+        &self,
+        _: &str,
+        _: &str,
+        _: i32,
+        _: Option<i32>,
+    ) -> Result<BreakpointResult, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn set_exception_pause_mode(
+        &self,
+        _: &str,
+        _: DapExceptionPauseMode,
+    ) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_stack(&self, _: &str, _: Option<i32>) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn evaluate(&self, _: &str, _: &str, _: &str) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn evaluate_in_frame(
+        &self,
+        _: &str,
+        _: i32,
+        _: &str,
+    ) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
+        Err("not connected".to_string())
+    }
+
+    async fn hot_reload(&self) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+
+    async fn hot_restart(&self) -> Result<(), BackendError> {
+        Err(BackendError::NotConnected)
+    }
+}
+
+/// Mock backend that returns configurable results for hot_reload/hot_restart.
+pub(crate) struct HotOpMockBackend {
+    pub(crate) reload_result: Result<(), BackendError>,
+    pub(crate) restart_result: Result<(), BackendError>,
+}
+
+impl HotOpMockBackend {
+    pub(crate) fn ok() -> Self {
+        Self {
+            reload_result: Ok(()),
+            restart_result: Ok(()),
+        }
+    }
+
+    pub(crate) fn failing() -> Self {
+        Self {
+            reload_result: Err(BackendError::NotConnected),
+            restart_result: Err(BackendError::NotConnected),
+        }
+    }
+}
+
+impl MockTestBackend for HotOpMockBackend {
+    async fn hot_reload(&self) -> Result<(), BackendError> {
+        self.reload_result.clone()
+    }
+
+    async fn hot_restart(&self) -> Result<(), BackendError> {
+        self.restart_result.clone()
+    }
+}
+
+/// Mock backend with configurable `evaluate_in_frame` behavior.
+///
+/// `eval_result` is called once per `evaluate_in_frame` invocation.
+/// `resume_calls` counts how many times `resume()` was called (used to
+/// verify that a silently-resumed breakpoint did not emit `stopped`).
+pub(crate) struct CondMockBackend {
+    pub(crate) eval_result: Arc<Mutex<serde_json::Value>>,
+    pub(crate) resume_calls: Arc<Mutex<u32>>,
+}
+
+impl CondMockBackend {
+    pub(crate) fn returning(val: serde_json::Value) -> (Self, Arc<Mutex<u32>>) {
+        let resume_calls = Arc::new(Mutex::new(0u32));
+        let backend = Self {
+            eval_result: Arc::new(Mutex::new(val)),
+            resume_calls: resume_calls.clone(),
+        };
+        (backend, resume_calls)
+    }
+}
+
+impl MockTestBackend for CondMockBackend {
+    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+        *self.resume_calls.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn evaluate_in_frame(
+        &self,
+        _: &str,
+        _: i32,
+        _: &str,
+    ) -> Result<serde_json::Value, BackendError> {
+        Ok(self.eval_result.lock().unwrap().clone())
+    }
+
+    async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({"isolates": []}))
+    }
+}
+
+/// Mock backend for logpoint tests.
+///
+/// `evaluate_in_frame` returns the expression name wrapped in braces so
+/// tests can verify which expressions were evaluated. `resume_calls` counts
+/// resume invocations.
+pub(crate) struct LogpointMockBackend {
+    /// Override for evaluate_in_frame: maps expression → valueAsString.
+    /// If the expression is not in the map, `<error>` is returned (Err).
+    pub(crate) eval_map: HashMap<String, String>,
+    pub(crate) resume_calls: Arc<Mutex<u32>>,
+}
+
+impl LogpointMockBackend {
+    /// Backend where all expressions evaluate to `"<value>"` as a placeholder.
+    pub(crate) fn new_returning_value(expr: &str, value: &str) -> (Self, Arc<Mutex<u32>>) {
+        let resume_calls = Arc::new(Mutex::new(0u32));
+        let mut eval_map = HashMap::new();
+        eval_map.insert(expr.to_string(), value.to_string());
+        (
+            Self {
+                eval_map,
+                resume_calls: resume_calls.clone(),
+            },
+            resume_calls,
+        )
+    }
+
+    /// Backend where all expression evaluations fail (simulate errors).
+    pub(crate) fn new_failing() -> (Self, Arc<Mutex<u32>>) {
+        let resume_calls = Arc::new(Mutex::new(0u32));
+        (
+            Self {
+                eval_map: HashMap::new(),
+                resume_calls: resume_calls.clone(),
+            },
+            resume_calls,
+        )
+    }
+
+    /// Backend with multiple expression mappings.
+    pub(crate) fn new_with_map(entries: &[(&str, &str)]) -> (Self, Arc<Mutex<u32>>) {
+        let resume_calls = Arc::new(Mutex::new(0u32));
+        let eval_map = entries
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        (
+            Self {
+                eval_map,
+                resume_calls: resume_calls.clone(),
+            },
+            resume_calls,
+        )
+    }
+}
+
+impl MockTestBackend for LogpointMockBackend {
+    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+        *self.resume_calls.lock().unwrap() += 1;
+        Ok(())
+    }
+
+    async fn evaluate_in_frame(
+        &self,
+        _: &str,
+        _: i32,
+        expression: &str,
+    ) -> Result<serde_json::Value, BackendError> {
+        match self.eval_map.get(expression) {
+            Some(value) => Ok(serde_json::json!({"kind": "String", "valueAsString": value})),
+            None => Err(BackendError::VmServiceError(format!(
+                "evaluation of '{}' failed",
+                expression
+            ))),
+        }
+    }
+
+    async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({"isolates": []}))
     }
 }

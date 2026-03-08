@@ -54,3 +54,34 @@ The `test_helpers.rs` module already contains the `MockTestBackend` trait with d
 - `VarMockBackend` builds complex JSON responses — the serde_json import will be needed
 - `FailingVmBackend` overrides ALL methods to return errors, not just a few — verify the full impl is moved
 - After this task, the `mod.rs` test block should be ~4,500 lines (down from ~5,178)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/test_helpers.rs` | Added `use std::collections::HashMap`, `use std::sync::{Arc, Mutex}` imports; appended all 10 concrete mock backend structs with `pub(crate)` visibility |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Changed `use super::test_helpers::MockTestBackend` to `use super::test_helpers::*`; removed the 10 mock struct definitions from the test module; also removed `use std::sync::{Arc, Mutex}` from within the mock definition blocks (the `use` statement remains in the test module for inline mocks that still use it) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Wildcard import (`use super::test_helpers::*`)**: Used instead of listing individual names, which is cleaner and consistent with the task spec. Since this is a `#[cfg(test)]` module, wildcard imports are acceptable and common.
+2. **`use std::sync::{Arc, Mutex}` kept in test module**: The inline mocks (`TrackingBackend`, `StopTrackingBackend`, `StopTrackingBackend2`) inside specific test functions still use `Arc<Mutex<_>>`, so the import remains. The moved mocks (`CondMockBackend`, `LogpointMockBackend`) bring their own imports via `test_helpers.rs`.
+3. **test_helpers.rs is 821 lines**: Slightly over the 800-line target. The `cargo fmt` auto-formatter expanded several multi-argument function signatures onto multiple lines. The content is correct and all existing tests pass.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (auto-formatted test_helpers.rs)
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (581 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **test_helpers.rs line count**: 821 lines vs. the 800-line target. The 21 extra lines come from `cargo fmt` normalizing multi-parameter function signatures. The functionality and all tests are correct.
+2. **No structural changes to existing tests**: All 4 inline mock structs (`ErrorEvalBackend`, `TrackingBackend`, `StopTrackingBackend`, `StopTrackingBackend2`) remain inside their respective test functions as required by the task spec.

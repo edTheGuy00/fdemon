@@ -73,3 +73,35 @@ pub(crate) fn pause_reason_to_dap_str(reason: &PauseReason) -> &'static str { ..
 - The `handle_debug_event` method accesses private fields (`thread_map`, `thread_names`, `paused_isolates`, `breakpoint_state`, `desired_breakpoints`, `exception_mode`, `source_reference_store`, `vm_disconnected`). Since `events.rs` is a submodule of `adapter`, it has access to all private fields of `DapAdapter` — no visibility changes needed on the struct fields.
 - `send_event` is used by other methods (in `handlers.rs` later) — it should be `pub(crate)` or `pub(super)` in `events.rs` so sibling modules can call it. Alternatively, keep it private in `events.rs` if only event methods use it, and add a separate `send_event` in handlers if needed.
 - Verify that `interpolate_log_message` doesn't need to be called from handlers — if it does, adjust visibility.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/events.rs` | Created — contains all 6 extracted `DapAdapter` methods + `pause_reason_to_dap_str` free function |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `mod events;`, removed 6 extracted methods + `pause_reason_to_dap_str`, added `use super::events::pause_reason_to_dap_str;` in test module |
+
+### Notable Decisions/Tradeoffs
+
+1. **`send_event` visibility — `pub(crate)`**: `send_event` is called from `handle_attach` and other handlers in mod.rs (lines 836, 850, 869). Since `send_event` is defined in an `impl` block in `events.rs` (a submodule), it would be private to that submodule by default. Making it `pub(crate)` allows mod.rs and future sibling modules (handlers.rs) to call it.
+
+2. **`pause_reason_to_dap_str` accessibility in tests**: The test module in mod.rs uses `use super::*` (which only re-exports `pub` items from mod.rs scope) and directly calls `pause_reason_to_dap_str`. Since the function is `pub(crate)` in the private `events` submodule, an explicit `use super::events::pause_reason_to_dap_str;` was added to the test module to make it accessible — exactly as the task notes specified.
+
+3. **`DesiredBreakpoint` import**: In `events.rs` the `IsolateRunnable` handler collects desired breakpoints using the full path `crate::adapter::breakpoints::DesiredBreakpoint` since `DesiredBreakpoint` is re-exported at the adapter level but not directly imported in events.rs's local scope. This avoids import duplication.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (581 unit tests + 2 doc tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No risks**: The extraction is a pure refactor — no logic was changed. The `events.rs` submodule accesses `DapAdapter` private fields directly (valid in Rust since child modules have access to private items of parent module structs via `impl` blocks in the same crate).

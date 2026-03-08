@@ -72,3 +72,37 @@ Actually, in Rust, when you have `impl<B> DapAdapter<B>` in multiple files (mod.
 - `handle_scopes` returns Locals scope only (Globals was removed by task 13) — verify current behavior matches
 - `instance_ref_to_variable` is a complex method (~125 lines) that maps Dart instance types to DAP variables — test carefully
 - `parse_args` (from `handlers.rs`) is used by `handle_stack_trace`, `handle_scopes`, `handle_variables` — import via `crate::adapter::handlers::parse_args`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `mod variables;` declaration; removed 6 extracted methods from impl block; cleaned up unused imports (`DapScope`, `DapStackFrame`, `DapVariable`, `ScopesArguments`, `StackTraceArguments`, `VariablesArguments`, `parse_args`, `MAX_VARIABLES_PER_REQUEST`); moved test-only imports to `#[cfg(test)]` blocks; moved `MAX_VARIABLES_PER_REQUEST` to test module's explicit import |
+| `crates/fdemon-dap/src/adapter/variables.rs` | **CREATED** — new file containing all 6 extracted methods: `handle_stack_trace`, `handle_scopes`, `handle_variables`, `get_scope_variables`, `instance_ref_to_variable`, `expand_object` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`instance_ref_to_variable` visibility**: The task spec said `fn` (private), but existing tests in `mod.rs` call `adapter.instance_ref_to_variable()` directly. Since `mod tests` is a child of `adapter::mod`, not of `adapter::variables`, the method needs `pub(super)` visibility to be accessible from those tests. Made it `pub(super)` to preserve test coverage.
+
+2. **Test-only imports**: `DapRequest` and `DapResponse` are used only in the test module of `mod.rs`. These were moved to a `#[cfg(test)] use crate::{DapRequest, DapResponse};` block to eliminate clippy's "unused imports" warning while keeping tests working.
+
+3. **`MAX_VARIABLES_PER_REQUEST` in tests**: Moved from a module-level private import in `mod.rs` to an explicit `super::types::MAX_VARIABLES_PER_REQUEST` in the test module's import block — eliminates the "unused import" warning.
+
+4. **Production code line count**: `mod.rs` production code is now 215 lines (struct definition + constructors + module declarations + re-exports), well within the ≤ 300 line limit.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed (0 warnings)
+- `cargo test -p fdemon-dap` - Passed (581 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`handle_scopes` still returns both Locals and Globals**: The note says "Globals was removed by task 13" but the current code in both the original and extracted version returns both scopes. The test `test_scopes_returns_locals_and_globals` asserts `len() == 2`. This matches the existing behavior exactly — the extraction is faithful to the source.
