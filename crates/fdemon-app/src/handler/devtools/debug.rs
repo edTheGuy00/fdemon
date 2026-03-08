@@ -275,9 +275,8 @@ pub fn handle_isolate_event(
             isolate_id: isolate.id.clone(),
             name: isolate.name.clone().unwrap_or_default(),
         }),
-        IsolateEvent::IsolateRunnable { isolate } => Some(DapDebugEvent::IsolateStart {
+        IsolateEvent::IsolateRunnable { isolate } => Some(DapDebugEvent::IsolateRunnable {
             isolate_id: isolate.id.clone(),
-            name: isolate.name.clone().unwrap_or_default(),
         }),
         IsolateEvent::IsolateExit { isolate } => Some(DapDebugEvent::IsolateExit {
             isolate_id: isolate.id.clone(),
@@ -1320,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn test_isolate_runnable_forwarded_as_isolate_start() {
+    fn test_isolate_runnable_forwarded_as_isolate_runnable() {
         let (mut state, session_id) = make_state_with_session();
 
         let event = IsolateEvent::IsolateRunnable {
@@ -1331,12 +1330,13 @@ mod tests {
         };
 
         let result = handle_isolate_event(&mut state, session_id, event);
-        // IsolateRunnable is forwarded as IsolateStart to the DAP adapter.
+        // IsolateRunnable is forwarded as IsolateRunnable to the DAP adapter
+        // so it can re-apply breakpoints and exception pause mode.
         match extract_dap_event(result) {
-            DapDebugEvent::IsolateStart { isolate_id, .. } => {
+            DapDebugEvent::IsolateRunnable { isolate_id, .. } => {
                 assert_eq!(isolate_id, "isolates/12");
             }
-            other => panic!("Expected IsolateStart event, got {:?}", other),
+            other => panic!("Expected IsolateRunnable event, got {:?}", other),
         }
     }
 
