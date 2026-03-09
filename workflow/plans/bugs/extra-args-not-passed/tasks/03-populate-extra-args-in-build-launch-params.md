@@ -30,3 +30,27 @@
 ## Verification
 
 - `cargo check -p fdemon-app` compiles
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/state.rs` | No changes needed — `extra_args: self.launch_context.extra_args.clone()` was already present at line 926 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing implementation**: The `extra_args` field was already populated in `build_launch_params()` by a prior task. No code changes were required.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (0.06s, no errors)
+
+### Risks/Limitations
+
+1. **None**: The implementation matches the task specification exactly.

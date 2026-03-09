@@ -33,3 +33,29 @@
 
 - `cargo check -p fdemon-app` compiles
 - `cargo test -p fdemon-app -- handler::new_session` passes
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Added `|| !params.extra_args.is_empty()` to the config-build condition; added `extra_args: params.extra_args` to the `LaunchConfig` struct literal |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal change**: Only the two lines specified in the task were touched. The existing `..Default::default()` spread is retained for all other fields, so future additions to `LaunchConfig` default safely.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- handler::new_session` - Passed (56 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No new unit tests added**: The task did not request new tests. Existing tests cover the launch path but do not exercise the `extra_args` branch specifically — that coverage belongs to a follow-on test task if needed.

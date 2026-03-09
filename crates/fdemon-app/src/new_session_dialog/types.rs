@@ -173,6 +173,7 @@ pub struct LaunchParams {
     pub dart_defines: Vec<String>,
     pub config_name: Option<String>,
     pub entry_point: Option<PathBuf>,
+    pub extra_args: Vec<String>,
 }
 
 #[cfg(test)]

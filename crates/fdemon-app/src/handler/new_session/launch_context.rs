@@ -439,6 +439,7 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
             || params.flavor.is_some()
             || !params.dart_defines.is_empty()
             || params.entry_point.is_some()
+            || !params.extra_args.is_empty()
         {
             let mut cfg = LaunchConfig {
                 name: params.config_name.unwrap_or_else(|| "Session".to_string()),
@@ -446,6 +447,7 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                 mode: params.mode,
                 flavor: params.flavor,
                 entry_point: params.entry_point,
+                extra_args: params.extra_args,
                 ..Default::default()
             };
 
@@ -1475,5 +1477,49 @@ mod tests {
             error.contains("already has an active session"),
             "Error message should mention active session, got: {error}"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // extra_args pipeline: handle_launch produces SpawnSession with extra_args
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_handle_launch_extra_args_in_spawn_session_config() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Add a connected device and select it
+        // (selected_index = 1 because index 0 is the group header)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // Set extra_args directly on launch context state (as if populated from a config)
+        state.new_session_dialog_state.launch_context.extra_args =
+            vec!["--dart-define-from-file=env.json".to_string()];
+
+        let result = handle_launch(&mut state);
+
+        match result.action {
+            Some(UpdateAction::SpawnSession { config, .. }) => {
+                assert!(
+                    config.is_some(),
+                    "Config should be created because extra_args is non-empty"
+                );
+                let cfg = config.unwrap();
+                assert_eq!(
+                    cfg.extra_args,
+                    vec!["--dart-define-from-file=env.json".to_string()],
+                    "extra_args should be passed through to LaunchConfig"
+                );
+            }
+            _ => panic!("Expected SpawnSession action, got {:?}", result.action),
+        }
     }
 }
