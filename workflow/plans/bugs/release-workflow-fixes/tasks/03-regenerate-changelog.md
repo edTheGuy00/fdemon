@@ -55,4 +55,30 @@ grep -c "^WIP" CHANGELOG.md  # should be 0
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `CHANGELOG.md` | Full regeneration from git history using `git cliff -o CHANGELOG.md` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Merge commit bodies are included verbatim**: The "Other Changes" entries for the 3 PR merge commits include the full squash commit body text (all sub-commit messages). This is expected given `split_commits = false` in cliff.toml — git-cliff treats the entire merge commit as a single entry. The PR title appears as the bullet and the body follows.
+
+2. **WIP/index on/Merge branch skip rules work correctly**: All 3 skip patterns from Task 01 (cliff.toml) function as expected — zero matching lines appear in the output.
+
+### Testing Performed
+
+- `grep -i "auto changelog website" CHANGELOG.md` - Passed (found in v0.2.0 Other Changes)
+- `grep -i "responsive session dialog" CHANGELOG.md` - Passed (found in v0.2.0 Other Changes)
+- `grep -i "session resilience" CHANGELOG.md` - Passed (found in v0.2.0 Other Changes)
+- `grep -c "^WIP" CHANGELOG.md` - Passed (count = 0)
+- `grep -c "^index on" CHANGELOG.md` - Passed (count = 0)
+- `grep -c "^Merge branch" CHANGELOG.md` - Passed (count = 0)
+- Version sections present: [Unreleased], [0.2.0], [0.1.0] - All confirmed
+
+### Risks/Limitations
+
+1. **Verbose Other Changes entries**: Merge commit bodies are long (include all squash messages). This is cosmetically verbose but technically correct — the information is there and all 3 previously-dropped commits are now represented.

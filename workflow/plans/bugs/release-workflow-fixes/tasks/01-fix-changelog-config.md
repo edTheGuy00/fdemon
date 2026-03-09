@@ -65,4 +65,27 @@ git cliff v0.1.0..v0.2.0
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `cliff.toml` | Changed `filter_unconventional` from `true` to `false`; added skip patterns for WIP/index on/Merge branch commits; added catch-all `.*` parser as last entry in `commit_parsers` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Skip patterns placed before catch-all**: The WIP/merge skip entries were inserted between `^revert` and the catch-all `.*` parser. git-cliff uses first-match semantics so these take priority over the catch-all, preventing noisy commits from appearing in the changelog while all other non-conventional commits land in "Other Changes".
+
+2. **`conventional_commits = true` retained**: The `conventional_commits` flag remains `true` — this controls parsing behavior, not filtering. With `filter_unconventional = false`, non-conventional commits are parsed but not dropped, which is the desired outcome.
+
+### Testing Performed
+
+- `git cliff --latest` - Passed: `Feat/session resilience (#3)`, `Feat/responsive session dialog (#5)`, and `Feat/auto changelog website (#7)` now appear under "Other Changes"
+- `git cliff v0.1.0..v0.2.0` - Passed: v0.2.0 section includes all three previously-dropped Feat/... commits
+- Conventional commits (feat, fix, chore, etc.) still appear in their proper groups (Features, Bug Fixes, Miscellaneous)
+- `chore(release)` and `chore(deps)` entries are still skipped (patterns remain in place ahead of the catch-all)
+
+### Risks/Limitations
+
+1. **Squash merge bodies in Other Changes**: Squash-merged PRs with multi-commit bodies render verbosely in "Other Changes" (the full body text appears). This is a pre-existing presentation issue unrelated to this task; a future task could trim commit bodies in the cliff.toml template.

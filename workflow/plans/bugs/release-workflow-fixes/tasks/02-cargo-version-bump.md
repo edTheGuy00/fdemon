@@ -86,4 +86,27 @@ The `sed` pattern `^version = ".*"` only matches `version = "X.Y.Z"` (with quote
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/release.yml` | Added 4 new steps to the `version` job between "Compute next version" and "Create and push tag": Install Rust toolchain, Update Cargo.toml version (sed), Update Cargo.lock (cargo generate-lockfile), Commit version bump. Modified "Create and push tag" to use `git push origin HEAD:main --follow-tags` instead of pushing only the tag ref. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`cargo generate-lockfile` over `cargo update`**: Used as specified in the task — lighter weight and does not pull new transitive dependency versions, only regenerates the lockfile to reflect the new workspace version.
+2. **sed pattern safety**: The pattern `^version = ".*"` only matches the `version = "0.1.0"` line under `[workspace.package]` (line 7 of Cargo.toml). The `version.workspace = true` line at line 67 starts with `version.` (dot), not `version =` with a quoted value, so it is unaffected.
+3. **`git config` in Commit step only**: The `git config` user name/email is set once in "Commit version bump" rather than in "Create and push tag". The tag step no longer needs it since `git tag` inherits the already-configured identity.
+4. **`--follow-tags` push**: Pushing with `HEAD:main --follow-tags` ensures the version bump commit lands on `main` before the tag ref is pushed, so the tag points to the version bump commit (not a detached state).
+
+### Testing Performed
+
+- `sed -n 's/^version = ".*"/version = "0.3.0"/p' Cargo.toml` dry-run — Passed (output: `version = "0.3.0"`, exactly one match, `version.workspace = true` not matched)
+- Reviewed final workflow YAML for correct step ordering and indentation — Passed
+
+### Risks/Limitations
+
+1. **Branch protection on `main`**: If the repository has branch protection rules that require PRs, the `GITHUB_TOKEN`-based push via `git push origin HEAD:main` will fail with a 403. In that case a PAT or GitHub App token with bypass permissions would be needed. This is noted in the task but not addressed here, as it requires repository admin configuration outside the workflow file.
+2. **Checkout ref**: The `actions/checkout@v4` in the `version` job uses the default ref (the triggering branch/SHA). If the workflow is dispatched from a branch other than `main`, the push to `HEAD:main` could overwrite unrelated changes. This is an existing workflow design concern, not introduced by this change.
