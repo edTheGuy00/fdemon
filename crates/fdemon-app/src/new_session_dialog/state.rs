@@ -528,9 +528,7 @@ impl LaunchContextState {
                     .collect();
             }
 
-            if !config.config.extra_args.is_empty() {
-                self.extra_args = config.config.extra_args.clone();
-            }
+            self.extra_args = config.config.extra_args.clone();
         }
     }
 
