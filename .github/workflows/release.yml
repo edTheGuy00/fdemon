@@ -91,8 +91,12 @@ jobs:
 
       - name: Create and push tag
         run: |
-          git tag "${{ steps.compute.outputs.tag }}"
-          git push origin HEAD:main "${{ steps.compute.outputs.tag }}"
+          TAG="${{ steps.compute.outputs.tag }}"
+          # Remove stale tag from a previous failed run, if any
+          git tag -d "$TAG" 2>/dev/null || true
+          git push origin --delete "$TAG" 2>/dev/null || true
+          git tag "$TAG"
+          git push origin HEAD:main "$TAG"
 
   # ── Step 2: Build binaries ──────────────────────────────────────────
   build-macos:
