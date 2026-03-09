@@ -28,6 +28,7 @@ jobs:
       - name: Checkout with full history
         uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
 
       - name: Install git-cliff
@@ -60,12 +61,30 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Create and push tag
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Update Cargo.toml version
+        run: |
+          VERSION="${{ steps.compute.outputs.version }}"
+          sed -i 's/^version = ".*"/version = "'"$VERSION"'"/' Cargo.toml
+          grep -q "^version = \"$VERSION\"" Cargo.toml || { echo "::error::Failed to update version"; exit 1; }
+          echo "Updated Cargo.toml to version $VERSION"
+
+      - name: Update Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Commit version bump
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.toml Cargo.lock
+          git commit -m "chore(release): bump version to ${{ steps.compute.outputs.version }}"
+
+      - name: Create and push tag
+        run: |
           git tag "${{ steps.compute.outputs.tag }}"
-          git push origin "${{ steps.compute.outputs.tag }}"
+          git push origin HEAD:main "${{ steps.compute.outputs.tag }}"
 
   # ── Step 2: Build binaries ──────────────────────────────────────────
   build-macos:

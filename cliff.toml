@@ -15,7 +15,7 @@ body = """
 {% for commit in commits %}\
 - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
 {% if commit.breaking %}[**breaking**] {% endif %}\
-{{ commit.message | upper_first }}\
+{{ commit.message | split(pat="\n") | first | upper_first }}
 {% endfor %}
 {% endfor %}\n
 """
@@ -24,7 +24,7 @@ trim = true
 
 [git]
 conventional_commits = true
-filter_unconventional = true
+filter_unconventional = false
 split_commits = false
 commit_parsers = [
     { message = "^feat", group = "Features" },
@@ -39,6 +39,10 @@ commit_parsers = [
     { message = "^chore|^ci", group = "Miscellaneous" },
     { body = ".*security", group = "Security" },
     { message = "^revert", group = "Reverted" },
+    { message = "^WIP", skip = true },
+    { message = "^index on", skip = true },
+    { message = "^Merge branch", skip = true },
+    { message = ".*", group = "Other Changes" },
 ]
 protect_breaking_commits = false
 filter_commits = false
