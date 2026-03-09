@@ -25,11 +25,19 @@ jobs:
       tag: ${{ steps.compute.outputs.tag }}
 
     steps:
+      - name: Generate app token
+        id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
       - name: Checkout with full history
         uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Install git-cliff
         uses: taiki-e/install-action@v2
@@ -79,7 +87,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): bump version to ${{ steps.compute.outputs.version }}"
+          git commit -m "chore(release): bump version to ${{ steps.compute.outputs.version }} [skip ci]"
 
       - name: Create and push tag
         run: |
