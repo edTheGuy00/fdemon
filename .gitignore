@@ -5,3 +5,6 @@
 
 # License verification (personal records only)
 .licensure-summary.txt
+
+# IDE auto-generated debug configs
+.zed/debug.json

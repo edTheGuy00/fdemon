@@ -764,15 +764,4 @@ mod tests {
         assert_eq!(stream_id::ISOLATE, "Isolate");
     }
 
-    #[test]
-    fn test_stream_id_debug_constant() {
-        // Verify the Debug stream ID matches the Dart VM Service protocol value.
-        assert_eq!(stream_id::DEBUG, "Debug");
-    }
-
-    #[test]
-    fn test_stream_id_isolate_constant() {
-        // Verify the Isolate stream ID matches the Dart VM Service protocol value.
-        assert_eq!(stream_id::ISOLATE, "Isolate");
-    }
 }

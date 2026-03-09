@@ -160,20 +160,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// to the DAP client.
     pub fn new(backend: B) -> (Self, mpsc::Receiver<DapMessage>) {
         let (event_tx, event_rx) = mpsc::channel(EVENT_CHANNEL_CAPACITY);
-        let adapter = Self {
-            backend,
-            event_tx,
-            thread_map: ThreadMap::new(),
-            thread_names: HashMap::new(),
-            var_store: VariableStore::new(),
-            frame_store: FrameStore::new(),
-            breakpoint_state: BreakpointState::new(),
-            desired_breakpoints: HashMap::new(),
-            exception_mode: DapExceptionPauseMode::Unhandled,
-            paused_isolates: Vec::new(),
-            source_reference_store: SourceReferenceStore::new(),
-            vm_disconnected: false,
-        };
+        let (adapter, ()) = Self::new_with_tx(backend, event_tx);
         (adapter, event_rx)
     }
 
