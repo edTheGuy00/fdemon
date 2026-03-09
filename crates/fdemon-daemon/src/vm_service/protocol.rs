@@ -763,5 +763,4 @@ mod tests {
         assert_eq!(stream_id::DEBUG, "Debug");
         assert_eq!(stream_id::ISOLATE, "Isolate");
     }
-
 }

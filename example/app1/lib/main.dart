@@ -14,6 +14,7 @@ import 'logging/talker_demo.dart';
 import 'errors/sync_errors.dart';
 import 'errors/async_errors.dart';
 import 'errors/deep_stack.dart';
+import 'env_check.dart';
 
 void main() {
   runApp(const TestLoggingApp());
@@ -114,6 +115,9 @@ class ErrorTestingPage extends StatelessWidget {
             _buildErrorButton('Extreme (50)', extremelyDeepStackTrace),
             _buildErrorButton('Mixed Closures', mixedStackTrace),
             _buildAsyncErrorButton('Async Deep', asyncDeepStackTrace),
+          ]),
+          _buildSection(context, 'Env Check', [
+            _buildButton('Check Env', EnvCheck.printAll),
           ]),
           _buildSection(context, 'Spam Logs', [
             _buildButton('10 Mixed', () => _spamMixedLogs(10)),

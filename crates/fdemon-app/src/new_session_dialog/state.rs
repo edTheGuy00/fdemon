@@ -429,6 +429,9 @@ pub struct LaunchContextState {
     /// Dart defines (from config or user override)
     pub dart_defines: Vec<DartDefine>,
 
+    /// Extra arguments passed to `flutter run` verbatim (from config)
+    pub extra_args: Vec<String>,
+
     /// Currently focused field
     pub focused_field: LaunchContextField,
 }
@@ -444,6 +447,7 @@ impl LaunchContextState {
             available_entry_points: Vec::new(),
             entry_points_loading: false,
             dart_defines: Vec::new(),
+            extra_args: Vec::new(),
             focused_field: LaunchContextField::Config,
         }
     }
@@ -523,6 +527,8 @@ impl LaunchContextState {
                     .map(|(k, v)| DartDefine::new(k, v))
                     .collect();
             }
+
+            self.extra_args = config.config.extra_args.clone();
         }
     }
 
@@ -915,6 +921,7 @@ impl NewSessionDialogState {
                 .selected_config()
                 .map(|c| c.display_name.clone()),
             entry_point: self.launch_context.entry_point.clone(),
+            extra_args: self.launch_context.extra_args.clone(),
         })
     }
 
@@ -1290,5 +1297,77 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert_eq!(items[0], "(default)");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // extra_args pipeline tests
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_select_config_copies_extra_args() {
+        let extra_arg = "--dart-define-from-file=envs/staging.env.json".to_string();
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Staging".to_string(),
+                extra_args: vec![extra_arg.clone()],
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Staging".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+
+        state.select_config(Some(0));
+
+        assert_eq!(
+            state.extra_args,
+            vec!["--dart-define-from-file=envs/staging.env.json".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_launch_params_includes_extra_args() {
+        use fdemon_daemon::Device;
+
+        let extra_arg = "--dart-define-from-file=envs/staging.env.json".to_string();
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Staging".to_string(),
+                extra_args: vec![extra_arg.clone()],
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Staging".to_string(),
+        });
+
+        let mut dialog = NewSessionDialogState::new(configs);
+
+        // Select the config so extra_args are applied to launch context state
+        dialog.launch_context.select_config(Some(0));
+
+        // Add a connected device so build_launch_params() returns Some
+        let device = Device {
+            id: "emulator-5554".to_string(),
+            name: "Android Emulator".to_string(),
+            platform: "android".to_string(),
+            emulator: true,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        dialog.target_selector.connected_devices.push(device);
+        // selected_index = 1 because index 0 is the group header
+        dialog.target_selector.selected_index = 1;
+
+        let params = dialog.build_launch_params().expect("should build params");
+
+        assert_eq!(
+            params.extra_args,
+            vec!["--dart-define-from-file=envs/staging.env.json".to_string()]
+        );
     }
 }
