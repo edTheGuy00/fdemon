@@ -988,6 +988,7 @@ fn test_footer_height_not_stolen_in_small_area() {
         error_count: 0,
         vm_connected: false,
         dap_port: None,
+        dap_config_ide: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1203,6 +1204,7 @@ fn test_status_bar_no_dap_badge_when_off() {
         error_count: 0,
         vm_connected: false,
         dap_port: None,
+        dap_config_ide: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1234,6 +1236,7 @@ fn test_status_bar_shows_dap_badge_with_port() {
         error_count: 0,
         vm_connected: false,
         dap_port: Some(4711),
+        dap_config_ide: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1264,6 +1267,7 @@ fn test_status_bar_dap_badge_different_port() {
         error_count: 0,
         vm_connected: false,
         dap_port: Some(54321),
+        dap_config_ide: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1295,6 +1299,7 @@ fn test_dap_badge_hidden_in_compact_mode() {
         error_count: 0,
         vm_connected: false,
         dap_port: Some(4711),
+        dap_config_ide: None,
     };
 
     let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
@@ -1305,5 +1310,111 @@ fn test_dap_badge_hidden_in_compact_mode() {
     assert!(
         !term.buffer_contains("[DAP"),
         "DAP badge should not appear in compact mode (terminal width < 60)"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// DAP config IDE badge rendering tests (Phase 5, Task 11)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_status_bar_shows_dap_with_ide_name() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: Some(4711),
+        dap_config_ide: Some("VS Code".to_string()),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[DAP :4711"),
+        "DAP badge should appear when dap_port is Some(4711)"
+    );
+    assert!(
+        term.buffer_contains("VS Code"),
+        "IDE name 'VS Code' should appear in the DAP badge"
+    );
+}
+
+#[test]
+fn test_status_bar_shows_dap_without_ide_name() {
+    use crate::test_utils::TestTerminal;
+
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: Some(4711),
+        dap_config_ide: None,
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        term.buffer_contains("[DAP :4711]"),
+        "Badge should be '[DAP :4711]' with no IDE suffix when dap_config_ide is None"
+    );
+    assert!(
+        !term.buffer_contains("VS Code"),
+        "No IDE name should appear when dap_config_ide is None"
+    );
+}
+
+#[test]
+fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
+    use crate::test_utils::TestTerminal;
+
+    // dap_config_ide is Some but dap_port is None — no badge should appear
+    let mut term = TestTerminal::with_size(80, 10);
+
+    let logs = logs_from(vec![make_entry(LogLevel::Info, LogSource::App, "msg")]);
+
+    let status_info = StatusInfo {
+        phase: &AppPhase::Running,
+        is_busy: false,
+        mode: None,
+        flavor: None,
+        duration: None,
+        error_count: 0,
+        vm_connected: false,
+        dap_port: None,
+        dap_config_ide: Some("VS Code".to_string()),
+    };
+
+    let log_view = LogView::new(&logs, test_icons()).with_status(status_info);
+    let mut state = LogViewState::new();
+
+    term.render_stateful_widget(log_view, term.area(), &mut state);
+
+    assert!(
+        !term.buffer_contains("[DAP"),
+        "No DAP badge should appear when dap_port is None, even if dap_config_ide is set"
     );
 }

@@ -761,6 +761,21 @@ impl LoadingState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DAP IDE Config Status (DAP Server Phase 5, Task 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of IDE DAP config generation, shown in TUI status bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DapConfigStatus {
+    /// The IDE config was generated/updated for.
+    pub ide_name: String,
+    /// The config file path.
+    pub path: PathBuf,
+    /// What happened ("Created", "Updated", "Skipped: <reason>").
+    pub action: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DAP Server State (DAP Server Phase 2)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -888,6 +903,12 @@ pub struct AppState {
     /// Consumed (reset to 0) by `ResumeFileWatcher` which triggers a single
     /// `AutoReloadTriggered` if the count is non-zero.
     pub pending_file_changes: usize,
+
+    /// Result of the most recent IDE DAP config generation (Phase 5, Task 03).
+    ///
+    /// Set when `DapConfigGenerated` is received; persists until the next
+    /// DAP server restart. `None` before any config has been generated.
+    pub dap_config_status: Option<DapConfigStatus>,
 }
 
 impl Default for AppState {
@@ -928,6 +949,7 @@ impl AppState {
             dap_status: DapStatus::Off,
             file_watcher_suspended: false,
             pending_file_changes: 0,
+            dap_config_status: None,
         }
     }
 

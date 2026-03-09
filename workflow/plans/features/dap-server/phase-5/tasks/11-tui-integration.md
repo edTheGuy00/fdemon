@@ -156,3 +156,40 @@ fn test_toggle_auto_configure_ide() {
 - The permanent badge approach (showing IDE name until DAP restart) is simpler and still useful. If users want transient behavior, it can be added as a follow-up.
 - The settings panel changes follow the exact existing pattern — look at how `auto_start_in_ide` is rendered and toggled for the reference implementation.
 - The `· ` separator (middle dot with spaces) is used to visually separate the port from the IDE name within the badge. This is compact and readable.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Added `dap_config_ide: Option<String>` field to `StatusInfo`; updated DAP badge rendering to include IDE name when present (`[DAP :PORT · IDE]`) |
+| `crates/fdemon-tui/src/render/mod.rs` | Wired `dap_config_ide` from `AppState.dap_config_status` into `StatusInfo` |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added `dap_config_ide: None` to all 5 existing `StatusInfo` literals; added 3 new tests for the IDE badge variants |
+| `crates/fdemon-app/src/settings_items.rs` | Added `dap.auto_configure_ide` `SettingItem` to the DAP Server section; updated tests: `test_dap_settings_items_all_present` includes new ID, `test_dap_settings_items_section` expects 6 items, `test_dap_settings_items_defaults` checks new item defaults |
+| `crates/fdemon-app/src/handler/settings.rs` | Added `dap.auto_configure_ide` arm to `apply_project_setting`; added 2 new toggle tests |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated `test_project_settings_items_count` from 33 to 34 to reflect new item |
+
+### Notable Decisions/Tradeoffs
+
+1. **Permanent badge approach**: Adopted the simpler recommended approach — IDE name stays visible until the next DAP server restart, not transient. No `Instant` timestamp tracking needed in `AppState`.
+2. **Middle dot Unicode character**: Used `\u{00b7}` (U+00B7 MIDDLE DOT) in the format string for the separator, consistent with the task spec's `·` character.
+3. **`dap_config_ide` as `Option<String>` in `StatusInfo`**: Keeps the TUI crate decoupled from `fdemon-app`'s `DapConfigStatus` type — only the display string crosses the boundary.
+4. **Settings panel rendering**: The `auto_configure_ide` setting appears in the existing DAP Server section automatically because `settings_items::project_settings_items` drives the panel render — no widget code changes required.
+5. **No new file needed for settings_keys**: The existing `handle_settings_toggle_bool` in `settings_handlers.rs` dispatches through `apply_project_setting` for all `Bool` settings on the Project tab, so adding the `dap.auto_configure_ide` arm there is sufficient.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace` — Passed (3,777 tests across all crates, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed
+- `cargo fmt --all` — No formatting changes needed
+
+### Risks/Limitations
+
+1. **Compact mode**: DAP badge (including IDE suffix) is suppressed when terminal width < 60 columns, which is the existing behaviour — no additional logic needed per the task spec.
+2. **Badge length**: Adding ` · VS Code` (10 chars) to the badge could clip the right-aligned timer/error section on narrow terminals. The existing width arithmetic in `render_bottom_metadata` handles this gracefully by truncating the padding span.

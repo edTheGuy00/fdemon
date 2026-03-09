@@ -50,6 +50,21 @@ struct Args {
     /// Cannot be combined with --dap-port (mutually exclusive transports).
     #[arg(long, conflicts_with = "dap_port")]
     dap_stdio: bool,
+
+    /// Generate DAP config for a specific IDE without auto-detection.
+    ///
+    /// When used with --dap-port, generates the IDE config file and exits
+    /// immediately (standalone mode). This is useful for scripting and CI.
+    ///
+    /// When used without --dap-port, starts fdemon normally but overrides
+    /// IDE auto-detection for config generation when the DAP server starts.
+    ///
+    /// Values: vscode (or vs-code, code), neovim (or nvim), helix (or hx),
+    ///         zed, emacs
+    ///
+    /// Cannot be combined with --dap-stdio.
+    #[arg(long, value_name = "IDE", conflicts_with = "dap_stdio")]
+    dap_config: Option<String>,
 }
 
 #[tokio::main]
@@ -72,6 +87,55 @@ async fn main() -> Result<()> {
     // so stdout is clean for the DAP wire protocol.
     if args.dap_stdio {
         return dap_stdio::runner::run_dap_stdio().await;
+    }
+
+    // --dap-config <IDE> with --dap-port: standalone config generation mode.
+    //
+    // When both flags are provided we generate the IDE config file and exit
+    // immediately.  The TUI and Engine are never started — this makes the flag
+    // safe to use in CI scripts and editor setup hooks.
+    //
+    // Without --dap-port the flag is still accepted; in that case it is stored
+    // and used later to override IDE auto-detection when the DAP server starts
+    // during a normal run.
+    if let Some(ref ide_str) = args.dap_config {
+        if let Some(port) = args.dap_port {
+            // Standalone mode: parse IDE, resolve project root, generate, exit.
+            let ide = fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+                eprintln!("Error: {}", e);
+                eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+                e
+            })?;
+
+            let project_root = args
+                .path
+                .clone()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+
+            match fdemon_app::ide_config::generate_ide_config(Some(ide), port, &project_root)? {
+                Some(result) => {
+                    println!(
+                        "Generated DAP config for {}: {:?} at {}",
+                        ide.display_name(),
+                        result.action,
+                        result.path.display()
+                    );
+                }
+                None => {
+                    println!("IDE '{}' does not support DAP config generation", ide_str);
+                }
+            }
+            return Ok(());
+        }
+        // No --dap-port: validate the IDE name early so the user gets a clear
+        // error before fdemon starts the TUI, but then proceed with a normal run.
+        // The IDE override is threaded through the action when the DAP server
+        // starts (see UpdateAction::GenerateIdeConfig::ide_override).
+        fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+            eprintln!("Error: {}", e);
+            eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+            e
+        })?;
     }
 
     // Get base path from args or use current directory

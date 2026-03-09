@@ -165,3 +165,36 @@ fn test_handle_dap_config_generated_stores_status() {
 - The `action` field in `DapConfigGenerated` is a `String` rather than the `ConfigAction` enum to keep the message type simple and avoid coupling `message.rs` to `ide_config/` types. The handler can parse it if needed.
 - The settings panel (`,` keybinding) already renders `DapSettings` fields. Adding `auto_configure_ide` to the settings panel rendering is deferred to Task 11 (TUI integration).
 - `DapConfigStatus` is stored on `AppState` for the TUI to read during rendering. It persists until the next DAP server restart.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `auto_configure_ide: bool` field to `DapSettings` with `#[serde(default = "default_auto_configure_ide")]` defaulting to `true`; added `default_auto_configure_ide()` fn; updated `Default` impl; added 3 new tests |
+| `crates/fdemon-app/src/state.rs` | Added `DapConfigStatus` struct with `ide_name`, `path`, `action` fields; added `dap_config_status: Option<DapConfigStatus>` field to `AppState`; initialized to `None` in `with_settings()` |
+| `crates/fdemon-app/src/message.rs` | Added `DapConfigGenerated { ide_name, path, action }` variant to `Message` enum in the DAP section |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `GenerateIdeConfig { port: u16 }` variant to `UpdateAction` enum |
+| `crates/fdemon-app/src/handler/dap.rs` | Added `DapConfigStatus` to import; added `DapConfigGenerated` match arm in `handle_dap_message`; added `handle_config_generated()` function; added 3 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added `Message::DapConfigGenerated { .. }` to the DAP message routing match arm |
+
+### Notable Decisions/Tradeoffs
+
+1. **`GenerateIdeConfig` was already in `actions/mod.rs`**: Task 02 (already done) had added the action handler in `actions/mod.rs`, so no changes were needed there. The new variant in `handler/mod.rs` was the only addition needed for the enum definition.
+2. **Handler function signature uses `&str` / `&Path`**: The `handle_config_generated` function takes string slices rather than owned strings to match the pattern used by other handlers in `dap.rs`, avoiding unnecessary clones at the call site.
+3. **`DapConfigStatus` placement**: Added in the DAP section of `state.rs` just before `DapStatus` definitions for logical grouping.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all tests pass: 1367 fdemon-app, 360 fdemon-core, 460 fdemon-daemon, 581 fdemon-dap, 796 fdemon-tui, plus integration tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`dap_config_status` persists across restarts**: As noted in the task, the status field persists until the next DAP server restart. This is by design — TUI rendering of this field is deferred to Task 11.

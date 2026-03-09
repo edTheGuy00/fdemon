@@ -204,3 +204,39 @@ fn test_helix_ide_name() {
 - Helix's `transport = "tcp"` model fundamentally requires spawning a new process. Users who want to debug against an already-running fdemon session should use a wrapper script or the `--dap-stdio` flag. This is documented as a known limitation.
 - If `toml_edit` is not available as a dependency, the merge logic using the basic `toml` crate will reformat the file. This is acceptable since `.helix/languages.toml` is typically small and project-local.
 - The `[[language.debugger.templates]]` uses `request = "attach"` because fdemon already manages the Flutter process. Helix doesn't have an equivalent of VS Code's `debugServer` — the spawned fdemon instance handles the connection.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/helix.rs` | Created — `HelixGenerator` struct implementing `IdeConfigGenerator` with TOML generation and merge logic (20 tests) |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `pub mod helix;` declaration; moved `ParentIde::Helix` out of "not yet implemented" match group to call `run_generator(&helix::HelixGenerator, ...)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Used `toml` crate (not `toml_edit`)**: `toml_edit` is not a workspace dependency and was not added. The `toml` crate is sufficient; merge serialization may reorder keys and lose comments, which is acceptable for `.helix/languages.toml` (typically small and project-local). This was the expected fallback per the task notes.
+
+2. **`indoc()` helper is a thin wrapper**: Rather than adding the `indoc` crate, a minimal `fn indoc(s: &str) -> String { s.to_string() }` was used to keep the raw string literal aligned without introducing a new dependency.
+
+3. **`run_generator` was already implemented**: When reading the current `mod.rs`, the `run_generator` helper (file I/O for create/merge/write) had already been implemented by a prior task (Task 08 Emacs). The `run_generator` call for Emacs was compiling with an unresolved symbol. Adding `pub mod helix;` and wiring `ParentIde::Helix` to `run_generator` resolved the remaining compile error.
+
+4. **`port` parameter documented as unused**: Both `generate()` and `merge_config()` accept `port` for trait uniformity. This is documented in the method doc comments and with `_port` parameter names, matching the approach used by `EmacsGenerator`.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (1425 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` — Passed (0 warnings)
+- `cargo fmt --all` — Applied (formatter cleaned up some formatting in helix.rs)
+
+### Risks/Limitations
+
+1. **TOML reformatting on merge**: The `toml` crate serializer may reorder keys and lose comments from existing `.helix/languages.toml` files during merge. This is a known trade-off (noted in task spec). Users who need formatting preservation should use `toml_edit` — adding it as a workspace dependency is a future enhancement.
+
+2. **Helix transport model limitation**: Helix spawns a new fdemon process per debug session rather than connecting to an existing fdemon TUI session. This is a fundamental Helix DAP limitation documented in both the task spec and the module doc comment.

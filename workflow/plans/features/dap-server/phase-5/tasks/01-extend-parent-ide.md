@@ -170,3 +170,31 @@ fn test_helix_display_name() {
 - Environment variable detection is best-effort. `$INSIDE_EMACS` is not set in all Emacs terminal modes (some custom shell setups skip it). `$HELIX_RUNTIME` may not be set in all Helix versions. Users can fall back to `--dap-config emacs/helix` (Task 10).
 - The detection priority puts Emacs and Helix after Neovim. If someone runs Neovim inside Emacs (unlikely but possible), Neovim wins — this is correct since the innermost editor should take precedence.
 - `emacsclient -n` opens files without blocking; the `-n` flag is critical for non-blocking behavior.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `Emacs` and `Helix` variants to `ParentIde` enum; updated `url_scheme()`, `reuse_flag()`, `display_name()` match arms for new variants; added `supports_dap_config()` and `dap_config_path()` methods to `impl ParentIde`; added `Path` to imports; added 11 new unit tests |
+| `crates/fdemon-app/src/config/settings.rs` | Added Emacs detection (step 6, `$INSIDE_EMACS`) and Helix detection (step 7, `$HELIX_RUNTIME`) in `detect_parent_ide()`; added `Emacs` and `Helix` arms to `editor_config_for_ide()`; added 6 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Detection test safety**: `set_var`/`remove_var` are marked `unsafe` in Rust 2024 edition. The detection tests guard against already-set env vars and only assert correctness when no higher-priority IDE vars are present, making them safe in parallel test runners without serial test sequencing annotations.
+
+2. **`url_scheme()` grouping**: Combined `Neovim | Emacs | Helix => "file"` in a single arm rather than separate arms, keeping the match concise without information loss.
+
+3. **Test coverage**: Added tests for all new acceptance criteria including `dap_config_path` for every variant (VSCode family, Helix, Zed, Emacs, None for IntelliJ/AndroidStudio), `supports_dap_config` for all 9 variants, and editor config validation for both new IDEs.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (1334 tests, 17 new)
+- `cargo clippy --workspace -- -D warnings` — Passed
+- `cargo fmt --all` — Passed (no formatting changes needed)

@@ -583,6 +583,62 @@ pub fn handle_action(
                 }
             }
         }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // IDE Config Generation (DAP Server Phase 5, Task 02)
+        //
+        // Dispatches IDE-specific DAP config generation (launch.json,
+        // languages.toml, etc.) in an async task so the TEA loop is not
+        // blocked by file I/O.  Per-IDE generator implementations are added
+        // incrementally in Tasks 04–08; until then generate_ide_config()
+        // returns Ok(None) for all IDEs.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::GenerateIdeConfig { port, ide_override } => {
+            let project_path = project_path.to_path_buf();
+            let msg_tx_clone = msg_tx.clone();
+            tokio::spawn(async move {
+                // Use the CLI-specified IDE override when provided.  Otherwise
+                // detect the parent IDE from the environment (process-name
+                // heuristic). We don't carry Settings through UpdateAction to
+                // keep the action payload small.
+                let ide = if ide_override.is_some() {
+                    ide_override
+                } else {
+                    crate::config::settings::detect_parent_ide()
+                };
+
+                match crate::ide_config::generate_ide_config(ide, port, &project_path) {
+                    Ok(Some(result)) => {
+                        let action_str = match &result.action {
+                            crate::ide_config::ConfigAction::Created => "Created".to_string(),
+                            crate::ide_config::ConfigAction::Updated => "Updated".to_string(),
+                            crate::ide_config::ConfigAction::Skipped(reason) => {
+                                format!("Skipped: {}", reason)
+                            }
+                        };
+                        let ide_name = ide
+                            .map(|i| i.display_name().to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let _ = msg_tx_clone
+                            .send(Message::DapConfigGenerated {
+                                ide_name,
+                                path: result.path,
+                                action: action_str,
+                            })
+                            .await;
+                    }
+                    Ok(None) => {
+                        // No IDE detected or IDE doesn't support DAP config.
+                        tracing::debug!(
+                            "No IDE config generated (no IDE detected or IDE unsupported)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to generate IDE DAP config: {}", e);
+                    }
+                }
+            });
+        }
     }
 }
 

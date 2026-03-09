@@ -138,6 +138,11 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.dap.suppress_reload_on_pause = *v;
             }
         }
+        "dap.auto_configure_ide" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.dap.auto_configure_ide = *v;
+            }
+        }
 
         _ => {
             tracing::warn!("Unknown project setting id: {}", item.id);
@@ -686,6 +691,30 @@ mod tests {
 
         apply_project_setting(&mut settings, &item);
         assert_eq!(settings.dap.port, 4711);
+    }
+
+    #[test]
+    fn test_apply_dap_auto_configure_ide_setting() {
+        let mut settings = Settings::default();
+        assert!(settings.dap.auto_configure_ide); // default is true
+
+        let item = SettingItem::new("dap.auto_configure_ide", "Auto-Configure IDE")
+            .value(SettingValue::Bool(false));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(!settings.dap.auto_configure_ide);
+    }
+
+    #[test]
+    fn test_apply_dap_auto_configure_ide_toggle_back_to_true() {
+        let mut settings = Settings::default();
+        settings.dap.auto_configure_ide = false;
+
+        let item = SettingItem::new("dap.auto_configure_ide", "Auto-Configure IDE")
+            .value(SettingValue::Bool(true));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(settings.dap.auto_configure_ide);
     }
 
     #[test]

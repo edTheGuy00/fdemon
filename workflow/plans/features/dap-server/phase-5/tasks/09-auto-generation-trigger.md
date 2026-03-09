@@ -189,3 +189,39 @@ fn test_generate_ide_config_no_ide() {
 - The `detect_parent_ide()` call happens inside the spawned task, not in the handler. This is because env var detection is cheap but logically belongs with the config generation flow.
 - If the user toggles `auto_configure_ide` off in settings while the DAP server is running, existing config files are left in place. They are only generated/updated when the server starts.
 - The `post_write()` trait hook is a minor trait extension. If it feels over-engineered, the alternative is to handle Neovim specifically in the dispatch function with `if matches!(ide, ParentIde::Neovim) { ... }`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/dap.rs` | Extended `handle_started()` to return `GenerateIdeConfig` action when `auto_configure_ide` is true; updated existing test and added 3 new tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Updated `GenerateIdeConfig` arm to send `DapConfigGenerated` message on success with IDE name, path, and action string; added `ide_override` handling (pre-populated by linter for Task 10 extension) |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `post_write()` default no-op method to `IdeConfigGenerator` trait; updated `run_generator()` to call `post_write()` after primary file write |
+| `crates/fdemon-app/src/ide_config/neovim.rs` | Moved `.nvim-dap.lua` write from `generate()` to `post_write()` so it fires on both create and merge paths; updated test and added `test_neovim_post_write_updates_lua_on_merge` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`post_write()` moved from `generate()` to dedicated hook**: The Neovim `generate()` previously wrote `.nvim-dap.lua` as a side effect. Moving it to `post_write()` ensures it runs on both create (fresh) and update (merge) paths via `run_generator()`. The test was updated to call `post_write()` directly rather than `generate()`.
+
+2. **`ide_override` field**: The linter pre-populated `GenerateIdeConfig` with an `ide_override: Option<ParentIde>` field (documented as Task 10 scope in `handler/mod.rs`). The `actions/mod.rs` handler correctly uses this: when `ide_override` is `Some`, it bypasses env-detection. The `handle_started()` always passes `ide_override: None` to use auto-detection.
+
+3. **`DapConfigGenerated` message not sent on `Ok(None)`**: When no IDE is detected or the IDE doesn't support DAP config, no message is sent — only a debug log. This matches the acceptance criteria.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (1453 tests)
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Double write on create path for Neovim**: When `run_generator()` is used for a fresh Neovim config, `generate()` runs first (produces JSON, no Lua), then `post_write()` writes `.nvim-dap.lua`. This is a single write — correct behavior.
+
+2. **`post_write()` errors do not affect the primary result**: `post_write()` for Neovim catches errors internally (logs as warnings) and always returns `Ok(())`. This means Lua write failures are silent at the `run_generator` level — consistent with the best-effort design in the original `write_nvim_dap_lua()`.

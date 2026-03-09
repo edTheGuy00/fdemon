@@ -226,3 +226,36 @@ fn test_vscode_merge_no_configurations_key() {
 - JSONC comments are stripped during merge but not preserved in the output. VS Code handles both JSON and JSONC for `launch.json`, so writing pure JSON is fine.
 - The `fdemon-managed: true` marker is non-standard JSON in the config but is harmless — VS Code and the Dart extension ignore unknown fields. It enables safe identification of auto-generated entries.
 - This generator covers VS Code, VS Code Insiders, and Cursor since they all use the same `.vscode/launch.json` format.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/vscode.rs` | Pre-existing file confirmed complete: `VSCodeGenerator` struct implementing `IdeConfigGenerator` with `config_path`, `generate`, `merge_config`, and `ide_name` methods; 12 unit tests covering all acceptance criteria |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Pre-existing: `pub mod vscode;` declared, `generate_ide_config` dispatch routes `VSCode | VSCodeInsiders | Cursor` to `vscode::VSCodeGenerator` via `run_generator`; `run_generator` helper handles all file I/O |
+
+### Notable Decisions/Tradeoffs
+
+1. **File already existed**: `vscode.rs` and the dispatch wiring were already present in the repo, created as part of parallel task progress. Task was to verify everything was correct and complete, fix any gaps, and ensure all checks pass.
+2. **`run_generator` helper pattern**: File I/O is centralized in `run_generator` in `mod.rs` so generators stay pure string-in/string-out. This is consistent with the design doc principle and makes generators easy to unit-test without filesystem mocks.
+3. **Empty file handling**: Empty/whitespace-only existing files are treated as fresh generation (delegates to `generate()`) rather than returning an error — matches acceptance criteria #9.
+4. **JSONC comments stripped on parse, not preserved**: Output is pure JSON. VS Code accepts both JSON and JSONC for `launch.json` so this is safe per the task notes.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1439 tests, 4 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo test -p fdemon-app ide_config::vscode` - Passed (12 tests)
+- `cargo test -p fdemon-app ide_config::` - Passed (99 tests across all ide_config submodules)
+
+### Risks/Limitations
+
+1. **No `pub mod zed;`**: The `zed.rs` generator exists in the directory and is compiled (mod.rs has `pub mod zed;`) but is dispatched to `Ok(None)` — this is intentional (Task 07 placeholder).
+2. **JSONC comment loss**: Merging strips comments from the existing file. This is the expected behaviour per task notes ("JSONC comments are stripped during merge but not preserved").

@@ -329,6 +329,13 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .value(SettingValue::Bool(settings.dap.suppress_reload_on_pause))
             .default(SettingValue::Bool(true))
             .section("DAP Server"),
+        SettingItem::new("dap.auto_configure_ide", "Auto-Configure IDE")
+            .description(
+                "Automatically generate IDE debug config (launch.json etc.) when DAP server starts",
+            )
+            .value(SettingValue::Bool(settings.dap.auto_configure_ide))
+            .default(SettingValue::Bool(true))
+            .section("DAP Server"),
     ]
 }
 
@@ -557,6 +564,7 @@ mod tests {
             "dap.port",
             "dap.bind_address",
             "dap.suppress_reload_on_pause",
+            "dap.auto_configure_ide",
         ];
 
         for id in &dap_ids {
@@ -574,7 +582,7 @@ mod tests {
         let items = project_settings_items(&settings);
 
         let dap_items: Vec<_> = items.iter().filter(|i| i.section == "DAP Server").collect();
-        assert_eq!(dap_items.len(), 5, "Expected 5 DAP Server settings items");
+        assert_eq!(dap_items.len(), 6, "Expected 6 DAP Server settings items");
     }
 
     #[test]
@@ -613,6 +621,13 @@ mod tests {
             .unwrap();
         assert_eq!(suppress.value, SettingValue::Bool(true));
         assert_eq!(suppress.default, SettingValue::Bool(true));
+
+        let auto_configure = items
+            .iter()
+            .find(|i| i.id == "dap.auto_configure_ide")
+            .unwrap();
+        assert_eq!(auto_configure.value, SettingValue::Bool(true));
+        assert_eq!(auto_configure.default, SettingValue::Bool(true));
     }
 
     #[test]
@@ -626,6 +641,7 @@ mod tests {
             port: 4711,
             bind_address: "0.0.0.0".to_string(),
             suppress_reload_on_pause: false,
+            auto_configure_ide: true,
         };
 
         let items = project_settings_items(&settings);

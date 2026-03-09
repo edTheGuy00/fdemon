@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// A single launch configuration
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -497,6 +497,11 @@ pub struct DapSettings {
     /// Suppress auto-reload while debugger is paused at a breakpoint.
     #[serde(default = "default_suppress_reload")]
     pub suppress_reload_on_pause: bool,
+
+    /// Automatically generate IDE DAP config when server starts.
+    /// Default: true — generates launch.json/languages.toml/etc. on server bind.
+    #[serde(default = "default_auto_configure_ide")]
+    pub auto_configure_ide: bool,
 }
 
 fn default_auto_start_in_ide() -> bool {
@@ -511,6 +516,10 @@ fn default_suppress_reload() -> bool {
     true
 }
 
+fn default_auto_configure_ide() -> bool {
+    true
+}
+
 impl Default for DapSettings {
     fn default() -> Self {
         Self {
@@ -519,6 +528,7 @@ impl Default for DapSettings {
             port: 0,
             bind_address: default_bind_address(),
             suppress_reload_on_pause: default_suppress_reload(),
+            auto_configure_ide: default_auto_configure_ide(),
         }
     }
 }
@@ -536,6 +546,8 @@ pub enum ParentIde {
     IntelliJ,
     AndroidStudio,
     Neovim,
+    Emacs,
+    Helix,
 }
 
 impl ParentIde {
@@ -547,7 +559,7 @@ impl ParentIde {
             ParentIde::Cursor => "cursor",
             ParentIde::Zed => "zed",
             ParentIde::IntelliJ | ParentIde::AndroidStudio => "idea",
-            ParentIde::Neovim => "file", // Neovim doesn't have URL scheme
+            ParentIde::Neovim | ParentIde::Emacs | ParentIde::Helix => "file",
         }
     }
 
@@ -571,6 +583,30 @@ impl ParentIde {
             ParentIde::IntelliJ => "IntelliJ IDEA",
             ParentIde::AndroidStudio => "Android Studio",
             ParentIde::Neovim => "Neovim",
+            ParentIde::Emacs => "Emacs",
+            ParentIde::Helix => "Helix",
+        }
+    }
+
+    /// Returns true if this IDE supports auto-generated DAP configuration.
+    ///
+    /// IntelliJ and Android Studio use proprietary debugging protocols — no standard DAP path.
+    pub fn supports_dap_config(&self) -> bool {
+        !matches!(self, Self::IntelliJ | Self::AndroidStudio)
+    }
+
+    /// Returns the target config file path for DAP auto-configuration.
+    ///
+    /// Returns `None` for IDEs that don't support DAP config (IntelliJ, Android Studio).
+    pub fn dap_config_path(&self, project_root: &Path) -> Option<PathBuf> {
+        match self {
+            Self::VSCode | Self::VSCodeInsiders | Self::Cursor | Self::Neovim => {
+                Some(project_root.join(".vscode/launch.json"))
+            }
+            Self::Helix => Some(project_root.join(".helix/languages.toml")),
+            Self::Zed => Some(project_root.join(".zed/debug.json")),
+            Self::Emacs => Some(project_root.join(".fdemon/dap-emacs.el")),
+            Self::IntelliJ | Self::AndroidStudio => None,
         }
     }
 }
@@ -1331,5 +1367,143 @@ theme = "default"
         assert_eq!(settings.dap.port, 0);
         assert_eq!(settings.dap.bind_address, "127.0.0.1");
         assert!(settings.dap.suppress_reload_on_pause);
+    }
+
+    #[test]
+    fn test_dap_settings_default_auto_configure_ide() {
+        let settings = DapSettings::default();
+        assert!(settings.auto_configure_ide);
+    }
+
+    #[test]
+    fn test_dap_settings_deserialize_without_auto_configure_ide() {
+        let toml = r#"
+        enabled = false
+        port = 0
+        bind_address = "127.0.0.1"
+        "#;
+        let settings: DapSettings = toml::from_str(toml).unwrap();
+        assert!(settings.auto_configure_ide); // default true
+    }
+
+    #[test]
+    fn test_dap_settings_deserialize_with_auto_configure_ide_false() {
+        let toml = r#"
+        enabled = false
+        auto_configure_ide = false
+        "#;
+        let settings: DapSettings = toml::from_str(toml).unwrap();
+        assert!(!settings.auto_configure_ide);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // ParentIde::Emacs / Helix Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_emacs_display_name() {
+        assert_eq!(ParentIde::Emacs.display_name(), "Emacs");
+    }
+
+    #[test]
+    fn test_helix_display_name() {
+        assert_eq!(ParentIde::Helix.display_name(), "Helix");
+    }
+
+    #[test]
+    fn test_emacs_url_scheme_is_file() {
+        assert_eq!(ParentIde::Emacs.url_scheme(), "file");
+    }
+
+    #[test]
+    fn test_helix_url_scheme_is_file() {
+        assert_eq!(ParentIde::Helix.url_scheme(), "file");
+    }
+
+    #[test]
+    fn test_emacs_reuse_flag_is_none() {
+        assert_eq!(ParentIde::Emacs.reuse_flag(), None);
+    }
+
+    #[test]
+    fn test_helix_reuse_flag_is_none() {
+        assert_eq!(ParentIde::Helix.reuse_flag(), None);
+    }
+
+    #[test]
+    fn test_supports_dap_config_true_for_all_except_intellij() {
+        assert!(ParentIde::VSCode.supports_dap_config());
+        assert!(ParentIde::VSCodeInsiders.supports_dap_config());
+        assert!(ParentIde::Cursor.supports_dap_config());
+        assert!(ParentIde::Zed.supports_dap_config());
+        assert!(ParentIde::Neovim.supports_dap_config());
+        assert!(ParentIde::Emacs.supports_dap_config());
+        assert!(ParentIde::Helix.supports_dap_config());
+        assert!(!ParentIde::IntelliJ.supports_dap_config());
+        assert!(!ParentIde::AndroidStudio.supports_dap_config());
+    }
+
+    #[test]
+    fn test_dap_config_path_vscode_family() {
+        let root = std::path::Path::new("/project");
+        assert_eq!(
+            ParentIde::VSCode.dap_config_path(root),
+            Some(root.join(".vscode/launch.json"))
+        );
+        assert_eq!(
+            ParentIde::VSCodeInsiders.dap_config_path(root),
+            Some(root.join(".vscode/launch.json"))
+        );
+        assert_eq!(
+            ParentIde::Cursor.dap_config_path(root),
+            Some(root.join(".vscode/launch.json"))
+        );
+        assert_eq!(
+            ParentIde::Neovim.dap_config_path(root),
+            Some(root.join(".vscode/launch.json"))
+        );
+    }
+
+    #[test]
+    fn test_dap_config_path_helix() {
+        let root = std::path::Path::new("/project");
+        assert_eq!(
+            ParentIde::Helix.dap_config_path(root),
+            Some(root.join(".helix/languages.toml"))
+        );
+    }
+
+    #[test]
+    fn test_dap_config_path_zed() {
+        let root = std::path::Path::new("/project");
+        assert_eq!(
+            ParentIde::Zed.dap_config_path(root),
+            Some(root.join(".zed/debug.json"))
+        );
+    }
+
+    #[test]
+    fn test_dap_config_path_emacs() {
+        let root = std::path::Path::new("/project");
+        assert_eq!(
+            ParentIde::Emacs.dap_config_path(root),
+            Some(root.join(".fdemon/dap-emacs.el"))
+        );
+    }
+
+    #[test]
+    fn test_dap_config_path_none_for_intellij() {
+        assert_eq!(
+            ParentIde::IntelliJ.dap_config_path(std::path::Path::new("/p")),
+            None
+        );
+    }
+
+    #[test]
+    fn test_dap_config_path_none_for_android_studio() {
+        assert_eq!(
+            ParentIde::AndroidStudio.dap_config_path(std::path::Path::new("/p")),
+            None
+        );
     }
 }

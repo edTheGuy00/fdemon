@@ -181,3 +181,38 @@ fn test_emacs_elisp_parens_balanced() {
 - The Elisp snippet assumes `dap-mode` is installed. If it's not, the `(require 'dap-mode)` call will error. This is expected — users who run Emacs with dap-mode will have it installed.
 - The `host` is hardcoded to `"localhost"` in the Elisp. For non-localhost bind addresses (a future enhancement), this would need to be parameterized.
 - Emacs detection via `$INSIDE_EMACS` is not 100% reliable (some custom shell setups don't set it). Users can always fall back to `fdemon --dap-config emacs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/emacs.rs` | Created — `EmacsGenerator` struct implementing `IdeConfigGenerator`; `generate_elisp()` private helper; 10 unit tests |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `pub mod emacs;` declaration; added `run_generator()` file-I/O helper; wired `ParentIde::Emacs` arm in `generate_ide_config()` dispatch to `run_generator(&emacs::EmacsGenerator, ...)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`run_generator` helper in mod.rs**: The task description states the dispatch function owns file I/O. I added a private `run_generator()` function before the dispatch to handle mkdir/read/write, keeping all generators pure. The Helix task (Task 06) had already added this same function to mod.rs, so the Emacs arm just reuses it. No duplication was introduced.
+
+2. **`generate_elisp` private function**: Content generation is extracted to a free function `generate_elisp(port, file_path_display)` rather than an `impl` method, keeping the `EmacsGenerator` struct minimal and making the format string easy to read and test in isolation.
+
+3. **`merge_config` uses placeholder path**: Since `merge_config` doesn't receive `project_root`, the loading instructions in the overwritten file use `.fdemon/dap-emacs.el` as a relative placeholder. The `generate()` path embeds the full absolute path. This is an acceptable tradeoff documented in the task.
+
+4. **Parenthesis balance verified**: The Elisp template contains `(fdemon DAP)` inside a string, which adds one `(` and one `)` that cancel out. The paren-balance test passes because the raw character counts are equal.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app ide_config::emacs` — Passed (10/10 tests)
+- `cargo test -p fdemon-app` — Passed (1425 tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **No integration test for file write**: The `run_generator` helper that actually writes to disk is only exercised via `generate_ide_config(Some(ParentIde::Emacs), ...)` calls. Such a test would need a tempdir. The unit tests for `EmacsGenerator` itself are pure (no I/O), which satisfies the task's testing requirements.

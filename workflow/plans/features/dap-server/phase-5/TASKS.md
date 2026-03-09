@@ -35,17 +35,18 @@ Wave 4 — Polish (depends on Wave 3)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-extend-parent-ide](tasks/01-extend-parent-ide.md) | Pending | - | 2–3h | `fdemon-app/config/types.rs`, `fdemon-app/config/settings.rs` |
-| 2 | [02-ide-config-trait](tasks/02-ide-config-trait.md) | Pending | - | 3–4h | `fdemon-app/ide_config/mod.rs` **NEW**, `fdemon-app/ide_config/merge.rs` **NEW** |
-| 3 | [03-dap-settings-and-messages](tasks/03-dap-settings-and-messages.md) | Pending | - | 2–3h | `fdemon-app/config/types.rs`, `fdemon-app/message.rs`, `fdemon-app/handler/dap.rs` |
-| 4 | [04-vscode-generator](tasks/04-vscode-generator.md) | Pending | 1, 2 | 3–4h | `fdemon-app/ide_config/vscode.rs` **NEW** |
-| 5 | [05-neovim-generator](tasks/05-neovim-generator.md) | Pending | 1, 2 | 3–4h | `fdemon-app/ide_config/neovim.rs` **NEW** |
-| 6 | [06-helix-generator](tasks/06-helix-generator.md) | Pending | 1, 2 | 3–4h | `fdemon-app/ide_config/helix.rs` **NEW** |
-| 7 | [07-zed-generator](tasks/07-zed-generator.md) | Pending | 1, 2 | 2–3h | `fdemon-app/ide_config/zed.rs` **NEW** |
-| 8 | [08-emacs-generator](tasks/08-emacs-generator.md) | Pending | 1, 2 | 2–3h | `fdemon-app/ide_config/emacs.rs` **NEW** |
-| 9 | [09-auto-generation-trigger](tasks/09-auto-generation-trigger.md) | Pending | 3, 4–8 | 3–4h | `fdemon-app/handler/dap.rs`, `fdemon-app/actions/mod.rs`, `fdemon-app/engine.rs` |
-| 10 | [10-dap-config-cli](tasks/10-dap-config-cli.md) | Pending | 3, 4–8 | 2–3h | `flutter-demon/src/main.rs`, `fdemon-app/ide_config/mod.rs` |
-| 11 | [11-tui-integration](tasks/11-tui-integration.md) | Pending | 9 | 2–3h | `fdemon-tui/widgets/log_view/mod.rs`, `fdemon-app/handler/dap.rs` |
+| 1 | [01-extend-parent-ide](tasks/01-extend-parent-ide.md) | Done | - | 2–3h | `fdemon-app/config/types.rs`, `fdemon-app/config/settings.rs` |
+| 2 | [02-ide-config-trait](tasks/02-ide-config-trait.md) | Done | - | 3–4h | `fdemon-app/ide_config/mod.rs` **NEW**, `fdemon-app/ide_config/merge.rs` **NEW** |
+| 3 | [03-dap-settings-and-messages](tasks/03-dap-settings-and-messages.md) | Done | - | 2–3h | `fdemon-app/config/types.rs`, `fdemon-app/message.rs`, `fdemon-app/handler/dap.rs` |
+| 4 | [04-vscode-generator](tasks/04-vscode-generator.md) | Done | 1, 2 | 3–4h | `fdemon-app/ide_config/vscode.rs` **NEW** |
+| 5 | [05-neovim-generator](tasks/05-neovim-generator.md) | Done | 1, 2 | 3–4h | `fdemon-app/ide_config/neovim.rs` **NEW** |
+| 6 | [06-helix-generator](tasks/06-helix-generator.md) | Done | 1, 2 | 3–4h | `fdemon-app/ide_config/helix.rs` **NEW** |
+| 7 | [07-zed-generator](tasks/07-zed-generator.md) | Done | 1, 2 | 2–3h | `fdemon-app/ide_config/zed.rs` **NEW** |
+| 8 | [08-emacs-generator](tasks/08-emacs-generator.md) | Done | 1, 2 | 2–3h | `fdemon-app/ide_config/emacs.rs` **NEW** |
+| 9 | [09-auto-generation-trigger](tasks/09-auto-generation-trigger.md) | Done | 3, 4–8 | 3–4h | `fdemon-app/handler/dap.rs`, `fdemon-app/actions/mod.rs`, `fdemon-app/engine.rs` |
+| 10 | [10-dap-config-cli](tasks/10-dap-config-cli.md) | Done | 3, 4–8 | 2–3h | `flutter-demon/src/main.rs`, `fdemon-app/ide_config/mod.rs` |
+| 11 | [11-tui-integration](tasks/11-tui-integration.md) | Done | 9 | 2–3h | `fdemon-tui/widgets/log_view/mod.rs`, `fdemon-app/handler/dap.rs` |
+| 12 | [12-fix-ide-config-discrepancies](tasks/12-fix-ide-config-discrepancies.md) | Done | 8 | 1–2h | `fdemon-app/ide_config/emacs.rs` |
 
 ## Success Criteria
 

@@ -8,7 +8,7 @@ use std::collections::HashSet;
 
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::message::Message;
-use crate::state::{AppState, DapStatus};
+use crate::state::{AppState, DapConfigStatus, DapStatus};
 
 /// Handle a DAP server lifecycle message.
 pub fn handle_dap_message(state: &mut AppState, message: &Message) -> UpdateResult {
@@ -23,6 +23,11 @@ pub fn handle_dap_message(state: &mut AppState, message: &Message) -> UpdateResu
         Message::DapClientDisconnected { client_id } => {
             handle_client_disconnected(state, client_id)
         }
+        Message::DapConfigGenerated {
+            ide_name,
+            path,
+            action,
+        } => handle_config_generated(state, ide_name, path, action),
         _ => UpdateResult::none(),
     }
 }
@@ -63,7 +68,16 @@ fn handle_started(state: &mut AppState, port: u16) -> UpdateResult {
         state.settings.dap.bind_address,
         port
     );
-    UpdateResult::none()
+
+    // Trigger IDE config auto-generation if the setting is enabled.
+    if state.settings.dap.auto_configure_ide {
+        UpdateResult::action(UpdateAction::GenerateIdeConfig {
+            port,
+            ide_override: None,
+        })
+    } else {
+        UpdateResult::none()
+    }
 }
 
 fn handle_stopped(state: &mut AppState) -> UpdateResult {
@@ -104,6 +118,26 @@ fn handle_client_disconnected(state: &mut AppState, client_id: &str) -> UpdateRe
         return UpdateResult::message(crate::message::Message::ResumeFileWatcher);
     }
 
+    UpdateResult::none()
+}
+
+fn handle_config_generated(
+    state: &mut AppState,
+    ide_name: &str,
+    path: &std::path::Path,
+    action: &str,
+) -> UpdateResult {
+    state.dap_config_status = Some(DapConfigStatus {
+        ide_name: ide_name.to_string(),
+        path: path.to_path_buf(),
+        action: action.to_string(),
+    });
+    tracing::info!(
+        "DAP config for {}: {} at {}",
+        ide_name,
+        action,
+        path.display()
+    );
     UpdateResult::none()
 }
 
@@ -265,6 +299,8 @@ mod tests {
     fn test_dap_server_started_transitions_to_running() {
         let mut state = test_state();
         state.dap_status = DapStatus::Starting;
+        // auto_configure_ide defaults to true, so the action will be GenerateIdeConfig.
+        state.settings.dap.auto_configure_ide = false;
         let result = handle_dap_message(&mut state, &Message::DapServerStarted { port: 4711 });
         assert_eq!(
             state.dap_status,
@@ -274,6 +310,39 @@ mod tests {
             }
         );
         assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_dap_server_started_triggers_ide_config_when_enabled() {
+        let mut state = test_state();
+        state.settings.dap.auto_configure_ide = true;
+        let result = handle_dap_message(&mut state, &Message::DapServerStarted { port: 4711 });
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::GenerateIdeConfig {
+                port: 4711,
+                ide_override: None
+            })
+        ));
+    }
+
+    #[test]
+    fn test_dap_server_started_skips_ide_config_when_disabled() {
+        let mut state = test_state();
+        state.settings.dap.auto_configure_ide = false;
+        let result = handle_dap_message(&mut state, &Message::DapServerStarted { port: 4711 });
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_dap_server_started_still_sets_status() {
+        let mut state = test_state();
+        state.settings.dap.auto_configure_ide = true;
+        handle_dap_message(&mut state, &Message::DapServerStarted { port: 4711 });
+        assert!(matches!(
+            state.dap_status,
+            DapStatus::Running { port: 4711, .. }
+        ));
     }
 
     #[test]
@@ -441,5 +510,64 @@ mod tests {
         };
         let result = handle_dap_message(&mut state, &Message::StopDapServer);
         assert!(matches!(result.action, Some(UpdateAction::StopDapServer)));
+    }
+
+    // --- DapConfigGenerated tests (Phase 5, Task 03) ---
+
+    #[test]
+    fn test_handle_dap_config_generated_stores_status() {
+        let mut state = test_state();
+        let msg = Message::DapConfigGenerated {
+            ide_name: "VS Code".into(),
+            path: std::path::PathBuf::from(".vscode/launch.json"),
+            action: "Created".into(),
+        };
+        let result = handle_dap_message(&mut state, &msg);
+        assert!(result.action.is_none());
+        assert!(result.message.is_none());
+        assert!(state.dap_config_status.is_some());
+        let status = state.dap_config_status.unwrap();
+        assert_eq!(status.ide_name, "VS Code");
+        assert_eq!(status.path, std::path::PathBuf::from(".vscode/launch.json"));
+        assert_eq!(status.action, "Created");
+    }
+
+    #[test]
+    fn test_handle_dap_config_generated_overwrites_previous_status() {
+        let mut state = test_state();
+        // First generation
+        handle_dap_message(
+            &mut state,
+            &Message::DapConfigGenerated {
+                ide_name: "Neovim".into(),
+                path: std::path::PathBuf::from(".nvim/dap.lua"),
+                action: "Created".into(),
+            },
+        );
+        // Second generation overwrites
+        handle_dap_message(
+            &mut state,
+            &Message::DapConfigGenerated {
+                ide_name: "VS Code".into(),
+                path: std::path::PathBuf::from(".vscode/launch.json"),
+                action: "Updated".into(),
+            },
+        );
+        let status = state.dap_config_status.unwrap();
+        assert_eq!(status.ide_name, "VS Code");
+        assert_eq!(status.action, "Updated");
+    }
+
+    #[test]
+    fn test_handle_dap_config_generated_skipped_action() {
+        let mut state = test_state();
+        let msg = Message::DapConfigGenerated {
+            ide_name: "Helix".into(),
+            path: std::path::PathBuf::from(".config/helix/languages.toml"),
+            action: "Skipped: file already up to date".into(),
+        };
+        handle_dap_message(&mut state, &msg);
+        let status = state.dap_config_status.unwrap();
+        assert_eq!(status.action, "Skipped: file already up to date");
     }
 }

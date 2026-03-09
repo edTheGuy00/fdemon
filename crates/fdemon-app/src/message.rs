@@ -1094,4 +1094,18 @@ pub enum Message {
 
     /// A DAP client disconnected from the server.
     DapClientDisconnected { client_id: String },
+
+    /// IDE DAP config was generated/updated/skipped.
+    ///
+    /// Sent by the IDE config generation task after writing (or skipping)
+    /// the config file. The `action` field is a human-readable description
+    /// such as `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
+    DapConfigGenerated {
+        /// The IDE the config was generated for (e.g. `"VS Code"`, `"Neovim"`).
+        ide_name: String,
+        /// The config file path that was written (or would have been written).
+        path: std::path::PathBuf,
+        /// What happened: `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
+        action: String,
+    },
 }

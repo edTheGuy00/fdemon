@@ -119,6 +119,18 @@ pub fn detect_parent_ide() -> Option<ParentIde> {
         return Some(ParentIde::Neovim);
     }
 
+    // Step 6: Emacs detection via $INSIDE_EMACS
+    // Set by Emacs shell-mode, vterm, eshell, term-mode
+    if env::var("INSIDE_EMACS").is_ok() {
+        return Some(ParentIde::Emacs);
+    }
+
+    // Step 7: Helix detection via $HELIX_RUNTIME
+    // Set when running inside Helix's :sh command
+    if env::var("HELIX_RUNTIME").is_ok() {
+        return Some(ParentIde::Helix);
+    }
+
     None
 }
 
@@ -192,6 +204,16 @@ pub fn editor_config_for_ide(ide: ParentIde) -> EditorConfig {
             command: "nvim",
             pattern: "nvim --server $NVIM --remote-send '<Esc>:e +$LINE $FILE<CR>'",
             display_name: "Neovim",
+        },
+        ParentIde::Emacs => EditorConfig {
+            command: "emacsclient",
+            pattern: "emacsclient -n +$LINE:$COLUMN $FILE",
+            display_name: "Emacs",
+        },
+        ParentIde::Helix => EditorConfig {
+            command: "hx",
+            pattern: "hx $FILE:$LINE",
+            display_name: "Helix",
         },
     }
 }
@@ -1796,5 +1818,73 @@ icons = "nerd_fonts"
         settings.dap.enabled = false;
         settings.dap.auto_start_in_ide = false;
         assert!(!should_auto_start_dap(&settings));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Emacs and Helix Detection Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_emacs_detection_via_inside_emacs() {
+        // Note: env var tests can be flaky in parallel runners.
+        // We use a guard approach: only assert if the var wasn't already set.
+        let was_set = std::env::var("INSIDE_EMACS").is_ok();
+        if !was_set {
+            // SAFETY: setting env vars in single-threaded context for this test.
+            // This test may be skipped in environments with INSIDE_EMACS already set.
+            unsafe { std::env::set_var("INSIDE_EMACS", "1") };
+            let result = detect_parent_ide();
+            unsafe { std::env::remove_var("INSIDE_EMACS") };
+            // After setting INSIDE_EMACS, detect_parent_ide should return Emacs
+            // unless a higher-priority env var (NVIM, TERM_PROGRAM, etc.) is set.
+            // In a clean test env, it will be Emacs.
+            if std::env::var("TERM_PROGRAM").is_err()
+                && std::env::var("ZED_TERM").is_err()
+                && std::env::var("VSCODE_IPC_HOOK_CLI").is_err()
+                && std::env::var("TERMINAL_EMULATOR").is_err()
+                && std::env::var("NVIM").is_err()
+            {
+                assert_eq!(result, Some(ParentIde::Emacs));
+            }
+        }
+    }
+
+    #[test]
+    fn test_helix_detection_via_helix_runtime() {
+        let was_set = std::env::var("HELIX_RUNTIME").is_ok();
+        if !was_set {
+            unsafe { std::env::set_var("HELIX_RUNTIME", "/usr/share/helix") };
+            let result = detect_parent_ide();
+            unsafe { std::env::remove_var("HELIX_RUNTIME") };
+            // After setting HELIX_RUNTIME, detect_parent_ide should return Helix
+            // unless a higher-priority env var is set.
+            if std::env::var("TERM_PROGRAM").is_err()
+                && std::env::var("ZED_TERM").is_err()
+                && std::env::var("VSCODE_IPC_HOOK_CLI").is_err()
+                && std::env::var("TERMINAL_EMULATOR").is_err()
+                && std::env::var("NVIM").is_err()
+                && std::env::var("INSIDE_EMACS").is_err()
+            {
+                assert_eq!(result, Some(ParentIde::Helix));
+            }
+        }
+    }
+
+    #[test]
+    fn test_editor_config_for_emacs() {
+        let config = editor_config_for_ide(ParentIde::Emacs);
+        assert_eq!(config.command, "emacsclient");
+        assert!(config.pattern.contains("emacsclient"));
+        assert!(config.pattern.contains("-n"));
+        assert!(config.pattern.contains("$FILE"));
+        assert!(config.pattern.contains("$LINE"));
+    }
+
+    #[test]
+    fn test_editor_config_for_helix() {
+        let config = editor_config_for_ide(ParentIde::Helix);
+        assert_eq!(config.command, "hx");
+        assert!(config.pattern.contains("$FILE"));
+        assert!(config.pattern.contains("$LINE"));
     }
 }

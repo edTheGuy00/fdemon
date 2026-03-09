@@ -377,6 +377,23 @@ pub enum UpdateAction {
     /// Stale senders (where the DAP client has disconnected) are pruned
     /// automatically inside `handle_action` via the `retain` + `try_send` pattern.
     ForwardDapDebugEvents(Vec<fdemon_dap::adapter::DebugEvent>),
+
+    /// Generate IDE-specific DAP config file (Phase 5, Task 03).
+    ///
+    /// Triggers the IDE config generation task that inspects the detected
+    /// `ParentIde` and writes the appropriate config (launch.json,
+    /// languages.toml, .emacs.d/fdemon-dap.el, etc.).
+    ///
+    /// `ide_override` allows the `--dap-config <IDE>` CLI flag to bypass
+    /// auto-detection and target a specific IDE explicitly (Phase 5, Task 10).
+    ///
+    /// Handled by the TUI/headless runner event loops.
+    GenerateIdeConfig {
+        port: u16,
+        /// Optional IDE override from `--dap-config` CLI flag.
+        /// When `None`, the IDE is auto-detected from the environment.
+        ide_override: Option<crate::config::ParentIde>,
+    },
 }
 
 /// Background tasks to spawn

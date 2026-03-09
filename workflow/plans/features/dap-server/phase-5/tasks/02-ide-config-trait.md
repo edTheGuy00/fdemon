@@ -285,3 +285,40 @@ fn test_clean_jsonc_strips_trailing_commas() {
 - The dispatch function handles the file I/O (read/write/mkdir) so generators only produce string content. This keeps generators pure and testable.
 - The `clean_jsonc` function in `config/vscode.rs` is currently `pub(crate)`. If making it `pub` is undesirable, duplicate the ~30-line implementation in `merge.rs`.
 - Per-IDE submodule declarations (`mod vscode;`, etc.) should be added to `mod.rs` with `#[allow(unused)]` until Tasks 04–08 create the implementations, or use conditional compilation. Alternatively, declare them only when the files exist.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/mod.rs` | Created — `IdeConfigGenerator` trait, `IdeConfigResult`, `ConfigAction`, `generate_ide_config()` placeholder dispatch, re-exports, tests |
+| `crates/fdemon-app/src/ide_config/merge.rs` | Created — `find_json_entry_by_field`, `merge_json_array_entry`, `clean_jsonc`, `to_pretty_json`, constants, tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub mod ide_config;` in alphabetical order |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `UpdateAction::GenerateIdeConfig` arm that async-dispatches to `ide_config::generate_ide_config()` |
+| `crates/fdemon-app/src/settings_items.rs` | Fixed pre-existing test: added missing `auto_configure_ide` field in `DapSettings` struct initializer |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option 1 for dispatch**: Chose the placeholder approach — `generate_ide_config()` returns `Ok(None)` for all supported IDEs until Tasks 04–08 add generator modules. The match arm is exhaustive so the compiler enforces it gets updated when generators arrive.
+2. **`clean_jsonc` duplication**: The function in `config/vscode.rs` is not `pub`, so the implementation was duplicated (~70 lines including `strip_json_comments` + `strip_trailing_commas`) in `merge.rs`. Both implementations are identical in logic.
+3. **`Result` import**: Used `fdemon_core::Result` directly (not `crate::Result`) because `fdemon-app` does not re-export `Result` at its crate root.
+4. **Pre-existing `settings_items.rs` fix**: The `DapSettings` struct initializer in a test was missing the `auto_configure_ide` field added by a prior task. Fixed as a side-effect since it prevented `cargo test` from compiling.
+5. **`GenerateIdeConfig` action handler**: Added the missing match arm to `actions/mod.rs` which the compiler required for exhaustive coverage. The handler detects the parent IDE via `detect_parent_ide()` and delegates to `ide_config::generate_ide_config()` in an async task.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app` — Passed (1367 unit tests + 1 doc test)
+- `cargo test -p fdemon-app ide_config` — Passed (27 new tests)
+- `cargo clippy --workspace -- -D warnings` — Passed (zero warnings)
+- `cargo fmt --all` — Passed
+
+### Risks/Limitations
+
+1. **Placeholder dispatch**: `generate_ide_config()` currently returns `Ok(None)` for all IDEs. Tasks 04–08 must update the match to dispatch to real generators. The exhaustive match ensures the compiler reminds implementors.
+2. **`clean_jsonc` duplication**: Two copies of the JSONC cleaning logic exist (`config/vscode.rs` and `ide_config/merge.rs`). If one is modified, the other should be updated too. Making `config/vscode.rs::clean_jsonc` `pub(crate)` would eliminate duplication, but that was not in scope for this task.

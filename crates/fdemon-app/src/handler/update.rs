@@ -1925,7 +1925,8 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::DapServerStopped
         | Message::DapServerFailed { .. }
         | Message::DapClientConnected { .. }
-        | Message::DapClientDisconnected { .. } => dap::handle_dap_message(state, &message),
+        | Message::DapClientDisconnected { .. }
+        | Message::DapConfigGenerated { .. } => dap::handle_dap_message(state, &message),
     }
 }
 

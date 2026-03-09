@@ -180,3 +180,38 @@ fn test_zed_ide_name() {
 - The `tcp_connection` field is the key mechanism — it tells Zed to connect to an existing TCP server rather than spawning a new adapter. This is analogous to VS Code's `debugServer` field.
 - The `fdemon-managed: true` marker is non-standard but harmless — Zed ignores unknown fields in debug configs.
 - Dart/Flutter debugger support in Zed depends on a community extension. The generated config is forward-compatible — it will work once Dart debugging is available in Zed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/zed.rs` | Created — `ZedGenerator` struct implementing `IdeConfigGenerator` with JSON generation, merge logic, and 14 unit tests |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `pub mod zed;` declaration; updated `generate_ide_config()` to dispatch `ParentIde::Zed` to `run_generator(&zed::ZedGenerator, ...)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Named constants for label/host**: Used `ZED_FDEMON_LABEL` and `ZED_DAP_HOST` constants instead of inline string literals, per CODE_STANDARDS.md anti-magic-numbers guidance.
+
+2. **fdemon_core::Error directly**: The trait signature uses `fdemon_core::Result` and the task spec's `crate::Error` resolved to `fdemon_core::Error::config(...)` — used it directly, consistent with `plugin.rs` patterns in the codebase.
+
+3. **mod.rs was already partially updated**: When this task ran, the `mod.rs` had been updated by concurrent tasks (04–06, 08) to include `run_generator`, `vscode`, `helix`, `neovim`, `emacs` modules, and their dispatch arms — but the Zed arm was still stubbed as `Ok(None)`. This task added `pub mod zed;` and replaced the stub with `run_generator(&zed::ZedGenerator, ...)`. The fully-wired dispatch now handles all 5 IDEs.
+
+4. **Non-array JSON returns error**: Added an extra test (`test_zed_merge_non_array_json_returns_error`) beyond the task spec to cover the case where a JSON object is passed instead of an array — `serde_json::from_str::<Vec<Value>>` correctly fails on objects.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-app ide_config::zed` — Passed (14 tests)
+- `cargo test -p fdemon-app` — Passed (1,439 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` — Passed
+- `cargo fmt --all` — Clean
+
+### Risks/Limitations
+
+1. **Zed Dart/Flutter support**: As documented in the task, Dart/Flutter debugging in Zed requires a community extension not yet available (March 2026). The generator emits a `tracing::warn!` and produces the config anyway for forward compatibility.

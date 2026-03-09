@@ -44,6 +44,9 @@ pub struct StatusInfo<'a> {
     pub vm_connected: bool,
     /// DAP server port if running (shows [DAP :PORT] badge).
     pub dap_port: Option<u16>,
+    /// IDE name for which DAP config was generated (e.g. "VS Code").
+    /// When present alongside `dap_port`, badge becomes `[DAP :PORT · IDE]`.
+    pub dap_config_ide: Option<String>,
 }
 
 /// Log view widget with rich formatting
@@ -842,11 +845,17 @@ impl<'a> LogView<'a> {
                 ));
             }
 
-            // DAP server indicator
+            // DAP server indicator — optionally embeds the IDE name when a
+            // config was generated: [DAP :4711 · VS Code]
             if let Some(port) = status.dap_port {
                 spans.push(Span::raw("  "));
+                let dap_text = if let Some(ref ide) = status.dap_config_ide {
+                    format!("[DAP :{port} \u{00b7} {ide}]")
+                } else {
+                    format!("[DAP :{port}]")
+                };
                 spans.push(Span::styled(
-                    format!("[DAP :{port}]"),
+                    dap_text,
                     Style::default().fg(palette::STATUS_GREEN),
                 ));
             }
