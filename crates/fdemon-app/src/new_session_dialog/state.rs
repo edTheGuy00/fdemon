@@ -510,23 +510,19 @@ impl LaunchContextState {
         if let Some(config) = self.selected_config().cloned() {
             self.mode = config.config.mode;
 
-            if let Some(ref flavor) = config.config.flavor {
-                self.flavor = Some(flavor.clone());
-            }
+            self.flavor = config.config.flavor.clone();
 
             // Apply entry_point from config
             if let Some(ref entry_point) = config.config.entry_point {
                 self.entry_point = Some(entry_point.clone());
             }
 
-            if !config.config.dart_defines.is_empty() {
-                self.dart_defines = config
-                    .config
-                    .dart_defines
-                    .iter()
-                    .map(|(k, v)| DartDefine::new(k, v))
-                    .collect();
-            }
+            self.dart_defines = config
+                .config
+                .dart_defines
+                .iter()
+                .map(|(k, v)| DartDefine::new(k, v))
+                .collect();
 
             self.extra_args = config.config.extra_args.clone();
         }
@@ -1368,6 +1364,79 @@ mod tests {
         assert_eq!(
             params.extra_args,
             vec!["--dart-define-from-file=envs/staging.env.json".to_string()]
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // select_config clears stale fields when switching configs
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_select_config_clears_flavor_when_new_config_has_none() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Production".to_string(),
+                flavor: Some("production".to_string()),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Production".to_string(),
+        });
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "Basic".to_string(),
+                flavor: None,
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "Basic".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+
+        state.select_config(Some(0));
+        assert_eq!(state.flavor, Some("production".to_string()));
+
+        state.select_config(Some(1));
+        assert_eq!(
+            state.flavor, None,
+            "flavor should be cleared when new config has none"
+        );
+    }
+
+    #[test]
+    fn test_select_config_clears_dart_defines_when_new_config_has_none() {
+        let mut configs = LoadedConfigs::default();
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "WithDefines".to_string(),
+                dart_defines: [("API_URL".to_string(), "https://prod.com".to_string())]
+                    .into_iter()
+                    .collect(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "WithDefines".to_string(),
+        });
+        configs.configs.push(SourcedConfig {
+            config: LaunchConfig {
+                name: "NoDefines".to_string(),
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: "NoDefines".to_string(),
+        });
+
+        let mut state = LaunchContextState::new(configs);
+
+        state.select_config(Some(0));
+        assert_eq!(state.dart_defines.len(), 1);
+
+        state.select_config(Some(1));
+        assert!(
+            state.dart_defines.is_empty(),
+            "dart_defines should be cleared when new config has none"
         );
     }
 }
