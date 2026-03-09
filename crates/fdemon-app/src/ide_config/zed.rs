@@ -39,8 +39,17 @@ pub struct ZedGenerator;
 impl ZedGenerator {
     /// Build the fdemon DAP entry for Zed's `debug.json`.
     ///
-    /// Uses the `Delve` adapter — one of the adapters Zed's debug panel
-    /// recognises — with `tcp_connection` to attach to the running DAP server.
+    /// # Adapter workaround
+    ///
+    /// Zed does not yet have a native Dart or Flutter DAP adapter type.
+    /// As a workaround, this entry uses `"adapter": "Delve"` (the Go debugger
+    /// adapter), which is one of the adapter names Zed's debug panel already
+    /// recognises.  Fdemon's DAP server handles the actual Dart/Flutter
+    /// protocol; Zed simply forwards the TCP connection to it.
+    ///
+    /// **Note:** If a future Zed release validates that the chosen adapter
+    /// matches the project language, this workaround will break and will need
+    /// to be updated to use a native Dart adapter name once Zed supports one.
     fn fdemon_entry(port: u16) -> serde_json::Value {
         serde_json::json!({
             "label": ZED_FDEMON_LABEL,
@@ -76,7 +85,7 @@ impl IdeConfigGenerator for ZedGenerator {
     ///
     /// Returns [`fdemon_core::Error::Config`] if `existing` is not valid JSON or
     /// is not a JSON array.
-    fn merge_config(&self, existing: &str, port: u16) -> Result<String> {
+    fn merge_config(&self, existing: &str, port: u16, _project_root: &Path) -> Result<String> {
         let mut array: Vec<serde_json::Value> = serde_json::from_str(existing)
             .map_err(|e| fdemon_core::Error::config(format!("invalid JSON in debug.json: {e}")))?;
 
@@ -164,7 +173,7 @@ mod tests {
             {"label": "Flutter Demon (TCP)", "adapter": "Delve", "tcp_connection": {"host": "127.0.0.1", "port": 1234}}
         ]"#;
         let gen = ZedGenerator;
-        let merged = gen.merge_config(existing, 5678).unwrap();
+        let merged = gen.merge_config(existing, 5678, Path::new("")).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[0]["label"], "Other"); // preserved
@@ -175,7 +184,7 @@ mod tests {
     fn test_zed_merge_appends_when_no_fdemon_entry() {
         let existing = r#"[{"label": "Other", "adapter": "other"}]"#;
         let gen = ZedGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed.len(), 2);
         assert_eq!(parsed[1]["label"], "Flutter Demon (TCP)");
@@ -184,7 +193,7 @@ mod tests {
     #[test]
     fn test_zed_merge_empty_array() {
         let gen = ZedGenerator;
-        let merged = gen.merge_config("[]", 4711).unwrap();
+        let merged = gen.merge_config("[]", 4711, Path::new("")).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["label"], "Flutter Demon (TCP)");
@@ -193,7 +202,7 @@ mod tests {
     #[test]
     fn test_zed_merge_malformed_json_returns_error() {
         let gen = ZedGenerator;
-        let result = gen.merge_config("not json", 4711);
+        let result = gen.merge_config("not json", 4711, Path::new(""));
         assert!(result.is_err());
     }
 
@@ -201,7 +210,7 @@ mod tests {
     fn test_zed_merge_non_array_json_returns_error() {
         let gen = ZedGenerator;
         // A JSON object is not a valid debug.json (must be an array)
-        let result = gen.merge_config(r#"{"key": "value"}"#, 4711);
+        let result = gen.merge_config(r#"{"key": "value"}"#, 4711, Path::new(""));
         assert!(result.is_err());
     }
 
@@ -212,7 +221,7 @@ mod tests {
             {"label": "Config B", "adapter": "b"}
         ]"#;
         let gen = ZedGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0]["label"], "Config A");
@@ -227,7 +236,7 @@ mod tests {
              "tcp_connection": {"host": "127.0.0.1", "port": 1111}}
         ]"#;
         let gen = ZedGenerator;
-        let merged = gen.merge_config(existing, 2222).unwrap();
+        let merged = gen.merge_config(existing, 2222, Path::new("")).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0]["tcp_connection"]["port"], 2222);

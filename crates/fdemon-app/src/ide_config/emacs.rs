@@ -52,10 +52,11 @@ impl IdeConfigGenerator for EmacsGenerator {
     /// Regenerate the file from scratch (overwrite semantics).
     ///
     /// Because `.fdemon/dap-emacs.el` is fdemon-owned, the existing content is
-    /// always discarded. A placeholder path is used in the loading instructions
-    /// since `project_root` is not available here.
-    fn merge_config(&self, _existing: &str, port: u16) -> Result<String> {
-        Ok(generate_elisp(port, ".fdemon/dap-emacs.el".to_string()))
+    /// always discarded. The absolute path embedded in the loading instructions
+    /// is derived from `project_root` so the user can copy-paste a working path.
+    fn merge_config(&self, _existing: &str, port: u16, project_root: &Path) -> Result<String> {
+        let path = self.config_path(project_root);
+        Ok(generate_elisp(port, path.display().to_string()))
     }
 
     /// Display name used in log messages.
@@ -144,7 +145,9 @@ mod tests {
     fn test_emacs_merge_overwrites() {
         let gen = EmacsGenerator;
         let old_content = ";; old content";
-        let new_content = gen.merge_config(old_content, 5678).unwrap();
+        let new_content = gen
+            .merge_config(old_content, 5678, Path::new("/project"))
+            .unwrap();
         assert!(new_content.contains(":debugServer 5678"));
         assert!(!new_content.contains("old content"));
     }
@@ -180,11 +183,33 @@ mod tests {
     }
 
     #[test]
-    fn test_emacs_merge_uses_placeholder_path() {
+    fn test_emacs_merge_uses_absolute_path() {
         let gen = EmacsGenerator;
-        let content = gen.merge_config("", 4711).unwrap();
-        // merge_config uses a placeholder since project_root is unavailable
-        assert!(content.contains(".fdemon/dap-emacs.el"));
+        let content = gen
+            .merge_config("", 4711, Path::new("/my/flutter/app"))
+            .unwrap();
+        // merge_config now uses the absolute path derived from project_root
+        assert!(content.contains("/my/flutter/app/.fdemon/dap-emacs.el"));
+    }
+
+    #[test]
+    fn test_emacs_merge_produces_absolute_path() {
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let gen = EmacsGenerator;
+        let existing = "(some old elisp)";
+        let result = gen.merge_config(existing, 12345, dir.path()).unwrap();
+        let expected_path = dir.path().join(".fdemon/dap-emacs.el");
+        assert!(
+            result.contains(&expected_path.display().to_string()),
+            "expected absolute path '{}' in merged output",
+            expected_path.display()
+        );
+        // Ensure the old relative placeholder is gone
+        assert!(
+            !result.contains("\".fdemon/dap-emacs.el\""),
+            "merged output must not contain the relative placeholder"
+        );
     }
 
     #[test]

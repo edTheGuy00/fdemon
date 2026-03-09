@@ -73,7 +73,7 @@ fn handle_started(state: &mut AppState, port: u16) -> UpdateResult {
     if state.settings.dap.auto_configure_ide {
         UpdateResult::action(UpdateAction::GenerateIdeConfig {
             port,
-            ide_override: None,
+            ide_override: state.cli_dap_config_override,
         })
     } else {
         UpdateResult::none()
@@ -510,6 +510,37 @@ mod tests {
         };
         let result = handle_dap_message(&mut state, &Message::StopDapServer);
         assert!(matches!(result.action, Some(UpdateAction::StopDapServer)));
+    }
+
+    // --- CLI DAP config override tests (Phase 5, Task 01) ---
+
+    #[test]
+    fn test_handle_started_uses_cli_override() {
+        use crate::config::ParentIde;
+        let mut state = test_state();
+        state.settings.dap.auto_configure_ide = true;
+        state.cli_dap_config_override = Some(ParentIde::Neovim);
+        let result = handle_dap_message(&mut state, &Message::DapServerStarted { port: 12345 });
+        match result.action {
+            Some(UpdateAction::GenerateIdeConfig { ide_override, .. }) => {
+                assert_eq!(ide_override, Some(ParentIde::Neovim));
+            }
+            _ => panic!("expected GenerateIdeConfig action"),
+        }
+    }
+
+    #[test]
+    fn test_handle_started_without_override_emits_none() {
+        let mut state = test_state();
+        state.settings.dap.auto_configure_ide = true;
+        // cli_dap_config_override defaults to None
+        let result = handle_dap_message(&mut state, &Message::DapServerStarted { port: 12345 });
+        match result.action {
+            Some(UpdateAction::GenerateIdeConfig { ide_override, .. }) => {
+                assert_eq!(ide_override, None);
+            }
+            _ => panic!("expected GenerateIdeConfig action"),
+        }
     }
 
     // --- DapConfigGenerated tests (Phase 5, Task 03) ---

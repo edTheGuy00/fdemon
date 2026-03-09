@@ -909,6 +909,10 @@ pub struct AppState {
     /// Set when `DapConfigGenerated` is received; persists until the next
     /// DAP server restart. `None` before any config has been generated.
     pub dap_config_status: Option<DapConfigStatus>,
+
+    /// CLI-provided IDE override for DAP config generation (`--dap-config <ide>`).
+    /// When set, bypasses environment-based IDE detection.
+    pub cli_dap_config_override: Option<crate::config::ParentIde>,
 }
 
 impl Default for AppState {
@@ -950,6 +954,7 @@ impl AppState {
             file_watcher_suspended: false,
             pending_file_changes: 0,
             dap_config_status: None,
+            cli_dap_config_override: None,
         }
     }
 

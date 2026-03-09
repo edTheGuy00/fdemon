@@ -23,7 +23,14 @@ use fdemon_core::prelude::*;
 /// * `project_path` — Path to the Flutter project directory.
 /// * `dap_port` — If `Some(port)`, overrides `settings.dap.port` and forces
 ///   `settings.dap.enabled = true`. Use `0` for an OS-assigned ephemeral port.
-pub async fn run_with_project_and_dap(project_path: &Path, dap_port: Option<u16>) -> Result<()> {
+/// * `dap_config` — If `Some(ide)`, stores the CLI-provided IDE override on
+///   `AppState` so `handle_started()` can pass it to `GenerateIdeConfig`,
+///   bypassing environment-based IDE detection.
+pub async fn run_with_project_and_dap(
+    project_path: &Path,
+    dap_port: Option<u16>,
+    dap_config: Option<fdemon_app::config::ParentIde>,
+) -> Result<()> {
     // Delegate to the TUI runner which handles DAP port override and auto-start.
-    fdemon_tui::run_with_project_and_dap(project_path, dap_port).await
+    fdemon_tui::run_with_project_and_dap(project_path, dap_port, dap_config).await
 }

@@ -90,4 +90,32 @@ fn test_run_generator_skips_identical_content() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added content comparison in `run_generator()` after `merge_config` call; added 2 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **No `ide` field in early return**: `IdeConfigResult` only has `path` and `action` fields (no `ide` field), so the early return only populates those two. The tracing log before the early return uses `generator.ide_name()` for visibility.
+
+2. **Tracing before early return**: Added a `tracing::info!` call inside the early-return block so skipped operations are still visible in logs. The existing log at the bottom of `run_generator()` only fires for Created/Updated paths (which is correct since Skipped returns early).
+
+3. **`post_write()` is correctly skipped**: Because the early return exits before the `generator.post_write()` call, secondary file writes (e.g. Neovim's `.nvim-dap.lua`) are not triggered when content is unchanged. This is the correct behaviour per the task notes.
+
+4. **mtime test uses 10ms sleep**: A short sleep is needed to make any spurious write detectable via filesystem mtime. This is a well-established pattern for mtime-based tests.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all crates: 0 failures, 70 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo test -p fdemon-app "test_run_generator"` - Passed (2/2 new tests)
+
+### Risks/Limitations
+
+1. **mtime granularity on some filesystems**: The mtime test sleeps 10ms between write and skip. On filesystems with coarse-grained mtime (e.g. 1-second resolution like HFS+ without `noatime`), the test could report a false pass even if a write did occur within the same second. The test is still valuable as a regression guard on common CI environments (ext4, APFS) which have millisecond or better resolution.

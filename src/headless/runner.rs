@@ -23,7 +23,14 @@ use super::HeadlessEvent;
 ///   `settings.dap.enabled = true`. The server's actual port is printed to
 ///   stdout as `{"event":"dap_server_started","port":<N>}` once it is bound.
 ///   Use `0` for an OS-assigned ephemeral port.
-pub async fn run_headless(project_path: &Path, dap_port: Option<u16>) -> Result<()> {
+/// * `dap_config` — If `Some(ide)`, stores the CLI-provided IDE override on
+///   `AppState` so `handle_started()` can pass it to `GenerateIdeConfig`,
+///   bypassing environment-based IDE detection.
+pub async fn run_headless(
+    project_path: &Path,
+    dap_port: Option<u16>,
+    dap_config: Option<fdemon_app::config::ParentIde>,
+) -> Result<()> {
     info!("═══════════════════════════════════════════════════════");
     info!("Flutter Demon starting in HEADLESS mode");
     info!("Project: {}", project_path.display());
@@ -36,6 +43,12 @@ pub async fn run_headless(project_path: &Path, dap_port: Option<u16>) -> Result<
     // both settings copies, keeping them in sync.
     if let Some(port) = dap_port {
         engine.apply_cli_dap_override(port);
+    }
+
+    // Apply --dap-config IDE override: stored on AppState so handle_started()
+    // can pass it to GenerateIdeConfig, bypassing environment-based detection.
+    if let Some(ide) = dap_config {
+        engine.apply_cli_dap_config_override(ide);
     }
 
     // Spawn headless-specific stdin reader

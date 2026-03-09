@@ -55,4 +55,30 @@ Also check `merge.rs` itself — if `clean_jsonc` is `pub fn`, change to `pub(cr
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/merge.rs` | Changed all `pub const` / `pub fn` items to `pub(crate)`. Added `#[allow(dead_code)]` with explanatory doc comment to `FDEMON_MARKER_FIELD` (protocol constant unused in production code, only referenced in tests). |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Changed `pub mod merge` to `pub(crate) mod merge`. Trimmed the re-export from the full 6-item list to only `pub(crate) use merge::{merge_json_array_entry, to_pretty_json}` — the 2 items actually consumed via `super::` by `zed.rs`. Updated the test block to import `clean_jsonc` and `find_json_entry_by_field` directly from `merge` instead of through the now-trimmed re-export. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Re-export trimming**: Changing from `pub` to `pub(crate)` caused `unused_imports` warnings for 4 of the 6 re-exported items because `vscode.rs` imports directly from `super::merge::` (bypassing the `super::` re-export) and the other items had no consumers through `super::`. Rather than add `#[allow(unused_imports)]`, the re-export was trimmed to only the 2 items (`merge_json_array_entry`, `to_pretty_json`) actually used by `zed.rs` via `super::`. This is strictly more correct.
+
+2. **`FDEMON_MARKER_FIELD` dead_code**: Reducing visibility from `pub` to `pub(crate)` caused a `dead_code` lint because the constant is only used in tests. Added `#[allow(dead_code)]` with doc comment explaining it is an intentional protocol constant reserved for future generators.
+
+3. **`pub(crate) mod merge`**: The `merge` submodule declaration was also restricted to `pub(crate)` since no external crate accesses `fdemon_app::ide_config::merge` directly.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 warnings)
+- `cargo test --workspace` - Passed (3,769 tests: 0 failed, 66 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Task 02 coordination**: The task notes `config/vscode.rs` may import `clean_jsonc` via `crate::ide_config::clean_jsonc` after Task 02 dedup. That path still works since `clean_jsonc` remains in the `pub(crate)` re-export... but the re-export was trimmed and `clean_jsonc` is no longer in it. If Task 02 adds that import path, the re-export will need to be extended with `clean_jsonc`. Alternatively, Task 02 can import directly via `crate::ide_config::merge::clean_jsonc`.

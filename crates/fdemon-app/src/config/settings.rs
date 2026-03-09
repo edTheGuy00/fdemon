@@ -836,6 +836,7 @@ pub fn validate_last_selection(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
     use tempfile::tempdir;
 
     #[test]
@@ -1825,12 +1826,13 @@ icons = "nerd_fonts"
     // ─────────────────────────────────────────────────────────────────────────
 
     #[test]
+    #[serial]
     fn test_emacs_detection_via_inside_emacs() {
         // Note: env var tests can be flaky in parallel runners.
         // We use a guard approach: only assert if the var wasn't already set.
         let was_set = std::env::var("INSIDE_EMACS").is_ok();
         if !was_set {
-            // SAFETY: setting env vars in single-threaded context for this test.
+            // SAFETY: `#[serial]` ensures no other test runs concurrently.
             // This test may be skipped in environments with INSIDE_EMACS already set.
             unsafe { std::env::set_var("INSIDE_EMACS", "1") };
             let result = detect_parent_ide();
@@ -1850,9 +1852,11 @@ icons = "nerd_fonts"
     }
 
     #[test]
+    #[serial]
     fn test_helix_detection_via_helix_runtime() {
         let was_set = std::env::var("HELIX_RUNTIME").is_ok();
         if !was_set {
+            // SAFETY: `#[serial]` ensures no other test runs concurrently.
             unsafe { std::env::set_var("HELIX_RUNTIME", "/usr/share/helix") };
             let result = detect_parent_ide();
             unsafe { std::env::remove_var("HELIX_RUNTIME") };

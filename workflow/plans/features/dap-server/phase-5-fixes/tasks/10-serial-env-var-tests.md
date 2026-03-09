@@ -80,4 +80,29 @@ The `// SAFETY:` comment is incorrect — Rust's test harness runs tests in para
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/Cargo.toml` | Added `serial_test.workspace = true` to `[dev-dependencies]` |
+| `crates/fdemon-app/src/config/settings.rs` | Added `use serial_test::serial;` import; added `#[serial]` to both env-var tests; updated `// SAFETY:` comments to reference `#[serial]` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Workspace dependency**: Used `serial_test.workspace = true` instead of `serial_test = "3"` directly, as `serial_test = "3"` was already declared in the workspace `Cargo.toml` dev-dependencies. This keeps version management centralised.
+2. **Guard pattern retained**: The `if !was_set` guard was kept as a secondary safety net, as the task noted it is acceptable and provides defence-in-depth against CI environments that set `INSIDE_EMACS` or `HELIX_RUNTIME`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (pre-existing unused-import warnings from concurrent task changes, not related to this task)
+- `cargo test --workspace` - Passed (all 0 failed)
+- `cargo test -p fdemon-app -- test_emacs_detection_via_inside_emacs test_helix_detection_via_helix_runtime --test-threads=1` - Passed (2/2)
+- `cargo test -p fdemon-app -- test_emacs_detection_via_inside_emacs test_helix_detection_via_helix_runtime --test-threads=4` - Passed (2/2)
+- `cargo clippy --workspace -- -D warnings` - Pre-existing failures in `ide_config/mod.rs` from concurrent task changes (unused imports from `pub(crate) use` rewrite); not introduced by this task
+
+### Risks/Limitations
+
+1. **Clippy pre-existing failures**: `cargo clippy --workspace -- -D warnings` fails due to unused-import warnings in `crates/fdemon-app/src/ide_config/mod.rs` caused by another concurrent task changing `pub mod merge` to `pub(crate) mod merge`. These are not introduced by this task's changes.

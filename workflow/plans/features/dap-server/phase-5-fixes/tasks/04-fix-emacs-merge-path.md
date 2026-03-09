@@ -79,4 +79,33 @@ fn test_emacs_merge_produces_absolute_path() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `project_root: &Path` to `merge_config` trait signature; updated `run_generator()` call site to pass `project_root` |
+| `crates/fdemon-app/src/ide_config/emacs.rs` | Updated `merge_config` to accept `project_root: &Path` and use `self.config_path(project_root)` for absolute path; replaced stale placeholder-path test; added `test_emacs_merge_produces_absolute_path` |
+| `crates/fdemon-app/src/ide_config/vscode.rs` | Added `_project_root: &Path` to `merge_config` signature; updated all 9 test call sites |
+| `crates/fdemon-app/src/ide_config/neovim.rs` | Added `_project_root: &Path` to `merge_config` signature; delegates to `vscode.merge_config(existing, port, Path::new(""))` ; updated 3 test call sites |
+| `crates/fdemon-app/src/ide_config/helix.rs` | Added `_project_root: &Path` to `merge_config` signature; updated 10 test call sites |
+| `crates/fdemon-app/src/ide_config/zed.rs` | Added `_project_root: &Path` to `merge_config` signature; updated 7 test call sites |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A chosen**: Added `project_root: &Path` to the `merge_config` trait as specified. The 4 non-Emacs implementations receive `_project_root` (unused). This is the cleanest approach and future-proofs any generator that might need `project_root` during merge.
+2. **Test call sites updated to `Path::new("")`**: Non-Emacs test call sites pass an empty path since those implementations ignore the parameter. This is consistent with how VSCode's existing `generate()` tests use `Path::new("")`.
+3. **Stale test renamed**: `test_emacs_merge_uses_placeholder_path` was renamed to `test_emacs_merge_uses_absolute_path` and updated to assert the absolute path is present, since the placeholder behaviour was the bug being fixed.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 errors)
+- `cargo test -p fdemon-app -- emacs` - Passed (19 tests including new `test_emacs_merge_produces_absolute_path`)
+- `cargo test -p fdemon-app` - Passed (1444 tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **None**: The change is purely additive to the trait signature. All implementations compile and all tests pass.

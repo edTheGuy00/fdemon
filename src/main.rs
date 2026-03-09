@@ -98,45 +98,51 @@ async fn main() -> Result<()> {
     // Without --dap-port the flag is still accepted; in that case it is stored
     // and used later to override IDE auto-detection when the DAP server starts
     // during a normal run.
-    if let Some(ref ide_str) = args.dap_config {
-        if let Some(port) = args.dap_port {
-            // Standalone mode: parse IDE, resolve project root, generate, exit.
-            let ide = fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
-                eprintln!("Error: {}", e);
-                eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
-                e
-            })?;
+    // Parse the --dap-config IDE name and store for combined mode.
+    // In standalone mode (--dap-port also provided), generate config and exit.
+    // In combined mode (no --dap-port), validate early and store for later use.
+    let dap_config_override: Option<fdemon_app::config::ParentIde> =
+        if let Some(ref ide_str) = args.dap_config {
+            if let Some(port) = args.dap_port {
+                // Standalone mode: parse IDE, resolve project root, generate, exit.
+                let ide = fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+                    eprintln!("Error: {}", e);
+                    eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+                    e
+                })?;
 
-            let project_root = args
-                .path
-                .clone()
-                .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+                let project_root = args.path.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
 
-            match fdemon_app::ide_config::generate_ide_config(Some(ide), port, &project_root)? {
-                Some(result) => {
-                    println!(
-                        "Generated DAP config for {}: {:?} at {}",
-                        ide.display_name(),
-                        result.action,
-                        result.path.display()
-                    );
+                match fdemon_app::ide_config::generate_ide_config(Some(ide), port, &project_root)? {
+                    Some(result) => {
+                        println!(
+                            "Generated DAP config for {}: {:?} at {}",
+                            ide.display_name(),
+                            result.action,
+                            result.path.display()
+                        );
+                    }
+                    None => {
+                        println!("IDE '{}' does not support DAP config generation", ide_str);
+                    }
                 }
-                None => {
-                    println!("IDE '{}' does not support DAP config generation", ide_str);
-                }
+                return Ok(());
             }
-            return Ok(());
-        }
-        // No --dap-port: validate the IDE name early so the user gets a clear
-        // error before fdemon starts the TUI, but then proceed with a normal run.
-        // The IDE override is threaded through the action when the DAP server
-        // starts (see UpdateAction::GenerateIdeConfig::ide_override).
-        fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
-            eprintln!("Error: {}", e);
-            eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
-            e
-        })?;
-    }
+            // Combined mode: validate the IDE name early so the user gets a clear
+            // error before fdemon starts the TUI, then store for use when the DAP
+            // server starts (passed to GenerateIdeConfig via AppState).
+            Some(
+                fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+                    eprintln!("Error: {}", e);
+                    eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+                    e
+                })?,
+            )
+        } else {
+            None
+        };
 
     // Get base path from args or use current directory
     let base_path = args
@@ -147,9 +153,10 @@ async fn main() -> Result<()> {
     if is_runnable_flutter_project(&base_path) {
         info!("Project path: {}", base_path.display());
         return if args.headless {
-            headless::runner::run_headless(&base_path, args.dap_port).await
+            headless::runner::run_headless(&base_path, args.dap_port, dap_config_override).await
         } else {
-            tui::runner::run_with_project_and_dap(&base_path, args.dap_port).await
+            tui::runner::run_with_project_and_dap(&base_path, args.dap_port, dap_config_override)
+                .await
         };
     }
 
@@ -218,9 +225,10 @@ async fn main() -> Result<()> {
             eprintln!("✅ Found Flutter project: {}", project.display());
             info!("Project path: {}", project.display());
             if args.headless {
-                headless::runner::run_headless(project, args.dap_port).await
+                headless::runner::run_headless(project, args.dap_port, dap_config_override).await
             } else {
-                tui::runner::run_with_project_and_dap(project, args.dap_port).await
+                tui::runner::run_with_project_and_dap(project, args.dap_port, dap_config_override)
+                    .await
             }
         }
         _ => {
@@ -233,12 +241,17 @@ async fn main() -> Result<()> {
                     project.display()
                 );
                 info!("Project path: {}", project.display());
-                headless::runner::run_headless(project, args.dap_port).await
+                headless::runner::run_headless(project, args.dap_port, dap_config_override).await
             } else {
                 match select_project(&discovery.projects, &discovery.searched_from)? {
                     SelectionResult::Selected(project) => {
                         info!("Project path: {}", project.display());
-                        tui::runner::run_with_project_and_dap(&project, args.dap_port).await
+                        tui::runner::run_with_project_and_dap(
+                            &project,
+                            args.dap_port,
+                            dap_config_override,
+                        )
+                        .await
                     }
                     SelectionResult::Cancelled => {
                         eprintln!("Selection cancelled.");

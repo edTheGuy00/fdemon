@@ -459,6 +459,16 @@ impl Engine {
         tracing::info!("DAP server port overridden by --dap-port: {}", port);
     }
 
+    /// Apply a CLI-provided IDE config override (`--dap-config <ide>`).
+    ///
+    /// Stores the override on `AppState` so that `handle_started()` can
+    /// pass it as `ide_override: Some(ide)` to `GenerateIdeConfig`, bypassing
+    /// environment-based IDE detection.
+    pub fn apply_cli_dap_config_override(&mut self, ide: crate::config::ParentIde) {
+        self.state.cli_dap_config_override = Some(ide);
+        tracing::info!("DAP IDE config overridden by --dap-config: {:?}", ide);
+    }
+
     /// Check if the application should quit.
     pub fn should_quit(&self) -> bool {
         self.state.should_quit()

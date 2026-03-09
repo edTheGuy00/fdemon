@@ -99,9 +99,9 @@ impl IdeConfigGenerator for NeovimGenerator {
     /// Merge the fdemon entry into an existing `.vscode/launch.json`.
     ///
     /// Delegates entirely to the VS Code generator's merge logic.
-    fn merge_config(&self, existing: &str, port: u16) -> Result<String> {
+    fn merge_config(&self, existing: &str, port: u16, _project_root: &Path) -> Result<String> {
         let vscode = VSCodeGenerator;
-        vscode.merge_config(existing, port)
+        vscode.merge_config(existing, port, Path::new(""))
     }
 
     /// Write (or overwrite) the secondary `.nvim-dap.lua` file.
@@ -235,7 +235,7 @@ mod tests {
             ]
         }"#;
         let gen = NeovimGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         let configs = parsed["configurations"].as_array().unwrap();
         assert_eq!(configs.len(), 2);
@@ -250,7 +250,7 @@ mod tests {
             ]
         }"#;
         let gen = NeovimGenerator;
-        let merged = gen.merge_config(existing, 5678).unwrap();
+        let merged = gen.merge_config(existing, 5678, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed["configurations"][0]["debugServer"], 5678);
     }
@@ -258,7 +258,7 @@ mod tests {
     #[test]
     fn test_neovim_merge_malformed_json_returns_error() {
         let gen = NeovimGenerator;
-        let result = gen.merge_config("not json {{{", 4711);
+        let result = gen.merge_config("not json {{{", 4711, Path::new(""));
         assert!(result.is_err());
     }
 

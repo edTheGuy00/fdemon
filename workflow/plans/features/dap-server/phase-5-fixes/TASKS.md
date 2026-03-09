@@ -29,32 +29,32 @@ Wave 2 — Minor cleanups (all parallel)
 
 | # | Task | Status | Depends On | Wave | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-thread-cli-override](tasks/01-thread-cli-override.md) | Not Started | - | 1 | `src/main.rs`, `src/tui/runner.rs`, `src/headless/runner.rs`, `fdemon-app/engine.rs`, `fdemon-app/state.rs`, `fdemon-app/handler/dap.rs` |
-| 2 | [02-deduplicate-jsonc](tasks/02-deduplicate-jsonc.md) | Not Started | - | 1 | `fdemon-app/config/vscode.rs`, `fdemon-app/ide_config/merge.rs` |
-| 3 | [03-remove-indoc-noop](tasks/03-remove-indoc-noop.md) | Not Started | - | 1 | `fdemon-app/ide_config/helix.rs` |
-| 4 | [04-fix-emacs-merge-path](tasks/04-fix-emacs-merge-path.md) | Not Started | - | 1 | `fdemon-app/ide_config/mod.rs`, `fdemon-app/ide_config/emacs.rs` |
-| 5 | [05-content-comparison](tasks/05-content-comparison.md) | Not Started | 4 | 1 | `fdemon-app/ide_config/mod.rs` |
-| 6 | [06-helix-unreachable-to-error](tasks/06-helix-unreachable-to-error.md) | Not Started | - | 2 | `fdemon-app/ide_config/helix.rs` |
-| 7 | [07-idiomatic-or-else](tasks/07-idiomatic-or-else.md) | Not Started | - | 2 | `fdemon-app/actions/mod.rs` |
-| 8 | [08-restrict-merge-visibility](tasks/08-restrict-merge-visibility.md) | Not Started | - | 2 | `fdemon-app/ide_config/mod.rs`, `fdemon-app/ide_config/merge.rs` |
-| 9 | [09-zed-delve-comment](tasks/09-zed-delve-comment.md) | Not Started | - | 2 | `fdemon-app/ide_config/zed.rs` |
-| 10 | [10-serial-env-var-tests](tasks/10-serial-env-var-tests.md) | Not Started | - | 2 | `fdemon-app/Cargo.toml`, `fdemon-app/config/settings.rs` |
+| 1 | [01-thread-cli-override](tasks/01-thread-cli-override.md) | Done | - | 1 | `src/main.rs`, `src/tui/runner.rs`, `src/headless/runner.rs`, `fdemon-app/engine.rs`, `fdemon-app/state.rs`, `fdemon-app/handler/dap.rs` |
+| 2 | [02-deduplicate-jsonc](tasks/02-deduplicate-jsonc.md) | Done | - | 1 | `fdemon-app/config/vscode.rs`, `fdemon-app/ide_config/merge.rs` |
+| 3 | [03-remove-indoc-noop](tasks/03-remove-indoc-noop.md) | Done | - | 1 | `fdemon-app/ide_config/helix.rs` |
+| 4 | [04-fix-emacs-merge-path](tasks/04-fix-emacs-merge-path.md) | Done | - | 1 | `fdemon-app/ide_config/mod.rs`, `fdemon-app/ide_config/emacs.rs` |
+| 5 | [05-content-comparison](tasks/05-content-comparison.md) | Done | 4 | 1 | `fdemon-app/ide_config/mod.rs` |
+| 6 | [06-helix-unreachable-to-error](tasks/06-helix-unreachable-to-error.md) | Done | - | 2 | `fdemon-app/ide_config/helix.rs` |
+| 7 | [07-idiomatic-or-else](tasks/07-idiomatic-or-else.md) | Done | - | 2 | `fdemon-app/actions/mod.rs` |
+| 8 | [08-restrict-merge-visibility](tasks/08-restrict-merge-visibility.md) | Done | - | 2 | `fdemon-app/ide_config/mod.rs`, `fdemon-app/ide_config/merge.rs` |
+| 9 | [09-zed-delve-comment](tasks/09-zed-delve-comment.md) | Done | - | 2 | `fdemon-app/ide_config/zed.rs` |
+| 10 | [10-serial-env-var-tests](tasks/10-serial-env-var-tests.md) | Done | - | 2 | `fdemon-app/Cargo.toml`, `fdemon-app/config/settings.rs` |
 
 ## Success Criteria
 
 Phase 5 fixes are complete when:
 
-- [ ] `fdemon --dap-config neovim` (no `--dap-port`) generates Neovim config when DAP starts
-- [ ] `clean_jsonc` exists in one location only
-- [ ] `ConfigAction::Skipped` is no longer dead code — produced when content is unchanged
-- [ ] Emacs merge path produces absolute paths, not relative placeholders
-- [ ] `indoc()` no-op removed from helix.rs
-- [ ] No `unreachable!()` in library code
-- [ ] Internal merge utilities are `pub(crate)`, not `pub`
-- [ ] `cargo fmt --all` — Pass
-- [ ] `cargo check --workspace` — Pass
-- [ ] `cargo test --workspace` — Pass
-- [ ] `cargo clippy --workspace -- -D warnings` — Pass
+- [x] `fdemon --dap-config neovim` (no `--dap-port`) generates Neovim config when DAP starts
+- [x] `clean_jsonc` exists in one location only
+- [x] `ConfigAction::Skipped` is no longer dead code — produced when content is unchanged
+- [x] Emacs merge path produces absolute paths, not relative placeholders
+- [x] `indoc()` no-op removed from helix.rs
+- [x] No `unreachable!()` in library code
+- [x] Internal merge utilities are `pub(crate)`, not `pub`
+- [x] `cargo fmt --all` — Pass
+- [x] `cargo check --workspace` — Pass
+- [x] `cargo test --workspace` — Pass
+- [x] `cargo clippy --workspace -- -D warnings` — Pass
 
 ## Notes
 

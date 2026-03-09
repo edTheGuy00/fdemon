@@ -51,7 +51,7 @@ impl IdeConfigGenerator for VSCodeGenerator {
         Ok(to_pretty_json(&config))
     }
 
-    fn merge_config(&self, existing: &str, port: u16) -> Result<String> {
+    fn merge_config(&self, existing: &str, port: u16, _project_root: &Path) -> Result<String> {
         // Treat an empty/whitespace-only file as a fresh generation.
         if existing.trim().is_empty() {
             return self.generate(port, Path::new(""));
@@ -136,7 +136,7 @@ mod tests {
             ]
         }"#;
         let gen = VSCodeGenerator;
-        let merged = gen.merge_config(existing, 5678).unwrap();
+        let merged = gen.merge_config(existing, 5678, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         let configs = parsed["configurations"].as_array().unwrap();
         assert_eq!(configs.len(), 2);
@@ -153,7 +153,7 @@ mod tests {
             ]
         }"#;
         let gen = VSCodeGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         let configs = parsed["configurations"].as_array().unwrap();
         assert_eq!(configs.len(), 2);
@@ -170,14 +170,14 @@ mod tests {
             ]
         }"#;
         let gen = VSCodeGenerator;
-        let result = gen.merge_config(existing, 4711);
+        let result = gen.merge_config(existing, 4711, Path::new(""));
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_vscode_merge_malformed_json_returns_error() {
         let gen = VSCodeGenerator;
-        let result = gen.merge_config("not json at all {{{", 4711);
+        let result = gen.merge_config("not json at all {{{", 4711, Path::new(""));
         assert!(result.is_err());
     }
 
@@ -185,7 +185,7 @@ mod tests {
     fn test_vscode_merge_preserves_version() {
         let existing = r#"{"version": "0.2.0", "configurations": []}"#;
         let gen = VSCodeGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed["version"], "0.2.0");
     }
@@ -194,7 +194,7 @@ mod tests {
     fn test_vscode_merge_no_configurations_key() {
         let existing = r#"{"version": "0.2.0"}"#;
         let gen = VSCodeGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         assert!(parsed["configurations"].is_array());
     }
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn test_vscode_merge_empty_file_acts_as_fresh_generation() {
         let gen = VSCodeGenerator;
-        let result = gen.merge_config("", 4711);
+        let result = gen.merge_config("", 4711, Path::new(""));
         assert!(result.is_ok());
         let parsed: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
         assert_eq!(parsed["configurations"][0]["debugServer"], 4711);
@@ -219,7 +219,7 @@ mod tests {
             ]
         }"#;
         let gen = VSCodeGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         let configs = parsed["configurations"].as_array().unwrap();
         assert_eq!(configs.len(), 3);

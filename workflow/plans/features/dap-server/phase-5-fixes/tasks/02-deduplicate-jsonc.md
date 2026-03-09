@@ -67,4 +67,29 @@ The comment in `merge.rs:66-68` says "duplicated to keep modules independent" bu
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/vscode.rs` | Deleted three private JSONC functions (`clean_jsonc`, `strip_json_comments`, `strip_trailing_commas`, ~130 lines). Added `use crate::ide_config::clean_jsonc;` import. Removed 14 unit tests that directly tested the deleted private functions. |
+| `crates/fdemon-app/src/ide_config/merge.rs` | Removed the stale "duplicated from config/vscode.rs to keep modules independent" comment block (3 lines). |
+| `crates/fdemon-app/src/ide_config/mod.rs` | Added `clean_jsonc` to the `pub(crate) use merge::{}` re-export so `crate::ide_config::clean_jsonc` resolves (this was already present in the working tree from related task changes). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test removal scope**: Removed all 14 tests that directly called the now-deleted private functions (`strip_json_comments`, `strip_trailing_commas`, `clean_jsonc`). These are fully covered by `ide_config/merge.rs` test suite. All `load_vscode_configs` and `parse_launch_json` integration tests were preserved.
+2. **Pre-existing failures**: The working tree contains pre-existing compilation failures in `helix.rs`, `neovim.rs`, and `zed.rs` due to a `merge_config` signature change from another in-progress task (adding `project_root: &Path` parameter). These failures are out of scope for task 02 and existed before this task began.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Fails only on pre-existing `merge_config` arity errors in helix/neovim/zed (not caused by this task)
+- `cargo check -p fdemon-app 2>&1 | grep -E "vscode\.rs|merge\.rs"` - No errors in modified files
+- `cargo test -p fdemon-app -- jsonc` - Cannot run due to pre-existing compile failures in other files
+
+### Risks/Limitations
+
+1. **Pre-existing failures block test run**: The full `cargo test -p fdemon-app` cannot complete due to `merge_config` signature mismatches in helix.rs, neovim.rs, and zed.rs introduced by other tasks. Once those tasks are resolved, the full test suite should pass.
+2. **Single source of truth achieved**: `clean_jsonc` now lives only in `ide_config/merge.rs` — the duplicate in `config/vscode.rs` is gone.

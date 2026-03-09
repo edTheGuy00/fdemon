@@ -5,16 +5,20 @@
 //! These utilities are reused across per-IDE generator implementations.
 
 /// Marker field name used to identify fdemon-managed entries in JSON configs.
-pub const FDEMON_MARKER_FIELD: &str = "fdemon-managed";
+///
+/// Reserved for generators that write a boolean marker field instead of matching by name.
+/// Currently unused in production code but retained as a named protocol constant.
+#[allow(dead_code)]
+pub(crate) const FDEMON_MARKER_FIELD: &str = "fdemon-managed";
 
 /// Marker value for the fdemon config entry name field.
-pub const FDEMON_CONFIG_NAME: &str = "Flutter (fdemon)";
+pub(crate) const FDEMON_CONFIG_NAME: &str = "Flutter (fdemon)";
 
 /// Find an entry in a JSON array by a string field value.
 ///
 /// Searches `array` for an object whose field named `field` has a string value
 /// equal to `value`. Returns the index of the first matching entry, or `None`.
-pub fn find_json_entry_by_field(
+pub(crate) fn find_json_entry_by_field(
     array: &[serde_json::Value],
     field: &str,
     value: &str,
@@ -34,7 +38,7 @@ pub fn find_json_entry_by_field(
 /// If an existing entry in `array` has a field named `field` with string value
 /// `value`, it is replaced in-place with `new_entry`. Otherwise `new_entry`
 /// is appended to the end of `array`.
-pub fn merge_json_array_entry(
+pub(crate) fn merge_json_array_entry(
     array: &mut Vec<serde_json::Value>,
     field: &str,
     value: &str,
@@ -52,20 +56,16 @@ pub fn merge_json_array_entry(
 /// - `//` line comments
 /// - `/* */` block comments
 /// - Trailing commas in arrays and objects
-pub fn clean_jsonc(input: &str) -> String {
+pub(crate) fn clean_jsonc(input: &str) -> String {
     let without_comments = strip_json_comments(input);
     strip_trailing_commas(&without_comments)
 }
 
 /// Serialize a JSON value with consistent pretty-printing (2-space indent).
-pub fn to_pretty_json(value: &serde_json::Value) -> String {
+pub(crate) fn to_pretty_json(value: &serde_json::Value) -> String {
     // serde_json's pretty-print uses 2-space indent by default
     serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
-
-// ─────────────────────────────────────────────────────────────────
-// Internal helpers (duplicated from config/vscode.rs to keep modules independent)
-// ─────────────────────────────────────────────────────────────────
 
 /// Strip `//` line comments and `/* */` block comments from JSON.
 fn strip_json_comments(content: &str) -> String {

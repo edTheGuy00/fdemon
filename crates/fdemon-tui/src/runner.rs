@@ -59,7 +59,9 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 /// This is identical to [`run_with_project`] but also:
 /// 1. Applies a `--dap-port` CLI override to `settings.dap.port` and forces
 ///    `settings.dap.enabled = true` when `dap_port` is `Some(port)`.
-/// 2. Evaluates [`should_auto_start_dap`] after CLI flag processing and sends
+/// 2. Applies a `--dap-config` IDE override to `AppState.cli_dap_config_override`
+///    when `dap_config` is `Some(ide)`, bypassing environment-based detection.
+/// 3. Evaluates [`should_auto_start_dap`] after CLI flag processing and sends
 ///    `Message::StartDapServer` if the result is `true`.
 ///
 /// This covers all startup paths:
@@ -67,7 +69,11 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 /// - `dap.enabled = true` in config → auto-starts
 /// - `dap.auto_start_in_ide = true` + IDE detected → auto-starts
 /// - No DAP config + no IDE → does not auto-start
-pub async fn run_with_project_and_dap(project_path: &Path, dap_port: Option<u16>) -> Result<()> {
+pub async fn run_with_project_and_dap(
+    project_path: &Path,
+    dap_port: Option<u16>,
+    dap_config: Option<fdemon_app::config::ParentIde>,
+) -> Result<()> {
     // Install panic hook for terminal restoration
     terminal::install_panic_hook();
 
@@ -78,6 +84,12 @@ pub async fn run_with_project_and_dap(project_path: &Path, dap_port: Option<u16>
     // both settings copies, keeping them in sync.
     if let Some(port) = dap_port {
         engine.apply_cli_dap_override(port);
+    }
+
+    // Apply --dap-config IDE override: stored on AppState so handle_started()
+    // can pass it to GenerateIdeConfig, bypassing environment-based detection.
+    if let Some(ide) = dap_config {
+        engine.apply_cli_dap_config_override(ide);
     }
 
     // Evaluate DAP auto-start (covers config-enabled and IDE-detected scenarios).

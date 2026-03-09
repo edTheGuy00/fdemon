@@ -1,6 +1,7 @@
 //! VSCode launch.json parser for Dart/Flutter compatibility
 
 use super::types::{ConfigSource, FlutterMode, LaunchConfig, ResolvedLaunchConfig};
+use crate::ide_config::clean_jsonc;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::Path;
@@ -242,138 +243,6 @@ fn parse_tool_args(
     (dart_defines, flavor, extra_args)
 }
 
-/// Strip comments AND trailing commas from JSON (JSONC support)
-///
-/// VSCode uses JSONC which allows:
-/// - // line comments
-/// - /* block comments */
-/// - Trailing commas in arrays and objects
-fn clean_jsonc(content: &str) -> String {
-    let without_comments = strip_json_comments(content);
-    strip_trailing_commas(&without_comments)
-}
-
-/// Strip trailing commas before ] and }
-///
-/// Trailing commas are valid in JSONC but not in standard JSON.
-/// This function removes commas that appear before closing brackets/braces,
-/// while preserving commas inside strings.
-fn strip_trailing_commas(content: &str) -> String {
-    let mut result = String::with_capacity(content.len());
-    let mut chars = content.chars().peekable();
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    while let Some(c) = chars.next() {
-        if escape_next {
-            result.push(c);
-            escape_next = false;
-            continue;
-        }
-
-        if c == '\\' && in_string {
-            result.push(c);
-            escape_next = true;
-            continue;
-        }
-
-        if c == '"' {
-            in_string = !in_string;
-            result.push(c);
-            continue;
-        }
-
-        if !in_string && c == ',' {
-            // Look ahead to see if this comma is trailing
-            let mut is_trailing = false;
-            let mut peek_chars = chars.clone();
-
-            // Skip whitespace to see what comes after the comma
-            while let Some(&next) = peek_chars.peek() {
-                if next.is_whitespace() {
-                    peek_chars.next();
-                } else {
-                    // If we find ] or }, this is a trailing comma
-                    is_trailing = next == ']' || next == '}';
-                    break;
-                }
-            }
-
-            if !is_trailing {
-                result.push(c);
-            }
-            // If trailing, skip the comma (don't push it)
-            continue;
-        }
-
-        result.push(c);
-    }
-
-    result
-}
-
-/// Strip comments from JSON (JSONC support)
-///
-/// VSCode uses JSONC which allows // and /* */ comments
-fn strip_json_comments(content: &str) -> String {
-    let mut result = String::with_capacity(content.len());
-    let mut chars = content.chars().peekable();
-    let mut in_string = false;
-    let mut escape_next = false;
-
-    while let Some(c) = chars.next() {
-        if escape_next {
-            result.push(c);
-            escape_next = false;
-            continue;
-        }
-
-        if c == '\\' && in_string {
-            result.push(c);
-            escape_next = true;
-            continue;
-        }
-
-        if c == '"' && !escape_next {
-            in_string = !in_string;
-            result.push(c);
-            continue;
-        }
-
-        if !in_string && c == '/' {
-            if let Some(&next) = chars.peek() {
-                if next == '/' {
-                    // Line comment - skip until newline
-                    chars.next(); // consume second /
-                    while let Some(&nc) = chars.peek() {
-                        if nc == '\n' {
-                            break;
-                        }
-                        chars.next();
-                    }
-                    continue;
-                } else if next == '*' {
-                    // Block comment - skip until */
-                    chars.next(); // consume *
-                    while let Some(nc) = chars.next() {
-                        if nc == '*' {
-                            if let Some(&'/') = chars.peek() {
-                                chars.next(); // consume /
-                                break;
-                            }
-                        }
-                    }
-                    continue;
-                }
-            }
-        }
-
-        result.push(c);
-    }
-
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,46 +346,6 @@ mod tests {
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].config.name, "Flutter");
-    }
-
-    #[test]
-    fn test_strip_json_comments_line_comment() {
-        let input = r#"{
-            // This is a comment
-            "key": "value"
-        }"#;
-
-        let result = strip_json_comments(input);
-        assert!(!result.contains("This is a comment"));
-        assert!(result.contains("\"key\": \"value\""));
-    }
-
-    #[test]
-    fn test_strip_json_comments_block_comment() {
-        let input = r#"{
-            /* Block comment */
-            "key": "value"
-        }"#;
-
-        let result = strip_json_comments(input);
-        assert!(!result.contains("Block comment"));
-        assert!(result.contains("\"key\": \"value\""));
-    }
-
-    #[test]
-    fn test_strip_json_comments_preserves_strings() {
-        let input = r#"{"url": "http://example.com"}"#;
-
-        let result = strip_json_comments(input);
-        assert_eq!(result, input);
-    }
-
-    #[test]
-    fn test_strip_json_comments_preserves_slashes_in_strings() {
-        let input = r#"{"path": "C:\\Users\\test", "url": "https://example.com/path"}"#;
-
-        let result = strip_json_comments(input);
-        assert_eq!(result, input);
     }
 
     #[test]
@@ -737,32 +566,6 @@ mod tests {
     }
 
     #[test]
-    fn test_strip_json_comments_multiline_block() {
-        let input = r#"{
-            /*
-             * Multi-line
-             * block comment
-             */
-            "key": "value"
-        }"#;
-
-        let result = strip_json_comments(input);
-        assert!(!result.contains("Multi-line"));
-        assert!(!result.contains("block comment"));
-        assert!(result.contains("\"key\": \"value\""));
-    }
-
-    #[test]
-    fn test_strip_json_comments_comment_like_in_string() {
-        let input = r#"{"comment": "This has // in it and /* too */"}"#;
-
-        let result = strip_json_comments(input);
-        // Should preserve the comment-like content inside the string
-        assert!(result.contains("// in it"));
-        assert!(result.contains("/* too */"));
-    }
-
-    #[test]
     fn test_vscode_config_flavor_from_args() {
         let temp = tempdir().unwrap();
         let vscode_dir = temp.path().join(".vscode");
@@ -844,90 +647,6 @@ mod tests {
 
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].config.flavor, Some("from-toolargs".to_string()));
-    }
-
-    // Trailing comma tests
-
-    #[test]
-    fn test_strip_trailing_commas_in_array() {
-        let input = r#"{"arr": [1, 2, 3,]}"#;
-        let result = strip_trailing_commas(input);
-        assert_eq!(result, r#"{"arr": [1, 2, 3]}"#);
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_in_object() {
-        let input = r#"{"key": "value",}"#;
-        let result = strip_trailing_commas(input);
-        assert_eq!(result, r#"{"key": "value"}"#);
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_with_whitespace() {
-        let input = r#"{
-        "arr": [
-            "a",
-            "b",
-        ]
-    }"#;
-        let result = strip_trailing_commas(input);
-        // Should not contain trailing comma before ]
-        assert!(!result.contains(",\n        ]"));
-        assert!(result.contains(r#""b""#));
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_preserves_strings() {
-        let input = r#"{"text": "hello, world", "arr": ["a,b,c",]}"#;
-        let result = strip_trailing_commas(input);
-        // Commas in strings should be preserved
-        assert!(result.contains("hello, world"));
-        assert!(result.contains("a,b,c"));
-        // But trailing comma should be removed
-        assert_eq!(result, r#"{"text": "hello, world", "arr": ["a,b,c"]}"#);
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_nested_structures() {
-        let input = r#"{
-            "outer": {
-                "inner": [1, 2,],
-                "key": "val",
-            }
-        }"#;
-        let result = strip_trailing_commas(input);
-        // Should remove both trailing commas
-        assert!(!result.contains("2,]"));
-        assert!(!result.contains("\"val\","));
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_valid_json_unchanged() {
-        let input = r#"{"arr": [1, 2, 3], "key": "value"}"#;
-        let result = strip_trailing_commas(input);
-        assert_eq!(result, input);
-    }
-
-    #[test]
-    fn test_strip_trailing_commas_empty_structures() {
-        let input = r#"{"arr": [], "obj": {}}"#;
-        let result = strip_trailing_commas(input);
-        assert_eq!(result, input);
-    }
-
-    #[test]
-    fn test_clean_jsonc_combines_both() {
-        let input = r#"{
-            // Comment
-            "arr": [
-                "value",
-            ]
-        }"#;
-        let result = clean_jsonc(input);
-        // Comments should be stripped
-        assert!(!result.contains("// Comment"));
-        // Trailing comma should be removed
-        assert!(!result.contains("\"value\","));
     }
 
     #[test]

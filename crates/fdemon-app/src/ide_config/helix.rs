@@ -66,7 +66,7 @@ impl IdeConfigGenerator for HelixGenerator {
     ///
     /// Returns an error if the existing content is malformed TOML that cannot
     /// be parsed.
-    fn merge_config(&self, existing: &str, _port: u16) -> Result<String> {
+    fn merge_config(&self, existing: &str, _port: u16, _project_root: &Path) -> Result<String> {
         merge_helix_languages(existing)
     }
 
@@ -85,8 +85,7 @@ impl HelixGenerator {
         // Note: `port-arg` is how Helix passes a port to the spawned adapter.
         // Helix calls: fdemon --dap-port <PORT>
         // `args = []` because --dap-port is supplied via port-arg, not args.
-        indoc(
-            r#"# fdemon DAP configuration for Helix (auto-generated)
+        r#"# fdemon DAP configuration for Helix (auto-generated)
 # Helix will spawn fdemon as a DAP adapter on a port it chooses.
 # For connecting to an already-running fdemon, see the docs.
 
@@ -106,8 +105,8 @@ request = "attach"
 completion = []
 
 [language.debugger.templates.args]
-"#,
-        )
+"#
+        .to_string()
     }
 
     /// Returns only the debugger table values that should be applied to an
@@ -157,12 +156,6 @@ completion = []
     }
 }
 
-/// Strip a leading `\n` from a string literal used with `indoc!`-style
-/// indentation. This is a minimal helper to keep the raw string readable.
-fn indoc(s: &str) -> String {
-    s.to_string()
-}
-
 /// Merge the fdemon Dart debugger section into the existing `languages.toml`
 /// content.
 ///
@@ -201,10 +194,13 @@ fn merge_helix_languages(existing: &str) -> Result<String> {
                 Error::config(".helix/languages.toml top level is not a TOML table".to_string())
             })?;
             root.insert("language".to_string(), toml::Value::Array(vec![]));
-            // Safety: we just inserted it.
             match root.get_mut("language") {
                 Some(toml::Value::Array(arr)) => arr,
-                _ => unreachable!("just inserted an Array"),
+                _ => {
+                    return Err(Error::config(
+                        "failed to retrieve inserted language array from TOML table".to_string(),
+                    ))
+                }
             }
         }
     };
@@ -334,7 +330,7 @@ mod tests {
     #[test]
     fn test_helix_merge_adds_dart_entry_to_empty_file() {
         let gen = HelixGenerator;
-        let merged = gen.merge_config("", 4711).unwrap();
+        let merged = gen.merge_config("", 4711, Path::new("")).unwrap();
         assert!(merged.contains("dart"));
     }
 
@@ -348,7 +344,7 @@ name = "rust"
 enable = true
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("name = \"dart\""));
         assert!(merged.contains("name = \"rust\"")); // preserved
     }
@@ -357,7 +353,7 @@ enable = true
     fn test_helix_merge_adds_dart_entry_when_no_language_key() {
         let existing = "some-setting = true\n";
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("dart"));
     }
 
@@ -375,7 +371,7 @@ transport = "stdio"
 command = "dart"
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("command = \"fdemon\""));
         assert!(!merged.contains("command = \"dart\""));
     }
@@ -392,7 +388,7 @@ transport = "stdio"
 command = "dart"
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("transport = \"tcp\""));
         assert!(!merged.contains("transport = \"stdio\""));
     }
@@ -415,7 +411,7 @@ transport = "stdio"
 command = "dart"
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("name = \"rust\""));
         assert!(merged.contains("name = \"python\""));
         assert!(merged.contains("command = \"fdemon\""));
@@ -428,7 +424,7 @@ command = "dart"
 name = "rust"
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         let parsed: Result<toml::Value> =
             toml::from_str(&merged).map_err(|e| Error::config(format!("parse error: {e}")));
         assert!(parsed.is_ok(), "merged output must be valid TOML");
@@ -444,7 +440,7 @@ name = "dart"
 file-types = ["dart"]
 "#;
         let gen = HelixGenerator;
-        let merged = gen.merge_config(existing, 4711).unwrap();
+        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
         assert!(merged.contains("fdemon-dap"));
         assert!(merged.contains("command = \"fdemon\""));
     }
@@ -454,14 +450,14 @@ file-types = ["dart"]
     #[test]
     fn test_helix_merge_malformed_toml_returns_error() {
         let gen = HelixGenerator;
-        let result = gen.merge_config("not [valid toml", 4711);
+        let result = gen.merge_config("not [valid toml", 4711, Path::new(""));
         assert!(result.is_err());
     }
 
     #[test]
     fn test_helix_merge_invalid_unicode_returns_error() {
         let gen = HelixGenerator;
-        let result = gen.merge_config("[[language\x00]]", 4711);
+        let result = gen.merge_config("[[language\x00]]", 4711, Path::new(""));
         // Either parses weird or errors — just must not panic
         let _ = result;
     }

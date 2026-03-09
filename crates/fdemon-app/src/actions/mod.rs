@@ -601,11 +601,7 @@ pub fn handle_action(
                 // detect the parent IDE from the environment (process-name
                 // heuristic). We don't carry Settings through UpdateAction to
                 // keep the action payload small.
-                let ide = if ide_override.is_some() {
-                    ide_override
-                } else {
-                    crate::config::settings::detect_parent_ide()
-                };
+                let ide = ide_override.or_else(crate::config::settings::detect_parent_ide);
 
                 match crate::ide_config::generate_ide_config(ide, port, &project_path) {
                     Ok(Some(result)) => {

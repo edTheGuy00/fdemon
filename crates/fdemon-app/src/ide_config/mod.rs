@@ -25,7 +25,7 @@
 
 pub mod emacs;
 pub mod helix;
-pub mod merge;
+pub(crate) mod merge;
 pub mod neovim;
 pub mod vscode;
 pub mod zed;
@@ -88,11 +88,16 @@ pub trait IdeConfigGenerator {
     ///
     /// Returns the merged content, or an error if the file cannot be parsed.
     ///
+    /// `project_root` is the absolute path to the Flutter project root. Most
+    /// implementations ignore it (pass `_project_root`), but generators that
+    /// embed an absolute file path (e.g. Emacs) require it to avoid writing a
+    /// relative placeholder.
+    ///
     /// Implementations must:
     /// - Find existing fdemon entries (by marker) and update them
     /// - Append a new entry if no fdemon entry exists
     /// - Preserve all non-fdemon entries unchanged
-    fn merge_config(&self, existing: &str, port: u16) -> Result<String>;
+    fn merge_config(&self, existing: &str, port: u16, project_root: &Path) -> Result<String>;
 
     /// Optional post-generation hook for secondary file writes.
     ///
@@ -137,7 +142,18 @@ fn run_generator(
 
     let (content, action) = if generator.config_exists(project_root) {
         let existing = std::fs::read_to_string(&config_path)?;
-        let merged = generator.merge_config(&existing, port)?;
+        let merged = generator.merge_config(&existing, port, project_root)?;
+        if merged == existing {
+            tracing::info!(
+                path = %config_path.display(),
+                "{} DAP config skipped (content unchanged)",
+                generator.ide_name(),
+            );
+            return Ok(Some(IdeConfigResult {
+                path: config_path,
+                action: ConfigAction::Skipped("content unchanged".to_string()),
+            }));
+        }
         (merged, ConfigAction::Updated)
     } else {
         let fresh = generator.generate(port, project_root)?;
@@ -251,10 +267,7 @@ pub fn parse_ide_name(name: &str) -> fdemon_core::Result<crate::config::ParentId
 // Re-exports
 // ─────────────────────────────────────────────────────────────────
 
-pub use merge::{
-    clean_jsonc, find_json_entry_by_field, merge_json_array_entry, to_pretty_json,
-    FDEMON_CONFIG_NAME, FDEMON_MARKER_FIELD,
-};
+pub(crate) use merge::{clean_jsonc, merge_json_array_entry, to_pretty_json};
 
 // ─────────────────────────────────────────────────────────────────
 // Tests
@@ -264,6 +277,7 @@ pub use merge::{
 mod tests {
     use super::*;
     use crate::config::ParentIde;
+    use merge::{clean_jsonc, find_json_entry_by_field};
     use serde_json::json;
 
     // ── parse_ide_name ───────────────────────────────────────────
@@ -438,5 +452,87 @@ mod tests {
         let cleaned = clean_jsonc(input);
         let parsed: serde_json::Value = serde_json::from_str(&cleaned).unwrap();
         assert!(parsed.is_object());
+    }
+
+    // ── run_generator: content comparison / skip behaviour ──────
+
+    /// Verifies the create → skip → update sequence for run_generator.
+    ///
+    /// 1. First call: file does not exist → `ConfigAction::Created` and file written.
+    /// 2. Second call with identical port: content unchanged → `ConfigAction::Skipped`.
+    /// 3. Third call with different port: content changed → `ConfigAction::Updated`.
+    #[test]
+    fn test_run_generator_create_skip_update_sequence() {
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+
+        // First run: file does not exist → Created.
+        let result1 = run_generator(&vscode::VSCodeGenerator, 12345, dir.path())
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result1.action, ConfigAction::Created),
+            "expected Created, got {:?}",
+            result1.action
+        );
+        assert!(
+            result1.path.exists(),
+            "config file should have been written"
+        );
+
+        // Second run with same port: content is identical → Skipped.
+        let result2 = run_generator(&vscode::VSCodeGenerator, 12345, dir.path())
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result2.action, ConfigAction::Skipped(ref reason) if reason == "content unchanged"),
+            "expected Skipped(\"content unchanged\"), got {:?}",
+            result2.action
+        );
+
+        // Third run with a different port: content changes → Updated.
+        let result3 = run_generator(&vscode::VSCodeGenerator, 54321, dir.path())
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(result3.action, ConfigAction::Updated),
+            "expected Updated, got {:?}",
+            result3.action
+        );
+    }
+
+    /// Verifies that when content is unchanged the file modification time is not
+    /// updated (i.e. no write occurs on skip).
+    #[test]
+    fn test_run_generator_skip_does_not_modify_file() {
+        use std::time::Duration;
+        use tempfile::tempdir;
+
+        let dir = tempdir().unwrap();
+
+        // Create the file.
+        run_generator(&vscode::VSCodeGenerator, 12345, dir.path())
+            .unwrap()
+            .unwrap();
+
+        let config_path = vscode::VSCodeGenerator.config_path(dir.path());
+        let mtime_before = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+
+        // Give the clock a small window so that a spurious write would be detectable.
+        std::thread::sleep(Duration::from_millis(10));
+
+        // Second run with identical port: should skip.
+        let result = run_generator(&vscode::VSCodeGenerator, 12345, dir.path())
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result.action, ConfigAction::Skipped(_)));
+
+        let mtime_after = std::fs::metadata(&config_path).unwrap().modified().unwrap();
+
+        assert_eq!(
+            mtime_before, mtime_after,
+            "file mtime should not change when content is unchanged"
+        );
     }
 }
