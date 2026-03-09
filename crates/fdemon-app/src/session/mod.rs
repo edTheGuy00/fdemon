@@ -2,6 +2,7 @@
 
 mod block_state;
 mod collapse;
+pub mod debug_state;
 mod handle;
 pub(crate) mod log_batcher;
 pub(crate) mod network;
@@ -15,6 +16,7 @@ mod tests;
 // Re-export all public types at the session:: level
 pub use block_state::LogBlockState;
 pub use collapse::CollapseState;
+pub use debug_state::{DebugState, PauseReason, TrackedBreakpoint};
 pub use handle::SessionHandle;
 pub use log_batcher::LogBatcher;
 pub use network::{NetworkDetailTab, NetworkState};

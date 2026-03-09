@@ -17,6 +17,7 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Error Navigation](#error-navigation)
   - [Stack Trace Interaction](#stack-trace-interaction)
   - [Link Navigation](#link-navigation)
+  - [DAP Server](#dap-server)
 - [New Session Dialog](#new-session-dialog)
   - [General Navigation](#general-navigation)
   - [Target Selector (Left Pane)](#target-selector-left-pane)
@@ -72,6 +73,7 @@ Flutter Demon supports running up to 9 simultaneous device sessions.
 | `Ctrl+W` | Close Session | Alternative binding to close current session |
 | `+` | Start New Session | Start a new session (shows Startup Dialog if no sessions, Device Selector if sessions exist) |
 | `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
+| `D` | Toggle DAP Server | Start or stop the DAP debug adapter server |
 
 ### App Control
 
@@ -175,6 +177,12 @@ Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for
 | `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
 
 Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls.
+
+### DAP Server
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `D` | Toggle DAP Server | Start or stop the DAP debug adapter server. When active, `[DAP :PORT]` appears in the status bar. Connect your IDE's debugger to this port. |
 
 ---
 

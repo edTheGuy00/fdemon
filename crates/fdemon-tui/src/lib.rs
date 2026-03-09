@@ -33,5 +33,5 @@ pub mod widgets;
 pub mod test_utils;
 
 // Re-export main entry points
-pub use runner::run_with_project;
+pub use runner::{run_with_project, run_with_project_and_dap};
 pub use selector::{select_project, SelectionResult};

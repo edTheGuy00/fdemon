@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{broadcast, mpsc, watch};
 use tracing::{info, warn};
@@ -25,9 +25,10 @@ use crate::services::{
 };
 use crate::session::SessionId;
 use crate::signals;
-use crate::state::AppState;
+use crate::state::{AppState, DapStatus};
 use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
-use fdemon_core::AppPhase;
+use fdemon_core::{AppPhase, LogLevel};
+use fdemon_dap::{adapter::DebugEvent as DapDebugEvent, DapServerHandle, DapService};
 
 /// Lightweight snapshot of state for change detection.
 ///
@@ -122,6 +123,53 @@ pub struct Engine {
 
     /// Registered plugins
     plugins: Vec<Box<dyn EnginePlugin>>,
+
+    /// Handle for the running DAP server, if any.
+    ///
+    /// Wrapped in `Arc<Mutex<Option<>>>` so it can be passed to
+    /// `actions::handle_action` (which runs on the Tokio thread pool and needs
+    /// shared, mutable access to deposit or withdraw the handle).
+    ///
+    /// The Engine is the sole owner of this slot; `handle_action` only writes
+    /// (on `SpawnDapServer`) or reads-and-clears (on `StopDapServer`).
+    pub(crate) dap_server_handle: Arc<Mutex<Option<DapServerHandle>>>,
+
+    /// Broadcast sender for forwarding [`DapDebugEvent`]s to connected DAP sessions.
+    ///
+    /// Set when the DAP server starts (via `set_dap_log_sender`) and cleared when
+    /// the server stops. The Engine uses this to push `LogOutput` events derived
+    /// from Flutter app stdout/stderr to every connected IDE debug console.
+    ///
+    /// `None` when no DAP server is running (avoids unnecessary work in the log
+    /// forwarding path and correctly satisfies acceptance criterion: no output
+    /// events are sent when no DAP session is active).
+    dap_log_event_tx: Option<tokio::sync::broadcast::Sender<DapDebugEvent>>,
+
+    /// Shared VM handle slot for the DAP backend factory.
+    ///
+    /// The [`VmBackendFactory`] captures this `Arc` so it can supply the
+    /// active session's [`VmRequestHandle`] to each new DAP client connection
+    /// without knowing about `SessionManager` or the TEA update cycle.
+    ///
+    /// Updated in [`Engine::process_message`] after each TEA cycle via
+    /// [`Engine::sync_vm_handle_for_dap`].  Set to `Some` when the selected
+    /// session's VM Service is connected; `None` when disconnected or no
+    /// session is active.
+    pub(crate) vm_handle_for_dap: Arc<Mutex<Option<fdemon_daemon::vm_service::VmRequestHandle>>>,
+
+    /// Per-DAP-client debug event senders.
+    ///
+    /// Each `mpsc::Sender<DebugEvent>` in this list corresponds to one active
+    /// DAP client session. When the TEA handler receives a VM Service debug
+    /// event (`PauseBreakpoint`, `Resume`, `IsolateStart`, etc.) it iterates
+    /// this list and forwards the translated [`DapDebugEvent`] to all connected
+    /// adapters using `try_send`. Stale entries (where the receiver has been
+    /// dropped because the client disconnected) are pruned automatically via
+    /// the `retain` pattern — `try_send` returns `Err` for a closed channel.
+    ///
+    /// [`VmBackendFactory::create`] registers a new sender here each time a
+    /// DAP client connects and the VM Service is available.
+    pub(crate) dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>>,
 }
 
 impl Engine {
@@ -170,6 +218,16 @@ impl Engine {
         // 10. Create broadcast channel for engine events (capacity 256)
         let (event_tx, _) = broadcast::channel(256);
 
+        // 11. Create the shared DAP debug sender registry.
+        //
+        // Engine is the sole owner. `handle_action` (which runs on the Tokio
+        // thread pool) receives a clone of this Arc and uses it to forward VM
+        // debug events to connected DAP adapters via `ForwardDapDebugEvents`.
+        // `VmBackendFactory::create` also receives a clone so it can register
+        // per-client senders when a new DAP connection is established.
+        let dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>> =
+            Arc::new(Mutex::new(Vec::new()));
+
         Self {
             state,
             msg_tx,
@@ -183,6 +241,10 @@ impl Engine {
             shared_state,
             event_tx,
             plugins: Vec::new(),
+            dap_server_handle: Arc::new(Mutex::new(None)),
+            dap_log_event_tx: None,
+            vm_handle_for_dap: Arc::new(Mutex::new(None)),
+            dap_debug_senders,
         }
     }
 
@@ -247,10 +309,25 @@ impl Engine {
             &self.session_tasks,
             &self.shutdown_rx,
             &self.project_path,
+            self.dap_server_handle.clone(),
+            self.vm_handle_for_dap.clone(),
+            self.dap_debug_senders.clone(),
         );
 
         // Snapshot state after processing
         let post = StateSnapshot::capture(&self.state);
+
+        // Sync the DAP log event sender from the server handle.
+        //
+        // The sender lives in `DapServerHandle` (deposited by the async action
+        // handler when the TCP server starts). We keep a copy here so that
+        // `emit_events` can broadcast log events without acquiring the mutex
+        // on every log line. The sync is cheap (just cloning a sender) and
+        // runs once per TEA cycle.
+        self.sync_dap_log_sender();
+
+        // Keep the VM handle slot in sync with the selected session.
+        self.sync_vm_handle_for_dap();
 
         // Emit events for any state changes
         self.emit_events(&pre, &post);
@@ -354,7 +431,42 @@ impl Engine {
             self.shutdown_rx.clone(),
             &self.project_path,
             Default::default(),
+            self.dap_server_handle.clone(),
+            self.vm_handle_for_dap.clone(),
+            self.dap_debug_senders.clone(),
         );
+    }
+
+    /// Returns a clone of the shared DAP debug sender registry.
+    ///
+    /// The registry is an `Arc<Mutex<Vec<mpsc::Sender<DebugEvent>>>>`. The
+    /// [`VmBackendFactory`] uses this to register per-session event senders
+    /// when a new DAP client connects. The TEA handler reads the same `Arc`
+    /// when forwarding VM debug events to connected DAP adapters.
+    pub fn dap_debug_senders(&self) -> Arc<Mutex<Vec<tokio::sync::mpsc::Sender<DapDebugEvent>>>> {
+        self.dap_debug_senders.clone()
+    }
+
+    /// Apply a CLI `--dap-port` override.
+    ///
+    /// Sets the DAP port and forces `enabled = true` in both the cached
+    /// settings and the embedded AppState settings, keeping them in sync.
+    pub fn apply_cli_dap_override(&mut self, port: u16) {
+        self.settings.dap.port = port;
+        self.settings.dap.enabled = true;
+        self.state.settings.dap.port = port;
+        self.state.settings.dap.enabled = true;
+        tracing::info!("DAP server port overridden by --dap-port: {}", port);
+    }
+
+    /// Apply a CLI-provided IDE config override (`--dap-config <ide>`).
+    ///
+    /// Stores the override on `AppState` so that `handle_started()` can
+    /// pass it as `ide_override: Some(ide)` to `GenerateIdeConfig`, bypassing
+    /// environment-based IDE detection.
+    pub fn apply_cli_dap_config_override(&mut self, ide: crate::config::ParentIde) {
+        self.state.cli_dap_config_override = Some(ide);
+        tracing::info!("DAP IDE config overridden by --dap-config: {:?}", ide);
     }
 
     /// Check if the application should quit.
@@ -396,13 +508,27 @@ impl Engine {
         &self.shared_state
     }
 
-    /// Initiate shutdown: stop watcher, signal background tasks, cleanup sessions.
+    /// Initiate shutdown: stop DAP server, watcher, signal background tasks, cleanup sessions.
     pub async fn shutdown(&mut self) {
         // Notify plugins first
         self.notify_plugins_shutdown();
 
         // Emit shutdown event
         self.emit(EngineEvent::Shutdown);
+
+        // Stop DAP server if running
+        let dap_handle = match self.dap_server_handle.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(e) => {
+                warn!("DAP handle lock poisoned during shutdown: {}", e);
+                None
+            }
+        };
+        if let Some(handle) = dap_handle {
+            info!("Stopping DAP server...");
+            DapService::stop(handle).await;
+            self.state.dap_status = DapStatus::Off;
+        }
 
         // Stop file watcher
         if let Some(ref mut watcher) = self.file_watcher {
@@ -431,6 +557,53 @@ impl Engine {
                 Ok(Ok(())) => info!("Session {} cleaned up", session_id),
                 Ok(Err(e)) => warn!("Session {} panicked: {}", session_id, e),
                 Err(_) => warn!("Session {} cleanup timed out", session_id),
+            }
+        }
+    }
+
+    /// Synchronize the cached DAP log event sender from the server handle.
+    ///
+    /// Called once per TEA cycle in [`process_message`]. Acquires the DAP
+    /// handle slot (non-blocking, using `try_lock`) and clones the log event
+    /// sender if a handle is present. Clears the cached sender when the handle
+    /// is absent (server stopped).
+    ///
+    /// This keeps `dap_log_event_tx` in sync without holding the mutex lock
+    /// during the hot log-forwarding path in `emit_events`.
+    fn sync_dap_log_sender(&mut self) {
+        match self.dap_server_handle.try_lock() {
+            Ok(guard) => {
+                self.dap_log_event_tx = guard.as_ref().map(|handle| handle.log_event_sender());
+            }
+            Err(_) => {
+                // Lock held by the action handler — skip this cycle, retry next.
+            }
+        }
+    }
+
+    /// Sync `vm_handle_for_dap` from the selected session's `vm_request_handle`.
+    ///
+    /// Called once per TEA cycle after message processing. The shared slot is
+    /// updated to match the selected session's current VM handle so that the
+    /// [`VmBackendFactory`] always produces a fresh clone for new DAP clients.
+    ///
+    /// - If the selected session has a connected VM Service, the slot is `Some`.
+    /// - If the session has no VM handle (not yet connected, or disconnected),
+    ///   the slot is set to `None`.
+    /// - If no session is selected, the slot is set to `None`.
+    fn sync_vm_handle_for_dap(&self) {
+        let new_handle = self
+            .state
+            .session_manager
+            .selected()
+            .and_then(|sh| sh.vm_request_handle.clone());
+
+        match self.vm_handle_for_dap.try_lock() {
+            Ok(mut guard) => {
+                *guard = new_handle;
+            }
+            Err(_) => {
+                // Lock held by the factory — skip this cycle, retry next.
             }
         }
     }
@@ -485,6 +658,30 @@ impl Engine {
                         .rev()
                         .cloned()
                         .collect();
+
+                    // Forward new log entries to DAP sessions (if any are connected).
+                    // Only forward when DAP is running with at least one client.
+                    if let Some(dap_tx) = &self.dap_log_event_tx {
+                        if self.state.dap_status.client_count() > 0 {
+                            for log in &logs {
+                                let level = match log.level {
+                                    LogLevel::Error => "error",
+                                    LogLevel::Info => "info",
+                                    LogLevel::Warning => "warning",
+                                    LogLevel::Debug => "debug",
+                                }
+                                .to_string();
+                                let dap_event = DapDebugEvent::LogOutput {
+                                    message: log.message.clone(),
+                                    level,
+                                    source_uri: None,
+                                    line: None,
+                                };
+                                // Ignore send errors — no subscribers means no clients.
+                                let _ = dap_tx.send(dap_event);
+                            }
+                        }
+                    }
 
                     // Use batch emission for multiple logs (more efficient)
                     if logs.len() > 1 {

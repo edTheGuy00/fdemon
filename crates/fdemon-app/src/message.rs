@@ -143,6 +143,26 @@ pub enum Message {
     /// Watcher error occurred
     WatcherError { message: String },
 
+    // ── Coordinated Pause / File-Watcher Gate (Phase 4, Task 03) ─────────────
+    /// Suspend auto-reload while the debugger is paused.
+    ///
+    /// Emitted by `handle_debug_event` on any `PauseBreakpoint`, `PauseException`,
+    /// `PauseInterrupted`, `PausePostRequest`, or `PauseStart` event when
+    /// `settings.dap.suppress_reload_on_pause` is `true`.
+    ///
+    /// The update handler sets `state.file_watcher_suspended = true`.
+    SuspendFileWatcher,
+
+    /// Resume auto-reload after the debugger continues execution.
+    ///
+    /// Emitted by `handle_debug_event` on `Resume` events and by
+    /// `handle_client_disconnected` when a DAP client disconnects while the
+    /// watcher was suspended.
+    ///
+    /// The update handler clears `state.file_watcher_suspended` and triggers
+    /// `AutoReloadTriggered` if `pending_file_changes > 0`.
+    ResumeFileWatcher,
+
     // ─────────────────────────────────────────────────────────
     // Device Selector Messages
     // ─────────────────────────────────────────────────────────
@@ -887,6 +907,27 @@ pub enum Message {
     /// Navigate within the widget inspector tree.
     DevToolsInspectorNavigate(InspectorNav),
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // VM Service Debug Messages (DAP Server Phase 1, Task 05)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// A debug stream event from the VM Service (breakpoints, pause, resume, etc.).
+    ///
+    /// Sent by the event forwarding loop when a "Debug" stream notification
+    /// arrives. The handler updates per-session `DebugState`.
+    VmServiceDebugEvent {
+        session_id: SessionId,
+        event: fdemon_daemon::vm_service::debugger_types::DebugEvent,
+    },
+
+    /// An isolate lifecycle event from the VM Service.
+    ///
+    /// Sent by the event forwarding loop when an "Isolate" stream notification
+    /// arrives. The handler tracks known isolates and clears pause state on exit.
+    VmServiceIsolateEvent {
+        session_id: SessionId,
+        event: fdemon_daemon::vm_service::debugger_types::IsolateEvent,
+    },
+
     // ── VM Service Network Messages (Phase 4, Network Monitor) ───────────────
     /// HTTP profile poll results arrived.
     VmServiceHttpProfileReceived {
@@ -1026,4 +1067,45 @@ pub enum Message {
 
     /// Confirm the selected extra args value.
     SettingsExtraArgsConfirm,
+
+    // ─────────────────────────────────────────────────────────
+    // DAP Server Messages
+    // ─────────────────────────────────────────────────────────
+    /// Request to start the DAP server on the configured port.
+    StartDapServer,
+
+    /// Request to stop the DAP server and disconnect all clients.
+    StopDapServer,
+
+    /// Toggle DAP server on/off (keybinding handler).
+    ToggleDap,
+
+    /// DAP server successfully started and is listening.
+    DapServerStarted { port: u16 },
+
+    /// DAP server has been stopped.
+    DapServerStopped,
+
+    /// DAP server failed to start.
+    DapServerFailed { reason: String },
+
+    /// A DAP client connected to the server.
+    DapClientConnected { client_id: String },
+
+    /// A DAP client disconnected from the server.
+    DapClientDisconnected { client_id: String },
+
+    /// IDE DAP config was generated/updated/skipped.
+    ///
+    /// Sent by the IDE config generation task after writing (or skipping)
+    /// the config file. The `action` field is a human-readable description
+    /// such as `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
+    DapConfigGenerated {
+        /// The IDE the config was generated for (e.g. `"VS Code"`, `"Neovim"`).
+        ide_name: String,
+        /// The config file path that was written (or would have been written).
+        path: std::path::PathBuf,
+        /// What happened: `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
+        action: String,
+    },
 }

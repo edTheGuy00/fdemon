@@ -177,6 +177,9 @@ impl MainHeader<'_> {
             Span::styled("d", Style::default().fg(palette::STATUS_YELLOW)),
             Span::styled("] Debug  ", Style::default().fg(palette::TEXT_MUTED)),
             Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("D", Style::default().fg(palette::STATUS_YELLOW)),
+            Span::styled("] DAP  ", Style::default().fg(palette::TEXT_MUTED)),
+            Span::styled("[", Style::default().fg(palette::TEXT_MUTED)),
             Span::styled("q", Style::default().fg(palette::STATUS_YELLOW)),
             Span::styled("] Quit", Style::default().fg(palette::TEXT_MUTED)),
         ];
@@ -399,6 +402,7 @@ mod tests {
             term.buffer_contains("[d] Debug"),
             "Should show debug/device selector key"
         );
+        assert!(term.buffer_contains("[D] DAP"), "Should show DAP key");
         assert!(term.buffer_contains("[q] Quit"), "Should show quit key");
     }
 

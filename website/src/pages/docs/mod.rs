@@ -1,6 +1,7 @@
 pub mod architecture;
 pub mod changelog;
 pub mod configuration;
+pub mod debugging;
 pub mod devtools;
 pub mod installation;
 pub mod introduction;
@@ -10,7 +11,7 @@ use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
 use leptos_router::hooks::use_location;
 
-use crate::components::icons::{Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings};
+use crate::components::icons::{Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings};
 
 struct DocItem {
     href: &'static str,
@@ -39,6 +40,11 @@ fn doc_items() -> Vec<DocItem> {
             href: "/docs/devtools",
             label: "DevTools",
             icon: || view! { <Eye class="w-4 h-4 mr-3" /> }.into_any(),
+        },
+        DocItem {
+            href: "/docs/debugging",
+            label: "Debugging",
+            icon: || view! { <Bug class="w-4 h-4 mr-3" /> }.into_any(),
         },
         DocItem {
             href: "/docs/configuration",

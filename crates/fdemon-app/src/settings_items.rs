@@ -301,6 +301,41 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .value(SettingValue::String(settings.editor.open_pattern.clone()))
             .default(SettingValue::String("$EDITOR $FILE:$LINE".to_string()))
             .section("Editor"),
+        // ─────────────────────────────────────────────────────────
+        // DAP Server Section
+        // ─────────────────────────────────────────────────────────
+        SettingItem::new("dap.enabled", "Always Enabled")
+            .description("Always enable DAP server on startup (ignores IDE detection)")
+            .value(SettingValue::Bool(settings.dap.enabled))
+            .default(SettingValue::Bool(false))
+            .section("DAP Server"),
+        SettingItem::new("dap.auto_start_in_ide", "Auto-Start in IDE")
+            .description("Auto-start DAP server when running inside a detected IDE terminal")
+            .value(SettingValue::Bool(settings.dap.auto_start_in_ide))
+            .default(SettingValue::Bool(true))
+            .section("DAP Server"),
+        SettingItem::new("dap.port", "Port")
+            .description("TCP port for DAP connections (0 = auto-assign)")
+            .value(SettingValue::Number(settings.dap.port as i64))
+            .default(SettingValue::Number(0))
+            .section("DAP Server"),
+        SettingItem::new("dap.bind_address", "Bind Address")
+            .description("Network address to bind the DAP server to")
+            .value(SettingValue::String(settings.dap.bind_address.clone()))
+            .default(SettingValue::String("127.0.0.1".to_string()))
+            .section("DAP Server"),
+        SettingItem::new("dap.suppress_reload_on_pause", "Suppress Reload on Pause")
+            .description("Suppress auto-reload while debugger is paused at a breakpoint")
+            .value(SettingValue::Bool(settings.dap.suppress_reload_on_pause))
+            .default(SettingValue::Bool(true))
+            .section("DAP Server"),
+        SettingItem::new("dap.auto_configure_ide", "Auto-Configure IDE")
+            .description(
+                "Automatically generate IDE debug config (launch.json etc.) when DAP server starts",
+            )
+            .value(SettingValue::Bool(settings.dap.auto_configure_ide))
+            .default(SettingValue::Bool(true))
+            .section("DAP Server"),
     ]
 }
 
@@ -512,5 +547,112 @@ mod tests {
         } else {
             panic!("devtools.default_panel default should be SettingValue::Enum");
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // DAP Server Settings Items Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_dap_settings_items_all_present() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+
+        let dap_ids = [
+            "dap.enabled",
+            "dap.auto_start_in_ide",
+            "dap.port",
+            "dap.bind_address",
+            "dap.suppress_reload_on_pause",
+            "dap.auto_configure_ide",
+        ];
+
+        for id in &dap_ids {
+            assert!(
+                items.iter().any(|i| i.id == *id),
+                "Missing DAP settings item: {}",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn test_dap_settings_items_section() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+
+        let dap_items: Vec<_> = items.iter().filter(|i| i.section == "DAP Server").collect();
+        assert_eq!(dap_items.len(), 6, "Expected 6 DAP Server settings items");
+    }
+
+    #[test]
+    fn test_dap_settings_items_defaults() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+
+        let enabled = items.iter().find(|i| i.id == "dap.enabled").unwrap();
+        assert_eq!(enabled.value, SettingValue::Bool(false));
+        assert_eq!(enabled.default, SettingValue::Bool(false));
+
+        let auto_start = items
+            .iter()
+            .find(|i| i.id == "dap.auto_start_in_ide")
+            .unwrap();
+        assert_eq!(auto_start.value, SettingValue::Bool(true));
+        assert_eq!(auto_start.default, SettingValue::Bool(true));
+
+        let port = items.iter().find(|i| i.id == "dap.port").unwrap();
+        assert_eq!(port.value, SettingValue::Number(0));
+        assert_eq!(port.default, SettingValue::Number(0));
+
+        let bind_addr = items.iter().find(|i| i.id == "dap.bind_address").unwrap();
+        assert_eq!(
+            bind_addr.value,
+            SettingValue::String("127.0.0.1".to_string())
+        );
+        assert_eq!(
+            bind_addr.default,
+            SettingValue::String("127.0.0.1".to_string())
+        );
+
+        let suppress = items
+            .iter()
+            .find(|i| i.id == "dap.suppress_reload_on_pause")
+            .unwrap();
+        assert_eq!(suppress.value, SettingValue::Bool(true));
+        assert_eq!(suppress.default, SettingValue::Bool(true));
+
+        let auto_configure = items
+            .iter()
+            .find(|i| i.id == "dap.auto_configure_ide")
+            .unwrap();
+        assert_eq!(auto_configure.value, SettingValue::Bool(true));
+        assert_eq!(auto_configure.default, SettingValue::Bool(true));
+    }
+
+    #[test]
+    fn test_dap_settings_items_reflect_custom_settings() {
+        use crate::config::DapSettings;
+
+        let mut settings = Settings::default();
+        settings.dap = DapSettings {
+            enabled: true,
+            auto_start_in_ide: false,
+            port: 4711,
+            bind_address: "0.0.0.0".to_string(),
+            suppress_reload_on_pause: false,
+            auto_configure_ide: true,
+        };
+
+        let items = project_settings_items(&settings);
+
+        let enabled = items.iter().find(|i| i.id == "dap.enabled").unwrap();
+        assert_eq!(enabled.value, SettingValue::Bool(true));
+
+        let port = items.iter().find(|i| i.id == "dap.port").unwrap();
+        assert_eq!(port.value, SettingValue::Number(4711));
+
+        let bind_addr = items.iter().find(|i| i.id == "dap.bind_address").unwrap();
+        assert_eq!(bind_addr.value, SettingValue::String("0.0.0.0".to_string()));
     }
 }

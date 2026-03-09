@@ -3,6 +3,7 @@
 //! Organized into submodules:
 //! - `update`: Main update() function and message dispatch
 //! - `daemon`: Multi-session daemon event handling
+//! - `dap`: DAP server lifecycle message handler
 //! - `session`: Session state helpers
 //! - `session_lifecycle`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
@@ -16,6 +17,8 @@
 //! - `log_view`: Log view operation handlers
 
 pub(crate) mod daemon;
+pub(crate) mod dap;
+pub(crate) mod dap_backend;
 pub(crate) mod devtools;
 pub(crate) mod helpers;
 pub(crate) mod keys;
@@ -262,6 +265,135 @@ pub enum UpdateAction {
         /// `None` until hydrated by `process.rs`.
         vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
     },
+
+    // --- Debug Actions (DAP Server Phase 1, Task 05) ---
+    /// Pause an isolate in the VM.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    PauseIsolate {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to pause (e.g. `"isolates/1234"`).
+        isolate_id: String,
+    },
+
+    /// Resume an isolate, optionally with a step action.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    ResumeIsolate {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to resume (e.g. `"isolates/1234"`).
+        isolate_id: String,
+        /// Optional step action. `None` resumes normally; `Some` performs a step.
+        step: Option<fdemon_daemon::vm_service::debugger_types::StepOption>,
+    },
+
+    /// Set a breakpoint via URI and line number.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    AddBreakpoint {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID the breakpoint belongs to.
+        isolate_id: String,
+        /// The script URI (e.g. `"package:app/main.dart"`).
+        script_uri: String,
+        /// 1-based line number in the source file.
+        line: i32,
+        /// Optional 1-based column number.
+        column: Option<i32>,
+    },
+
+    /// Remove a breakpoint by VM Service ID.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    RemoveBreakpoint {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID the breakpoint belongs to.
+        isolate_id: String,
+        /// The VM Service breakpoint ID to remove (e.g. `"breakpoints/1"`).
+        breakpoint_id: String,
+    },
+
+    /// Set the exception pause mode for an isolate.
+    ///
+    /// `vm_handle` is `None` until hydrated by `process.rs` from the session's
+    /// `vm_request_handle`. `handle_action` silently skips the action when it
+    /// remains `None` (VM not connected).
+    SetIsolatePauseMode {
+        session_id: SessionId,
+        /// VM Service request handle used for the RPC call.
+        /// `None` until hydrated by `process.rs`.
+        vm_handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
+        /// The isolate ID to configure.
+        isolate_id: String,
+        /// The new exception pause mode.
+        mode: fdemon_daemon::vm_service::debugger_types::ExceptionPauseMode,
+    },
+
+    // --- DAP Server Actions (DAP Server Phase 2, Task 03) ---
+    /// Spawn the DAP TCP server as a background task.
+    ///
+    /// Handled by the TUI/headless runner event loops (not by `actions/mod.rs`),
+    /// because the DAP server is an Engine-level service (like the file watcher),
+    /// not a session-scoped action.
+    SpawnDapServer {
+        /// The TCP port to bind the DAP server on.
+        port: u16,
+        /// The bind address (e.g. `"127.0.0.1"` or `"0.0.0.0"`).
+        bind_addr: String,
+    },
+
+    /// Stop the running DAP server and disconnect all clients.
+    ///
+    /// Handled by the TUI/headless runner event loops (not by `actions/mod.rs`).
+    StopDapServer,
+
+    /// Forward translated VM debug events to all connected DAP adapters.
+    ///
+    /// Produced by `handle_debug_event` and `handle_isolate_event` after
+    /// updating per-session `DebugState`. The actual `try_send` calls happen
+    /// in `actions::handle_action`, outside the synchronous TEA update cycle,
+    /// which preserves TEA purity (no blocking mutex / channel ops in `update()`).
+    ///
+    /// Stale senders (where the DAP client has disconnected) are pruned
+    /// automatically inside `handle_action` via the `retain` + `try_send` pattern.
+    ForwardDapDebugEvents(Vec<fdemon_dap::adapter::DebugEvent>),
+
+    /// Generate IDE-specific DAP config file (Phase 5, Task 03).
+    ///
+    /// Triggers the IDE config generation task that inspects the detected
+    /// `ParentIde` and writes the appropriate config (launch.json,
+    /// languages.toml, .emacs.d/fdemon-dap.el, etc.).
+    ///
+    /// `ide_override` allows the `--dap-config <IDE>` CLI flag to bypass
+    /// auto-detection and target a specific IDE explicitly (Phase 5, Task 10).
+    ///
+    /// Handled by the TUI/headless runner event loops.
+    GenerateIdeConfig {
+        port: u16,
+        /// Optional IDE override from `--dap-config` CLI flag.
+        /// When `None`, the IDE is auto-detected from the environment.
+        ide_override: Option<crate::config::ParentIde>,
+    },
 }
 
 /// Background tasks to spawn
@@ -308,6 +440,19 @@ impl UpdateResult {
     pub fn action(action: UpdateAction) -> Self {
         Self {
             message: None,
+            action: Some(action),
+        }
+    }
+
+    /// Carry both a follow-up message and a side-effect action.
+    ///
+    /// Used when an event simultaneously triggers a state-gate message
+    /// (e.g. `SuspendFileWatcher` on a DAP pause) **and** must forward
+    /// translated debug events to connected DAP adapters via
+    /// `ForwardDapDebugEvents`.
+    pub fn message_and_action(msg: Message, action: UpdateAction) -> Self {
+        Self {
+            message: Some(msg),
             action: Some(action),
         }
     }

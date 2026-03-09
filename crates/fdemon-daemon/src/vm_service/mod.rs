@@ -13,6 +13,8 @@
 //! - [`extensions`] — Flutter service extension call infrastructure and constants.
 //! - [`timeline`] — Flutter.Frame Extension event parsing for frame timing data.
 //! - [`performance`] — Memory/GC RPC wrappers (`getMemoryUsage`, `getAllocationProfile`) and GC event parsing.
+//! - [`debugger_types`] — VM Service debug type definitions for debugging RPCs and Debug/Isolate stream events.
+//! - [`debugger`] — Debug RPC wrappers (`pause`, `resume`, `addBreakpointWithScriptUri`, `getStack`, `evaluate`, etc.).
 //!
 //! ## Quick start
 //!
@@ -64,6 +66,8 @@
 //! ```
 
 pub mod client;
+pub mod debugger;
+pub mod debugger_types;
 pub mod errors;
 pub mod extensions;
 pub mod logging;
@@ -73,6 +77,15 @@ pub mod protocol;
 pub mod timeline;
 
 pub use client::{ConnectionState, VmRequestHandle, VmServiceClient, MAX_RECONNECT_ATTEMPTS};
+pub use debugger::{
+    add_breakpoint_with_script_uri, evaluate, evaluate_in_frame, get_object, get_scripts,
+    get_source_report, get_stack, pause, remove_breakpoint, resume, set_isolate_pause_mode,
+};
+pub use debugger_types::{
+    parse_debug_event, parse_isolate_event, BoundVariable, Breakpoint, ClassRef, DebugEvent,
+    ExceptionPauseMode, Frame, FrameKind, FunctionRef, InstanceRef, IsolateEvent,
+    IsolateRef as DebugIsolateRef, ScriptList, ScriptRef, SourceLocation, Stack, StepOption,
+};
 pub use errors::{flutter_error_to_log_entry, parse_flutter_error, FlutterErrorEvent};
 pub use extensions::{
     debug_dump, debug_dump_app, debug_dump_layer_tree, debug_dump_render_tree, debug_paint, ext,

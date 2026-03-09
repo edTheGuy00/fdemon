@@ -8,6 +8,7 @@
 //! - `inspector`: Widget tree fetch handlers, inspector navigation, and layout data handlers
 //! - `performance`: Frame selection, memory sample, and allocation profile handlers
 
+pub(crate) mod debug;
 pub mod inspector;
 pub(crate) mod network;
 pub(crate) mod performance;

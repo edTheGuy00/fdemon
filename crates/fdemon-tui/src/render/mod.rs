@@ -106,6 +106,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             duration,
             error_count: handle.session.error_count(),
             vm_connected: handle.session.vm_connected,
+            dap_port: state.dap_status.port(),
+            dap_config_ide: state.dap_config_status.as_ref().map(|s| s.ide_name.clone()),
         };
         log_view = log_view.with_status(status_info);
 

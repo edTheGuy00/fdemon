@@ -6079,3 +6079,242 @@ fn test_vm_service_connection_failed_background_session_no_error() {
         "vm_connection_error must not be set by a background session's VmServiceConnectionFailed"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4, Task 03: Coordinated Pause / File-Watcher Gate tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_suspend_file_watcher_sets_flag() {
+    let mut state = AppState::new();
+    assert!(!state.file_watcher_suspended);
+
+    let result = update(&mut state, Message::SuspendFileWatcher);
+
+    assert!(state.file_watcher_suspended);
+    assert!(result.message.is_none());
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_suspend_file_watcher_is_idempotent() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+
+    let result = update(&mut state, Message::SuspendFileWatcher);
+
+    // Should still be suspended and no follow-up message.
+    assert!(state.file_watcher_suspended);
+    assert!(result.message.is_none());
+}
+
+#[test]
+fn test_resume_file_watcher_clears_flag() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+
+    let result = update(&mut state, Message::ResumeFileWatcher);
+
+    assert!(!state.file_watcher_suspended);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_resume_file_watcher_no_reload_when_no_pending_changes() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    state.pending_file_changes = 0;
+
+    let result = update(&mut state, Message::ResumeFileWatcher);
+
+    assert!(!state.file_watcher_suspended);
+    assert!(
+        result.message.is_none(),
+        "No reload when no pending changes"
+    );
+}
+
+#[test]
+fn test_resume_file_watcher_triggers_reload_when_pending_changes() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    state.pending_file_changes = 5;
+
+    let result = update(&mut state, Message::ResumeFileWatcher);
+
+    assert!(!state.file_watcher_suspended);
+    // pending_file_changes must be cleared.
+    assert_eq!(state.pending_file_changes, 0);
+    // AutoReloadTriggered must be emitted.
+    assert!(
+        matches!(result.message, Some(Message::AutoReloadTriggered)),
+        "Should emit AutoReloadTriggered when pending changes exist"
+    );
+}
+
+#[test]
+fn test_resume_file_watcher_clears_pending_changes() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    state.pending_file_changes = 3;
+
+    update(&mut state, Message::ResumeFileWatcher);
+
+    assert_eq!(
+        state.pending_file_changes, 0,
+        "pending_file_changes must be reset to 0 on resume"
+    );
+}
+
+#[test]
+fn test_files_changed_queued_when_suspended() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    // suppress_reload_on_pause defaults to true.
+
+    let result = update(&mut state, Message::FilesChanged { count: 3 });
+
+    assert_eq!(state.pending_file_changes, 3);
+    assert!(
+        result.message.is_none(),
+        "No reload should be triggered while suspended"
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_files_changed_accumulates_when_suspended() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    state.pending_file_changes = 2;
+
+    update(&mut state, Message::FilesChanged { count: 3 });
+
+    assert_eq!(
+        state.pending_file_changes, 5,
+        "Changes should accumulate while suspended"
+    );
+}
+
+#[test]
+fn test_files_changed_not_queued_when_suppress_disabled() {
+    let mut state = AppState::new();
+    state.file_watcher_suspended = true;
+    state.settings.dap.suppress_reload_on_pause = false;
+
+    // With suppress disabled, even a suspended watcher should not queue changes.
+    let result = update(&mut state, Message::FilesChanged { count: 3 });
+
+    assert_eq!(
+        state.pending_file_changes, 0,
+        "No queuing when suppress is disabled"
+    );
+    // The normal FilesChanged handler doesn't produce a message/action on its own
+    // (AutoReloadTriggered is a separate message). Confirm no regression.
+    assert!(result.message.is_none());
+}
+
+#[test]
+fn test_files_changed_not_queued_when_not_suspended() {
+    let mut state = AppState::new();
+    // file_watcher_suspended defaults to false.
+
+    let result = update(&mut state, Message::FilesChanged { count: 5 });
+
+    assert_eq!(
+        state.pending_file_changes, 0,
+        "Changes should not be queued when watcher is active"
+    );
+    assert!(result.message.is_none());
+}
+
+#[test]
+fn test_suspend_then_resume_full_flow() {
+    let mut state = AppState::new();
+    assert!(!state.file_watcher_suspended);
+
+    // Step 1: suspend.
+    update(&mut state, Message::SuspendFileWatcher);
+    assert!(state.file_watcher_suspended);
+
+    // Step 2: file changes arrive while suspended.
+    update(&mut state, Message::FilesChanged { count: 2 });
+    update(&mut state, Message::FilesChanged { count: 1 });
+    assert_eq!(state.pending_file_changes, 3);
+
+    // Step 3: resume.
+    let result = update(&mut state, Message::ResumeFileWatcher);
+    assert!(!state.file_watcher_suspended);
+    assert_eq!(state.pending_file_changes, 0);
+    assert!(
+        matches!(result.message, Some(Message::AutoReloadTriggered)),
+        "Resume should trigger reload for 3 pending changes"
+    );
+}
+
+#[test]
+fn test_dap_client_disconnect_resumes_file_watcher() {
+    use crate::state::DapStatus;
+    use std::collections::HashSet;
+
+    let mut state = AppState::new();
+    state.dap_status = DapStatus::Running {
+        port: 4711,
+        clients: ["client-1".to_string()].into_iter().collect::<HashSet<_>>(),
+    };
+    state.file_watcher_suspended = true;
+    state.pending_file_changes = 2;
+
+    let result = update(
+        &mut state,
+        Message::DapClientDisconnected {
+            client_id: "client-1".to_string(),
+        },
+    );
+
+    // The dap handler should emit ResumeFileWatcher as a follow-up.
+    assert!(
+        matches!(result.message, Some(Message::ResumeFileWatcher)),
+        "DapClientDisconnected while suspended should emit ResumeFileWatcher"
+    );
+}
+
+#[test]
+fn test_dap_client_disconnect_no_resume_when_not_suspended() {
+    use crate::state::DapStatus;
+    use std::collections::HashSet;
+
+    let mut state = AppState::new();
+    state.dap_status = DapStatus::Running {
+        port: 4711,
+        clients: ["client-1".to_string()].into_iter().collect::<HashSet<_>>(),
+    };
+    // Not suspended.
+    assert!(!state.file_watcher_suspended);
+
+    let result = update(
+        &mut state,
+        Message::DapClientDisconnected {
+            client_id: "client-1".to_string(),
+        },
+    );
+
+    // No ResumeFileWatcher when watcher was not suspended.
+    assert!(
+        !matches!(result.message, Some(Message::ResumeFileWatcher)),
+        "Should not emit ResumeFileWatcher when watcher was not suspended"
+    );
+}
+
+#[test]
+fn test_state_defaults_to_not_suspended() {
+    let state = AppState::new();
+    assert!(
+        !state.file_watcher_suspended,
+        "file_watcher_suspended defaults to false"
+    );
+    assert_eq!(
+        state.pending_file_changes, 0,
+        "pending_file_changes defaults to 0"
+    );
+}

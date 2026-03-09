@@ -1,0 +1,280 @@
+//! # DapService — DAP server lifecycle management
+//!
+//! Provides a thin wrapper around [`server::start`] and
+//! [`transport::stdio::run_stdio_session`] that manages the DAP server lifecycle
+//! (start and stop). The event bridge from [`DapServerEvent`] to the host
+//! application's message type is handled by the caller (e.g., `fdemon-app`),
+//! which maps events to `Message` variants without creating a circular
+//! dependency.
+//!
+//! ## Usage — TCP mode
+//!
+//! ```ignore
+//! // In fdemon-app (which depends on fdemon-dap):
+//! let (event_tx, event_rx) = mpsc::channel(32);
+//! let handle = DapService::start_tcp(port, bind_addr, event_tx).await?;
+//!
+//! // Bridge events in the app layer:
+//! tokio::spawn(async move {
+//!     while let Some(event) = event_rx.recv().await {
+//!         // map event → Message and send to engine
+//!     }
+//! });
+//!
+//! // On shutdown:
+//! DapService::stop(handle).await;
+//! ```
+//!
+//! ## Usage — Stdio mode
+//!
+//! ```ignore
+//! // In the binary crate (--dap-stdio flag):
+//! let (event_tx, event_rx) = mpsc::channel(32);
+//! let handle = DapService::start_stdio(event_tx).await?;
+//!
+//! // The stdio session runs for the lifetime of the process.
+//! DapService::stop(handle).await;
+//! ```
+
+use std::sync::Arc;
+
+use tokio::sync::{broadcast, mpsc, watch};
+
+use fdemon_core::error::Result;
+
+use crate::{
+    adapter::DebugEvent,
+    server::{BackendFactory, DapServerConfig, DapServerEvent, DapServerHandle},
+};
+
+/// Manages the DAP server lifecycle.
+///
+/// This is a stateless helper — all lifecycle state lives in the
+/// [`DapServerHandle`] returned by [`DapService::start`]. The caller
+/// (Engine integration layer) stores the handle and passes it to
+/// [`DapService::stop`] on shutdown.
+///
+/// ## Cross-crate boundary
+///
+/// `DapService` does **not** reference `fdemon-app` types such as `Message`.
+/// Instead, it accepts an `mpsc::Sender<DapServerEvent>` so the caller can
+/// bridge events to application-specific message types without creating a
+/// circular dependency.
+pub struct DapService;
+
+impl DapService {
+    /// Start the DAP TCP server and begin forwarding events to the caller.
+    ///
+    /// Binds the server to `bind_addr:port` and returns a [`DapServerHandle`]
+    /// for lifecycle management. Events are sent over `event_tx` so the caller
+    /// can map them to application-specific messages (e.g., `Message` variants)
+    /// without creating a crate dependency from `fdemon-dap` to `fdemon-app`.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` — TCP port to bind on. Use `0` to let the OS assign an
+    ///   ephemeral port; the actual port is via [`DapServerHandle::port()`].
+    /// * `bind_addr` — Bind address string (e.g. `"127.0.0.1"`).
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications. The
+    ///   caller is responsible for draining this channel.
+    ///
+    /// # Returns
+    ///
+    /// A [`DapServerHandle`] on success, or an [`Error`] if the port is
+    /// unavailable.
+    ///
+    /// [`Error`]: fdemon_core::error::Error
+    pub async fn start_tcp(
+        port: u16,
+        bind_addr: String,
+        event_tx: mpsc::Sender<DapServerEvent>,
+    ) -> Result<DapServerHandle> {
+        let config = DapServerConfig { port, bind_addr };
+        crate::server::start(config, event_tx, None).await
+    }
+
+    /// Start the DAP TCP server with a real backend factory.
+    ///
+    /// Like [`DapService::start_tcp`] but threads a [`BackendFactory`] through
+    /// to the accept loop so each accepted connection can be wired to a real
+    /// VM Service session instead of falling back to [`NoopBackend`].
+    ///
+    /// This is the production entry point used by the Engine when a Flutter
+    /// session's VM Service is available. The factory is typically constructed
+    /// in `fdemon-app` and captures an `Arc<Mutex<Option<VmRequestHandle>>>`.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` — TCP port to bind on. Use `0` for OS-assigned.
+    /// * `bind_addr` — Bind address string (e.g. `"127.0.0.1"`).
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications.
+    /// * `backend_factory` — Factory invoked once per accepted connection.
+    pub async fn start_tcp_with_factory(
+        port: u16,
+        bind_addr: String,
+        event_tx: mpsc::Sender<DapServerEvent>,
+        backend_factory: Arc<dyn BackendFactory>,
+    ) -> Result<DapServerHandle> {
+        let config = DapServerConfig { port, bind_addr };
+        crate::server::start(config, event_tx, Some(backend_factory)).await
+    }
+
+    /// Start a DAP session over stdin/stdout (adapter subprocess mode).
+    ///
+    /// Spawns a background task that runs a single DAP session over the
+    /// process's stdin/stdout streams. Returns a [`DapServerHandle`] for
+    /// lifecycle management; call [`DapService::stop`] to signal shutdown.
+    ///
+    /// **Important**: Before calling this function, ensure the tracing
+    /// subscriber writes to stderr (not stdout). Any stdout writes not part
+    /// of the DAP wire protocol will corrupt the session.
+    ///
+    /// # Arguments
+    ///
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications. The
+    ///   caller is responsible for draining this channel.
+    ///
+    /// # Returns
+    ///
+    /// A [`DapServerHandle`] on success. The `port()` of the handle will
+    /// return `0` (no TCP port is used in stdio mode).
+    pub async fn start_stdio(event_tx: mpsc::Sender<DapServerEvent>) -> Result<DapServerHandle> {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        let task = tokio::spawn(async move {
+            crate::transport::stdio::run_stdio_session(shutdown_rx, event_tx)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!("DAP stdio session error: {}", e);
+                });
+        });
+
+        // Stdio mode has no TCP accept loop, so no sessions subscribe to this
+        // broadcast. The sender is included so the Engine can call
+        // `log_event_sender()` without needing to know the transport mode.
+        let (log_event_tx, _) = broadcast::channel::<DebugEvent>(1);
+
+        Ok(DapServerHandle {
+            port: 0,
+            shutdown_tx,
+            task,
+            log_event_tx,
+        })
+    }
+
+    /// Start the DAP TCP server (alias for [`DapService::start_tcp`]).
+    ///
+    /// This method is preserved for backwards compatibility. New code should
+    /// use [`DapService::start_tcp`] to make the transport explicit.
+    ///
+    /// # Arguments
+    ///
+    /// * `port` — TCP port to bind on.
+    /// * `bind_addr` — Bind address string.
+    /// * `event_tx` — Channel for [`DapServerEvent`] notifications.
+    pub async fn start(
+        port: u16,
+        bind_addr: String,
+        event_tx: mpsc::Sender<DapServerEvent>,
+    ) -> Result<DapServerHandle> {
+        Self::start_tcp(port, bind_addr, event_tx).await
+    }
+
+    /// Stop a running DAP server and wait for it to finish.
+    ///
+    /// Signals the server task to shut down, then awaits the task with a
+    /// 5-second timeout. If the task does not complete within the timeout
+    /// a warning is logged and the handle is dropped (not cancelled forcefully).
+    ///
+    /// # Arguments
+    ///
+    /// * `handle` — The [`DapServerHandle`] returned by [`DapService::start`].
+    pub async fn stop(handle: DapServerHandle) {
+        // Signal shutdown. If the receiver is already gone the server has
+        // already stopped — that is fine, so we ignore the error.
+        let _ = handle.shutdown_tx.send(true);
+
+        // Wait for the accept-loop task to finish with a generous timeout.
+        if tokio::time::timeout(std::time::Duration::from_secs(5), handle.task)
+            .await
+            .is_err()
+        {
+            tracing::warn!("DAP server task did not complete within 5s shutdown timeout");
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::mpsc;
+
+    /// Helper: start a server on port 0 (OS-assigned).
+    async fn start_server() -> (DapServerHandle, mpsc::Receiver<DapServerEvent>) {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let handle = DapService::start(0, "127.0.0.1".to_string(), event_tx)
+            .await
+            .expect("DapService::start should succeed on port 0");
+        (handle, event_rx)
+    }
+
+    #[tokio::test]
+    async fn test_dap_service_start_returns_valid_port() {
+        let (handle, _rx) = start_server().await;
+        assert!(handle.port() > 0, "OS-assigned port must be nonzero");
+        DapService::stop(handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_dap_service_stop_completes_cleanly() {
+        let (handle, _rx) = start_server().await;
+        // Should not panic or hang.
+        DapService::stop(handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_dap_service_start_fails_on_port_in_use() {
+        let (handle, _rx) = start_server().await;
+        let occupied_port = handle.port();
+
+        let (event_tx2, _rx2) = mpsc::channel(16);
+        let result = DapService::start(occupied_port, "127.0.0.1".to_string(), event_tx2).await;
+
+        assert!(
+            result.is_err(),
+            "Starting a second server on an occupied port must fail"
+        );
+
+        DapService::stop(handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_dap_service_events_forwarded() {
+        use tokio::net::TcpStream;
+
+        let (handle, mut event_rx) = start_server().await;
+        let port = handle.port();
+
+        // Connect a client so we get a ClientConnected event.
+        let _stream = TcpStream::connect(format!("127.0.0.1:{}", port))
+            .await
+            .expect("client should connect");
+
+        let event = tokio::time::timeout(std::time::Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("event should arrive within 2 seconds")
+            .expect("channel should not be closed");
+
+        assert!(
+            matches!(event, DapServerEvent::ClientConnected { .. }),
+            "Expected ClientConnected, got {:?}",
+            event
+        );
+
+        DapService::stop(handle).await;
+    }
+}

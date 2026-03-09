@@ -14,6 +14,7 @@ fdemon-core = { path = "crates/fdemon-core" }
 fdemon-daemon = { path = "crates/fdemon-daemon" }
 fdemon-app = { path = "crates/fdemon-app" }
 fdemon-tui = { path = "crates/fdemon-tui" }
+fdemon-dap = { path = "crates/fdemon-dap" }
 
 # Shared external dependencies (deduplicate versions)
 tokio = { version = "1", features = ["full"] }
@@ -46,6 +47,9 @@ futures-util = "0.3"
 # CLI
 clap = { version = "4", features = ["derive"] }
 
+# URL parsing
+url = "2"
+
 # Misc
 rand = "0.8"
 
@@ -76,6 +80,7 @@ fdemon-core.workspace = true
 fdemon-daemon.workspace = true
 fdemon-app.workspace = true
 fdemon-tui.workspace = true
+fdemon-dap.workspace = true
 
 # CLI
 clap.workspace = true

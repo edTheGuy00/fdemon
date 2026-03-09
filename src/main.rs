@@ -2,7 +2,9 @@
 //!
 //! This is the binary entry point.
 
+mod dap_stdio;
 mod headless;
+mod tui;
 
 use std::path::PathBuf;
 
@@ -26,6 +28,43 @@ struct Args {
     /// Run in headless mode (JSON output, no TUI)
     #[arg(long)]
     headless: bool,
+
+    /// Start the DAP server on a specific port (implies DAP enabled).
+    ///
+    /// Use 0 to let the OS assign an ephemeral port.
+    /// In headless mode the assigned port is printed as JSON: {"event":"dap_server_started","port":54321,"timestamp":...}
+    #[arg(long, value_name = "PORT")]
+    dap_port: Option<u16>,
+
+    /// Run as a DAP adapter over stdin/stdout (for IDE integration).
+    ///
+    /// When this flag is set, fdemon acts as a DAP adapter subprocess:
+    /// - The TUI is not started (stdin/stdout are used for the DAP wire protocol).
+    /// - All tracing/logging output is written to stderr.
+    /// - The process exits when the DAP client disconnects.
+    ///
+    /// This is the preferred transport for Zed, Helix, and nvim-dap. Example
+    /// Zed configuration:
+    ///   { "adapter": "fdemon", "command": "fdemon", "args": ["--dap-stdio"] }
+    ///
+    /// Cannot be combined with --dap-port (mutually exclusive transports).
+    #[arg(long, conflicts_with = "dap_port")]
+    dap_stdio: bool,
+
+    /// Generate DAP config for a specific IDE without auto-detection.
+    ///
+    /// When used with --dap-port, generates the IDE config file and exits
+    /// immediately (standalone mode). This is useful for scripting and CI.
+    ///
+    /// When used without --dap-port, starts fdemon normally but overrides
+    /// IDE auto-detection for config generation when the DAP server starts.
+    ///
+    /// Values: vscode (or vs-code, code), neovim (or nvim), helix (or hx),
+    ///         zed, emacs
+    ///
+    /// Cannot be combined with --dap-stdio.
+    #[arg(long, value_name = "IDE", conflicts_with = "dap_stdio")]
+    dap_config: Option<String>,
 }
 
 #[tokio::main]
@@ -42,6 +81,69 @@ async fn main() -> Result<()> {
 
     let args = Args::parse();
 
+    // --dap-stdio: run as a DAP adapter subprocess over stdin/stdout.
+    // This mode does not require a Flutter project path and must not start the TUI.
+    // All tracing output is already going to a file (fdemon_core::logging::init above),
+    // so stdout is clean for the DAP wire protocol.
+    if args.dap_stdio {
+        return dap_stdio::runner::run_dap_stdio().await;
+    }
+
+    // --dap-config <IDE> with --dap-port: standalone config generation mode.
+    //
+    // When both flags are provided we generate the IDE config file and exit
+    // immediately.  The TUI and Engine are never started — this makes the flag
+    // safe to use in CI scripts and editor setup hooks.
+    //
+    // Without --dap-port the flag is still accepted; in that case it is stored
+    // and used later to override IDE auto-detection when the DAP server starts
+    // during a normal run.
+    // Parse the --dap-config IDE name and store for combined mode.
+    // In standalone mode (--dap-port also provided), generate config and exit.
+    // In combined mode (no --dap-port), validate early and store for later use.
+    let dap_config_override: Option<fdemon_app::config::ParentIde> =
+        if let Some(ref ide_str) = args.dap_config {
+            if let Some(port) = args.dap_port {
+                // Standalone mode: parse IDE, resolve project root, generate, exit.
+                let ide = fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+                    eprintln!("Error: {}", e);
+                    eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+                    e
+                })?;
+
+                let project_root = args.path.clone().unwrap_or_else(|| {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                });
+
+                match fdemon_app::ide_config::generate_ide_config(Some(ide), port, &project_root)? {
+                    Some(result) => {
+                        println!(
+                            "Generated DAP config for {}: {:?} at {}",
+                            ide.display_name(),
+                            result.action,
+                            result.path.display()
+                        );
+                    }
+                    None => {
+                        println!("IDE '{}' does not support DAP config generation", ide_str);
+                    }
+                }
+                return Ok(());
+            }
+            // Combined mode: validate the IDE name early so the user gets a clear
+            // error before fdemon starts the TUI, then store for use when the DAP
+            // server starts (passed to GenerateIdeConfig via AppState).
+            Some(
+                fdemon_app::ide_config::parse_ide_name(ide_str).map_err(|e| {
+                    eprintln!("Error: {}", e);
+                    eprintln!("       Valid values: vscode, neovim, helix, zed, emacs");
+                    e
+                })?,
+            )
+        } else {
+            None
+        };
+
     // Get base path from args or use current directory
     let base_path = args
         .path
@@ -51,9 +153,10 @@ async fn main() -> Result<()> {
     if is_runnable_flutter_project(&base_path) {
         info!("Project path: {}", base_path.display());
         return if args.headless {
-            headless::runner::run_headless(&base_path).await
+            headless::runner::run_headless(&base_path, args.dap_port, dap_config_override).await
         } else {
-            fdemon_tui::run_with_project(&base_path).await
+            tui::runner::run_with_project_and_dap(&base_path, args.dap_port, dap_config_override)
+                .await
         };
     }
 
@@ -122,9 +225,10 @@ async fn main() -> Result<()> {
             eprintln!("✅ Found Flutter project: {}", project.display());
             info!("Project path: {}", project.display());
             if args.headless {
-                headless::runner::run_headless(project).await
+                headless::runner::run_headless(project, args.dap_port, dap_config_override).await
             } else {
-                fdemon_tui::run_with_project(project).await
+                tui::runner::run_with_project_and_dap(project, args.dap_port, dap_config_override)
+                    .await
             }
         }
         _ => {
@@ -137,12 +241,17 @@ async fn main() -> Result<()> {
                     project.display()
                 );
                 info!("Project path: {}", project.display());
-                headless::runner::run_headless(project).await
+                headless::runner::run_headless(project, args.dap_port, dap_config_override).await
             } else {
                 match select_project(&discovery.projects, &discovery.searched_from)? {
                     SelectionResult::Selected(project) => {
                         info!("Project path: {}", project.display());
-                        fdemon_tui::run_with_project(&project).await
+                        tui::runner::run_with_project_and_dap(
+                            &project,
+                            args.dap_port,
+                            dap_config_override,
+                        )
+                        .await
                     }
                     SelectionResult::Cancelled => {
                         eprintln!("Selection cancelled.");

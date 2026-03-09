@@ -761,6 +761,67 @@ impl LoadingState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// DAP IDE Config Status (DAP Server Phase 5, Task 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of IDE DAP config generation, shown in TUI status bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DapConfigStatus {
+    /// The IDE config was generated/updated for.
+    pub ide_name: String,
+    /// The config file path.
+    pub path: PathBuf,
+    /// What happened ("Created", "Updated", "Skipped: <reason>").
+    pub action: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DAP Server State (DAP Server Phase 2)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Status of the embedded DAP server.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum DapStatus {
+    /// DAP server is not running.
+    #[default]
+    Off,
+    /// DAP server is starting up (binding port, initializing).
+    Starting,
+    /// DAP server is running and accepting connections.
+    Running {
+        /// The TCP port the server is listening on.
+        port: u16,
+        /// Set of currently connected DAP client IDs.
+        clients: HashSet<String>,
+    },
+    /// DAP server is shutting down (disconnecting clients, unbinding).
+    Stopping,
+}
+
+impl DapStatus {
+    /// Returns the port if the server is running.
+    pub fn port(&self) -> Option<u16> {
+        match self {
+            DapStatus::Running { port, .. } => Some(*port),
+            _ => None,
+        }
+    }
+
+    /// Returns whether the server is running.
+    pub fn is_running(&self) -> bool {
+        matches!(self, DapStatus::Running { .. })
+    }
+
+    /// Returns the number of currently connected clients, or 0 if not running.
+    pub fn client_count(&self) -> usize {
+        match self {
+            DapStatus::Running { clients, .. } => clients.len(),
+            _ => 0,
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -818,6 +879,40 @@ pub struct AppState {
 
     /// DevTools mode view state (Phase 4 DevTools Integration)
     pub devtools_view_state: DevToolsViewState,
+
+    /// Status of the embedded DAP debug adapter server.
+    pub dap_status: DapStatus,
+
+    // ── Coordinated Pause / File-Watcher Gate (Phase 4, Task 03) ─────────────
+    /// Whether the file watcher's auto-reload is currently suppressed because
+    /// a DAP debugger is paused at a breakpoint, step, exception, etc.
+    ///
+    /// Set to `true` by `Message::SuspendFileWatcher` (emitted by
+    /// `handle_debug_event` on any Pause* event) and cleared by
+    /// `Message::ResumeFileWatcher` (emitted on Resume or client disconnect).
+    ///
+    /// Controlled by `settings.dap.suppress_reload_on_pause` (default `true`).
+    /// When that setting is `false`, this flag is ignored in the
+    /// `FilesChanged` handler and reload proceeds normally.
+    pub file_watcher_suspended: bool,
+
+    /// Number of file-change events that arrived while `file_watcher_suspended`
+    /// is `true`.
+    ///
+    /// Incremented by the `FilesChanged` handler when suppression is active.
+    /// Consumed (reset to 0) by `ResumeFileWatcher` which triggers a single
+    /// `AutoReloadTriggered` if the count is non-zero.
+    pub pending_file_changes: usize,
+
+    /// Result of the most recent IDE DAP config generation (Phase 5, Task 03).
+    ///
+    /// Set when `DapConfigGenerated` is received; persists until the next
+    /// DAP server restart. `None` before any config has been generated.
+    pub dap_config_status: Option<DapConfigStatus>,
+
+    /// CLI-provided IDE override for DAP config generation (`--dap-config <ide>`).
+    /// When set, bypasses environment-based IDE detection.
+    pub cli_dap_config_override: Option<crate::config::ParentIde>,
 }
 
 impl Default for AppState {
@@ -855,6 +950,11 @@ impl AppState {
             bootable_last_updated: None,
             tool_availability: ToolAvailability::default(),
             devtools_view_state: DevToolsViewState::default(),
+            dap_status: DapStatus::Off,
+            file_watcher_suspended: false,
+            pending_file_changes: 0,
+            dap_config_status: None,
+            cli_dap_config_override: None,
         }
     }
 

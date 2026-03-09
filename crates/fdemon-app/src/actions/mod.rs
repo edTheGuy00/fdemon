@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use tokio::sync::{mpsc, watch};
 use tracing::warn;
@@ -11,7 +11,8 @@ use crate::handler::Task;
 use crate::message::Message;
 use crate::session::SessionId;
 use crate::UpdateAction;
-use fdemon_daemon::{CommandSender, ToolAvailability};
+use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, ToolAvailability};
+use fdemon_dap::{DapServerEvent, DapServerHandle, DapService};
 
 use super::spawn;
 
@@ -25,6 +26,16 @@ pub(super) mod vm_service;
 /// Convenience type alias for session task tracking
 pub type SessionTaskMap = Arc<std::sync::Mutex<HashMap<SessionId, tokio::task::JoinHandle<()>>>>;
 
+/// Convenience type alias for the shared DAP server handle slot.
+///
+/// The Engine stores the running `DapServerHandle` here so that
+/// `handle_action` can deposit it (on `SpawnDapServer`) or withdraw it
+/// (on `StopDapServer`) without taking ownership of the Engine.
+pub type DapHandleSlot = Arc<Mutex<Option<DapServerHandle>>>;
+
+/// Channel capacity for DAP server events (connect/disconnect/error notifications).
+const DAP_EVENT_CHANNEL_CAPACITY: usize = 32;
+
 /// Execute an action by spawning a background task
 #[allow(clippy::too_many_arguments)]
 pub fn handle_action(
@@ -36,6 +47,9 @@ pub fn handle_action(
     shutdown_rx: watch::Receiver<bool>,
     project_path: &Path,
     tool_availability: ToolAvailability,
+    dap_server_handle: DapHandleSlot,
+    vm_handle_for_dap: Arc<Mutex<Option<VmRequestHandle>>>,
+    dap_debug_senders: Arc<Mutex<Vec<tokio::sync::mpsc::Sender<fdemon_dap::adapter::DebugEvent>>>>,
 ) {
     match action {
         UpdateAction::SpawnTask(task) => {
@@ -331,6 +345,295 @@ pub fn handle_action(
                     session_id
                 );
             }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Debug RPC Actions (DAP Server Phase 1, Task 05)
+        //
+        // These variants are defined now to satisfy the exhaustive match but are
+        // not dispatched to async executors until Phase 2 (DAP server wiring).
+        // Reaching these arms in the current build is unexpected; log at warn.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::PauseIsolate {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+        } => {
+            tracing::warn!(
+                "PauseIsolate action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::ResumeIsolate {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            step: _,
+        } => {
+            tracing::warn!(
+                "ResumeIsolate action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::AddBreakpoint {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            script_uri: _,
+            line: _,
+            column: _,
+        } => {
+            tracing::warn!(
+                "AddBreakpoint action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::RemoveBreakpoint {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            breakpoint_id: _,
+        } => {
+            tracing::warn!(
+                "RemoveBreakpoint action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        UpdateAction::SetIsolatePauseMode {
+            session_id,
+            vm_handle: _,
+            isolate_id: _,
+            mode: _,
+        } => {
+            tracing::warn!(
+                "SetIsolatePauseMode action for session {} — DAP executor not yet wired (Phase 2)",
+                session_id
+            );
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // DAP Server Actions (DAP Server Phase 2, Task 05)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::SpawnDapServer { port, bind_addr } => {
+            let msg_tx_clone = msg_tx.clone();
+            let handle_slot = dap_server_handle.clone();
+            // Construct a factory from the current VM handle slot so each
+            // accepted DAP client gets a real backend when a Flutter session
+            // is attached. Pass `msg_tx_clone` so that `hotReload`/`hotRestart`
+            // custom DAP requests can dispatch through the TEA pipeline
+            // (Phase 4, Task 02).
+            let factory = Arc::new(crate::handler::dap_backend::VmBackendFactory::new(
+                vm_handle_for_dap,
+                dap_debug_senders,
+                Some(msg_tx_clone.clone()),
+            ));
+            tokio::spawn(async move {
+                // Create the event channel: DapServerEvent → Message bridge
+                let (event_tx, mut event_rx) =
+                    tokio::sync::mpsc::channel::<DapServerEvent>(DAP_EVENT_CHANNEL_CAPACITY);
+
+                // Keep a copy of bind_addr for logging after the move below.
+                let bind_addr_log = bind_addr.clone();
+
+                // Start the TCP server with the backend factory.
+                match DapService::start_tcp_with_factory(port, bind_addr, event_tx, factory).await {
+                    Ok(server_handle) => {
+                        let actual_port = server_handle.port();
+
+                        // Deposit the handle into the shared slot so Engine::shutdown()
+                        // can stop it, and StopDapServer can retrieve it.
+                        match handle_slot.lock() {
+                            Ok(mut guard) => {
+                                *guard = Some(server_handle);
+                            }
+                            Err(e) => {
+                                warn!("DAP handle slot poisoned after start: {}", e);
+                            }
+                        }
+
+                        // Notify the TEA loop that the server is up
+                        let _ = msg_tx_clone
+                            .send(Message::DapServerStarted { port: actual_port })
+                            .await;
+
+                        // Log DAP connection info so IDE users can find the port.
+                        // In TUI mode the port is shown in the status bar;
+                        // in headless mode the tracing subscriber forwards to
+                        // stderr, making this visible in the terminal.
+                        tracing::info!(
+                            port = actual_port,
+                            bind_addr = %bind_addr_log,
+                            "DAP server listening on {}:{}",
+                            bind_addr_log, actual_port
+                        );
+                        tracing::info!(
+                            "Connect with: Zed (port {} in .zed/debug.json), \
+                             Helix (:debug-remote {}:{}), nvim (port {} in dap.adapters)",
+                            actual_port,
+                            bind_addr_log,
+                            actual_port,
+                            actual_port
+                        );
+
+                        // Bridge DapServerEvent → Message
+                        // Runs until the server stops (event_rx closes) or Engine channel drops.
+                        while let Some(event) = event_rx.recv().await {
+                            let msg = match event {
+                                DapServerEvent::ClientConnected { client_id } => {
+                                    Message::DapClientConnected { client_id }
+                                }
+                                DapServerEvent::ClientDisconnected { client_id } => {
+                                    Message::DapClientDisconnected { client_id }
+                                }
+                                DapServerEvent::ServerError { reason } => {
+                                    Message::DapServerFailed { reason }
+                                }
+                                // Debug session lifecycle events — logged but not yet
+                                // mapped to specific Message variants. The DapStatus
+                                // already tracks connected clients; these events provide
+                                // finer-grained state for future UI indicators.
+                                DapServerEvent::DebugSessionStarted { client_id } => {
+                                    tracing::info!("DAP debug session started: {}", client_id);
+                                    continue;
+                                }
+                                DapServerEvent::DebugSessionEnded { client_id } => {
+                                    tracing::info!("DAP debug session ended: {}", client_id);
+                                    continue;
+                                }
+                            };
+                            if msg_tx_clone.send(msg).await.is_err() {
+                                // Engine channel closed — Engine is shutting down.
+                                break;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Bind failed — report back to TEA loop
+                        let _ = msg_tx_clone
+                            .send(Message::DapServerFailed {
+                                reason: e.to_string(),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        UpdateAction::StopDapServer => {
+            let handle_slot = dap_server_handle.clone();
+            let msg_tx_clone = msg_tx.clone();
+            tokio::spawn(async move {
+                let maybe_handle = match handle_slot.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("DAP handle slot poisoned on StopDapServer: {}", e);
+                        None
+                    }
+                };
+                if let Some(handle) = maybe_handle {
+                    DapService::stop(handle).await;
+                    let _ = msg_tx_clone.send(Message::DapServerStopped).await;
+                } else {
+                    tracing::debug!("StopDapServer: no running DAP server to stop");
+                }
+            });
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // DAP Debug Event Forwarding (DAP Server Phase 4, Task 03)
+        //
+        // Forwards translated VM debug events to all connected DAP client
+        // adapters.  Runs outside the synchronous TEA `update()` cycle so
+        // that the blocking `std::sync::Mutex` lock and `try_send` calls do
+        // not stall the main loop (TEA purity).
+        //
+        // Stale senders (receivers dropped by disconnected clients) are pruned
+        // automatically via `retain` + `try_send` returning `Err(Closed)`.
+        // A full channel (`Err(Full)`) logs at `warn!` level and retains the
+        // sender — a full backlog suggests the client is misbehaving but may
+        // recover.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::ForwardDapDebugEvents(events) => {
+            match dap_debug_senders.lock() {
+                Ok(mut senders) => {
+                    for ev in &events {
+                        senders.retain(|tx| {
+                            match tx.try_send(ev.clone()) {
+                                Ok(()) => true,
+                                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                                    warn!(
+                                        "DAP debug event channel full — event dropped, \
+                                         IDE may desync"
+                                    );
+                                    true // retain: client may recover
+                                }
+                                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                                    false // prune: client disconnected
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("dap_debug_senders lock poisoned: {}", e);
+                }
+            }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // IDE Config Generation (DAP Server Phase 5, Task 02)
+        //
+        // Dispatches IDE-specific DAP config generation (launch.json,
+        // languages.toml, etc.) in an async task so the TEA loop is not
+        // blocked by file I/O.  Per-IDE generator implementations are added
+        // incrementally in Tasks 04–08; until then generate_ide_config()
+        // returns Ok(None) for all IDEs.
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::GenerateIdeConfig { port, ide_override } => {
+            let project_path = project_path.to_path_buf();
+            let msg_tx_clone = msg_tx.clone();
+            tokio::spawn(async move {
+                // Use the CLI-specified IDE override when provided.  Otherwise
+                // detect the parent IDE from the environment (process-name
+                // heuristic). We don't carry Settings through UpdateAction to
+                // keep the action payload small.
+                let ide = ide_override.or_else(crate::config::settings::detect_parent_ide);
+
+                match crate::ide_config::generate_ide_config(ide, port, &project_path) {
+                    Ok(Some(result)) => {
+                        let action_str = match &result.action {
+                            crate::ide_config::ConfigAction::Created => "Created".to_string(),
+                            crate::ide_config::ConfigAction::Updated => "Updated".to_string(),
+                            crate::ide_config::ConfigAction::Skipped(reason) => {
+                                format!("Skipped: {}", reason)
+                            }
+                        };
+                        let ide_name = ide
+                            .map(|i| i.display_name().to_string())
+                            .unwrap_or_else(|| "Unknown".to_string());
+                        let _ = msg_tx_clone
+                            .send(Message::DapConfigGenerated {
+                                ide_name,
+                                path: result.path,
+                                action: action_str,
+                            })
+                            .await;
+                    }
+                    Ok(None) => {
+                        // No IDE detected or IDE doesn't support DAP config.
+                        tracing::debug!(
+                            "No IDE config generated (no IDE detected or IDE unsupported)"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to generate IDE DAP config: {}", e);
+                    }
+                }
+            });
         }
     }
 }
