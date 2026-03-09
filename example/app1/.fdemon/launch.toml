@@ -1,0 +1,13 @@
+# Launch configurations for testing --dart-define-from-file bug
+# See: workflow/plans/bugs/extra-args-not-passed/BUG.md
+
+[[configurations]]
+name = "App1 | Default"
+device = "auto"
+
+[[configurations]]
+name = "App1 | Staging (with env file)"
+device = "auto"
+extra_args = [
+    "--dart-define-from-file=envs/staging.env.json"
+]
