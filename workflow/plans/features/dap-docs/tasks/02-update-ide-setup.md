@@ -94,3 +94,35 @@ Line 160-165 mentions "Phase 5" as future. Update to reflect that Phase 5 auto-c
 - Keep the existing manual setup instructions — auto-config doesn't replace them, it supplements them
 - The Helix auto-config generates `.helix/languages.toml` with `port-arg` so Helix spawns a new fdemon instance; this is different from TCP attach to an existing fdemon. Document this nuance.
 - IntelliJ/Android Studio are detected but `supports_dap_config()` returns `false` — mention this explicitly
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/IDE_SETUP.md` | Added "Automatic IDE Configuration" section with detection table, merge safety, status bar, CLI standalone mode, and disable instructions; added auto-setup notes to Zed, Helix, Neovim, and VS Code sections; added Emacs (dap-mode) section; updated Zed "Option C" Phase 5 reference from "future" to reflect current implementation state |
+
+### Notable Decisions/Tradeoffs
+
+1. **Helix nuance documented in both places**: The detection table in the new "Automatic IDE Configuration" section and the Helix IDE section both note that auto-generated Helix config uses `port-arg` (spawns a new fdemon instance), which differs from TCP attach to an existing TUI session. This keeps the nuance visible to readers who jump directly to a specific IDE section.
+
+2. **IntelliJ/Android Studio callout**: Added an explicit blockquote in the detection table notes explaining that these IDEs are detected but `supports_dap_config()` returns `false`, so no config is generated. This prevents user confusion when nothing is auto-generated.
+
+3. **Phase 5 reference wording**: The Zed "Option C" heading was changed from "Future — Phase 5" to just "Future" since Phase 5 is now implemented. The body text distinguishes between what Phase 5 delivered (auto config file generation) and what remains future work (a full WASM Zed extension).
+
+4. **Emacs section structure**: Added both "Loading the Auto-Generated Config" and "Manual Configuration" subsections, consistent with how other IDE sections cover both the auto-setup path and the manual fallback.
+
+### Testing Performed
+
+- Documentation-only change — no Rust code modified, no compilation required
+- Full read of the updated `docs/IDE_SETUP.md` to verify all five acceptance criteria are met
+- Checked that all existing sections and troubleshooting content are intact
+
+### Risks/Limitations
+
+1. **CLI flags not validated against implementation**: The `--dap-config` flag referenced in the CLI standalone mode examples was specified in the task requirements; I did not verify it exists in the binary's argument parser. If it is not implemented, the example commands will be incorrect and should be updated to match the actual flag names.

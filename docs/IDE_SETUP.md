@@ -45,7 +45,72 @@ All non-DAP output (tracing, logs) goes to stderr in stdio mode.
 
 ---
 
+## Automatic IDE Configuration
+
+When fdemon's DAP server starts (press `D` or pass `--dap-port`), it
+auto-detects whether it is running inside an IDE's integrated terminal and
+generates the appropriate debug configuration file. No manual config is needed
+in most cases.
+
+### Detection Table
+
+| IDE | Detected Via | Config File Generated | Merge Strategy |
+|-----|-------------|-----------------------|----------------|
+| VS Code / Cursor | `$TERM_PROGRAM`, `$VSCODE_IPC_HOOK_CLI` | `.vscode/launch.json` | Merge by `"name"` field; `"fdemon-managed": true` marker |
+| Zed | `$ZED_TERM` | `.zed/debug.json` | Merge by `"label"` field |
+| Neovim | `$NVIM` | `.vscode/launch.json` + `.nvim-dap.lua` | VS Code merge + Lua snippet overwrite |
+| Helix | `$HELIX_RUNTIME` | `.helix/languages.toml` | TOML merge: replaces `[language.debugger]` in dart entry |
+| Emacs | `$INSIDE_EMACS` | `.fdemon/dap-emacs.el` | Always overwritten (fdemon-owned) |
+| IntelliJ / Android Studio | `$TERMINAL_EMULATOR` | None | Auto-config not supported; use manual setup |
+
+> **Helix note:** The auto-generated `.helix/languages.toml` uses `port-arg` so
+> Helix spawns a new fdemon instance to pick the port. This differs from TCP
+> attach to an already-running fdemon — use Option A (`:debug-remote`) when you
+> want to connect to an existing TUI session.
+
+> **IntelliJ / Android Studio note:** These IDEs are detected via
+> `$TERMINAL_EMULATOR` but `supports_dap_config()` returns `false`. Auto-config
+> is not generated; follow the manual setup path for your IDE.
+
+### Merge Safety
+
+fdemon reads existing config files and merges its entry without clobbering other
+configurations. If the generated content is identical to what is already in the
+file, the file is not touched (mtime preserved). This prevents editor
+file-watcher noise.
+
+### Status Bar
+
+After config generation, the DAP badge in the status bar shows which IDE was
+configured, for example: `[DAP :4711 · VS Code]`.
+
+### CLI Standalone Mode
+
+```bash
+# Generate config and exit (useful for CI/scripts)
+fdemon --dap-config vscode --dap-port 4711
+
+# Override IDE detection in combined mode
+fdemon --dap-config zed
+```
+
+### Disabling Auto-Configuration
+
+```toml
+# .fdemon/config.toml
+[dap]
+auto_configure_ide = false
+```
+
+Or toggle in the Settings panel: `,` → Project → DAP Server → Auto-Configure IDE.
+
+---
+
 ## Zed IDE
+
+> **Automatic setup:** If you run fdemon from Zed's integrated terminal,
+> `.zed/debug.json` is generated automatically when you press `D`. The
+> instructions below are for manual setup or troubleshooting.
 
 Zed's Dart/Flutter debugging is not built-in (as of early 2026). Flutter Demon
 fills this gap.
@@ -157,16 +222,23 @@ Then add a debug configuration in `.zed/debug.json`:
 > debugging with Delve, use Option A (TCP) instead, or use project-level
 > `.zed/settings.json` to scope the override.
 
-### Option C: Zed Extension (Future — Phase 5)
+### Option C: Zed Extension (Future)
 
-A proper Zed WASM extension that registers the `FlutterDemon` adapter in the
-`DapRegistry`, provides `get_dap_binary`, and auto-detects Flutter projects
-via `pubspec.yaml` is planned for Phase 5. Phase 4 covers manual configuration
-only.
+Phase 5 delivered automatic config file generation (see
+[Automatic IDE Configuration](#automatic-ide-configuration) above). A full Zed
+WASM extension that registers the `FlutterDemon` adapter in the `DapRegistry`,
+provides `get_dap_binary`, and auto-detects Flutter projects via `pubspec.yaml`
+remains future work beyond Phase 5. Until then, use Option A (TCP) or rely on
+the auto-generated `.zed/debug.json`.
 
 ---
 
 ## Helix
+
+> **Automatic setup:** If you run fdemon from a Helix terminal session
+> (`$HELIX_RUNTIME` detected), `.helix/languages.toml` is generated
+> automatically when you press `D`. The instructions below are for manual setup
+> or troubleshooting.
 
 Helix marks DAP support as experimental. Known limitations:
 
@@ -249,6 +321,11 @@ is wired up in stdio mode.
 
 ## Neovim (nvim-dap)
 
+> **Automatic setup:** If you run fdemon from Neovim's integrated terminal
+> (`$NVIM` detected), `.vscode/launch.json` and `.nvim-dap.lua` are generated
+> automatically when you press `D`. The instructions below are for manual setup
+> or troubleshooting.
+
 Install [nvim-dap](https://github.com/mfussenegger/nvim-dap) and add the
 following to your Neovim configuration (e.g.,
 `~/.config/nvim/lua/dap-config.lua`):
@@ -299,6 +376,11 @@ dap.configurations.dart = {
 
 ## VS Code
 
+> **Automatic setup:** If you run fdemon from VS Code's integrated terminal
+> (`$TERM_PROGRAM` or `$VSCODE_IPC_HOOK_CLI` detected), `.vscode/launch.json`
+> is generated automatically when you press `D`. The instructions below are for
+> manual setup or troubleshooting.
+
 VS Code users typically use the official Dart extension for Flutter debugging.
 If you need to connect VS Code to Flutter Demon's DAP server (for example, to
 use fdemon's TUI alongside VS Code's debug UI), add a launch configuration to
@@ -320,6 +402,68 @@ use fdemon's TUI alongside VS Code's debug UI), add a launch configuration to
 
 > VS Code's built-in `debugServer` field connects to a running DAP TCP server.
 > Adjust the port to match what fdemon is listening on.
+
+---
+
+## Emacs (dap-mode)
+
+> **Automatic setup:** If you run fdemon from an Emacs terminal session
+> (`$INSIDE_EMACS` detected), `.fdemon/dap-emacs.el` is generated automatically
+> when you press `D`. This file is always overwritten by fdemon (it is
+> fdemon-owned). The instructions below show how to load the generated file or
+> configure dap-mode manually.
+
+When running fdemon from an Emacs terminal, fdemon auto-generates
+`.fdemon/dap-emacs.el` containing `dap-register-debug-provider` and
+`dap-register-debug-template` forms ready to connect to fdemon's DAP TCP server.
+
+### Loading the Auto-Generated Config
+
+Add the following to your Emacs init file (e.g., `~/.emacs.d/init.el` or your
+`use-package` block for dap-mode):
+
+```emacs-lisp
+(load-file (expand-file-name ".fdemon/dap-emacs.el"
+                             (project-root (project-current))))
+```
+
+This loads the generated provider and template each time you open the project.
+Because fdemon regenerates the file on every DAP server start, this always
+reflects the current port.
+
+### Manual Configuration
+
+If you prefer to configure dap-mode directly without the auto-generated file,
+add:
+
+```emacs-lisp
+(require 'dap-mode)
+
+(dap-register-debug-provider
+ "fdemon"
+ (lambda (conf)
+   (plist-put conf :host "127.0.0.1")
+   (plist-put conf :port 4711)
+   conf))
+
+(dap-register-debug-template
+ "Flutter Demon (TCP)"
+ (list :type "fdemon"
+       :request "attach"
+       :name "Flutter Demon (TCP)"))
+```
+
+Adjust the port to match what fdemon reports in the status bar (`[DAP :PORT]`).
+
+**Usage:**
+
+1. Run `fdemon` in your Flutter project and press `D` to start the DAP server.
+2. In Emacs, run `M-x dap-debug` and select `Flutter Demon (TCP)`.
+3. dap-mode connects over TCP to fdemon's DAP server.
+
+> **Requirement:** `dap-mode` must be installed. See the
+> [dap-mode README](https://github.com/emacs-lsp/dap-mode) for installation
+> instructions.
 
 ---
 

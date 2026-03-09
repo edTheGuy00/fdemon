@@ -11,6 +11,7 @@ use leptos_router::path;
 use pages::docs::architecture::Architecture;
 use pages::docs::changelog::Changelog;
 use pages::docs::configuration::Configuration;
+use pages::docs::debugging::Debugging;
 use pages::docs::devtools::Devtools;
 use pages::docs::installation::Installation;
 use pages::docs::introduction::Introduction;
@@ -32,6 +33,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/installation") view=Installation />
                         <Route path=path!("/keybindings") view=Keybindings />
                         <Route path=path!("/devtools") view=Devtools />
+                        <Route path=path!("/debugging") view=Debugging />
                         <Route path=path!("/configuration") view=Configuration />
                         <Route path=path!("/architecture") view=Architecture />
                         <Route path=path!("/changelog") view=Changelog />

@@ -219,3 +219,30 @@ fn KeyRow(key: &'static str, action: &'static str) -> impl IntoView {
 - Reference `website/src/pages/docs/devtools.rs` as the primary template
 - Don't import icons directly in this page — icons are only used in the sidebar (mod.rs)
 - The `CodeBlock` component accepts `code` (String) and optional `language` (default "bash")
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/debugging.rs` | **Created** — 580-line Leptos component covering all 11 sections |
+
+### Notable Decisions/Tradeoffs
+
+1. **CapRow component**: Added a fourth inline helper `CapRow(cap, supported: bool, notes)` for the capabilities table. It uses `into_any()` branching on the bool to render a green "Yes" or slate "No" — same pattern as other conditional views in the codebase.
+2. **KeyRow defined but not used in this page**: The `KeyRow` component is defined (per template requirement) even though this page has no keybinding table. This generates a harmless dead-code lint — identical to the existing devtools.rs pattern.
+3. **DAP settings defaults**: Verified directly from `crates/fdemon-app/src/config/types.rs` lines 477-534. All six settings (`enabled=false`, `auto_start_in_ide=true`, `port=0`, `bind_address="127.0.0.1"`, `suppress_reload_on_pause=true`, `auto_configure_ide=true`) match exactly.
+4. **`pub mod debugging` already declared**: `website/src/pages/docs/mod.rs` already had `pub mod debugging;` — no mod.rs change needed.
+
+### Testing Performed
+
+- `cargo check -p flutter-demon-website` — Passed (1 harmless dead_code warning, same as existing pages)
+
+### Risks/Limitations
+
+1. **Visual review pending**: The `trunk serve` visual review was not run (requires wasm-pack toolchain). The component compiles and follows exact patterns from devtools.rs.

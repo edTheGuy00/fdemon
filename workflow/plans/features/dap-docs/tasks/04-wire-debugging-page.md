@@ -91,3 +91,31 @@ Place after the `/devtools` route for consistency with sidebar order.
 
 - The `Bug` SVG paths are from the Lucide icon set (https://lucide.dev/icons/bug) — matches the existing icon convention
 - Sidebar order follows a logical flow: UI (Keybindings, DevTools) → Debugging → Configuration → Architecture
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/components/icons.rs` | Added `Bug` icon using `lucide_icon!` macro after `ScrollText` (11 SVG paths from Lucide bug icon) |
+| `website/src/pages/docs/mod.rs` | Added `pub mod debugging;` declaration; added `Bug` to icon import; added `DocItem` for Debugging after DevTools entry |
+| `website/src/lib.rs` | Added `use pages::docs::debugging::Debugging;` import; added `<Route path=path!("/debugging") view=Debugging />` after the `/devtools` route |
+
+### Notable Decisions/Tradeoffs
+
+1. **Module declaration order**: Added `pub mod debugging;` in alphabetical order (between `configuration` and `devtools`) to match the existing sorted ordering of the other module declarations.
+2. **Import placement**: The `use pages::docs::debugging::Debugging` import was inserted between `Configuration` and `Devtools` (alphabetical) to match the existing import ordering style in `lib.rs`.
+
+### Testing Performed
+
+- Verified all three files against the task specification by re-reading them after edits — all changes match the required patterns exactly.
+- Compilation skipped per task note: "don't try to run cargo check since the page may not be ready yet" (depends on parallel task 03 creating `debugging.rs`).
+
+### Risks/Limitations
+
+1. **Parallel dependency**: This task depends on task 03 creating `website/src/pages/docs/debugging.rs` with a `pub fn Debugging` component before the full website will compile. The module declaration is in place but the file must exist for `cargo check` to pass.

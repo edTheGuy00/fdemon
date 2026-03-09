@@ -45,3 +45,28 @@ The `D` key in Normal mode sends `Message::ToggleDap` (see `crates/fdemon-app/sr
 
 - `d` (lowercase) = DevTools mode, `D` (uppercase/Shift+D) = DAP toggle — make this distinction clear
 - The DAP server keybinding works regardless of session state (no active session required to start the server)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/KEYBINDINGS.md` | Added `D` row in Session Management table; added "DAP Server" subsection after DevTools subsection; added ToC entry for DAP Server |
+
+### Notable Decisions/Tradeoffs
+
+1. **ToC placement**: Added `[DAP Server](#dap-server)` after `[Link Navigation](#link-navigation)` in the Normal Mode ToC block. This matches document order (the DAP Server section appears after DevTools in the body, which itself comes after Settings and Link Navigation).
+
+### Testing Performed
+
+- Manual review of markdown formatting - Passed
+- All three acceptance criteria confirmed present in the updated file
+
+### Risks/Limitations
+
+1. **None**: This is a documentation-only change with no code impact.
