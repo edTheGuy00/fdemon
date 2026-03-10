@@ -149,3 +149,32 @@ Run: `cargo test -p fdemon-app -- native_log --nocapture` to verify all new test
 - The `JoinHandle` in `NativeLogCaptureStarted` is wrapped in `Arc<Mutex<Option<JoinHandle<()>>>>` (the `SharedTaskHandle` pattern). For tests, use `Arc::new(Mutex::new(None))` when no actual task is needed.
 - Use `flush_all_pending_logs(&mut state)` before asserting log contents — native logs go through the `LogBatcher` (batched queue) path.
 - The `maybe_start_native_log_capture` function is in `handler::session` — import as `super::session::maybe_start_native_log_capture` from the tests module.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added 10 new unit tests for native log message handling plus 2 test helper functions (`android_device`, `linux_device`, `attach_native_log_shutdown`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`SessionId::new()` does not exist**: `SessionId` is a `u64` type alias, not a struct. Used `u64::MAX` as a guaranteed-missing session ID in the "missing session" tests — no real session counter will reach that value.
+2. **`attach_native_log_shutdown` helper**: Followed the exact same pattern as `attach_perf_shutdown` and `attach_network_shutdown` to stay consistent with existing test infrastructure.
+3. **Tokio runtime for JoinHandle tests**: Tests that need a real `JoinHandle` use `tokio::runtime::Runtime::new().unwrap().block_on(...)` (same approach as `test_close_session_cleans_up_network_monitoring`).
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- native_log --nocapture` - Passed (21 tests, 10 new handler tests + 11 pre-existing)
+- `cargo test -p fdemon-app --lib` - Passed (1474 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed
+
+### Risks/Limitations
+
+1. **macOS-only `macos` platform test not added**: `native_logs_available("macos")` is gated behind `#[cfg(target_os = "macos")]` in `ToolAvailability`, making a cross-platform test for macOS log capture non-trivial. The 10 required tests cover all other paths; a macOS-specific test could be added as a follow-up with `#[cfg(target_os = "macos")]`.

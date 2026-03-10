@@ -42,12 +42,12 @@ Wave 3 (depends on 02):
 
 | # | Task | Status | Depends On | Issues | Modules |
 |---|------|--------|------------|--------|---------|
-| 1 | [01-fix-macos-log-check](tasks/01-fix-macos-log-check.md) | Not Started | — | #1 | `fdemon-daemon/src/tool_availability.rs` |
-| 2 | [02-wire-tool-guard-and-session-safety](tasks/02-wire-tool-guard-and-session-safety.md) | Not Started | 1 | #2, #4, #5, #6 | `fdemon-app/src/handler/session.rs`, `update.rs` |
-| 3 | [03-fix-macos-log-level](tasks/03-fix-macos-log-level.md) | Not Started | — | #3, #7 | `fdemon-daemon/src/native_logs/macos.rs`, `android.rs`, `mod.rs` |
-| 4 | [04-deduplicate-native-infra](tasks/04-deduplicate-native-infra.md) | Not Started | — | #9, #10 | `fdemon-daemon/src/native_logs/mod.rs`, `android.rs`, `macos.rs` |
-| 5 | [05-fix-daemon-triple-parse](tasks/05-fix-daemon-triple-parse.md) | Not Started | — | #8 | `fdemon-app/src/handler/daemon.rs` |
-| 6 | [06-add-handler-tests](tasks/06-add-handler-tests.md) | Not Started | 2 | #11 | `fdemon-app/src/handler/tests.rs` |
+| 1 | [01-fix-macos-log-check](tasks/01-fix-macos-log-check.md) | Done | — | #1 | `fdemon-daemon/src/tool_availability.rs` |
+| 2 | [02-wire-tool-guard-and-session-safety](tasks/02-wire-tool-guard-and-session-safety.md) | Done | 1 | #2, #4, #5, #6 | `fdemon-app/src/handler/session.rs`, `update.rs` |
+| 3 | [03-fix-macos-log-level](tasks/03-fix-macos-log-level.md) | Done | — | #3, #7 | `fdemon-daemon/src/native_logs/macos.rs`, `android.rs`, `mod.rs` |
+| 4 | [04-deduplicate-native-infra](tasks/04-deduplicate-native-infra.md) | Done | — | #9, #10 | `fdemon-daemon/src/native_logs/mod.rs`, `android.rs`, `macos.rs` |
+| 5 | [05-fix-daemon-triple-parse](tasks/05-fix-daemon-triple-parse.md) | Done | — | #8 | `fdemon-app/src/handler/daemon.rs` |
+| 6 | [06-add-handler-tests](tasks/06-add-handler-tests.md) | Done | 2 | #11 | `fdemon-app/src/handler/tests.rs` |
 
 ## Execution Plan
 

@@ -22,9 +22,6 @@ use tokio::sync::{mpsc, watch};
 
 use super::{AndroidLogConfig, NativeLogCapture, NativeLogEvent, NativeLogHandle};
 
-/// Channel capacity for native log events.
-const EVENT_CHANNEL_CAPACITY: usize = 256;
-
 /// Compiled regex for logcat threadtime format:
 /// `MM-DD HH:MM:SS.mmm  PID  TID PRIO TAG     : message`
 static THREADTIME_RE: LazyLock<Regex> = LazyLock::new(|| {
@@ -81,25 +78,6 @@ fn logcat_line_to_event(line: &LogcatLine) -> Option<NativeLogEvent> {
         message: line.message.clone(),
         timestamp: Some(format!("{} {}", line.date, line.time)),
     })
-}
-
-/// Determine whether a log line's tag should be included based on the config.
-///
-/// - If `include_tags` is non-empty, only those tags pass (overrides `exclude_tags`).
-/// - Otherwise, tags in `exclude_tags` are dropped; all others pass.
-///
-/// Tag comparison is case-insensitive.
-fn should_include_tag(config: &AndroidLogConfig, tag: &str) -> bool {
-    if !config.include_tags.is_empty() {
-        return config
-            .include_tags
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(tag));
-    }
-    !config
-        .exclude_tags
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case(tag))
 }
 
 /// Parse the `min_level` string into a [`NativeLogPriority`].
@@ -187,7 +165,11 @@ async fn run_logcat_capture(
                     Ok(Some(line)) => {
                         if let Some(parsed) = parse_threadtime_line(&line) {
                             // Apply tag filter.
-                            if !should_include_tag(&config, &parsed.tag) {
+                            if !super::should_include_tag(
+                                &config.include_tags,
+                                &config.exclude_tags,
+                                &parsed.tag,
+                            ) {
                                 continue;
                             }
                             // Apply priority filter.
@@ -240,15 +222,9 @@ impl AndroidLogCapture {
 
 impl NativeLogCapture for AndroidLogCapture {
     fn spawn(&self) -> Option<NativeLogHandle> {
-        let config = AndroidLogConfig {
-            device_serial: self.config.device_serial.clone(),
-            pid: self.config.pid,
-            exclude_tags: self.config.exclude_tags.clone(),
-            include_tags: self.config.include_tags.clone(),
-            min_level: self.config.min_level.clone(),
-        };
+        let config = self.config.clone();
 
-        let (event_tx, event_rx) = mpsc::channel::<NativeLogEvent>(EVENT_CHANNEL_CAPACITY);
+        let (event_tx, event_rx) = mpsc::channel::<NativeLogEvent>(super::EVENT_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let task_handle = tokio::spawn(async move {
@@ -379,48 +355,6 @@ mod tests {
         };
         let event = logcat_line_to_event(&line).unwrap();
         assert_eq!(event.level, LogLevel::Error);
-    }
-
-    #[test]
-    fn test_should_include_tag_exclude_list() {
-        let config = AndroidLogConfig {
-            device_serial: "test".into(),
-            pid: None,
-            exclude_tags: vec!["flutter".into()],
-            include_tags: vec![],
-            min_level: "info".into(),
-        };
-        assert!(!should_include_tag(&config, "flutter"));
-        assert!(!should_include_tag(&config, "Flutter")); // case-insensitive
-        assert!(should_include_tag(&config, "GoLog"));
-    }
-
-    #[test]
-    fn test_should_include_tag_include_list() {
-        let config = AndroidLogConfig {
-            device_serial: "test".into(),
-            pid: None,
-            exclude_tags: vec!["flutter".into()],
-            include_tags: vec!["GoLog".into()],
-            min_level: "info".into(),
-        };
-        assert!(should_include_tag(&config, "GoLog"));
-        assert!(!should_include_tag(&config, "OkHttp"));
-        // include_tags is non-empty, so exclude_tags is bypassed — "flutter" is not in include_tags
-        assert!(!should_include_tag(&config, "flutter"));
-    }
-
-    #[test]
-    fn test_should_include_tag_no_filters() {
-        let config = AndroidLogConfig {
-            device_serial: "test".into(),
-            pid: None,
-            exclude_tags: vec![],
-            include_tags: vec![],
-            min_level: "info".into(),
-        };
-        assert!(should_include_tag(&config, "AnyTag"));
-        assert!(should_include_tag(&config, "flutter"));
     }
 
     #[test]

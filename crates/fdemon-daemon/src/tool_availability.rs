@@ -128,17 +128,14 @@ impl ToolAvailability {
     ///
     /// This is a system utility present since macOS 10.12 (Sierra) and should always
     /// be available. The check is defensive in case of unusual environments.
+    ///
+    /// We check for the binary at its canonical path `/usr/bin/log` rather than
+    /// invoking it with a help subcommand because every invocation of `log` exits
+    /// with code 64 (EX_USAGE) regardless of the arguments on newer macOS versions,
+    /// making exit-code-based availability detection unreliable.
     #[cfg(target_os = "macos")]
     async fn check_macos_log() -> bool {
-        Command::new("log")
-            .arg("--help")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await
-            .map(|s| s.success())
-            .inspect_err(|e| tracing::debug!("macOS log check failed: {}", e))
-            .unwrap_or(false)
+        std::path::Path::new("/usr/bin/log").exists()
     }
 
     /// Get list of paths to try for emulator command
@@ -303,5 +300,17 @@ mod tests {
         let result = ToolAvailability::check_adb().await;
         // Result depends on environment — just verify no panic
         let _ = result;
+    }
+
+    /// Verify that `check_macos_log()` returns `true` on macOS.
+    ///
+    /// The `log` command is a system utility present since macOS 10.12 (Sierra)
+    /// and must always be available on any macOS machine running CI or development.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_check_macos_log_returns_true_on_macos() {
+        // On macOS, the `log` command is always present (since Sierra 10.12).
+        let result = ToolAvailability::check_macos_log().await;
+        assert!(result, "check_macos_log() should return true on macOS");
     }
 }

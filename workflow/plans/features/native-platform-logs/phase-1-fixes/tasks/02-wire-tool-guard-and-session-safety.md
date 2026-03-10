@@ -163,3 +163,32 @@ Tests should be added in task 06 (dedicated test task). But each fix should be m
 - The tool availability guard uses `state.tool_availability.native_logs_available(platform)` which dispatches on `"android"` → `self.adb` and `"macos"` → `self.macos_log` (cfg-gated). The accessor was created in task 03 precisely for this call site.
 - Fix 3 follows the `shutdown_native_logs()` pattern from `SessionHandle` (handle.rs:147-158): take the Arc, send `true`, abort the task.
 - The `VmServiceAttached` handler has the same latent leak but is a pre-existing issue unrelated to native logs. Consider filing separately.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Added `native_logs_available()` guard (Fix 1), added double-start guard `native_log_shutdown_tx.is_some()` (Fix 2), added parentheses to `needs_capture` expression (Fix 4) |
+| `crates/fdemon-app/src/handler/update.rs` | Added `else` branch to `NativeLogCaptureStarted` handler to signal shutdown and abort orphaned task when session is gone (Fix 3) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard ordering**: Tool availability check is placed before the double-start guard. This means we skip the tool check entirely if already running — acceptable because the first start already passed the tool check and the early-exit path is cheap.
+2. **`needs_capture` after guards**: The parentheses fix and the `needs_capture` boolean remain after both guards, so the cfg-gated macOS logic is only reached when tools are confirmed available and no capture is running.
+3. **Orphan abort pattern**: Fix 3 uses `h.abort()` consistent with `shutdown_native_logs()` in `SessionHandle` — sends the shutdown signal first (cooperative stop), then aborts the task handle (forceful stop).
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1464 passed, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`VmServiceAttached` latent leak**: The same session-closed-before-message-arrived pattern exists in the `VmServiceAttached` handler in `update.rs`. It is pre-existing and out of scope for this task — should be tracked as a separate follow-up issue.

@@ -6324,3 +6324,398 @@ fn test_state_defaults_to_not_suspended() {
         "pending_file_changes defaults to 0"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native Platform Log Handler Tests (Phase 1)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: create a `Device` with platform set to `"android"` — the platform
+/// that requires native log capture via `adb logcat`.
+fn android_device(id: &str) -> fdemon_daemon::Device {
+    fdemon_daemon::Device {
+        id: id.to_string(),
+        name: format!("Android Device {}", id),
+        platform: "android".to_string(),
+        emulator: false,
+        category: None,
+        platform_type: None,
+        ephemeral: false,
+        emulator_id: None,
+    }
+}
+
+/// Helper: create a `Device` with `platform` set to `"linux"`.
+fn linux_device(id: &str) -> fdemon_daemon::Device {
+    fdemon_daemon::Device {
+        id: id.to_string(),
+        name: format!("Linux Device {}", id),
+        platform: "linux".to_string(),
+        emulator: false,
+        category: None,
+        platform_type: None,
+        ephemeral: false,
+        emulator_id: None,
+    }
+}
+
+/// Helper: attach a native_log_shutdown_tx to a session, simulating a capture
+/// task that is already running. Returns the watch receiver so tests can verify
+/// whether the shutdown signal was sent.
+fn attach_native_log_shutdown(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = state.session_manager.get_mut(session_id).unwrap();
+    handle.native_log_shutdown_tx = Some(std::sync::Arc::new(tx));
+    rx
+}
+
+#[test]
+fn test_native_log_creates_log_entry_with_native_source() {
+    use fdemon_core::LogLevel;
+    use fdemon_core::LogSource;
+    use fdemon_daemon::NativeLogEvent;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let event = NativeLogEvent {
+        tag: "MyNativeTag".to_string(),
+        level: LogLevel::Warning,
+        message: "native warning message".to_string(),
+        timestamp: Some("2024-01-01 00:00:00.000".to_string()),
+    };
+
+    update(&mut state, Message::NativeLog { session_id, event });
+
+    // Flush any batched logs before asserting — native logs go through the
+    // LogBatcher (same path as Flutter stdout logs).
+    state.session_manager.flush_all_pending_logs();
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    let last_log = handle.session.logs.back().unwrap();
+    assert!(
+        matches!(&last_log.source, LogSource::Native { tag } if tag == "MyNativeTag"),
+        "Expected LogSource::Native {{ tag: \"MyNativeTag\" }}, got {:?}",
+        last_log.source
+    );
+    assert_eq!(last_log.level, LogLevel::Warning);
+    assert_eq!(last_log.message, "native warning message");
+}
+
+#[test]
+fn test_native_log_for_missing_session_is_no_op() {
+    use fdemon_core::LogLevel;
+    use fdemon_daemon::NativeLogEvent;
+
+    let mut state = AppState::new();
+    // Use a session_id that was never registered in the session manager.
+    let missing_id: crate::session::SessionId = u64::MAX;
+
+    let event = NativeLogEvent {
+        tag: "SomeTag".to_string(),
+        level: LogLevel::Info,
+        message: "should be discarded".to_string(),
+        timestamp: None,
+    };
+
+    // Must not panic; result is a no-op UpdateResult.
+    let result = update(
+        &mut state,
+        Message::NativeLog {
+            session_id: missing_id,
+            event,
+        },
+    );
+    assert!(
+        result.action.is_none(),
+        "Missing session NativeLog should produce no action"
+    );
+    assert!(
+        result.message.is_none(),
+        "Missing session NativeLog should produce no follow-up message"
+    );
+}
+
+#[test]
+fn test_native_log_capture_started_stores_handles() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        // Spawn a real (but trivially short-lived) task for the task_handle slot.
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::NativeLogCaptureStarted {
+                session_id,
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle,
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.native_log_shutdown_tx.is_some(),
+            "native_log_shutdown_tx should be Some after NativeLogCaptureStarted"
+        );
+        assert!(
+            handle.native_log_task_handle.is_some(),
+            "native_log_task_handle should be Some after NativeLogCaptureStarted"
+        );
+    });
+}
+
+#[test]
+fn test_native_log_capture_started_for_closed_session_sends_shutdown() {
+    // When a NativeLogCaptureStarted arrives for a session that no longer
+    // exists, the handler must send `true` on the shutdown channel so the
+    // orphaned capture task stops immediately.
+    let mut state = AppState::new();
+    let missing_id: crate::session::SessionId = u64::MAX;
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    update(
+        &mut state,
+        Message::NativeLogCaptureStarted {
+            session_id: missing_id,
+            shutdown_tx: std::sync::Arc::new(shutdown_tx),
+            task_handle,
+        },
+    );
+
+    assert_eq!(
+        *shutdown_rx.borrow_and_update(),
+        true,
+        "shutdown_tx should have been sent true when session is missing"
+    );
+}
+
+#[test]
+fn test_native_log_capture_stopped_clears_handles() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Attach shutdown_tx and a real task_handle to simulate a running capture.
+        let _rx = attach_native_log_shutdown(&mut state, session_id);
+        {
+            let task: tokio::task::JoinHandle<()> = tokio::spawn(async {
+                tokio::time::sleep(std::time::Duration::from_secs(60)).await
+            });
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.native_log_task_handle = Some(task);
+        }
+
+        // Verify both handles are set before the stop message.
+        {
+            let handle = state.session_manager.get(session_id).unwrap();
+            assert!(
+                handle.native_log_shutdown_tx.is_some(),
+                "shutdown_tx should be Some before stop"
+            );
+            assert!(
+                handle.native_log_task_handle.is_some(),
+                "task_handle should be Some before stop"
+            );
+        }
+
+        update(&mut state, Message::NativeLogCaptureStopped { session_id });
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.native_log_shutdown_tx.is_none(),
+            "native_log_shutdown_tx should be None after NativeLogCaptureStopped"
+        );
+        assert!(
+            handle.native_log_task_handle.is_none(),
+            "native_log_task_handle should be None after NativeLogCaptureStopped"
+        );
+    });
+}
+
+#[test]
+fn test_maybe_start_native_log_capture_returns_action_for_android() {
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Enable adb so native_logs_available("android") returns true.
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    // Ensure native logs are enabled (they are by default, but be explicit).
+    state.settings.native_logs.enabled = true;
+
+    let msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &msg);
+
+    assert!(
+        matches!(
+            action,
+            Some(crate::handler::UpdateAction::StartNativeLogCapture { .. })
+        ),
+        "Expected Some(StartNativeLogCapture) for android + adb=true + enabled, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_maybe_start_native_log_capture_returns_none_when_tools_unavailable() {
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // adb is NOT available — native_logs_available("android") returns false.
+    state.tool_availability = ToolAvailability {
+        adb: false,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = true;
+
+    let msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &msg);
+
+    assert!(
+        action.is_none(),
+        "Expected None when adb is unavailable, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_maybe_start_native_log_capture_returns_none_when_disabled() {
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Tools are available but native logs are disabled in settings.
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = false;
+
+    let msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &msg);
+
+    assert!(
+        action.is_none(),
+        "Expected None when native_logs.enabled = false, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_maybe_start_native_log_capture_returns_none_when_already_running() {
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = true;
+
+    // Simulate a capture already running by attaching a shutdown_tx.
+    let _rx = attach_native_log_shutdown(&mut state, session_id);
+
+    let msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &msg);
+
+    assert!(
+        action.is_none(),
+        "Expected None when native_log_shutdown_tx is already Some (double-start guard), got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_maybe_start_native_log_capture_returns_none_for_linux() {
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    // Linux does not need a separate capture process — Flutter's stdout pipe
+    // already surfaces native logs on this platform.
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Even with adb available (unusual, but defensive), Linux should return None.
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = true;
+
+    let msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &msg);
+
+    assert!(
+        action.is_none(),
+        "Expected None for linux platform (no native log capture needed), got {:?}",
+        action
+    );
+}

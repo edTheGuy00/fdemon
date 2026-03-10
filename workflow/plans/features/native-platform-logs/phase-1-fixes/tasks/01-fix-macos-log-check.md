@@ -81,3 +81,33 @@ async fn test_check_macos_log_returns_true_on_macos() {
 - This is a **blocking** fix — must be completed before task 02 can wire the tool availability guard.
 - The existing `test_check_macos_log_does_not_panic` test passes on macOS but doesn't assert the return value. The task noted this risk in its completion summary: *"`macos_log` check returns `false` on `log --help` exit code"*.
 - Single-line change: `"--help"` → `"help"`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/tool_availability.rs` | Replaced subprocess-based `check_macos_log()` with a path existence check; added `test_check_macos_log_returns_true_on_macos` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Path existence check instead of `log help`**: The task specified changing `--help` to `help`, but on macOS 26.3 (the environment in use) every invocation of `/usr/bin/log` exits with code 64 regardless of arguments — including `log help`. Switching to `std::path::Path::new("/usr/bin/log").exists()` is the most reliable approach: the binary is at a fixed canonical path, has been there since macOS 10.12 Sierra, and path existence is not subject to exit code variation across macOS versions. The doc comment explains the rationale inline.
+
+2. **Unused imports**: The `Command`/`Stdio` imports from `tokio::process` and `std::process` remain because other functions in the same `impl` block still use them — clippy confirms no warnings.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon -- check_macos_log --nocapture` - Passed (1 test)
+- `cargo test -p fdemon-daemon -- tool_availability --nocapture` - Passed (13 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all && cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **Path hardcoded to `/usr/bin/log`**: This is the canonical, stable path for the macOS unified logging tool and is appropriate for this platform-specific (`#[cfg(target_os = "macos")]`) function. If Apple ever relocates the binary this would need updating, but that is extremely unlikely.

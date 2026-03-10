@@ -119,3 +119,30 @@ No new tests needed — this is a pure refactor with identical behavior. Existin
 - `parse_daemon_message` is defined in `fdemon-daemon/src/protocol.rs:103` and returns `Option<DaemonMessage>`.
 - `DaemonMessage` is an enum defined in `fdemon-core/src/events.rs:113` with variants like `AppDebugPort`, `AppStart`, `AppStop`, etc.
 - The `AppDebugPort` and `AppStart` events are always separate messages (they never appear in the same stdout line), so `vm_action` and `native_log_action` are mutually exclusive. The `.or()` combiner is correct.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/daemon.rs` | Refactored `DaemonEvent::Stdout` arm to parse once via `let parsed = parse_daemon_message(&line)`, then branch on `&parsed` for both `AppDebugPort` and `AppStart` checks using `match` expressions instead of repeated parse calls |
+
+### Notable Decisions/Tradeoffs
+
+1. **Borrow via `&parsed`**: Both match arms borrow `&parsed` rather than consuming it, preserving the ability to use the same binding for both checks without cloning. The `msg` binding inside each arm borrows from the outer `Option<DaemonMessage>`.
+2. **`handle_session_stdout` ordering preserved**: The function is still called between the `vm_action` and `native_log_action` checks, as required by the task spec and the comment about `session.app_id` being set by that call.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1464 tests, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`handle_session_stdout` still re-parses internally**: As noted in the task, that function internally calls `parse_daemon_message` again, which is out of scope for this task. Total parse count per line is now 2 (one in the `Stdout` arm, one inside `handle_session_stdout`) rather than the prior 3-4.

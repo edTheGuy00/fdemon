@@ -104,23 +104,6 @@ pub fn syslog_line_to_event(line: &SyslogLine) -> NativeLogEvent {
     }
 }
 
-/// Decide whether a tag should be included based on the capture configuration.
-///
-/// - If `include_tags` is non-empty, only those tags pass.
-/// - Otherwise, any tag not in `exclude_tags` passes.
-fn should_include_tag(config: &MacOsLogConfig, tag: &str) -> bool {
-    if !config.include_tags.is_empty() {
-        return config
-            .include_tags
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(tag));
-    }
-    !config
-        .exclude_tags
-        .iter()
-        .any(|t| t.eq_ignore_ascii_case(tag))
-}
-
 /// Build the `log stream` [`Command`] from the given configuration.
 fn build_log_stream_command(config: &MacOsLogConfig) -> Command {
     let mut cmd = Command::new("log");
@@ -131,12 +114,14 @@ fn build_log_stream_command(config: &MacOsLogConfig) -> Command {
     cmd.arg("--predicate").arg(&predicate);
 
     // Map min_level to the closest valid `log stream --level` argument.
-    // macOS accepts: "default", "info", "debug". There is no "warning" level.
+    // macOS `log stream` only accepts: "default", "info", "debug".
+    // There is no "warning" or "error" level — map those to "default"
+    // so the command remains valid. Higher-level filtering is handled
+    // downstream by level comparison on parsed events.
     let level = match config.min_level.to_lowercase().as_str() {
         "verbose" | "debug" => "debug",
         "info" => "info",
-        "warning" | "error" => "error",
-        _ => "info",
+        _ => "default",
     };
     cmd.arg("--level").arg(level);
 
@@ -203,7 +188,11 @@ async fn run_log_stream_capture(
                         if let Some(parsed) = parse_syslog_line(&line) {
                             let tag = derive_tag(&parsed);
 
-                            if !should_include_tag(&config, &tag) {
+                            if !super::should_include_tag(
+                                &config.include_tags,
+                                &config.exclude_tags,
+                                &tag,
+                            ) {
                                 continue;
                             }
 
@@ -245,13 +234,8 @@ impl MacOsLogCapture {
 
 impl NativeLogCapture for MacOsLogCapture {
     fn spawn(&self) -> Option<NativeLogHandle> {
-        let config = MacOsLogConfig {
-            process_name: self.config.process_name.clone(),
-            exclude_tags: self.config.exclude_tags.clone(),
-            include_tags: self.config.include_tags.clone(),
-            min_level: self.config.min_level.clone(),
-        };
-        let (event_tx, event_rx) = mpsc::channel::<NativeLogEvent>(256);
+        let config = self.config.clone();
+        let (event_tx, event_rx) = mpsc::channel::<NativeLogEvent>(super::EVENT_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let task_handle = tokio::spawn(async move {
@@ -368,40 +352,48 @@ mod tests {
         assert!(parse_syslog_line("Timestamp                       Thread     Type        Activity             PID    TTL").is_none());
     }
 
+    /// Valid levels accepted by `log stream --level`: "default", "info", "debug".
+    /// Any other value (e.g., "error", "warning") is rejected by the tool.
     #[test]
-    fn test_should_include_tag_no_filter_passes_all() {
-        let config = MacOsLogConfig {
-            process_name: "my_app".into(),
-            exclude_tags: vec![],
-            include_tags: vec![],
-            min_level: "info".into(),
-        };
-        assert!(should_include_tag(&config, "anything"));
-    }
+    fn test_build_log_stream_command_uses_valid_levels() {
+        let valid_log_stream_levels = ["default", "info", "debug"];
 
-    #[test]
-    fn test_should_include_tag_exclude_filter() {
-        let config = MacOsLogConfig {
-            process_name: "my_app".into(),
-            exclude_tags: vec!["Flutter".into()],
-            include_tags: vec![],
-            min_level: "info".into(),
-        };
-        assert!(!should_include_tag(&config, "flutter"));
-        assert!(should_include_tag(&config, "GoLog"));
-    }
+        let test_cases = [
+            ("verbose", "debug"),
+            ("debug", "debug"),
+            ("info", "info"),
+            ("warning", "default"),
+            ("error", "default"),
+            ("fatal", "default"),
+            ("", "default"),
+            ("unknown", "default"),
+        ];
 
-    #[test]
-    fn test_should_include_tag_include_filter_overrides_exclude() {
-        let config = MacOsLogConfig {
-            process_name: "my_app".into(),
-            exclude_tags: vec!["Flutter".into()],
-            include_tags: vec!["GoLog".into()],
-            min_level: "info".into(),
-        };
-        assert!(should_include_tag(&config, "GoLog"));
-        assert!(!should_include_tag(&config, "Flutter"));
-        assert!(!should_include_tag(&config, "other"));
+        for (min_level, expected_level) in test_cases {
+            let config = MacOsLogConfig {
+                process_name: "test_app".into(),
+                exclude_tags: vec![],
+                include_tags: vec![],
+                min_level: min_level.to_string(),
+            };
+            let cmd = build_log_stream_command(&config);
+            let args: Vec<_> = cmd.as_std().get_args().collect();
+            let args_str: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
+
+            // Find --level argument and the value that follows it
+            let level_pos = args_str.iter().position(|&a| a == "--level");
+            let level_pos = level_pos.expect("--level arg must be present");
+            let actual_level = args_str[level_pos + 1];
+
+            assert!(
+                valid_log_stream_levels.contains(&actual_level),
+                "min_level={min_level:?} produced invalid log stream level {actual_level:?}"
+            );
+            assert_eq!(
+                actual_level, expected_level,
+                "min_level={min_level:?} should map to {expected_level:?}, got {actual_level:?}"
+            );
+        }
     }
 
     #[test]

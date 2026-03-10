@@ -600,18 +600,7 @@ impl NativeLogsSettings {
     ///
     /// Tag matching is case-insensitive.
     pub fn should_include_tag(&self, tag: &str) -> bool {
-        if !self.include_tags.is_empty() {
-            // Whitelist mode: only show tags in include_tags
-            return self
-                .include_tags
-                .iter()
-                .any(|t| t.eq_ignore_ascii_case(tag));
-        }
-        // Blacklist mode: show all tags except those in exclude_tags
-        !self
-            .exclude_tags
-            .iter()
-            .any(|t| t.eq_ignore_ascii_case(tag))
+        fdemon_daemon::native_logs::should_include_tag(&self.include_tags, &self.exclude_tags, tag)
     }
 }
 

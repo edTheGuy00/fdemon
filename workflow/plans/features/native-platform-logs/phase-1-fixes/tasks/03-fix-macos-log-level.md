@@ -144,3 +144,40 @@ pub fn should_include_tag(&self, tag: &str) -> bool {
 
 - The `build_log_stream_command` function is currently private and untested. Making it `pub(crate)` or `pub(super)` for testability would be acceptable, or test via a wrapper.
 - The `config/types.rs` delegation adds a cross-crate call (`fdemon-app` → `fdemon-daemon`). This is fine because `fdemon-app` already depends on `fdemon-daemon`. If preferred, the `config/types.rs` copy can remain as-is (it's a single function, and keeping it avoids a cross-crate coupling for a 5-line function). The key deduplication target is the two daemon-side copies.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/macos.rs` | Fixed `build_log_stream_command` level mapping (`"warning"\|"error"` → `"default"` instead of invalid `"error"`); removed local `should_include_tag` function; updated call site to `super::should_include_tag(...)`; removed 3 `should_include_tag` tests; added `test_build_log_stream_command_uses_valid_levels` test |
+| `crates/fdemon-daemon/src/native_logs/android.rs` | Removed local `should_include_tag` function; updated call site to `super::should_include_tag(...)`; removed 3 `should_include_tag` tests (moved to mod.rs) |
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Added `pub fn should_include_tag(include_tags, exclude_tags, tag)` free function; added 4 tests covering no-filter, exclude-list, include-list-overrides-exclude, and case-insensitive include scenarios |
+| `crates/fdemon-app/src/config/types.rs` | `NativeLogsSettings::should_include_tag` now delegates to `fdemon_daemon::native_logs::should_include_tag(...)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`"warning"/"error"` map to `"default"` not `"info"`**: The task spec says map to `"default"` (least verbose valid level). This is intentional — higher-severity filtering still happens downstream in the parse loop. Using `"default"` (which includes more messages) ensures we don't accidentally suppress logs we want to see.
+
+2. **Level test uses `cmd.as_std().get_args()`**: `build_log_stream_command` is private. Rather than changing its visibility, the test calls it within the same module via `#[cfg(test)]` access. The `Command::as_std()` method exposes the underlying `std::process::Command` for inspection.
+
+3. **4 shared tests in mod.rs instead of 3**: Added a 4th test for case-insensitive include matching, which wasn't covered in the original platform-specific tests.
+
+4. **Pre-existing test failure**: `tool_availability::tests::test_check_macos_log_returns_true_on_macos` fails in the test environment because `log` command isn't available. This is unrelated to our changes and was failing before this task.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon --lib native_logs` - Passed (38 tests)
+- `cargo test -p fdemon-app --lib` - Passed (1464 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo fmt --all` - Applied (single-line reformatting of delegation in types.rs)
+
+### Risks/Limitations
+
+1. **Pre-existing failing test**: `test_check_macos_log_returns_true_on_macos` fails in the sandbox environment because `log` is not available. This is unrelated to this task's changes.

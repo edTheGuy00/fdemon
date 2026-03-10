@@ -288,9 +288,24 @@ pub fn maybe_start_native_log_capture(
         if let Some(handle) = state.session_manager.get(session_id) {
             let platform = &handle.session.platform;
 
+            // Guard: skip if the required tool is not installed on this host.
+            if !state.tool_availability.native_logs_available(platform) {
+                tracing::debug!(
+                    "Native log capture skipped for {}: tools not available",
+                    platform
+                );
+                return None;
+            }
+
+            // Guard: don't start a second capture if one is already running
+            // (prevents double-start on repeated AppStart, e.g. hot-restart).
+            if handle.native_log_shutdown_tx.is_some() {
+                return None;
+            }
+
             // Only Android and macOS need a separate capture process.
             let needs_capture =
-                platform == "android" || cfg!(target_os = "macos") && platform == "macos";
+                platform == "android" || (cfg!(target_os = "macos") && platform == "macos");
 
             if needs_capture {
                 return Some(UpdateAction::StartNativeLogCapture {

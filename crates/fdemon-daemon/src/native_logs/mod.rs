@@ -21,6 +21,11 @@ use fdemon_core::LogLevel;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 
+/// Capacity of the mpsc channel used to forward native log events from the
+/// capture task to the TEA message loop. 256 provides headroom for bursty
+/// log output without blocking the capture loop.
+pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 256;
+
 /// A single log line captured from a native platform log source.
 #[derive(Debug, Clone)]
 pub struct NativeLogEvent {
@@ -65,6 +70,7 @@ pub trait NativeLogCapture: Send + Sync {
 }
 
 /// Configuration for Android logcat capture.
+#[derive(Clone)]
 pub struct AndroidLogConfig {
     /// The ADB device serial (e.g., "emulator-5554", "R5CT200QFLJ").
     /// Passed as `adb -s <serial>`.
@@ -82,6 +88,7 @@ pub struct AndroidLogConfig {
 
 /// Configuration for macOS `log stream` capture.
 #[cfg(target_os = "macos")]
+#[derive(Clone)]
 pub struct MacOsLogConfig {
     /// Process name to filter by (e.g., `"my_flutter_app"`).
     pub process_name: String,
@@ -91,6 +98,19 @@ pub struct MacOsLogConfig {
     pub include_tags: Vec<String>,
     /// Minimum log level for `log stream --level` (e.g., `"debug"`, `"info"`).
     pub min_level: String,
+}
+
+/// Decide whether a tag should be included based on include/exclude tag lists.
+///
+/// - If `include_tags` is non-empty, only those tags pass (whitelist mode).
+/// - Otherwise, any tag not in `exclude_tags` passes (blacklist mode).
+///
+/// Tag matching is case-insensitive.
+pub fn should_include_tag(include_tags: &[String], exclude_tags: &[String], tag: &str) -> bool {
+    if !include_tags.is_empty() {
+        return include_tags.iter().any(|t| t.eq_ignore_ascii_case(tag));
+    }
+    !exclude_tags.iter().any(|t| t.eq_ignore_ascii_case(tag))
 }
 
 /// Create the appropriate native log capture backend for the given platform.
@@ -119,6 +139,38 @@ pub fn create_native_log_capture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_should_include_tag_no_filters_passes_all() {
+        assert!(should_include_tag(&[], &[], "anything"));
+        assert!(should_include_tag(&[], &[], "flutter"));
+    }
+
+    #[test]
+    fn test_should_include_tag_exclude_list() {
+        let exclude = vec!["flutter".to_string()];
+        assert!(!should_include_tag(&[], &exclude, "flutter"));
+        assert!(!should_include_tag(&[], &exclude, "Flutter")); // case-insensitive
+        assert!(should_include_tag(&[], &exclude, "GoLog"));
+    }
+
+    #[test]
+    fn test_should_include_tag_include_list_overrides_exclude() {
+        let include = vec!["GoLog".to_string()];
+        let exclude = vec!["flutter".to_string()];
+        assert!(should_include_tag(&include, &exclude, "GoLog"));
+        assert!(!should_include_tag(&include, &exclude, "OkHttp"));
+        // include_tags is non-empty so exclude_tags is bypassed
+        assert!(!should_include_tag(&include, &exclude, "flutter"));
+    }
+
+    #[test]
+    fn test_should_include_tag_case_insensitive_include() {
+        let include = vec!["GoLog".to_string()];
+        assert!(should_include_tag(&include, &[], "golog"));
+        assert!(should_include_tag(&include, &[], "GOLOG"));
+        assert!(!should_include_tag(&include, &[], "OkHttp"));
+    }
 
     #[test]
     fn test_native_log_event_construction() {

@@ -1964,6 +1964,19 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     handle.native_log_task_handle = slot.take();
                 }
                 tracing::debug!("Native log capture started for session {}", session_id);
+            } else {
+                // Session was closed before capture started — shut down the
+                // orphaned task so it does not run indefinitely.
+                let _ = shutdown_tx.send(true);
+                if let Ok(mut slot) = task_handle.lock() {
+                    if let Some(h) = slot.take() {
+                        h.abort();
+                    }
+                }
+                tracing::debug!(
+                    "Native log capture arrived for closed session {} — shutting down",
+                    session_id
+                );
             }
             UpdateResult::none()
         }

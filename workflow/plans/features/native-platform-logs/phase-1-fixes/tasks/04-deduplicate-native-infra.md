@@ -135,3 +135,32 @@ No new tests needed — these are refactoring changes with identical runtime beh
 
 - Both changes are purely mechanical and safe. The `Clone` derive is idiomatic Rust and eliminates a maintenance hazard (forgetting to clone a new field produces a compile error with derive, but the manual approach would silently miss it too — both are safe, but derive is shorter and more conventional).
 - The `EVENT_CHANNEL_CAPACITY` value of 256 is suitable for both platforms. If platform-specific tuning is needed later, the constant can be split back.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Added `pub(crate) const EVENT_CHANNEL_CAPACITY: usize = 256;` with doc comment; added `#[derive(Clone)]` to `AndroidLogConfig`; added `#[derive(Clone)]` to `MacOsLogConfig` |
+| `crates/fdemon-daemon/src/native_logs/android.rs` | Removed local `const EVENT_CHANNEL_CAPACITY`; updated channel creation to use `super::EVENT_CHANNEL_CAPACITY`; replaced 5-field manual clone block with `self.config.clone()` |
+| `crates/fdemon-daemon/src/native_logs/macos.rs` | Updated channel creation from hardcoded `256` to `super::EVENT_CHANNEL_CAPACITY`; replaced 4-field manual clone block with `self.config.clone()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[derive(Clone)]` placement relative to `#[cfg(target_os = "macos")]`**: The `#[cfg]` attribute goes first, then `#[derive(Clone)]`, matching the original attribute ordering convention (`#[cfg]` gates the entire item including its derives).
+2. **No behavior change**: The refactoring is purely mechanical. Channel capacity value remains 256 on both platforms; clone semantics are identical.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon --lib` - Passed (499 passed, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: Both changes are safe, purely mechanical refactors. The `Clone` derive compiles identically to the manual field-by-field clone for all current fields.
