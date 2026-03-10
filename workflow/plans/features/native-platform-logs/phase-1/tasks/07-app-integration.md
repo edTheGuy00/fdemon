@@ -447,4 +447,47 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `NativeLog`, `NativeLogCaptureStarted`, `NativeLogCaptureStopped` variants; imported `NativeLogEvent` from `fdemon_daemon` |
+| `crates/fdemon-app/src/session/handle.rs` | Added `native_log_shutdown_tx`, `native_log_task_handle` fields; added `shutdown_native_logs()` method; updated `new()` and `Debug` impl |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::StartNativeLogCapture` variant with `settings: NativeLogsSettings` payload |
+| `crates/fdemon-app/src/handler/session.rs` | Added `maybe_start_native_log_capture()` function; added `shutdown_native_logs()` call on process exit and app stop |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Added `shutdown_native_logs()` call in `handle_close_current_session` |
+| `crates/fdemon-app/src/handler/daemon.rs` | Wired `maybe_start_native_log_capture` into `Stdout` and `Message` event paths after state mutation |
+| `crates/fdemon-app/src/handler/update.rs` | Added handlers for `NativeLog`, `NativeLogCaptureStarted`, `NativeLogCaptureStopped` messages |
+| `crates/fdemon-app/src/actions/native_logs.rs` | NEW — `spawn_native_log_capture()`, `resolve_android_pid()`, `derive_macos_process_name()`, tests |
+| `crates/fdemon-app/src/actions/mod.rs` | Registered `native_logs` module; added `StartNativeLogCapture` dispatch arm |
+
+### Notable Decisions/Tradeoffs
+
+1. **Settings in action payload**: Rather than threading `AppState` through `handle_action`, the `NativeLogsSettings` snapshot is embedded in `UpdateAction::StartNativeLogCapture`. This keeps the action dispatcher stateless and matches the existing pattern for `performance_refresh_ms` etc.
+
+2. **`SharedTaskHandle` pattern for `NativeLogCaptureStarted`**: `JoinHandle<()>` doesn't implement `Clone`, so `task_handle` is wrapped in `Arc<Mutex<Option<>>>` (same as `VmServicePerformanceMonitoringStarted` / `SharedTaskHandle` type alias). The handler takes the handle out of the `Option`.
+
+3. **AppStart action trigger via `maybe_start_native_log_capture`**: Follows the same pattern as `maybe_connect_vm_service` — called after `handle_session_stdout`/`handle_session_message_state` mutates state, so `session.app_id` is already set when we build the action.
+
+4. **Platform guard in two places**: `maybe_start_native_log_capture` guards on Android/macOS, AND `spawn_native_log_capture` repeats the guard as defense-in-depth. This prevents accidental captures even if the action is dispatched for unexpected platforms.
+
+5. **cfg-gated macOS check in `maybe_start_native_log_capture`**: Uses `cfg!(target_os = "macos") && platform == "macos"` so that on Linux/Windows, the check compiles to `false && ...` and no dead code is generated.
+
+6. **Shutdown in three places**: Process exited, app stopped (AppStop event), and session closed all call `shutdown_native_logs()`, matching the existing pattern for VM/perf/network shutdown handles.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 errors, 0 warnings)
+- `cargo test -p fdemon-app --lib` - Passed (1464 tests, 0 failed)
+- `cargo test -p fdemon-app native_logs` - Passed (11 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+- Pre-existing snapshot failures in `fdemon-tui` (version string mismatch `v0.1.0` vs `v0.2.1`) confirmed unrelated to this task
+
+### Risks/Limitations
+
+1. **PID changes on hot restart**: Native log capture starts once after `AppStart` with the initial PID. On hot restart, the PID changes and the old logcat process gets EOF. A new `AppStart` event will trigger a new capture. This is documented in the task notes as an accepted Phase 1 limitation.
+
+2. **Double parse for AppStart in Stdout path**: The `DaemonEvent::Stdout` arm calls `parse_daemon_message` twice (once to check for AppDebugPort, once to check for AppStart). This is a minor inefficiency but consistent with the existing pattern and not on a hot path.

@@ -31,7 +31,7 @@ pub use settings::{
 // Re-export public config types used by TUI and other crates
 pub use types::{
     BehaviorSettings, ConfigSource, DapSettings, DevToolsLoggingSettings, DevToolsSettings,
-    EditorSettings, FlutterMode, IconMode, LaunchConfig, LaunchFile, ParentIde,
+    EditorSettings, FlutterMode, IconMode, LaunchConfig, LaunchFile, NativeLogsSettings, ParentIde,
     ResolvedLaunchConfig, SettingItem, SettingValue, Settings, SettingsTab, UiSettings,
     UserPreferences, WatcherSettings, WindowPrefs,
 };

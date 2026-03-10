@@ -58,15 +58,15 @@ Wave 4:            ▼
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-core-types](tasks/01-core-types.md) | Not Started | - | `fdemon-core/src/types.rs` |
-| 2 | [02-native-log-config](tasks/02-native-log-config.md) | Not Started | - | `fdemon-app/src/config/types.rs`, `settings.rs` |
-| 3 | [03-tool-availability](tasks/03-tool-availability.md) | Not Started | - | `fdemon-daemon/src/tool_availability.rs` |
-| 4 | [04-shared-native-infra](tasks/04-shared-native-infra.md) | Not Started | 1 | `fdemon-daemon/src/native_logs/mod.rs` |
-| 5 | [05-android-logcat](tasks/05-android-logcat.md) | Not Started | 4 | `fdemon-daemon/src/native_logs/android.rs` |
-| 6 | [06-macos-log-stream](tasks/06-macos-log-stream.md) | Not Started | 4 | `fdemon-daemon/src/native_logs/macos.rs` |
-| 7 | [07-app-integration](tasks/07-app-integration.md) | Not Started | 1, 2, 3, 4, 5, 6 | `fdemon-app/src/` (message, handler, actions, session) |
-| 8 | [08-tui-rendering](tasks/08-tui-rendering.md) | Not Started | 1 | `fdemon-tui/src/theme/palette.rs`, `widgets/log_view/mod.rs` |
-| 9 | [09-example-app-native-logs](tasks/09-example-app-native-logs.md) | Not Started | - | `example/app2/` (Kotlin, Swift, Dart) |
+| 1 | [01-core-types](tasks/01-core-types.md) | Done | - | `fdemon-core/src/types.rs` |
+| 2 | [02-native-log-config](tasks/02-native-log-config.md) | Done | - | `fdemon-app/src/config/types.rs`, `settings.rs` |
+| 3 | [03-tool-availability](tasks/03-tool-availability.md) | Done | - | `fdemon-daemon/src/tool_availability.rs` |
+| 4 | [04-shared-native-infra](tasks/04-shared-native-infra.md) | Done | 1 | `fdemon-daemon/src/native_logs/mod.rs` |
+| 5 | [05-android-logcat](tasks/05-android-logcat.md) | Done | 4 | `fdemon-daemon/src/native_logs/android.rs` |
+| 6 | [06-macos-log-stream](tasks/06-macos-log-stream.md) | Done | 4 | `fdemon-daemon/src/native_logs/macos.rs` |
+| 7 | [07-app-integration](tasks/07-app-integration.md) | Done | 1, 2, 3, 4, 5, 6 | `fdemon-app/src/` (message, handler, actions, session) |
+| 8 | [08-tui-rendering](tasks/08-tui-rendering.md) | Done | 1 | `fdemon-tui/src/theme/palette.rs`, `widgets/log_view/mod.rs` |
+| 9 | [09-example-app-native-logs](tasks/09-example-app-native-logs.md) | Done | - | `example/app2/` (Kotlin, Swift, Dart) |
 
 ## Execution Plan
 

@@ -19,6 +19,7 @@ use super::spawn;
 pub(super) mod session;
 
 pub(super) mod inspector;
+pub(super) mod native_logs;
 pub(super) mod network;
 pub(super) mod performance;
 pub(super) mod vm_service;
@@ -582,6 +583,26 @@ pub fn handle_action(
                     warn!("dap_debug_senders lock poisoned: {}", e);
                 }
             }
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Native Platform Log Capture (Phase 1, Task 07)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::StartNativeLogCapture {
+            session_id,
+            platform,
+            device_id,
+            app_id,
+            settings,
+        } => {
+            native_logs::spawn_native_log_capture(
+                session_id,
+                platform,
+                device_id,
+                app_id,
+                &settings,
+                msg_tx.clone(),
+            );
         }
 
         // ─────────────────────────────────────────────────────────────────────

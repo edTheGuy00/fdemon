@@ -258,4 +258,34 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/types.rs` | Added `LogSource::Native { tag: String }` variant; removed `Copy` derive from `LogSource` (String is not Copy); changed `prefix()` return type from `&'static str` to `&str`; added `LogSourceFilter::Native` variant with updated `cycle()`, `matches()`, `display_name()`; added `NativeLogPriority` enum with `to_log_level()`, `from_logcat_char()`, `from_macos_level()` methods; updated existing test `test_source_filter_cycle` and `test_source_filter_display_names`; added 10 new tests |
+| `crates/fdemon-core/src/lib.rs` | Exported `NativeLogPriority` from crate root |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Changed `source_style(source: LogSource)` to `source_style(source: &LogSource)`; added `LogSource::Native { .. }` arm with placeholder `palette::ACCENT` color; updated call site to pass `&entry.source` |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Updated `test_source_styles_are_distinct` to pass references to `source_style` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed `Copy` from `LogSource`**: Adding `Native { tag: String }` makes `LogSource` non-`Copy` since `String` is heap-allocated. All call sites using `entry.source` by value were updated to use references. The `PartialEq` and `Clone` derives are unaffected.
+2. **`prefix()` return type changed from `&'static str` to `&str`**: The `Native` variant must return `tag.as_str()` whose lifetime is tied to `&self`, not `'static`. All call sites use the result in `format!()` or `.len()`, so no callers break.
+3. **Placeholder color for `Native` in TUI**: Used `palette::ACCENT` as the temporary color for `LogSource::Native` in `source_style()`. The task notes specify task 08 will set the final color.
+4. **`NativeLogPriority` is `Copy`**: Unlike `LogSource::Native`, the `NativeLogPriority` enum has no heap-allocated fields and can be `Copy` for ergonomic usage.
+
+### Testing Performed
+
+- `cargo check -p fdemon-core` - Passed
+- `cargo test -p fdemon-core` - Passed (367 tests: 357 pre-existing + 10 new)
+- `cargo clippy -p fdemon-core -- -D warnings` - Passed (zero warnings)
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed (zero warnings)
+- `cargo test -p fdemon-tui --lib -- widgets::log_view` - Passed (84 tests)
+
+### Risks/Limitations
+
+1. **Pre-existing snapshot test failures**: The workspace has 4 pre-existing snapshot test failures in `fdemon-tui::render::tests` related to a version string mismatch (`v0.1.0` vs `v0.2.1`). These are unrelated to this task and existed before these changes.
+2. **`Native` color is placeholder**: The `palette::ACCENT` color for native logs in the TUI is a temporary placeholder. Task 08 should assign a distinct color to make native logs visually distinguishable.

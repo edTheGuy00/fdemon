@@ -392,4 +392,35 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/android.rs` | Replaced stub `todo!()` with full implementation: `LogcatLine` struct, `parse_threadtime_line()`, `logcat_line_to_event()`, `should_include_tag()`, `parse_min_priority()`, `build_logcat_command()`, `run_logcat_capture()`, `AndroidLogCapture::spawn()`, and 15 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`std::sync::LazyLock` for regex**: Used `std::sync::LazyLock` (Rust 1.80+) for the static compiled regex, consistent with existing usage in `avds.rs`. The project runs Rust 1.91.1 so this is safe.
+
+2. **Priority comparison via `severity()`**: The task spec draft used `as u8` cast on `LogLevel`, but `LogLevel` doesn't implement `as u8`. Used `LogLevel::severity()` instead (the existing method for numeric severity comparison), which is semantically identical.
+
+3. **`AndroidLogConfig` clone in `spawn()`**: `AndroidLogConfig` does not derive `Clone`, so each field is cloned individually in `spawn()` to move into the async task. This is the minimal approach without modifying shared infrastructure.
+
+4. **Channel capacity constant**: Named `EVENT_CHANNEL_CAPACITY = 256` to avoid a magic number per code standards.
+
+5. **No crash recovery / restart loop**: The task spec does not require restart-on-exit. The capture loop exits on EOF and the caller (task 07, app layer) is responsible for restarting if needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (499 passed, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+- `cargo fmt -p fdemon-daemon` - Applied minor formatting, re-check passed
+
+### Risks/Limitations
+
+1. **`adb` must be in PATH**: `build_logcat_command` hard-codes `"adb"` as the binary name. If `adb` is not on the system PATH, `spawn()` will return `Some(handle)` but the background task will immediately log a warning and exit. The caller layer (task 07) is expected to gate on `ToolAvailability.adb` before calling `spawn()`.
+
+2. **Non-UTF-8 output**: `BufReader::lines()` returns an `io::Error` for invalid UTF-8 bytes, which breaks the loop. Lossy UTF-8 handling is noted in the task spec as a future iteration.

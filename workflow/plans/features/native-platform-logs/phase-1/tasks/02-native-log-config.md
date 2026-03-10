@@ -203,4 +203,29 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `NativeLogsSettings` struct with `enabled`, `exclude_tags`, `include_tags`, `min_level` fields; `Default` impl; `should_include_tag()` method; `native_logs: NativeLogsSettings` field added to `Settings` struct; 6 unit tests added to the existing test module |
+| `crates/fdemon-app/src/config/mod.rs` | Added `NativeLogsSettings` to the `pub use types::{...}` re-export block |
+| `crates/fdemon-app/src/config/settings.rs` | Added `[native_logs]` commented-out section to the default TOML template in `init_config_dir()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **String `min_level` field**: Stored as `String` rather than `NativeLogPriority` enum to avoid a premature dependency from `fdemon-app/config` on a core type that doesn't exist yet (task 01). The consumer (task 07) will parse this string at runtime.
+2. **Placement in `types.rs`**: `NativeLogsSettings` is placed after `DapSettings` and before `ParentIde`, consistent with the top-to-bottom progression of settings structs in that file. A section separator comment matching the existing style was added.
+3. **Re-use of `default_true`**: The existing `default_true` helper was intentionally NOT reused for `default_native_logs_enabled` to keep each default function self-contained and avoid coupling — consistent with how other settings structs define their own private helpers.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1,458 unit tests, 0 failed; includes 6 new `NativeLogsSettings` tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`min_level` is not validated at parse time**: An invalid string like `"critical"` will deserialize without error. Validation happens at the consumer layer (task 07). This is an intentional deferral per the task notes.
+2. **No integration with existing settings UI**: The new `native_logs` section is not yet wired into the settings panel (`SettingItem` list). That is out of scope for this task.

@@ -384,4 +384,38 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/macos.rs` | Replaced stub with full implementation: `SYSLOG_RE` regex, `SyslogLine` struct, `parse_syslog_line()`, `derive_tag()`, `syslog_line_to_event()`, `should_include_tag()`, `build_log_stream_command()`, `run_log_stream_capture()` async task, `MacOsLogCapture` struct + `NativeLogCapture` impl, and 14 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Entire file under macOS cfg gate**: The module declaration in `mod.rs` already gates the entire file with `#[cfg(target_os = "macos")]`, so individual items within the file don't need explicit `#[cfg]` attributes. This matches the task's requirement while keeping the file cleaner.
+
+2. **`MacOsLogConfig` clone via field-by-field copy**: `MacOsLogConfig` doesn't derive `Clone` (it was not added in task 04). The `spawn()` method clones the config into the async task by constructing a new `MacOsLogConfig` from each field individually. This avoids needing to modify the shared infrastructure.
+
+3. **Named constant for header lines**: `LOG_STREAM_HEADER_LINES: usize = 2` replaces the magic number `2` in the loop, following the code standards requirement for named constants.
+
+4. **`LazyLock` without `#[cfg]` attribute on static**: Since the entire file is cfg-gated, the `SYSLOG_RE` static doesn't need its own `#[cfg]` attribute — it is only compiled on macOS.
+
+5. **Tag derivation duplicated in loop**: `derive_tag()` is called twice in `run_log_stream_capture` (once for tag filtering, once inside `syslog_line_to_event()`). This is a minor inefficiency accepted in exchange for keeping `syslog_line_to_event()` a clean pure function matching the spec.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon -- native_logs::macos` — Passed (14 tests)
+- `cargo test -p fdemon-daemon` — Passed (483 tests, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed
+- `cargo fmt --all && cargo check --workspace` — Passed
+
+### Risks/Limitations
+
+1. **Syslog format variation**: The regex was derived from the documented format. Real-world macOS log output may vary across macOS versions (13/14/15) or when process names contain special characters. The regex is well-tested against the documented format but not against live `log stream` output.
+
+2. **Header line count**: The counter-based approach skips exactly 2 lines. If `log stream` emits extra diagnostic lines before data (e.g., for permission issues), those would be silently consumed. A more robust approach would be checking that each line starts with a timestamp pattern.
+
+3. **`MacOsLogConfig` lacks `Clone`**: The spawn method copies field-by-field. If `MacOsLogConfig` gains new fields in future tasks, the copy in `spawn()` will cause a compilation error, which is a safe failure mode (won't silently drop fields).

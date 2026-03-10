@@ -528,6 +528,9 @@ mod tests {
             xcrun_simctl: true,
             android_emulator: false,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
         };
 
         let backend = TestBackend::new(50, 20);

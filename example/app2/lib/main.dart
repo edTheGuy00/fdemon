@@ -13,6 +13,7 @@ import 'package:talker_flutter/talker_flutter.dart';
 import 'logging/mixed_loggers.dart';
 import 'errors/flutter_errors.dart';
 import 'networking/http_requests.dart';
+import 'native_logs/native_log_demo.dart';
 
 final logger = Logger(printer: PrettyPrinter(methodCount: 3));
 final talker = TalkerFlutter.init();
@@ -173,6 +174,10 @@ class _Sample2TestPageState extends State<Sample2TestPage> {
               }
             }),
           ]),
+          Card(
+            margin: const EdgeInsets.only(bottom: 16),
+            child: const NativeLogDemoPage(),
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton(

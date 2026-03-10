@@ -160,6 +160,9 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
                     current_session_id
                 );
             }
+
+            // Shut down the native log capture task (if running).
+            handle.shutdown_native_logs();
         }
 
         if let Some((app_id, cmd_sender_opt)) = session_info {

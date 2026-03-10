@@ -394,6 +394,26 @@ pub enum UpdateAction {
         /// When `None`, the IDE is auto-detected from the environment.
         ide_override: Option<crate::config::ParentIde>,
     },
+
+    /// Start native platform log capture for a session (after AppStarted).
+    ///
+    /// Dispatched by the TEA handler when a `DaemonMessage::AppStart` is
+    /// received for an Android or macOS session. The `platform` field
+    /// determines which capture backend is used. Linux/Windows/Web sessions
+    /// are silently ignored by the action dispatcher.
+    StartNativeLogCapture {
+        /// The session to capture logs for.
+        session_id: SessionId,
+        /// Platform string (e.g., `"android"`, `"macos"`).
+        platform: String,
+        /// ADB device serial (Android) or macOS device ID.
+        device_id: String,
+        /// Flutter app ID (package name / bundle ID) from the `app.start` event.
+        app_id: Option<String>,
+        /// Native log settings snapshot (captured at action creation time so
+        /// the action dispatcher does not need access to AppState).
+        settings: crate::config::NativeLogsSettings,
+    },
 }
 
 /// Background tasks to spawn

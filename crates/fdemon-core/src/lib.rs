@@ -89,7 +89,7 @@ pub use stack_trace::{
 };
 pub use types::{
     AppPhase, BootableDevice, DeviceState, FilterState, LogEntry, LogLevel, LogLevelFilter,
-    LogSource, LogSourceFilter, Platform, SearchMatch, SearchState,
+    LogSource, LogSourceFilter, NativeLogPriority, Platform, SearchMatch, SearchState,
 };
 pub use widget_tree::{
     BoxConstraints, CreationLocation, DiagnosticLevel, DiagnosticsNode, EdgeInsets, LayoutInfo,

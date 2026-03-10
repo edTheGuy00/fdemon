@@ -155,6 +155,9 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
             );
         }
 
+        // Shut down the native log capture task (if running).
+        handle.shutdown_native_logs();
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -215,6 +218,9 @@ pub fn handle_session_message_state(
                     let _ = tx.send(true);
                     tracing::info!("Sent network shutdown signal for session {}", session_id);
                 }
+
+                // Shut down the native log capture task (if running).
+                handle.shutdown_native_logs();
             }
         }
     }
@@ -252,6 +258,47 @@ pub fn maybe_connect_vm_service(
                 return Some(UpdateAction::ConnectVmService {
                     session_id,
                     ws_uri: debug_port.ws_uri.clone(),
+                });
+            }
+        }
+    }
+    None
+}
+
+/// Check if an `AppStart` event should trigger native platform log capture.
+///
+/// Returns `Some(StartNativeLogCapture)` when the message is an `AppStart` and
+/// the session's platform is `"android"` or `"macos"` (native log capture is
+/// only needed on these platforms — Linux/Windows/Web already surface native
+/// logs via Flutter's stdout pipe).
+///
+/// Returns `None` for non-`AppStart` messages, unsupported platforms, or when
+/// native logs are disabled in settings.
+pub fn maybe_start_native_log_capture(
+    state: &AppState,
+    session_id: SessionId,
+    msg: &DaemonMessage,
+) -> Option<UpdateAction> {
+    if let DaemonMessage::AppStart(app_start) = msg {
+        // Guard: only start if native logs are enabled.
+        if !state.settings.native_logs.enabled {
+            return None;
+        }
+
+        if let Some(handle) = state.session_manager.get(session_id) {
+            let platform = &handle.session.platform;
+
+            // Only Android and macOS need a separate capture process.
+            let needs_capture =
+                platform == "android" || cfg!(target_os = "macos") && platform == "macos";
+
+            if needs_capture {
+                return Some(UpdateAction::StartNativeLogCapture {
+                    session_id,
+                    platform: platform.clone(),
+                    device_id: handle.session.device_id.clone(),
+                    app_id: Some(app_start.app_id.clone()),
+                    settings: state.settings.native_logs.clone(),
                 });
             }
         }

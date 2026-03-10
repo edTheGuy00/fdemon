@@ -138,8 +138,8 @@ fn test_level_styles_are_distinct() {
 
 #[test]
 fn test_source_styles_are_distinct() {
-    let app_style = LogView::source_style(LogSource::App);
-    let flutter_style = LogView::source_style(LogSource::Flutter);
+    let app_style = LogView::source_style(&LogSource::App);
+    let flutter_style = LogView::source_style(&LogSource::Flutter);
 
     assert_ne!(app_style.fg, flutter_style.fg);
 }
@@ -1417,4 +1417,77 @@ fn test_status_bar_no_dap_with_ide_name_when_port_absent() {
         !term.buffer_contains("[DAP"),
         "No DAP badge should appear when dap_port is None, even if dap_config_ide is set"
     );
+}
+
+// ─────────────────────────────────────────────────────────
+// Native Source Styling Tests (Phase 1 - Task 08)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_source_style_native() {
+    let style = LogView::source_style(&LogSource::Native {
+        tag: "GoLog".into(),
+    });
+    assert_eq!(style.fg, Some(palette::SOURCE_NATIVE));
+}
+
+#[test]
+fn test_native_log_entry_prefix_rendering() {
+    let entry = LogEntry::new(
+        LogLevel::Info,
+        LogSource::Native {
+            tag: "GoLog".into(),
+        },
+        "Hello from Go".to_string(),
+    );
+    assert_eq!(entry.source.prefix(), "GoLog");
+    // format_entry renders this as "[GoLog] Hello from Go"
+}
+
+#[test]
+fn test_native_log_entry_long_tag() {
+    let entry = LogEntry::new(
+        LogLevel::Debug,
+        LogSource::Native {
+            tag: "com.example.myplugin.logging".into(),
+        },
+        "verbose message".to_string(),
+    );
+    assert_eq!(entry.source.prefix(), "com.example.myplugin.logging");
+}
+
+#[test]
+fn test_source_style_existing_sources_unchanged() {
+    // Verify existing source styles haven't regressed
+    assert_eq!(
+        LogView::source_style(&LogSource::App).fg,
+        Some(palette::SOURCE_APP)
+    );
+    assert_eq!(
+        LogView::source_style(&LogSource::Daemon).fg,
+        Some(palette::SOURCE_DAEMON)
+    );
+    assert_eq!(
+        LogView::source_style(&LogSource::Flutter).fg,
+        Some(palette::SOURCE_FLUTTER)
+    );
+    assert_eq!(
+        LogView::source_style(&LogSource::FlutterError).fg,
+        Some(palette::SOURCE_FLUTTER_ERROR)
+    );
+    assert_eq!(
+        LogView::source_style(&LogSource::Watcher).fg,
+        Some(palette::SOURCE_WATCHER)
+    );
+}
+
+#[test]
+fn test_native_source_color_is_distinct_from_others() {
+    // SOURCE_NATIVE must differ from all other source colors
+    assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_APP);
+    assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_DAEMON);
+    assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_FLUTTER);
+    assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_FLUTTER_ERROR);
+    assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_WATCHER);
+    assert_ne!(palette::SOURCE_NATIVE, palette::ACCENT);
 }

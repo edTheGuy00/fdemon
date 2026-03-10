@@ -77,6 +77,20 @@ pub struct SessionHandle {
     /// tasks. Initialized to `None`; set in Phase 2 when the DAP server
     /// spawns the per-session debug event forwarding task.
     pub debug_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Shutdown sender for the native platform log capture task.
+    ///
+    /// Sending `true` signals the native log capture forwarding task to stop.
+    /// Stored as `Arc` because the `Message` enum requires `Clone`.
+    /// Set by `NativeLogCaptureStarted`, cleared on session stop or capture exit.
+    pub native_log_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// JoinHandle for the native log capture forwarding task.
+    ///
+    /// Aborted on session close or app stop to prevent zombie capture tasks
+    /// from continuing after the session has ended. Set by `NativeLogCaptureStarted`,
+    /// cleared on session stop or capture exit.
+    pub native_log_task_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -93,6 +107,14 @@ impl std::fmt::Debug for SessionHandle {
             .field("has_network_task", &self.network_task_handle.is_some())
             .field("has_debug_shutdown", &self.debug_shutdown_tx.is_some())
             .field("has_debug_task", &self.debug_task_handle.is_some())
+            .field(
+                "has_native_log_shutdown",
+                &self.native_log_shutdown_tx.is_some(),
+            )
+            .field(
+                "has_native_log_task",
+                &self.native_log_task_handle.is_some(),
+            )
             .finish()
     }
 }
@@ -113,6 +135,25 @@ impl SessionHandle {
             network_task_handle: None,
             debug_shutdown_tx: None,
             debug_task_handle: None,
+            native_log_shutdown_tx: None,
+            native_log_task_handle: None,
+        }
+    }
+
+    /// Shut down the native platform log capture task (if running).
+    ///
+    /// Sends `true` on the shutdown channel to signal graceful stop, then
+    /// aborts the task as a fallback. Clears both fields on the handle.
+    pub fn shutdown_native_logs(&mut self) {
+        if let Some(tx) = self.native_log_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::debug!(
+                "Sent native log shutdown signal for session {}",
+                self.session.id
+            );
+        }
+        if let Some(handle) = self.native_log_task_handle.take() {
+            handle.abort();
         }
     }
 

@@ -167,4 +167,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/theme/palette.rs` | Added `SOURCE_NATIVE` constant (`Color::Rgb(206, 147, 216)`, light purple/lavender) in the log source colors section |
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Replaced placeholder `palette::ACCENT` in `LogSource::Native { .. }` match arm with `palette::SOURCE_NATIVE`; removed the placeholder comment |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added 5 new tests: `test_source_style_native`, `test_native_log_entry_prefix_rendering`, `test_native_log_entry_long_tag`, `test_source_style_existing_sources_unchanged`, `test_native_source_color_is_distinct_from_others` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`source_style()` already took `&LogSource`**: Task 01 had already updated the function signature from `LogSource` by-value to `&LogSource` reference, so no call-site changes were needed. The match arm with `LogSource::Native { .. }` was also already present as a placeholder using `palette::ACCENT`.
+
+2. **Color choice confirmed**: Used `Color::Rgb(206, 147, 216)` (light purple/lavender) as specified in the task. This is visually distinct from all existing source colors: green (App), yellow (Daemon), indigo (Flutter), red (FlutterError), blue (Watcher), and the `ACCENT` blue used by VmService.
+
+3. **Tests placed in `tests.rs`**: The log_view module uses a separate `tests.rs` file (declared via `mod tests;`), not inline `#[cfg(test)]`. New tests were appended with a matching section header following the existing convention.
+
+4. **Pre-existing snapshot test failures**: 4 snapshot tests in `render::tests` fail because snapshots contain `v0.1.0` while the package is now at `v0.2.1`. These failures are unrelated to this task and were present before any changes.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` - Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+- `cargo fmt --check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui native` - Passed (4/4 new tests)
+- `cargo test -p fdemon-tui test_source_style` - Passed (3/3 including new `test_source_style_native`)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui` - 800 passed, 4 failed (pre-existing snapshot version mismatch failures)
+
+### Risks/Limitations
+
+1. **Pre-existing snapshot failures**: The 4 render snapshot tests fail due to a version mismatch (`v0.1.0` in snapshots vs `v0.2.1` actual). These need to be updated separately with `cargo insta review` — they are not introduced by this task.

@@ -3217,6 +3217,9 @@ fn test_tool_availability_triggers_bootable_discovery() {
         xcrun_simctl: true,
         android_emulator: false,
         emulator_path: None,
+        adb: false,
+        #[cfg(target_os = "macos")]
+        macos_log: false,
     };
 
     let result = update(
@@ -3248,6 +3251,9 @@ fn test_no_tools_available_no_discovery() {
         xcrun_simctl: false,
         android_emulator: false,
         emulator_path: None,
+        adb: false,
+        #[cfg(target_os = "macos")]
+        macos_log: false,
     };
 
     let result = update(

@@ -246,4 +246,33 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | **NEW** — `NativeLogEvent`, `NativeLogHandle`, `NativeLogCapture` trait, `AndroidLogConfig`, `MacOsLogConfig` (cfg-gated), `create_native_log_capture` dispatch, 7 unit tests |
+| `crates/fdemon-daemon/src/native_logs/android.rs` | **NEW** — Stub `AndroidLogCapture` struct implementing `NativeLogCapture` (real impl in task 05) |
+| `crates/fdemon-daemon/src/native_logs/macos.rs` | **NEW** — Stub `MacOsLogCapture` struct implementing `NativeLogCapture` (real impl in task 06); cfg-gated to `target_os = "macos"` |
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod native_logs`; re-exported `NativeLogCapture`, `NativeLogEvent`, `NativeLogHandle`, `AndroidLogConfig`; cfg-gated re-export of `MacOsLogConfig`; updated module-level doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Stub with `todo!` instead of `None`**: Both `android.rs` and `macos.rs` stubs use `todo!("Implemented in task 05/06")` rather than returning `None`. This ensures task 05/06 authors will see a clear failure at runtime if the stub is accidentally invoked, rather than a silent `None` that would look like a "no-op" success. The task spec explicitly recommended this approach.
+2. **`todo!()` does not affect clippy or tests**: The `todo!()` macro compiles cleanly and does not trigger any clippy warnings. Tests only exercise `create_native_log_capture` by checking the dispatch returns `Some(...)` for Android — they do not call `.spawn()` on the returned backend, so `todo!()` is never reached.
+3. **`let _ = &self.config` in stubs**: Added to prevent dead-code warnings before the real implementations replace the stubs. Clippy clean.
+4. **`#[cfg(target_os = "macos")]` placement**: The entire `macos.rs` module and `MacOsLogConfig` struct are cfg-gated at the module level, matching the pattern from `tool_availability.rs`. The `create_native_log_capture` function signature uses an inline `#[cfg]` attribute on the `macos_config` parameter, exactly as specified by the task.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (469 unit tests, 3 ignored pre-existing)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (no warnings)
+- `cargo check --workspace` — Passed (all crates compile)
+- `cargo fmt --all` — Applied, then re-verified clean
+
+### Risks/Limitations
+
+1. **Stub `todo!()` panics at runtime**: The Android and macOS capture stubs will panic if `.spawn()` is called before tasks 05/06 replace the implementations. This is intentional — it makes incomplete wiring visible immediately rather than silently returning `None`. Task 07 (session integration) must not wire up `spawn()` until after tasks 05/06 are complete.
+2. **No `PartialEq` on config structs**: `AndroidLogConfig` and `MacOsLogConfig` do not derive `PartialEq` or `Debug` since the task spec did not require it. Tasks 05/06 can add these derives if needed for testing.

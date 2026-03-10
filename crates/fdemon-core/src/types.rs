@@ -226,7 +226,7 @@ impl LogLevelFilter {
 }
 
 /// Source of log messages
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LogSource {
     /// Application/system messages
     App,
@@ -240,10 +240,12 @@ pub enum LogSource {
     Watcher,
     /// VM Service / DevTools messages (structured logs, errors)
     VmService,
+    /// Native platform log (Android logcat, macOS unified logging) with arbitrary tag name
+    Native { tag: String },
 }
 
 impl LogSource {
-    pub fn prefix(&self) -> &'static str {
+    pub fn prefix(&self) -> &str {
         match self {
             LogSource::App => "app",
             LogSource::Daemon => "daemon",
@@ -251,6 +253,7 @@ impl LogSource {
             LogSource::FlutterError => "flutter",
             LogSource::Watcher => "watch",
             LogSource::VmService => "vm",
+            LogSource::Native { tag } => tag.as_str(),
         }
     }
 }
@@ -267,6 +270,8 @@ pub enum LogSourceFilter {
     Daemon,
     /// Show Flutter logs (includes Flutter and FlutterError)
     Flutter,
+    /// Show only native platform logs (Android logcat, macOS unified logging)
+    Native,
     /// Show only watcher logs
     Watcher,
 }
@@ -278,7 +283,8 @@ impl LogSourceFilter {
             LogSourceFilter::All => LogSourceFilter::App,
             LogSourceFilter::App => LogSourceFilter::Daemon,
             LogSourceFilter::Daemon => LogSourceFilter::Flutter,
-            LogSourceFilter::Flutter => LogSourceFilter::Watcher,
+            LogSourceFilter::Flutter => LogSourceFilter::Native,
+            LogSourceFilter::Native => LogSourceFilter::Watcher,
             LogSourceFilter::Watcher => LogSourceFilter::All,
         }
     }
@@ -295,6 +301,7 @@ impl LogSourceFilter {
                     LogSource::Flutter | LogSource::FlutterError | LogSource::VmService
                 )
             }
+            LogSourceFilter::Native => matches!(source, LogSource::Native { .. }),
             LogSourceFilter::Watcher => *source == LogSource::Watcher,
         }
     }
@@ -306,7 +313,71 @@ impl LogSourceFilter {
             LogSourceFilter::App => "App logs",
             LogSourceFilter::Daemon => "Daemon logs",
             LogSourceFilter::Flutter => "Flutter logs",
+            LogSourceFilter::Native => "Native logs",
             LogSourceFilter::Watcher => "Watcher logs",
+        }
+    }
+}
+
+/// Priority levels from native platform logging (Android logcat, macOS unified logging).
+/// Maps to the project's `LogLevel` for filtering and display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NativeLogPriority {
+    /// Verbose level (Android logcat 'V') — lowest priority
+    Verbose,
+    /// Debug level (Android logcat 'D')
+    Debug,
+    /// Informational level (Android logcat 'I')
+    Info,
+    /// Warning level (Android logcat 'W')
+    Warning,
+    /// Error level (Android logcat 'E')
+    Error,
+    /// Fatal level (Android logcat 'F') — highest priority
+    Fatal,
+}
+
+impl NativeLogPriority {
+    /// Map native priority to fdemon's `LogLevel`.
+    ///
+    /// This mapping is lossy by design: Verbose and Debug both map to `LogLevel::Debug`,
+    /// and Fatal maps to `LogLevel::Error` since fdemon has no distinct fatal level.
+    pub fn to_log_level(self) -> LogLevel {
+        match self {
+            Self::Verbose | Self::Debug => LogLevel::Debug,
+            Self::Info => LogLevel::Info,
+            Self::Warning => LogLevel::Warning,
+            Self::Error | Self::Fatal => LogLevel::Error,
+        }
+    }
+
+    /// Parse from Android logcat single-character priority code.
+    ///
+    /// Returns `None` for unrecognized characters.
+    pub fn from_logcat_char(c: char) -> Option<Self> {
+        match c {
+            'V' => Some(Self::Verbose),
+            'D' => Some(Self::Debug),
+            'I' => Some(Self::Info),
+            'W' => Some(Self::Warning),
+            'E' => Some(Self::Error),
+            'F' => Some(Self::Fatal),
+            _ => None,
+        }
+    }
+
+    /// Parse from macOS unified logging level string.
+    ///
+    /// Maps macOS-specific levels (`"default"`, `"notice"`, `"fault"`) to the
+    /// closest `NativeLogPriority` equivalent. Returns `None` for unrecognized strings.
+    pub fn from_macos_level(level: &str) -> Option<Self> {
+        match level.to_lowercase().as_str() {
+            "default" | "notice" => Some(Self::Info),
+            "info" => Some(Self::Info),
+            "debug" => Some(Self::Debug),
+            "error" => Some(Self::Error),
+            "fault" => Some(Self::Fatal),
+            _ => None,
         }
     }
 }
@@ -1047,6 +1118,8 @@ mod tests {
         f = f.cycle();
         assert_eq!(f, LogSourceFilter::Flutter);
         f = f.cycle();
+        assert_eq!(f, LogSourceFilter::Native);
+        f = f.cycle();
         assert_eq!(f, LogSourceFilter::Watcher);
         f = f.cycle();
         assert_eq!(f, LogSourceFilter::All); // wrap around
@@ -1061,6 +1134,9 @@ mod tests {
         assert!(filter.matches(&LogSource::FlutterError));
         assert!(filter.matches(&LogSource::VmService));
         assert!(filter.matches(&LogSource::Watcher));
+        assert!(filter.matches(&LogSource::Native {
+            tag: "GoLog".into()
+        }));
     }
 
     #[test]
@@ -1110,6 +1186,7 @@ mod tests {
         assert_eq!(LogSourceFilter::App.display_name(), "App logs");
         assert_eq!(LogSourceFilter::Daemon.display_name(), "Daemon logs");
         assert_eq!(LogSourceFilter::Flutter.display_name(), "Flutter logs");
+        assert_eq!(LogSourceFilter::Native.display_name(), "Native logs");
         assert_eq!(LogSourceFilter::Watcher.display_name(), "Watcher logs");
     }
 
@@ -1743,5 +1820,120 @@ mod tests {
     fn test_display_string() {
         let device = BootableDevice::new("id", "Pixel 8", Platform::Android, "API 34");
         assert_eq!(device.display_string(), "Pixel 8 (API 34)");
+    }
+
+    // NativeLogPriority and LogSource::Native tests
+
+    #[test]
+    fn test_native_log_source_prefix() {
+        let source = LogSource::Native {
+            tag: "GoLog".into(),
+        };
+        assert_eq!(source.prefix(), "GoLog");
+    }
+
+    #[test]
+    fn test_native_log_source_filter_cycle() {
+        assert_eq!(LogSourceFilter::Flutter.cycle(), LogSourceFilter::Native);
+        assert_eq!(LogSourceFilter::Native.cycle(), LogSourceFilter::Watcher);
+    }
+
+    #[test]
+    fn test_native_log_source_filter_matches() {
+        let native = LogSource::Native {
+            tag: "GoLog".into(),
+        };
+        assert!(LogSourceFilter::All.matches(&native));
+        assert!(LogSourceFilter::Native.matches(&native));
+        assert!(!LogSourceFilter::App.matches(&native));
+        assert!(!LogSourceFilter::Flutter.matches(&native));
+    }
+
+    #[test]
+    fn test_native_log_priority_from_logcat_char() {
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('V'),
+            Some(NativeLogPriority::Verbose)
+        );
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('D'),
+            Some(NativeLogPriority::Debug)
+        );
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('I'),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('W'),
+            Some(NativeLogPriority::Warning)
+        );
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('E'),
+            Some(NativeLogPriority::Error)
+        );
+        assert_eq!(
+            NativeLogPriority::from_logcat_char('F'),
+            Some(NativeLogPriority::Fatal)
+        );
+        assert_eq!(NativeLogPriority::from_logcat_char('X'), None);
+    }
+
+    #[test]
+    fn test_native_log_priority_to_log_level() {
+        assert_eq!(NativeLogPriority::Verbose.to_log_level(), LogLevel::Debug);
+        assert_eq!(NativeLogPriority::Debug.to_log_level(), LogLevel::Debug);
+        assert_eq!(NativeLogPriority::Info.to_log_level(), LogLevel::Info);
+        assert_eq!(NativeLogPriority::Warning.to_log_level(), LogLevel::Warning);
+        assert_eq!(NativeLogPriority::Error.to_log_level(), LogLevel::Error);
+        assert_eq!(NativeLogPriority::Fatal.to_log_level(), LogLevel::Error);
+    }
+
+    #[test]
+    fn test_native_log_priority_from_macos_level() {
+        assert_eq!(
+            NativeLogPriority::from_macos_level("debug"),
+            Some(NativeLogPriority::Debug)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("info"),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("default"),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("notice"),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("error"),
+            Some(NativeLogPriority::Error)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("fault"),
+            Some(NativeLogPriority::Fatal)
+        );
+        assert_eq!(NativeLogPriority::from_macos_level("unknown"), None);
+    }
+
+    #[test]
+    fn test_filter_state_matches_native() {
+        let native_entry = LogEntry::new(
+            LogLevel::Info,
+            LogSource::Native {
+                tag: "GoLog".into(),
+            },
+            "test message".to_string(),
+        );
+
+        let mut filter = FilterState::default();
+        assert!(filter.matches(&native_entry)); // All/All passes everything
+
+        filter.source_filter = LogSourceFilter::Native;
+        assert!(filter.matches(&native_entry));
+
+        filter.source_filter = LogSourceFilter::App;
+        assert!(!filter.matches(&native_entry));
     }
 }

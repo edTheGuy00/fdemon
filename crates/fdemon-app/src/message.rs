@@ -9,7 +9,7 @@ use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
-    IosSimulator, ToolAvailability,
+    IosSimulator, NativeLogEvent, ToolAvailability,
 };
 
 /// Shared, abort-able handle to a background task.
@@ -1108,4 +1108,43 @@ pub enum Message {
         /// What happened: `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
         action: String,
     },
+
+    // ─────────────────────────────────────────────────────────
+    // Native Platform Log Messages (Phase 1, Task 07)
+    // ─────────────────────────────────────────────────────────
+    /// A native platform log line was captured (from adb logcat, log stream, etc.).
+    ///
+    /// Sent by the native log capture forwarding task for each log event.
+    /// The update handler converts this to a `LogEntry` with
+    /// `LogSource::Native { tag }` and queues it on the session log buffer.
+    NativeLog {
+        session_id: SessionId,
+        event: NativeLogEvent,
+    },
+
+    /// Native log capture process started successfully for a session.
+    ///
+    /// Sent by `actions::native_logs::spawn_native_log_capture` immediately
+    /// after `NativeLogCapture::spawn()` succeeds. The TEA handler stores the
+    /// shutdown sender and task handle on the `SessionHandle` so they can be
+    /// signalled/aborted on session stop.
+    NativeLogCaptureStarted {
+        session_id: SessionId,
+        /// Shutdown sender — send `true` to signal the capture task to stop.
+        /// Stored as `Arc` because `Message` requires `Clone`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// JoinHandle for the capture forwarding task.
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out of the `Option` when
+        /// storing it on `SessionHandle`, leaving `None` for any subsequent
+        /// (unexpected) clone.
+        task_handle: SharedTaskHandle,
+    },
+
+    /// Native log capture process ended (exited or failed to start).
+    ///
+    /// Sent by the forwarding task when the capture process's event channel
+    /// closes (i.e., the capture process exited). The handler clears the
+    /// stored handles from `SessionHandle`.
+    NativeLogCaptureStopped { session_id: SessionId },
 }

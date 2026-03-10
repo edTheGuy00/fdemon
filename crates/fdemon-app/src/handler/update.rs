@@ -1927,6 +1927,56 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::DapClientConnected { .. }
         | Message::DapClientDisconnected { .. }
         | Message::DapConfigGenerated { .. } => dap::handle_dap_message(state, &message),
+
+        // ─────────────────────────────────────────────────────────
+        // Native Platform Log Messages (Phase 1, Task 07)
+        // ─────────────────────────────────────────────────────────
+
+        // A native log line was captured — convert to `LogEntry` and queue.
+        Message::NativeLog { session_id, event } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                let entry = fdemon_core::LogEntry::new(
+                    event.level,
+                    LogSource::Native { tag: event.tag },
+                    event.message,
+                );
+                // Use batched logging so high-volume native logs don't overwhelm
+                // the render loop (same approach as Flutter stdout logs).
+                if handle.session.queue_log(entry) {
+                    handle.session.flush_batched_logs();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Native log capture started — store shutdown sender and task handle.
+        Message::NativeLogCaptureStarted {
+            session_id,
+            shutdown_tx,
+            task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.native_log_shutdown_tx = Some(shutdown_tx);
+                // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
+                // The Option is taken so any subsequent (unexpected) clone of the
+                // message sees None, preventing double-store.
+                if let Ok(mut slot) = task_handle.lock() {
+                    handle.native_log_task_handle = slot.take();
+                }
+                tracing::debug!("Native log capture started for session {}", session_id);
+            }
+            UpdateResult::none()
+        }
+
+        // Native log capture stopped — clear stored handles.
+        Message::NativeLogCaptureStopped { session_id } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.native_log_shutdown_tx = None;
+                handle.native_log_task_handle = None;
+                tracing::debug!("Native log capture stopped for session {}", session_id);
+            }
+            UpdateResult::none()
+        }
     }
 }
 

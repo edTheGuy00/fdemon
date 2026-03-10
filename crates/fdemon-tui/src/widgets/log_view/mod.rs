@@ -205,7 +205,7 @@ impl<'a> LogView<'a> {
     }
 
     /// Get style for log source
-    fn source_style(source: LogSource) -> Style {
+    fn source_style(source: &LogSource) -> Style {
         match source {
             LogSource::App => Style::default().fg(palette::SOURCE_APP),
             LogSource::Daemon => Style::default().fg(palette::SOURCE_DAEMON),
@@ -213,6 +213,7 @@ impl<'a> LogView<'a> {
             LogSource::FlutterError => Style::default().fg(palette::SOURCE_FLUTTER_ERROR),
             LogSource::Watcher => Style::default().fg(palette::SOURCE_WATCHER),
             LogSource::VmService => Style::default().fg(palette::ACCENT),
+            LogSource::Native { .. } => Style::default().fg(palette::SOURCE_NATIVE),
         }
     }
 
@@ -289,7 +290,7 @@ impl<'a> LogView<'a> {
     /// Format a single log entry as a styled Line with icons
     fn format_entry(&self, entry: &LogEntry, entry_index: usize) -> Line<'static> {
         let (_level_style, msg_style) = Self::level_style(entry.level);
-        let source_style = Self::source_style(entry.source);
+        let source_style = Self::source_style(&entry.source);
 
         let mut spans = Vec::with_capacity(8);
 

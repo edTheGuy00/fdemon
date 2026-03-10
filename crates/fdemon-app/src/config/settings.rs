@@ -460,6 +460,13 @@ command = ""
 #   Zed:      "zed $FILE:$LINE"
 #   Neovim:   "nvim +$LINE $FILE"
 open_pattern = "$EDITOR $FILE:$LINE"
+
+# Native platform log capture (Android logcat, macOS log stream)
+[native_logs]
+# enabled = true                    # Master toggle (default: true)
+# exclude_tags = ["flutter"]        # Tags to exclude (default: ["flutter"])
+# include_tags = []                 # If set, ONLY show these tags (overrides exclude)
+# min_level = "info"                # Minimum priority: "verbose", "debug", "info", "warning", "error"
 "#;
         std::fs::write(&config_path, default_content)
             .map_err(|e| Error::config(format!("Failed to write config.toml: {}", e)))?;

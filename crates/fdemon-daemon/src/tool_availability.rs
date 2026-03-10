@@ -1,8 +1,8 @@
 //! Tool availability checking for device management
 //!
 //! This module provides functionality to check for the availability of external tools
-//! needed for device discovery and management, specifically `xcrun simctl` (iOS) and
-//! `emulator` (Android SDK).
+//! needed for device discovery and management, specifically `xcrun simctl` (iOS),
+//! `emulator` (Android SDK), `adb` (Android Debug Bridge), and the macOS `log` command.
 
 use std::process::Stdio;
 use tokio::process::Command;
@@ -18,18 +18,48 @@ pub struct ToolAvailability {
 
     /// Path to emulator command if found
     pub emulator_path: Option<String>,
+
+    /// Whether `adb` is available on PATH (required for Android logcat capture)
+    pub adb: bool,
+
+    /// Whether the macOS `log` command is available (required for unified log capture)
+    #[cfg(target_os = "macos")]
+    pub macos_log: bool,
 }
 
 impl ToolAvailability {
     /// Check tool availability (run once at startup)
     pub async fn check() -> Self {
-        let xcrun_simctl = Self::check_xcrun_simctl().await;
-        let (android_emulator, emulator_path) = Self::check_android_emulator().await;
+        let (xcrun_simctl, (android_emulator, emulator_path), adb) = tokio::join!(
+            Self::check_xcrun_simctl(),
+            Self::check_android_emulator(),
+            Self::check_adb(),
+        );
+
+        #[cfg(target_os = "macos")]
+        let macos_log = Self::check_macos_log().await;
 
         Self {
             xcrun_simctl,
             android_emulator,
             emulator_path,
+            adb,
+            #[cfg(target_os = "macos")]
+            macos_log,
+        }
+    }
+
+    /// Whether native log capture is available for the given platform.
+    ///
+    /// Returns `true` if the required tool for capturing native logs on the specified
+    /// platform is available. Used by the log capture subsystem before spawning capture
+    /// processes.
+    pub fn native_logs_available(&self, platform: &str) -> bool {
+        match platform {
+            "android" => self.adb,
+            #[cfg(target_os = "macos")]
+            "macos" => self.macos_log,
+            _ => false,
         }
     }
 
@@ -76,6 +106,39 @@ impl ToolAvailability {
         }
 
         (false, None)
+    }
+
+    /// Check if `adb` is available on PATH.
+    ///
+    /// Uses `adb version` which is lightweight and does not require a device to be
+    /// connected, avoiding the ADB server startup prompt that `adb devices` triggers.
+    async fn check_adb() -> bool {
+        Command::new("adb")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .inspect_err(|e| tracing::debug!("adb check failed: {}", e))
+            .unwrap_or(false)
+    }
+
+    /// Check if the macOS `log` command is available.
+    ///
+    /// This is a system utility present since macOS 10.12 (Sierra) and should always
+    /// be available. The check is defensive in case of unusual environments.
+    #[cfg(target_os = "macos")]
+    async fn check_macos_log() -> bool {
+        Command::new("log")
+            .arg("--help")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .inspect_err(|e| tracing::debug!("macOS log check failed: {}", e))
+            .unwrap_or(false)
     }
 
     /// Get list of paths to try for emulator command
@@ -176,6 +239,9 @@ mod tests {
             xcrun_simctl: true,
             android_emulator: false,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
         };
         assert!(availability.ios_unavailable_message().is_none());
     }
@@ -186,7 +252,56 @@ mod tests {
             xcrun_simctl: false,
             android_emulator: true,
             emulator_path: Some("/path/to/emulator".to_string()),
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
         };
         assert!(availability.android_unavailable_message().is_none());
+    }
+
+    #[test]
+    fn test_tool_availability_new_fields() {
+        // Verify struct can be constructed with new fields
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: true,
+            #[cfg(target_os = "macos")]
+            macos_log: true,
+        };
+        assert!(tools.adb);
+        assert!(tools.native_logs_available("android"));
+        assert!(!tools.native_logs_available("linux"));
+        assert!(!tools.native_logs_available("windows"));
+    }
+
+    #[test]
+    fn test_native_logs_available_android_false_when_no_adb() {
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+        };
+        assert!(!tools.native_logs_available("android"));
+    }
+
+    #[test]
+    fn test_native_logs_available_unknown_platform_returns_false() {
+        let tools = ToolAvailability::default();
+        assert!(!tools.native_logs_available("web"));
+        assert!(!tools.native_logs_available("fuchsia"));
+        assert!(!tools.native_logs_available(""));
+    }
+
+    #[tokio::test]
+    async fn test_check_adb_does_not_panic() {
+        // Verifies the check doesn't panic regardless of whether adb is installed.
+        let result = ToolAvailability::check_adb().await;
+        // Result depends on environment — just verify no panic
+        let _ = result;
     }
 }

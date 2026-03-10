@@ -416,4 +416,42 @@ Manual testing only — this task produces test fixtures, not automated tests:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `example/app2/android/app/src/main/kotlin/com/example/flutter_deamon_sample/MainActivity.kt` | Replaced bare `FlutterActivity` subclass with full method channel handler for `triggerNativeLogs`, `startPeriodicLogs`, `stopPeriodicLogs` |
+| `example/app2/android/app/src/main/kotlin/com/example/flutter_deamon_sample/NativeLogDemo.kt` | NEW — Kotlin singleton with `emitSampleLogs()` (burst across NativeDemo/MyPlugin/GoLog/OkHttp tags, all V/D/I/W/E priorities) and `startPeriodicLogs`/`stopPeriodicLogs` using `java.util.Timer` |
+| `example/app2/macos/Runner/AppDelegate.swift` | Added `applicationDidFinishLaunching` override that wires up FlutterMethodChannel to `NativeLogDemo` dispatch |
+| `example/app2/macos/Runner/NativeLogDemo.swift` | NEW — Swift class with `emitSampleLogs()` (NSLog + os_log across com.example.myplugin and com.example.network subsystems, all log types) and periodic timer support |
+| `example/app2/lib/native_logs/native_log_demo.dart` | NEW — `NativeLogDemoPage` StatefulWidget with "Emit Native Log Burst" and "Start/Stop Periodic Logs (2s)" buttons, toggling state via platform channel |
+| `example/app2/lib/main.dart` | Added import for `native_logs/native_log_demo.dart`; added `NativeLogDemoPage` as a `Card` at the end of the `ListView` |
+| `example/app2/macos/Runner.xcodeproj/project.pbxproj` | Added PBXBuildFile entry, PBXFileReference entry, Runner group child, and Sources build phase entry for `NativeLogDemo.swift` (UUID prefix `FDAE1B0`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Xcode project file edited manually**: The task notes Xcode is preferred, but manual pbxproj editing was done instead since Xcode is not available in the CI/automated context. All four required pbxproj sections were updated (PBXBuildFile, PBXFileReference, PBXGroup children, PBXSourcesBuildPhase files). UUID `FDAE1B00/01` was chosen to avoid collision with existing `33xx` and other existing IDs.
+
+2. **NativeLogDemoPage inserted as a Card directly**: The existing `_buildSection()` helper wraps children in a `Wrap`, which is not compatible with `NativeLogDemoPage`'s own `Column` layout. The page was inserted as a standalone `Card` outside `_buildSection()` to preserve its internal vertical layout and button styling.
+
+3. **AppDelegate.swift preserves `applicationSupportsSecureRestorableState`**: The original override was kept alongside the new `applicationDidFinishLaunching` override, maintaining backward compatibility with any macOS security requirements.
+
+4. **Android Timer-based periodic logging**: Used `java.util.Timer` (as specified) rather than Kotlin coroutines to keep the example simple and avoid adding coroutines as a dependency.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed (all Rust crates unaffected)
+- Manual file verification: all 7 files created/modified and present at expected paths
+- pbxproj consistency check: all 4 NativeLogDemo.swift references confirmed via grep
+
+Note: Flutter build verification (`flutter build macos`, `flutter build apk`) requires Flutter SDK and is not available in this environment. The code follows the exact patterns specified in the task and matches the existing file conventions.
+
+### Risks/Limitations
+
+1. **Xcode project file**: Manual pbxproj edits are technically correct but Xcode may reformat on next open. The file will function correctly; Xcode reformatting does not break functionality.
+
+2. **`applicationDidFinishLaunching` call order**: The Swift `AppDelegate` calls `super.applicationDidFinishLaunching(notification)` after setting up the channel. The `mainFlutterWindow?.contentViewController` cast as `FlutterViewController` assumes the window is already set up before this method is called, which is the standard Flutter macOS pattern.
+
+3. **No Flutter build CI**: This task produces Flutter/native test fixtures rather than Rust code, so there are no automated Rust tests to run. Manual verification against a device/emulator is required as described in the task's Testing section.

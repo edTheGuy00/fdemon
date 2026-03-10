@@ -8,7 +8,7 @@ use fdemon_daemon::parse_daemon_message;
 
 use super::session::{
     handle_session_exited, handle_session_message_state, handle_session_stdout,
-    maybe_connect_vm_service,
+    maybe_connect_vm_service, maybe_start_native_log_capture,
 };
 
 /// Handle daemon events for a specific session (multi-session mode)
@@ -51,9 +51,32 @@ pub fn handle_session_daemon_event(
                     None
                 };
 
+            // Parse AppStart before handle_session_stdout mutates state, so we
+            // know whether to trigger native log capture after the state is updated.
+            let is_app_start = matches!(
+                parse_daemon_message(&line),
+                Some(DaemonMessage::AppStart(_))
+            );
+
             handle_session_stdout(state, session_id, &line);
 
-            match vm_action {
+            // After handle_session_stdout, mark_started() has been called for
+            // AppStart events, so session.app_id is now set and we can build the
+            // native log capture action.
+            let native_log_action = if is_app_start {
+                // Re-parse to get the AppStart data for app_id extraction.
+                if let Some(msg @ DaemonMessage::AppStart(_)) = parse_daemon_message(&line) {
+                    maybe_start_native_log_capture(state, session_id, &msg)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Priority: VM service connection (AppDebugPort) > native log capture (AppStart).
+            // These two events are always separate, so at most one action is non-None here.
+            match vm_action.or(native_log_action) {
                 Some(action) => UpdateResult::action(action),
                 None => UpdateResult::none(),
             }
@@ -115,8 +138,17 @@ pub fn handle_session_daemon_event(
             // Update session state based on message type
             handle_session_message_state(state, session_id, &msg);
 
-            // Return ConnectVmService action if AppDebugPort was received
-            match vm_action {
+            // After handle_session_message_state, mark_started() has been called
+            // for AppStart events, so session.app_id is now set.
+            let native_log_action = if let DaemonMessage::AppStart(_) = &msg {
+                maybe_start_native_log_capture(state, session_id, &msg)
+            } else {
+                None
+            };
+
+            // Priority: VM service connection (AppDebugPort) > native log capture (AppStart).
+            // These two events are always separate, so at most one action is non-None here.
+            match vm_action.or(native_log_action) {
                 Some(action) => UpdateResult::action(action),
                 None => UpdateResult::none(),
             }
