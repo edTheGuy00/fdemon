@@ -3220,6 +3220,8 @@ fn test_tool_availability_triggers_bootable_discovery() {
         adb: false,
         #[cfg(target_os = "macos")]
         macos_log: false,
+        #[cfg(target_os = "macos")]
+        idevicesyslog: false,
     };
 
     let result = update(
@@ -3254,6 +3256,8 @@ fn test_no_tools_available_no_discovery() {
         adb: false,
         #[cfg(target_os = "macos")]
         macos_log: false,
+        #[cfg(target_os = "macos")]
+        idevicesyslog: false,
     };
 
     let result = update(
@@ -6718,4 +6722,279 @@ fn test_maybe_start_native_log_capture_returns_none_for_linux() {
         "Expected None for linux platform (no native log capture needed), got {:?}",
         action
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native Tag Filter Handler Tests (Phase 2, Task 07)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: send a NativeLog event to a session and flush batched logs.
+fn send_native_log(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+    tag: &str,
+    message: &str,
+) {
+    use fdemon_core::LogLevel;
+    use fdemon_daemon::NativeLogEvent;
+    let event = NativeLogEvent {
+        tag: tag.to_string(),
+        level: LogLevel::Info,
+        message: message.to_string(),
+        timestamp: None,
+    };
+    update(state, Message::NativeLog { session_id, event });
+    state.session_manager.flush_all_pending_logs();
+}
+
+#[test]
+fn test_native_log_observes_tag() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "hello");
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.native_tag_state.tag_count(), 1);
+    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 1);
+}
+
+#[test]
+fn test_native_log_increments_tag_count() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "msg 1");
+    send_native_log(&mut state, session_id, "GoLog", "msg 2");
+    send_native_log(&mut state, session_id, "OkHttp", "http msg");
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.native_tag_state.tag_count(), 2);
+    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 2);
+    assert_eq!(handle.native_tag_state.discovered_tags["OkHttp"], 1);
+}
+
+#[test]
+fn test_native_log_hidden_tag_not_added_to_buffer() {
+    use fdemon_core::LogLevel;
+    use fdemon_daemon::NativeLogEvent;
+
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // First, send one visible event to observe the tag.
+    send_native_log(&mut state, session_id, "GoLog", "visible message");
+
+    // Hide the tag.
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "GoLog".to_string(),
+        },
+    );
+
+    // Count logs before sending the hidden event.
+    let log_count_before = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    // Send a native log for the hidden tag.
+    let event = NativeLogEvent {
+        tag: "GoLog".to_string(),
+        level: LogLevel::Info,
+        message: "should be hidden".to_string(),
+        timestamp: None,
+    };
+    update(&mut state, Message::NativeLog { session_id, event });
+    state.session_manager.flush_all_pending_logs();
+
+    let log_count_after = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+
+    assert_eq!(
+        log_count_before, log_count_after,
+        "Hidden tag entry should not be added to the log buffer"
+    );
+
+    // The tag count should still be incremented even for hidden entries.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 2);
+}
+
+#[test]
+fn test_toggle_native_tag_message_toggles_visibility() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "first message");
+
+    // Initially visible.
+    assert!(state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .native_tag_state
+        .is_tag_visible("GoLog"));
+
+    // Toggle to hidden.
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "GoLog".to_string(),
+        },
+    );
+    assert!(!state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .native_tag_state
+        .is_tag_visible("GoLog"));
+
+    // Toggle back to visible.
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "GoLog".to_string(),
+        },
+    );
+    assert!(state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .native_tag_state
+        .is_tag_visible("GoLog"));
+}
+
+#[test]
+fn test_show_all_native_tags_clears_hidden() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "msg");
+    send_native_log(&mut state, session_id, "OkHttp", "msg");
+
+    // Hide both tags.
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "GoLog".to_string(),
+        },
+    );
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "OkHttp".to_string(),
+        },
+    );
+    assert_eq!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .native_tag_state
+            .hidden_count(),
+        2
+    );
+
+    // Show all.
+    update(&mut state, Message::ShowAllNativeTags);
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(handle.native_tag_state.hidden_count(), 0);
+    assert!(handle.native_tag_state.is_tag_visible("GoLog"));
+    assert!(handle.native_tag_state.is_tag_visible("OkHttp"));
+}
+
+#[test]
+fn test_hide_all_native_tags_hides_discovered() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "msg");
+    send_native_log(&mut state, session_id, "OkHttp", "msg");
+
+    update(&mut state, Message::HideAllNativeTags);
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(!handle.native_tag_state.is_tag_visible("GoLog"));
+    assert!(!handle.native_tag_state.is_tag_visible("OkHttp"));
+    assert_eq!(handle.native_tag_state.hidden_count(), 2);
+}
+
+#[test]
+fn test_native_log_capture_stopped_resets_tag_state() {
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    send_native_log(&mut state, session_id, "GoLog", "msg");
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.native_tag_state.tag_count(), 1);
+    }
+
+    update(&mut state, Message::NativeLogCaptureStopped { session_id });
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.native_tag_state.tag_count(),
+        0,
+        "Tag state should be reset when native log capture stops"
+    );
+}
+
+#[test]
+fn test_show_hide_tag_filter_messages_are_no_op() {
+    // ShowTagFilter and HideTagFilter are UI-only messages (handled by task 09).
+    // They must not panic and return no action or follow-up message.
+    let mut state = AppState::new();
+
+    let result = update(&mut state, Message::ShowTagFilter);
+    assert!(result.action.is_none());
+    assert!(result.message.is_none());
+
+    let result = update(&mut state, Message::HideTagFilter);
+    assert!(result.action.is_none());
+    assert!(result.message.is_none());
+}
+
+#[test]
+fn test_toggle_native_tag_no_session_is_no_op() {
+    // No sessions in manager — should not panic.
+    let mut state = AppState::new();
+    let result = update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "AnyTag".to_string(),
+        },
+    );
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_show_all_native_tags_no_session_is_no_op() {
+    let mut state = AppState::new();
+    let result = update(&mut state, Message::ShowAllNativeTags);
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_hide_all_native_tags_no_session_is_no_op() {
+    let mut state = AppState::new();
+    let result = update(&mut state, Message::HideAllNativeTags);
+    assert!(result.action.is_none());
 }

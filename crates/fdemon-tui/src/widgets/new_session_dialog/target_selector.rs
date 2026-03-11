@@ -531,6 +531,8 @@ mod tests {
             adb: false,
             #[cfg(target_os = "macos")]
             macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let backend = TestBackend::new(50, 20);

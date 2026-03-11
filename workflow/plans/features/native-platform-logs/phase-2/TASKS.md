@@ -54,16 +54,16 @@ Wave 4:                                        ▼
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-ios-tool-availability](tasks/01-ios-tool-availability.md) | Not Started | - | `fdemon-daemon/src/tool_availability.rs` |
-| 2 | [02-ios-log-config](tasks/02-ios-log-config.md) | Not Started | - | `fdemon-daemon/src/native_logs/mod.rs`, `lib.rs` |
-| 3 | [03-ios-simulator-capture](tasks/03-ios-simulator-capture.md) | Not Started | 2 | `fdemon-daemon/src/native_logs/ios.rs` |
-| 4 | [04-ios-physical-capture](tasks/04-ios-physical-capture.md) | Not Started | 2 | `fdemon-daemon/src/native_logs/ios.rs` |
-| 5 | [05-app-ios-integration](tasks/05-app-ios-integration.md) | Not Started | 1, 2, 3, 4 | `fdemon-app/src/handler/session.rs`, `actions/native_logs.rs` |
-| 6 | [06-example-app-ios](tasks/06-example-app-ios.md) | Not Started | - | `example/app2/ios/` |
-| 7 | [07-per-tag-state](tasks/07-per-tag-state.md) | Not Started | - | `fdemon-app/src/session/`, `handler/update.rs` |
-| 8 | [08-per-tag-config](tasks/08-per-tag-config.md) | Not Started | - | `fdemon-app/src/config/types.rs` |
-| 9 | [09-per-tag-filter-ui](tasks/09-per-tag-filter-ui.md) | Not Started | 7, 8 | `fdemon-tui/src/widgets/`, `fdemon-app/src/handler/` |
-| 10 | [10-docs-update](tasks/10-docs-update.md) | Not Started | 5, 9 | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
+| 1 | [01-ios-tool-availability](tasks/01-ios-tool-availability.md) | Done | - | `fdemon-daemon/src/tool_availability.rs` |
+| 2 | [02-ios-log-config](tasks/02-ios-log-config.md) | Done | - | `fdemon-daemon/src/native_logs/mod.rs`, `lib.rs` |
+| 3 | [03-ios-simulator-capture](tasks/03-ios-simulator-capture.md) | Done | 2 | `fdemon-daemon/src/native_logs/ios.rs` |
+| 4 | [04-ios-physical-capture](tasks/04-ios-physical-capture.md) | Done | 2 | `fdemon-daemon/src/native_logs/ios.rs` |
+| 5 | [05-app-ios-integration](tasks/05-app-ios-integration.md) | Done | 1, 2, 3, 4 | `fdemon-app/src/handler/session.rs`, `actions/native_logs.rs` |
+| 6 | [06-example-app-ios](tasks/06-example-app-ios.md) | Done | - | `example/app2/ios/` |
+| 7 | [07-per-tag-state](tasks/07-per-tag-state.md) | Done | - | `fdemon-app/src/session/`, `handler/update.rs` |
+| 8 | [08-per-tag-config](tasks/08-per-tag-config.md) | Done | - | `fdemon-app/src/config/types.rs` |
+| 9 | [09-per-tag-filter-ui](tasks/09-per-tag-filter-ui.md) | Done | 7, 8 | `fdemon-tui/src/widgets/`, `fdemon-app/src/handler/` |
+| 10 | [10-docs-update](tasks/10-docs-update.md) | Done | 5, 9 | `docs/ARCHITECTURE.md`, `docs/KEYBINDINGS.md` |
 
 ## Execution Plan
 

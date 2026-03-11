@@ -342,3 +342,37 @@ mod tests {
 - `log stream` outputs a header line on startup (e.g., `"Filtering the log data using..."`) — this must be skipped by the parser.
 - `kill_on_drop(true)` ensures the simctl process is cleaned up if the task panics.
 - The `EVENT_CHANNEL_CAPACITY` constant from `mod.rs` should be reused (it's `pub(crate)` at 256).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/ios.rs` | Replaced stub with full simulator capture implementation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reuse from `macos.rs` instead of extracting**: `macos.rs` already exposes `parse_syslog_line()`, `SyslogLine`, and `derive_tag()` as `pub` functions. Rather than extracting to a third shared module, `ios.rs` imports directly from `super::macos`. This is Option B (import from sibling) in spirit — no new file, no duplication. The task's Option A (shared `syslog.rs`) would be a larger refactor and was explicitly called "preferred but acceptable to skip".
+
+2. **`derive_tag()` behavior differs from task pseudocode**: The task's pseudocode showed a subsystem-first tag derivation, but the actual `derive_tag()` in `macos.rs` uses category-first (strips `:suffix`). The implementation reuses the existing `derive_tag()` to stay consistent with the macOS backend rather than inventing a divergent iOS-specific version.
+
+3. **Level conversion via `NativeLogPriority`**: The task pseudocode passed `parsed.level` directly as a `LogLevel`, but `SyslogLine.level` is a `String`. Used the existing `NativeLogPriority::from_macos_level()` path (same as `macos.rs`'s `syslog_line_to_event()`) for consistent level mapping.
+
+4. **`spawn_physical()` is a stub returning `None`**: Matches task requirement — task 04 will implement physical device capture.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (519 tests, 0 failed, 3 ignored)
+- `cargo fmt -p fdemon-daemon` — Passed
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Import coupling to `macos.rs`**: `ios.rs` imports directly from `super::macos`. If `macos.rs` is refactored to make `parse_syslog_line`/`SyslogLine`/`derive_tag` private, `ios.rs` will break. This is low risk since all three are already `pub` by design.
+2. **Physical device path is a stub**: `spawn_physical()` returns `None` with a warning. This is intentional — task 04 covers it.

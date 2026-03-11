@@ -525,6 +525,8 @@ mod tests {
             adb: false,
             #[cfg(target_os = "macos")]
             macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();
@@ -553,6 +555,8 @@ mod tests {
             adb: false,
             #[cfg(target_os = "macos")]
             macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();
@@ -581,6 +585,8 @@ mod tests {
             adb: false,
             #[cfg(target_os = "macos")]
             macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();

@@ -252,3 +252,35 @@ min_level = "debug"
 - **HashMap vs BTreeMap for tags config**: `HashMap` is used for config since the ordering doesn't matter for config lookup. The `NativeTagState` UI display uses `BTreeMap` (task 07) for alphabetical ordering.
 - **TOML `[native_logs.tags.GoLog]` syntax**: TOML nested table syntax. Tag names with dots must be quoted: `[native_logs.tags."com.example.plugin"]`.
 - **`TagConfig` is deliberately minimal**: Only `min_level` for now. Future phases could add per-tag `enabled`, `color`, or `alias` fields.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `TagConfig` struct with `min_level: Option<String>` and `Default` derive; added `tags: HashMap<String, TagConfig>` field to `NativeLogsSettings` with `#[serde(default)]`; updated `Default` impl to include `tags: HashMap::new()`; added `effective_min_level()` method to `NativeLogsSettings` impl; updated existing `test_native_logs_settings_default` to assert `tags.is_empty()`; added 8 new unit tests for per-tag configuration |
+| `crates/fdemon-app/src/config/mod.rs` | Added `TagConfig` to the `pub use types::{...}` re-export block |
+
+### Notable Decisions/Tradeoffs
+
+1. **`TagConfig` placed before `NativeLogsSettings`**: Since `TagConfig` is referenced by `NativeLogsSettings`, it is defined first in the same section, consistent with Rust's single-pass compilation requirement.
+2. **`#[derive(Default)]` on `TagConfig`**: Uses `Default` derive (not explicit impl) since `Option<String>` naturally defaults to `None`, keeping code minimal.
+3. **Worktree was at main, not feature/native-platform-logs**: The agent worktree branch was at `main` commits. Merged `feature/native-platform-logs` (which contained phase 1 `NativeLogsSettings` work) into the worktree branch before implementing. This is the correct base for phase 2 task 08.
+4. **No change to `settings.rs`**: The TOML parsing for `[native_logs.tags.<name>]` works automatically via serde's `HashMap<String, TagConfig>` deserialization — no additional parser code needed. The task description's mention of `settings.rs` was not required in practice.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1482 tests, 0 failed; includes 8 new per-tag config tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **`tags` field accepted silently with existing TOML configs**: Any existing `config.toml` without a `[native_logs.tags]` section will deserialize to an empty map via `#[serde(default)]` — no breaking change.
+2. **Acceptance criterion 8 (per-tag level filtering in NativeLog handler) is informational**: The task scope explicitly restricts modifying `update.rs` (that's task 07's scope). The `effective_min_level()` helper is provided for task 07 to use when implementing the handler. The method itself is tested and ready.

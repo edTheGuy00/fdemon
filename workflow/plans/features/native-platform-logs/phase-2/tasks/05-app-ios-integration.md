@@ -239,3 +239,38 @@ mod tests {
 - **Process name**: Flutter iOS apps default to "Runner" as the process name. Custom product names in Xcode change this, but `derive_macos_process_name()` already handles this by extracting the last bundle ID component.
 - **Tool availability**: The guard in `maybe_start_native_log_capture()` already calls `tool_availability.native_logs_available(platform)` which now returns `true` for `"ios"` when `xcrun_simctl || idevicesyslog` (from task 01).
 - **All iOS code is `#[cfg(target_os = "macos")]` gated** since you can only develop for iOS from a macOS host.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `device_name: String` field to `UpdateAction::StartNativeLogCapture`; updated doc comment to include `"ios"` |
+| `crates/fdemon-app/src/handler/session.rs` | Added `"ios"` to `needs_capture` guard in `maybe_start_native_log_capture()`; populate `device_name` from `handle.session.device_name` in returned action |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `device_name` to the `StartNativeLogCapture` destructuring and forwarded it to `spawn_native_log_capture()` |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `device_name` parameter to `spawn_native_log_capture()`; added `IosLogConfig` import (cfg-gated); added iOS config building branch; updated macOS platform guard to also allow `"ios"`; added `derive_ios_process_name()` and `is_ios_simulator()` helpers; added 8 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`derive_ios_process_name` delegates to `derive_macos_process_name`**: Both platforms use the same bundle ID convention, so reusing the existing function avoids duplication. The separate function name makes the call site self-documenting.
+
+2. **`device_name` added to `UpdateAction::StartNativeLogCapture` rather than pre-computing `is_simulator`**: Carrying `device_name` in the action keeps the action data honest — it's plain metadata from the session. Pre-computing a boolean would push policy into the handler layer and make the action harder to inspect/debug.
+
+3. **Double heuristic for simulator detection**: Device name check first (most reliable Flutter-side signal), then UDID format (well-known Apple convention). The combination covers edge cases where a user has renamed their device to include "iPhone 15" without "Simulator" but still has a UUID UDID.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1511 passed; 0 failed; 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied; no structural changes
+
+### Risks/Limitations
+
+1. **Simulator name heuristic**: If Flutter changes device naming (e.g., drops "Simulator" suffix), the name-based heuristic will fall through to the UDID format check, which is still reliable.
+2. **Physical UDID length variation**: Newer Apple Silicon devices use 24-char UDIDs; the UDID-format heuristic will correctly fall through to `false` (physical) for these, which is correct.

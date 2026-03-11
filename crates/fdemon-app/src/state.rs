@@ -822,6 +822,43 @@ impl DapStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tag Filter UI State (Phase 2, Task 09)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// UI state for the native tag filter overlay.
+///
+/// Tracks the currently selected row and scroll offset within the tag list.
+/// Lives on `AppState` so the TUI render function can read it without reaching
+/// into session state.
+#[derive(Debug, Clone, Default)]
+pub struct TagFilterUiState {
+    /// Currently selected index in the tag list.
+    pub selected_index: usize,
+    /// Scroll offset for the tag list (for large tag counts).
+    pub scroll_offset: usize,
+}
+
+impl TagFilterUiState {
+    /// Move selection up by one, saturating at 0.
+    pub fn move_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    /// Move selection down by one, clamping at `max_index`.
+    pub fn move_down(&mut self, max_index: usize) {
+        if self.selected_index < max_index {
+            self.selected_index += 1;
+        }
+    }
+
+    /// Reset selection and scroll offset when the overlay is opened.
+    pub fn reset(&mut self) {
+        self.selected_index = 0;
+        self.scroll_offset = 0;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -913,6 +950,17 @@ pub struct AppState {
     /// CLI-provided IDE override for DAP config generation (`--dap-config <ide>`).
     /// When set, bypasses environment-based IDE detection.
     pub cli_dap_config_override: Option<crate::config::ParentIde>,
+
+    // ── Tag Filter Overlay (Phase 2, Task 09) ────────────────────────────────
+    /// Whether the native tag filter overlay is currently visible.
+    ///
+    /// Set to `true` by `Message::ShowTagFilter`, cleared by
+    /// `Message::HideTagFilter`. When `true`, the TUI renders the tag filter
+    /// overlay and all key events are routed to the overlay handler first.
+    pub tag_filter_visible: bool,
+
+    /// UI state for the tag filter overlay (selection, scroll).
+    pub tag_filter_ui: TagFilterUiState,
 }
 
 impl Default for AppState {
@@ -955,6 +1003,8 @@ impl AppState {
             pending_file_changes: 0,
             dap_config_status: None,
             cli_dap_config_override: None,
+            tag_filter_visible: false,
+            tag_filter_ui: TagFilterUiState::default(),
         }
     }
 

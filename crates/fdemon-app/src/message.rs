@@ -1147,4 +1147,54 @@ pub enum Message {
     /// closes (i.e., the capture process exited). The handler clears the
     /// stored handles from `SessionHandle`.
     NativeLogCaptureStopped { session_id: SessionId },
+
+    // ─────────────────────────────────────────────────────────
+    // Native Tag Filter Messages (Phase 2, Task 07)
+    // ─────────────────────────────────────────────────────────
+    /// Toggle a specific native log tag's visibility in the active session.
+    ///
+    /// If the tag is currently visible, it becomes hidden (future log entries
+    /// with this tag are not added to the log buffer). If hidden, it becomes
+    /// visible (future entries appear in the log).
+    ///
+    /// The tag must already be in `NativeTagState::discovered_tags` for the
+    /// toggle to have an observable effect; toggling an unknown tag is a no-op
+    /// on the `hidden_tags` set but will pre-hide the tag when it is first seen.
+    ToggleNativeTag { tag: String },
+
+    /// Show all native log tags in the active session.
+    ///
+    /// Clears the hidden set so every tag becomes visible. Future log entries
+    /// from all tags will be added to the log buffer.
+    ShowAllNativeTags,
+
+    /// Hide all native log tags in the active session.
+    ///
+    /// Hides every tag currently in `discovered_tags`. Future entries from
+    /// any of these tags will not be added to the log buffer until un-hidden.
+    HideAllNativeTags,
+
+    /// Open the native tag filter overlay.
+    ///
+    /// Switches the UI into tag-filter mode where the user can see the list
+    /// of discovered tags and toggle their visibility. Handled by task 09
+    /// (per-tag filter UI).
+    ShowTagFilter,
+
+    /// Close the native tag filter overlay.
+    ///
+    /// Returns the UI to normal mode without changing tag visibility state.
+    HideTagFilter,
+
+    // ─────────────────────────────────────────────────────────
+    // Tag Filter Navigation Messages (Phase 2, Task 09)
+    // ─────────────────────────────────────────────────────────
+    /// Move the tag filter list selection up by one row.
+    TagFilterMoveUp,
+
+    /// Move the tag filter list selection down by one row.
+    TagFilterMoveDown,
+
+    /// Toggle the visibility of the currently selected tag in the filter overlay.
+    TagFilterToggleSelected,
 }

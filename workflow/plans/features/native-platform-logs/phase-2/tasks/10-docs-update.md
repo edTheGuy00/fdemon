@@ -88,3 +88,31 @@ Mark phase 2 items as complete:
 - This is a documentation-only task. No code changes.
 - Keep documentation concise — follow existing doc style.
 - If `docs/KEYBINDINGS.md` doesn't exist, add the keybinding info to wherever keybindings are currently documented (check `CLAUDE.md` "Keyboard Shortcuts Summary" section in the PLAN.md).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `native_logs/` directory tree under `fdemon-daemon`, added `native_tags.rs` to session tree, added `tag_filter.rs` to widgets tree; expanded `fdemon-daemon` Module Reference with full `native_logs/` module table, platform support table, and tool dependencies; added `NativeTagState` to fdemon-app session entry; added `tag_filter.rs` to fdemon-tui widgets table; added new "Native Log Capture Subsystem" section with architecture diagram, tag filtering description, per-tag config example, and tool dependency table; updated Table of Contents |
+| `docs/KEYBINDINGS.md` | Added `T` keybinding row to the Log Filtering table in Normal Mode |
+| `CLAUDE.md` | Updated test counts for fdemon-daemon (375→527), fdemon-app (1,039→1,511), fdemon-tui (754→814), and total (~3,209); updated fdemon-daemon crate description to mention native log capture; added two new Key Patterns entries for native log capture and per-session tag filtering |
+
+### Notable Decisions/Tradeoffs
+
+1. **New subsystem section in ARCHITECTURE.md**: Rather than scattering native log info across the existing module reference entries, a dedicated "Native Log Capture Subsystem" section provides a cohesive view of the architecture, tag filtering semantics, per-tag config format, and tool dependencies — consistent with the existing DevTools and DAP Server subsystem sections.
+2. **`T` key context in KEYBINDINGS.md**: The keybinding was placed in the "Log Filtering" subsection under Normal Mode (alongside `f`, `F`, `Ctrl+F`) since it filters log visibility, not in a new section.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed (no code changes, verifies docs-only task doesn't break anything)
+- Manual review of all documentation changes for accuracy against implementation files
+
+### Risks/Limitations
+
+1. **Test count is approximate**: The total "~3,209" is derived from the per-crate counts provided in the task context. If counts shift again before release, CLAUDE.md will need a follow-up update.

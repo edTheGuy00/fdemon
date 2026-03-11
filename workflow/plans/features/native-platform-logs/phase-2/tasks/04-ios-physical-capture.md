@@ -427,3 +427,40 @@ mod tests {
 - **`--no-colors` flag**: Prevents ANSI escape codes from corrupting the regex parser. idevicesyslog outputs ANSI colors by default when stdout is a TTY, but since we pipe it, this may not be needed — included defensively.
 - **BSD syslog levels vs macOS unified log levels**: idevicesyslog uses traditional BSD syslog levels (`Emergency`/`Alert`/`Critical`/`Error`/`Warning`/`Notice`/`Info`/`Debug`) which differ from macOS unified log types (`Default`/`Info`/`Debug`/`Error`/`Fault`). The mapping handles both.
 - **No crash recovery**: Same as Android — the loop exits on error and the caller handles restart decisions.
+
+## Completion Summary
+
+**Status:** Done
+
+### What Was Implemented
+
+- `parse_idevicesyslog_line()` — parses BSD syslog format (`Mon DD HH:MM:SS device process[pid] <level>: message`) using `IDEVICESYSLOG_RE` regex
+- `IdevicesyslogLine` struct with fields: `timestamp`, `device_name`, `process_name`, `pid`, `level`, `framework`, `message`
+- `bsd_syslog_level_to_log_level()` — maps all 8 BSD syslog levels (Emergency → Error, Alert → Error, Critical → Error, Error → Error, Warning → Warning, Notice → Info, Info → Info, Debug → Debug)
+- `idevicesyslog_line_to_event()` — converts parsed line to `NativeLogEvent` with tag derived from framework field
+- `build_idevicesyslog_command()` — builds command with `-u <udid>`, `-p <process_name>`, `-K` (suppress kernel), `--no-colors` flags
+- `run_idevicesyslog_capture()` — async capture loop reading stdout line-by-line, parsing, filtering by min level and include/exclude tags, sending events via channel, with graceful shutdown on token cancellation
+- `spawn_physical()` — spawns the capture task and returns `Some(NativeLogHandle)` with child process handle and shutdown sender
+
+### Files Modified
+
+- `crates/fdemon-daemon/src/native_logs/ios.rs` — added all physical device capture code (~300 lines) alongside existing simulator capture
+
+### Testing
+
+- 19+ unit tests covering: BSD syslog line parsing (valid lines, malformed input, multiline messages), level mapping for all 8 BSD levels, command construction with various config options, tag derivation from framework field, min level filtering
+- All 527 fdemon-daemon tests pass
+- `cargo clippy --workspace -- -D warnings` passes
+
+### Acceptance Criteria Met
+
+- [x] `parse_idevicesyslog_line()` correctly parses BSD syslog format
+- [x] `bsd_syslog_level_to_log_level()` maps all BSD syslog levels
+- [x] `IdevicesyslogLine` struct holds all parsed fields
+- [x] `build_idevicesyslog_command()` builds correct command with `-u`, `-p`, `-K`, `--no-colors`
+- [x] `run_idevicesyslog_capture()` implements async capture loop with shutdown
+- [x] `spawn_physical()` returns `Some(NativeLogHandle)`
+- [x] Tag derived from framework field
+- [x] Min level filtering applied
+- [x] Include/exclude tag filtering applied
+- [x] All code gated with `#[cfg(target_os = "macos")]`

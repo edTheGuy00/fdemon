@@ -305,3 +305,36 @@ mod tests {
 - **Filtering at handler vs render level**: The initial implementation filters at the handler level (hidden tags' entries are not added to the log buffer). This means un-hiding a tag only shows future entries, not historical ones. This is consistent with how the existing `LogSourceFilter` works (it filters the display, but the log buffer is a fixed ring). If retroactive filtering is desired later, the filter can be moved to render time.
 - **Tag count per entry**: Storing the count per tag (`BTreeMap<String, usize>`) allows the UI to show frequency info (e.g., "GoLog (42)") which helps users identify important tags.
 - **The `NativeTagState` struct lives in the app layer** (not fdemon-core) because it's session-specific state. If it needs to be shared with the TUI layer, it can be accessed via `SessionHandle`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/native_tags.rs` | New file: `NativeTagState` struct with `observe_tag`, `is_tag_visible`, `toggle_tag`, `sorted_tags`, `tag_count`, `hidden_count`, `show_all`, `hide_all` methods, plus 11 unit tests |
+| `crates/fdemon-app/src/session/mod.rs` | Added `mod native_tags` and `pub use native_tags::NativeTagState` re-export |
+| `crates/fdemon-app/src/session/handle.rs` | Added `use super::native_tags::NativeTagState`, `native_tag_state: NativeTagState` field on `SessionHandle`, initialized to `NativeTagState::default()` in constructor, added `native_tag_count` to `Debug` impl |
+| `crates/fdemon-app/src/message.rs` | Added `ToggleNativeTag { tag: String }`, `ShowAllNativeTags`, `HideAllNativeTags`, `ShowTagFilter`, `HideTagFilter` message variants |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `NativeLog` handler to call `observe_tag()` and skip hidden tags; updated `NativeLogCaptureStopped` to reset tag state; added handlers for `ToggleNativeTag`, `ShowAllNativeTags`, `HideAllNativeTags`, `ShowTagFilter`, `HideTagFilter` |
+| `crates/fdemon-app/src/handler/session.rs` | Added `native_tag_state` reset in `handle_session_exited` (process exit) and `handle_session_message_state` `AppStop` handler (app stop/restart) |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 11 handler tests covering: `observe_tag` on `NativeLog`, hidden tag filtering, `ToggleNativeTag`, `ShowAllNativeTags`, `HideAllNativeTags`, `NativeLogCaptureStopped` reset, `ShowTagFilter`/`HideTagFilter` no-op, and no-session edge cases |
+
+### Notable Decisions/Tradeoffs
+
+1. **No `active_session_mut()` needed**: The codebase uses the pattern `selected_id()` + `get_mut(id)` for accessing the active session. The `ToggleNativeTag`/`ShowAll`/`HideAll` handlers follow this pattern consistently.
+
+2. **Tag state reset on 3 events**: `NativeLogCaptureStopped` (capture process exits), `handle_session_exited` (Flutter process exits), and `AppStop` daemon message (app stopped within session). This ensures clean state across hot restarts and session reuses.
+
+3. **Phase 1 foundation merge**: The worktree needed a merge of `feature/native-platform-logs` (phase 1) before implementing this task, following the same pattern as the `agent-a0516f73` worktree.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1496 tests: 1485 pre-existing + 11 new)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied cleanly

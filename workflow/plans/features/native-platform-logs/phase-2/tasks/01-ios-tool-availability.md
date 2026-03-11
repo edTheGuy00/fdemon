@@ -250,3 +250,36 @@ mod tests {
 - Simulators don't need `idevicesyslog` — they use `xcrun simctl spawn log stream` which is already gated by the existing `xcrun_simctl` check.
 - The `IosLogTool` enum is needed by task 05 (app integration) to decide which config to build.
 - All iOS tool fields/methods must be gated with `#[cfg(target_os = "macos")]` since iOS development only works from macOS.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/tool_availability.rs` | Added `adb` and `macos_log` fields (phase 1 prerequisites); added `idevicesyslog` field (cfg-gated to macOS); added `check_adb()`, `check_macos_log()`, `check_idevicesyslog()` methods; added `native_logs_available()` with android/macos/ios arms; added `ios_native_log_tool()` helper; added `IosLogTool` enum; added all task-specified tests |
+| `crates/fdemon-daemon/src/lib.rs` | Added `#[cfg(target_os = "macos")] pub use tool_availability::IosLogTool` export; updated module doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Phase 1 prerequisites included**: The worktree was branched from `main` before phase 1 was merged. The task's acceptance criteria and test fixtures reference `adb`, `macos_log`, `check_adb()`, `check_macos_log()`, and `native_logs_available()` as existing infrastructure. These were added in the same commit as the phase 2 task 1 additions to make the worktree self-consistent.
+
+2. **`IosLogTool` placed in `tool_availability.rs`**: The enum is defined at the top of the file (before `ToolAvailability`) so it is visible when `ToolAvailability::ios_native_log_tool()` references it in its return type — matching the task specification.
+
+3. **`check_idevicesyslog` via `--help` exit code**: As specified in the task, `idevicesyslog --help` exits 0 on success, making exit-code-based detection reliable (unlike the macOS `log` command which always exits 64).
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon` — Passed (470 tests, 0 failed)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all` — Passed
+
+### Risks/Limitations
+
+1. **`idevicesyslog` broken on Xcode 26**: The availability check returns `true` if the binary is present and exits 0, but the tool itself may fail at runtime on Xcode 26. The task notes this is handled gracefully by the capture backend.
+2. **Non-macOS iOS arm**: `native_logs_available("ios")` returns `false` on non-macOS targets due to cfg-gating, matching expected behaviour since iOS tooling is macOS-only.

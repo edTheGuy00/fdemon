@@ -592,6 +592,7 @@ pub fn handle_action(
             session_id,
             platform,
             device_id,
+            device_name,
             app_id,
             settings,
         } => {
@@ -599,6 +600,7 @@ pub fn handle_action(
                 session_id,
                 platform,
                 device_id,
+                device_name,
                 app_id,
                 &settings,
                 msg_tx.clone(),

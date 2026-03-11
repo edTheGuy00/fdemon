@@ -540,6 +540,17 @@ impl Default for DapSettings {
 // Native Log Settings
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Per-tag configuration override for native log capture.
+///
+/// Allows individual tags to have their own minimum log level, overriding the
+/// global `min_level` in `NativeLogsSettings`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TagConfig {
+    /// Minimum log level for this tag (overrides the global `min_level`).
+    /// Options: "verbose", "debug", "info", "warning", "error"
+    pub min_level: Option<String>,
+}
+
 /// Configuration for native platform log capture.
 ///
 /// Controls whether fdemon runs parallel log capture processes (e.g., `adb logcat`,
@@ -564,6 +575,14 @@ pub struct NativeLogsSettings {
     /// Options: "verbose", "debug", "info", "warning", "error"
     #[serde(default = "default_native_logs_min_level")]
     pub min_level: String,
+
+    /// Per-tag configuration overrides.
+    ///
+    /// Key: tag name (e.g., "GoLog", "OkHttp", "com.example.myplugin").
+    /// In `.fdemon/config.toml`, use `[native_logs.tags.GoLog]` or
+    /// `[native_logs.tags."com.example.myplugin"]` for dotted names.
+    #[serde(default)]
+    pub tags: HashMap<String, TagConfig>,
 }
 
 fn default_native_logs_enabled() -> bool {
@@ -585,6 +604,7 @@ impl Default for NativeLogsSettings {
             exclude_tags: default_native_logs_exclude_tags(),
             include_tags: Vec::new(),
             min_level: default_native_logs_min_level(),
+            tags: HashMap::new(),
         }
     }
 }
@@ -601,6 +621,17 @@ impl NativeLogsSettings {
     /// Tag matching is case-insensitive.
     pub fn should_include_tag(&self, tag: &str) -> bool {
         fdemon_daemon::native_logs::should_include_tag(&self.include_tags, &self.exclude_tags, tag)
+    }
+
+    /// Get the effective minimum log level for a specific tag.
+    ///
+    /// Returns the per-tag override from `tags` if configured and has a `min_level` set,
+    /// otherwise falls back to the global `min_level`.
+    pub fn effective_min_level(&self, tag: &str) -> &str {
+        self.tags
+            .get(tag)
+            .and_then(|tc| tc.min_level.as_deref())
+            .unwrap_or(&self.min_level)
     }
 }
 
@@ -1589,6 +1620,7 @@ theme = "default"
         assert_eq!(settings.exclude_tags, vec!["flutter".to_string()]);
         assert!(settings.include_tags.is_empty());
         assert_eq!(settings.min_level, "info");
+        assert!(settings.tags.is_empty());
     }
 
     #[test]
@@ -1674,5 +1706,99 @@ theme = "default"
         );
         assert!(settings.native_logs.include_tags.is_empty());
         assert_eq!(settings.native_logs.min_level, "info");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Per-tag configuration tests (Task 08)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_settings_empty_tags() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.tags.is_empty());
+    }
+
+    #[test]
+    fn test_effective_min_level_global_fallback() {
+        let settings = NativeLogsSettings {
+            min_level: "info".to_string(),
+            tags: HashMap::new(),
+            ..Default::default()
+        };
+        assert_eq!(settings.effective_min_level("GoLog"), "info");
+    }
+
+    #[test]
+    fn test_effective_min_level_per_tag_override() {
+        let mut settings = NativeLogsSettings::default();
+        settings.tags.insert(
+            "GoLog".to_string(),
+            TagConfig {
+                min_level: Some("debug".to_string()),
+            },
+        );
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+        assert_eq!(settings.effective_min_level("OkHttp"), "info"); // fallback to global
+    }
+
+    #[test]
+    fn test_effective_min_level_per_tag_none_uses_global() {
+        let mut settings = NativeLogsSettings::default();
+        settings
+            .tags
+            .insert("GoLog".to_string(), TagConfig { min_level: None });
+        assert_eq!(settings.effective_min_level("GoLog"), "info"); // global default
+    }
+
+    #[test]
+    fn test_toml_deserialization_with_tags() {
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+
+[tags.GoLog]
+min_level = "debug"
+
+[tags.OkHttp]
+min_level = "warning"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+        assert_eq!(settings.effective_min_level("OkHttp"), "warning");
+        assert_eq!(settings.effective_min_level("Unknown"), "info");
+    }
+
+    #[test]
+    fn test_toml_deserialization_no_tags_section() {
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert!(settings.tags.is_empty());
+    }
+
+    #[test]
+    fn test_toml_deserialization_dotted_tag_name() {
+        let toml_str = r#"
+enabled = true
+min_level = "info"
+
+[tags."com.example.myplugin"]
+min_level = "debug"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            settings.effective_min_level("com.example.myplugin"),
+            "debug"
+        );
+    }
+
+    #[test]
+    fn test_tag_config_default_has_no_min_level() {
+        let tc = TagConfig::default();
+        assert!(tc.min_level.is_none());
     }
 }

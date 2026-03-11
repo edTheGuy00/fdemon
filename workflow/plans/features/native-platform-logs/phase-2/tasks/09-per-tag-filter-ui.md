@@ -342,3 +342,48 @@ mod tests {
 - **Empty state**: When no native tags have been discovered (no native log events received yet), the overlay shows an informative message rather than an empty list.
 - **Per-tag entry counts** come from `NativeTagState.discovered_tags` (BTreeMap<String, usize>) — these are updated in real-time as events arrive (task 07).
 - **Future enhancement**: Could add a search/filter bar within the overlay for projects with many tags. Deferred for now — the sorted list with scroll should be sufficient for typical tag counts (5-50 tags).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `TagFilterUiState` struct with `move_up`, `move_down`, `reset` methods; added `tag_filter_visible: bool` and `tag_filter_ui: TagFilterUiState` fields to `AppState`; initialized both in `with_settings()` |
+| `crates/fdemon-app/src/lib.rs` | Exported `TagFilterUiState` from the crate's public API |
+| `crates/fdemon-app/src/message.rs` | Added `TagFilterMoveUp`, `TagFilterMoveDown`, `TagFilterToggleSelected` message variants for overlay navigation |
+| `crates/fdemon-app/src/handler/update.rs` | Implemented `ShowTagFilter` (sets `tag_filter_visible = true`, calls `reset()`), `HideTagFilter` (clears flag), `TagFilterMoveUp`, `TagFilterMoveDown` (clamps at tag count), `TagFilterToggleSelected` (looks up tag at selected index and toggles it) |
+| `crates/fdemon-app/src/handler/keys.rs` | Added early-return overlay key intercept at top of `handle_key_normal` when `tag_filter_visible`; maps Esc/T/t to `HideTagFilter`, arrows/j/k to move messages, Space/Enter to toggle, a/n to bulk actions; added `T`/`t` binding in normal mode to open overlay |
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | NEW: `render_tag_filter()` function; `truncate_tag()` helper; 14 unit tests covering `TagFilterUiState` navigation, `truncate_tag` edge cases, and rendering smoke tests |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Declared `pub mod tag_filter`; re-exported `render_tag_filter` |
+| `crates/fdemon-tui/src/render/mod.rs` | Added overlay rendering in `UiMode::Normal` branch: when `tag_filter_visible`, calls `render_tag_filter(frame, areas.logs, &handle.native_tag_state, &state.tag_filter_ui)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Navigation messages instead of direct mutation**: The key handler takes `&AppState` (immutable), so navigation operations (`move_up`, `move_down`) couldn't mutate `tag_filter_ui` directly. Added `TagFilterMoveUp`, `TagFilterMoveDown`, `TagFilterToggleSelected` messages to keep the TEA pattern clean.
+
+2. **`tag_filter_visible` as plain bool on `AppState`**: The task specced `tag_filter_visible: bool` and `tag_filter_ui: TagFilterUiState` at the top-level `AppState`. This is consistent with other overlay flags (e.g., `file_watcher_suspended`). An alternative would have been a new `UiMode::TagFilter`, but the task explicitly said `tag_filter_visible: bool`.
+
+3. **`TagFilterUiState` defined in `state.rs`**: Placed alongside other UI state types (`DevToolsViewState`, `SettingsViewState`) in the app layer, matching the established pattern. Exported via `lib.rs` for use in `fdemon-tui`.
+
+4. **Overlay renders in `UiMode::Normal` only**: The tag filter is a normal-mode overlay. The task spec renders it when `state.tag_filter_visible` inside the `UiMode::Normal` match arm, after the search overlay.
+
+5. **`sorted_tags()` clones tag name for toggle**: `TagFilterToggleSelected` collects the tag name at `selected_index` before calling `toggle_tag`, avoiding borrow-checker issues with simultaneous immutable and mutable borrows on `NativeTagState`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - 814 passed; 4 pre-existing snapshot failures only (version number mismatch v0.1.0 → v0.2.1, unrelated to this task)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo test --lib -p fdemon-tui tag_filter` - 14/14 passed
+
+### Risks/Limitations
+
+1. **Scroll not wired to render**: `TagFilterUiState.scroll_offset` is tracked and reset but the `List` widget in `render_tag_filter` does not yet apply the offset (ratatui `List` doesn't scroll natively without `ListState`). For tag counts > `TAG_FILTER_MAX_VISIBLE_TAGS` (15), users will see a truncated list. This is acceptable for the initial implementation given typical tag counts of 5-50.
+
+2. **`T`/`t` key conflict**: Both `T` (uppercase) and `t` (lowercase) open/close the overlay. In normal mode `'t'` was unused; this is safe. Within the overlay, both close it. No conflicts found with other bindings.

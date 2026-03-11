@@ -2,18 +2,21 @@
 //!
 //! Shared types, trait, and platform dispatch for native platform log capture.
 //!
-//! Each platform backend (Android logcat, macOS unified logging) implements the
+//! Each platform backend (Android logcat, macOS unified logging, iOS) implements the
 //! [`NativeLogCapture`] trait and is selected at runtime via [`create_native_log_capture`].
 //!
 //! ## Platform Support
 //!
-//! | Platform | Mechanism          | Module        |
-//! |----------|--------------------|---------------|
-//! | Android  | `adb logcat`       | `android.rs`  |
-//! | macOS    | `log stream`       | `macos.rs`    |
-//! | Others   | Not needed (pipe)  | —             |
+//! | Platform | Mechanism                            | Module        |
+//! |----------|--------------------------------------|---------------|
+//! | Android  | `adb logcat`                         | `android.rs`  |
+//! | macOS    | `log stream`                         | `macos.rs`    |
+//! | iOS      | `xcrun simctl` / `idevicesyslog`     | `ios.rs`      |
+//! | Others   | Not needed (pipe)                    | —             |
 
 pub mod android;
+#[cfg(target_os = "macos")]
+pub mod ios;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
@@ -100,6 +103,33 @@ pub struct MacOsLogConfig {
     pub min_level: String,
 }
 
+/// Configuration for iOS native log capture.
+///
+/// iOS has two capture backends depending on whether the target is a simulator
+/// or a physical device:
+/// - Simulator: `xcrun simctl spawn <udid> log stream --style syslog`
+/// - Physical: `idevicesyslog -u <udid> -p <process>`
+#[cfg(target_os = "macos")]
+#[derive(Clone)]
+pub struct IosLogConfig {
+    /// The device UDID (simulator or physical).
+    /// Used as `xcrun simctl spawn <udid>` or `idevicesyslog -u <udid>`.
+    pub device_udid: String,
+    /// Whether this is a simulator device.
+    /// Determines which capture tool to use.
+    pub is_simulator: bool,
+    /// Process name to filter by (e.g., "Runner").
+    /// Used as `--predicate 'process == "<name>"'` (simulator)
+    /// or `-p <name>` (physical).
+    pub process_name: String,
+    /// Tags/subsystems to exclude from output.
+    pub exclude_tags: Vec<String>,
+    /// If non-empty, only show these tags.
+    pub include_tags: Vec<String>,
+    /// Minimum log level (e.g., "debug", "info").
+    pub min_level: String,
+}
+
 /// Decide whether a tag should be included based on include/exclude tag lists.
 ///
 /// - If `include_tags` is non-empty, only those tags pass (whitelist mode).
@@ -121,6 +151,7 @@ pub fn create_native_log_capture(
     platform: &str,
     android_config: Option<AndroidLogConfig>,
     #[cfg(target_os = "macos")] macos_config: Option<MacOsLogConfig>,
+    #[cfg(target_os = "macos")] ios_config: Option<IosLogConfig>,
 ) -> Option<Box<dyn NativeLogCapture>> {
     match platform {
         "android" => {
@@ -131,6 +162,11 @@ pub fn create_native_log_capture(
         "macos" => {
             let config = macos_config?;
             Some(Box::new(macos::MacOsLogCapture::new(config)))
+        }
+        #[cfg(target_os = "macos")]
+        "ios" => {
+            let config = ios_config?;
+            Some(Box::new(ios::IosLogCapture::new(config)))
         }
         _ => None, // Linux, Windows, Web — no native capture needed
     }
@@ -204,6 +240,8 @@ mod tests {
             None,
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         );
         assert!(result.is_none());
     }
@@ -215,6 +253,8 @@ mod tests {
             None,
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         );
         assert!(result.is_none());
     }
@@ -223,6 +263,8 @@ mod tests {
     fn test_dispatch_web_returns_none() {
         let result = create_native_log_capture(
             "web",
+            None,
+            #[cfg(target_os = "macos")]
             None,
             #[cfg(target_os = "macos")]
             None,
@@ -244,6 +286,8 @@ mod tests {
             Some(config),
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         );
         assert!(result.is_some());
     }
@@ -255,7 +299,31 @@ mod tests {
             None,
             #[cfg(target_os = "macos")]
             None,
+            #[cfg(target_os = "macos")]
+            None,
         );
+        assert!(result.is_none());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_dispatch_ios_with_config_returns_some() {
+        let config = IosLogConfig {
+            device_udid: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE".to_string(),
+            is_simulator: true,
+            process_name: "Runner".to_string(),
+            exclude_tags: vec!["flutter".to_string()],
+            include_tags: vec![],
+            min_level: "info".to_string(),
+        };
+        let result = create_native_log_capture("ios", None, None, Some(config));
+        assert!(result.is_some());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_dispatch_ios_without_config_returns_none() {
+        let result = create_native_log_capture("ios", None, None, None);
         assert!(result.is_none());
     }
 }

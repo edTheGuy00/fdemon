@@ -14,9 +14,9 @@ use tokio::sync::mpsc;
 use crate::config::NativeLogsSettings;
 use crate::message::Message;
 use crate::session::SessionId;
-#[cfg(target_os = "macos")]
-use fdemon_daemon::native_logs::MacOsLogConfig;
 use fdemon_daemon::native_logs::{create_native_log_capture, AndroidLogConfig};
+#[cfg(target_os = "macos")]
+use fdemon_daemon::native_logs::{IosLogConfig, MacOsLogConfig};
 
 /// Spawn native log capture for a session.
 ///
@@ -37,6 +37,7 @@ pub(super) fn spawn_native_log_capture(
     session_id: SessionId,
     platform: String,
     device_id: String,
+    device_name: String,
     app_id: Option<String>,
     settings: &NativeLogsSettings,
     msg_tx: mpsc::Sender<Message>,
@@ -49,8 +50,9 @@ pub(super) fn spawn_native_log_capture(
         return;
     }
 
-    // Only Android and macOS need a separate capture process.
+    // Only Android, macOS, and iOS need a separate capture process.
     // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
+    // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
     if platform != "android" {
         #[cfg(not(target_os = "macos"))]
         {
@@ -62,7 +64,7 @@ pub(super) fn spawn_native_log_capture(
             return;
         }
         #[cfg(target_os = "macos")]
-        if platform != "macos" {
+        if platform != "macos" && platform != "ios" {
             tracing::debug!(
                 "Native log capture not supported on platform '{}' — skipping for session {}",
                 platform,
@@ -112,6 +114,34 @@ pub(super) fn spawn_native_log_capture(
             None
         };
 
+        #[cfg(target_os = "macos")]
+        let ios_config = if platform == "ios" {
+            let process_name = derive_ios_process_name(&app_id);
+            let is_simulator = is_ios_simulator(&device_name, &device_id);
+
+            tracing::info!(
+                "Starting iOS native log capture for session {} ({}, process={})",
+                session_id,
+                if is_simulator {
+                    "simulator"
+                } else {
+                    "physical"
+                },
+                process_name,
+            );
+
+            Some(IosLogConfig {
+                device_udid: device_id.clone(),
+                is_simulator,
+                process_name,
+                exclude_tags: exclude_tags.clone(),
+                include_tags: include_tags.clone(),
+                min_level: min_level.clone(),
+            })
+        } else {
+            None
+        };
+
         // ── Create the platform capture backend ───────────────────────────
 
         let capture = create_native_log_capture(
@@ -119,6 +149,8 @@ pub(super) fn spawn_native_log_capture(
             android_config,
             #[cfg(target_os = "macos")]
             macos_config,
+            #[cfg(target_os = "macos")]
+            ios_config,
         );
 
         let capture = match capture {
@@ -230,6 +262,44 @@ fn derive_macos_process_name(app_id: &Option<String>) -> String {
     "Runner".to_string()
 }
 
+/// Derive the iOS process name from the Flutter app ID.
+///
+/// iOS Flutter apps use the same bundle identifier / process name convention
+/// as macOS — the process name is typically the last component of the bundle
+/// identifier (e.g., `"com.example.myApp"` → `"myApp"`).
+/// Falls back to `"Runner"` (Flutter's default iOS app name) when no
+/// `app_id` is available.
+///
+/// Uses the same logic as [`derive_macos_process_name`] since both platforms
+/// share the same naming convention.
+fn derive_ios_process_name(app_id: &Option<String>) -> String {
+    derive_macos_process_name(app_id)
+}
+
+/// Detect whether an iOS device is a simulator based on its metadata.
+///
+/// Uses two heuristics in order:
+/// 1. **Device name**: Flutter's device discovery names simulators with the
+///    suffix `" Simulator"` (e.g., `"iPhone 15 Simulator"`). Physical device
+///    names are user-set (e.g., `"Ed's iPhone"`).
+/// 2. **UDID format**: Simulator UDIDs use standard UUID format with hyphens
+///    (`XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`, 36 chars, 4 hyphens). Physical
+///    device UDIDs are 40-char hex strings without hyphens (or 24-char for
+///    newer Apple Silicon devices).
+///
+/// Falls back to `false` (physical device) if detection is ambiguous.
+fn is_ios_simulator(device_name: &str, device_id: &str) -> bool {
+    // Heuristic 1: device name contains "simulator" (case-insensitive)
+    if device_name.to_lowercase().contains("simulator") {
+        return true;
+    }
+    // Heuristic 2: UDID matches standard UUID format (8-4-4-4-12, 36 chars, 4 hyphens)
+    if device_id.len() == 36 && device_id.chars().filter(|c| *c == '-').count() == 4 {
+        return true;
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +380,69 @@ mod tests {
             LogSource::Native { ref tag } if tag == "OkHttp"
         ));
         assert_eq!(entry.level, LogLevel::Warning);
+    }
+
+    // ── is_ios_simulator tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_is_ios_simulator_by_name() {
+        assert!(is_ios_simulator("iPhone 15 Simulator", "some-id"));
+        assert!(is_ios_simulator(
+            "iPad Air (5th generation) Simulator",
+            "some-id"
+        ));
+        assert!(!is_ios_simulator("Ed's iPhone", "some-id"));
+    }
+
+    #[test]
+    fn test_is_ios_simulator_by_name_case_insensitive() {
+        // "simulator" is checked case-insensitively
+        assert!(is_ios_simulator("iPhone 15 SIMULATOR", "some-id"));
+    }
+
+    #[test]
+    fn test_is_ios_simulator_by_udid_format() {
+        // Simulator UDID: standard UUID format (36 chars, 4 hyphens)
+        assert!(is_ios_simulator(
+            "iPhone 15",
+            "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        ));
+        // Physical UDID: 40-char hex without hyphens
+        assert!(!is_ios_simulator(
+            "iPhone 15",
+            "00008030000011ABC000DEF1234567890abcdef0"
+        ));
+    }
+
+    #[test]
+    fn test_is_ios_simulator_physical_device_not_simulator() {
+        // Real device name without "Simulator" and non-UUID UDID
+        assert!(!is_ios_simulator(
+            "Ed's iPhone",
+            "00008030000011ABC000DEF1234567890abcdef0"
+        ));
+    }
+
+    // ── derive_ios_process_name tests ──────────────────────────────────────
+
+    #[test]
+    fn test_derive_ios_process_name_from_bundle_id() {
+        assert_eq!(
+            derive_ios_process_name(&Some("com.example.myApp".to_string())),
+            "myApp"
+        );
+    }
+
+    #[test]
+    fn test_derive_ios_process_name_fallback() {
+        assert_eq!(derive_ios_process_name(&None), "Runner");
+    }
+
+    #[test]
+    fn test_derive_ios_process_name_single_component() {
+        assert_eq!(
+            derive_ios_process_name(&Some("Runner".to_string())),
+            "Runner"
+        );
     }
 }

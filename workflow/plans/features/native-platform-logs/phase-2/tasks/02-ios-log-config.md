@@ -241,3 +241,38 @@ mod tests {
 - The `ios_config` parameter uses `#[cfg(target_os = "macos")]` attribute on the parameter itself, matching the existing pattern for `macos_config`. This means on non-macOS builds the parameter is omitted entirely.
 - The stub `ios.rs` returns `None` from `spawn()` — tasks 03 and 04 replace this with real implementations.
 - The signature change to `create_native_log_capture()` is a breaking change within the workspace. The call site in `actions/native_logs.rs` must be updated in this task to pass `None` for `ios_config`. The actual iOS config building is wired in task 05.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Added `IosLogConfig` struct (cfg-gated), declared `pub mod ios`, added `"ios"` dispatch arm to `create_native_log_capture()`, updated existing tests to pass new `ios_config` parameter, added 2 new iOS dispatch tests |
+| `crates/fdemon-daemon/src/native_logs/ios.rs` | NEW — stub `IosLogCapture` struct implementing `NativeLogCapture` with `spawn()` returning `None` |
+| `crates/fdemon-daemon/src/lib.rs` | Added `#[cfg(target_os = "macos")] pub use native_logs::IosLogConfig` export and updated doc comment |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Updated `create_native_log_capture()` call site to pass `#[cfg(target_os = "macos")] None` as `ios_config` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Rebase onto feature branch**: The worktree was based on `origin/main` which lacked Phase 1 native_logs infrastructure. Rebased `worktree-agent-a8bc8583` onto `feature/native-platform-logs` before making changes. The worktree differed from the feature branch only by a release workflow file, which was preserved as a clean rebase.
+
+2. **Platform guard not updated**: The early-return platform guard in `spawn_native_log_capture()` still only allows `"android"` and `"macos"`. This is intentional — updating the guard to allow `"ios"` is task 05's responsibility. The `"ios"` dispatch arm in `create_native_log_capture()` is ready but will only be reachable after task 05 expands the guard.
+
+3. **`cargo fmt` reformatted iOS test calls**: The two new iOS tests had multi-line `create_native_log_capture()` calls that `cargo fmt` collapsed to single-line. This is correct idiomatic formatting and matches the test spec's intent.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (reformatted iOS test calls to single-line)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon` - Passed (501 tests, 0 failed, 3 ignored)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Stub implementation**: `IosLogCapture::spawn()` always returns `None`. This is by design for this task — tasks 03 and 04 implement simulator and physical device capture respectively. Any `"ios"` dispatch will silently produce no capture until those tasks are complete.
+2. **macOS-only**: All iOS types and dispatch are behind `#[cfg(target_os = "macos")]`. The function signature differs between macOS and non-macOS builds (two fewer parameters on non-macOS), consistent with the existing `macos_config` pattern.

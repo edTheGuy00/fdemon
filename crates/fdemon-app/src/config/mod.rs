@@ -32,7 +32,7 @@ pub use settings::{
 pub use types::{
     BehaviorSettings, ConfigSource, DapSettings, DevToolsLoggingSettings, DevToolsSettings,
     EditorSettings, FlutterMode, IconMode, LaunchConfig, LaunchFile, NativeLogsSettings, ParentIde,
-    ResolvedLaunchConfig, SettingItem, SettingValue, Settings, SettingsTab, UiSettings,
+    ResolvedLaunchConfig, SettingItem, SettingValue, Settings, SettingsTab, TagConfig, UiSettings,
     UserPreferences, WatcherSettings, WindowPrefs,
 };
 pub use vscode::load_vscode_configs;

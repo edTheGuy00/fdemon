@@ -158,6 +158,10 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
         // Shut down the native log capture task (if running).
         handle.shutdown_native_logs();
 
+        // Reset native tag state — tags from the previous run should not
+        // persist across a session stop/restart.
+        handle.native_tag_state = crate::session::NativeTagState::default();
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -221,6 +225,10 @@ pub fn handle_session_message_state(
 
                 // Shut down the native log capture task (if running).
                 handle.shutdown_native_logs();
+
+                // Reset native tag state — tags from the previous run should
+                // not persist when the app is restarted within the same session.
+                handle.native_tag_state = crate::session::NativeTagState::default();
             }
         }
     }
@@ -268,9 +276,11 @@ pub fn maybe_connect_vm_service(
 /// Check if an `AppStart` event should trigger native platform log capture.
 ///
 /// Returns `Some(StartNativeLogCapture)` when the message is an `AppStart` and
-/// the session's platform is `"android"` or `"macos"` (native log capture is
-/// only needed on these platforms — Linux/Windows/Web already surface native
-/// logs via Flutter's stdout pipe).
+/// the session's platform is `"android"`, `"macos"`, or `"ios"` (native log
+/// capture is only needed on these platforms — Linux/Windows/Web already
+/// surface native logs via Flutter's stdout pipe).
+///
+/// iOS capture is only attempted on macOS hosts (gated by `cfg!(target_os = "macos")`).
 ///
 /// Returns `None` for non-`AppStart` messages, unsupported platforms, or when
 /// native logs are disabled in settings.
@@ -303,15 +313,19 @@ pub fn maybe_start_native_log_capture(
                 return None;
             }
 
-            // Only Android and macOS need a separate capture process.
-            let needs_capture =
-                platform == "android" || (cfg!(target_os = "macos") && platform == "macos");
+            // Only Android, macOS, and iOS need a separate capture process.
+            // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
+            // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
+            let needs_capture = platform == "android"
+                || (cfg!(target_os = "macos") && platform == "macos")
+                || (cfg!(target_os = "macos") && platform == "ios");
 
             if needs_capture {
                 return Some(UpdateAction::StartNativeLogCapture {
                     session_id,
                     platform: platform.clone(),
                     device_id: handle.session.device_id.clone(),
+                    device_name: handle.session.device_name.clone(),
                     app_id: Some(app_start.app_id.clone()),
                     settings: state.settings.native_logs.clone(),
                 });

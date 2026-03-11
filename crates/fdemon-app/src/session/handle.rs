@@ -5,6 +5,7 @@ use std::sync::Arc;
 use fdemon_core::AppPhase;
 use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, RequestTracker};
 
+use super::native_tags::NativeTagState;
 use super::session::Session;
 
 /// Handle for controlling a session's Flutter process
@@ -91,6 +92,13 @@ pub struct SessionHandle {
     /// from continuing after the session has ended. Set by `NativeLogCaptureStarted`,
     /// cleared on session stop or capture exit.
     pub native_log_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Per-session native log tag discovery and visibility state.
+    ///
+    /// Tracks every distinct tag seen in this session's native log stream
+    /// and allows the user to toggle individual tags on/off via the tag
+    /// filter UI. Reset to default when the session is stopped or restarted.
+    pub native_tag_state: NativeTagState,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -115,6 +123,7 @@ impl std::fmt::Debug for SessionHandle {
                 "has_native_log_task",
                 &self.native_log_task_handle.is_some(),
             )
+            .field("native_tag_count", &self.native_tag_state.tag_count())
             .finish()
     }
 }
@@ -137,6 +146,7 @@ impl SessionHandle {
             debug_task_handle: None,
             native_log_shutdown_tx: None,
             native_log_task_handle: None,
+            native_tag_state: NativeTagState::default(),
         }
     }
 

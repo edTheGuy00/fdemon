@@ -1932,9 +1932,21 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Native Platform Log Messages (Phase 1, Task 07)
         // ─────────────────────────────────────────────────────────
 
-        // A native log line was captured — convert to `LogEntry` and queue.
+        // A native log line was captured — track the tag and, if visible,
+        // convert to `LogEntry` and queue.
         Message::NativeLog { session_id, event } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Always observe the tag so the count reflects total capture
+                // volume regardless of the current visibility setting.
+                handle.native_tag_state.observe_tag(&event.tag);
+
+                // Skip the log entry if the user has hidden this tag.
+                // This filters at the handler level rather than at render time,
+                // keeping the log buffer free of invisible entries.
+                if !handle.native_tag_state.is_tag_visible(&event.tag) {
+                    return UpdateResult::none();
+                }
+
                 let entry = fdemon_core::LogEntry::new(
                     event.level,
                     LogSource::Native { tag: event.tag },
@@ -1981,12 +1993,102 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
-        // Native log capture stopped — clear stored handles.
+        // Native log capture stopped — clear stored handles and reset tag state.
         Message::NativeLogCaptureStopped { session_id } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.native_log_shutdown_tx = None;
                 handle.native_log_task_handle = None;
+                handle.native_tag_state = crate::session::NativeTagState::default();
                 tracing::debug!("Native log capture stopped for session {}", session_id);
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Native Tag Filter Messages (Phase 2, Task 07)
+        // ─────────────────────────────────────────────────────────
+
+        // Toggle a specific tag's visibility in the active session.
+        Message::ToggleNativeTag { tag } => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    let visible = handle.native_tag_state.toggle_tag(&tag);
+                    tracing::debug!(
+                        "Tag '{}' is now {}",
+                        tag,
+                        if visible { "visible" } else { "hidden" }
+                    );
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Show all native log tags in the active session.
+        Message::ShowAllNativeTags => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.native_tag_state.show_all();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Hide all native log tags in the active session.
+        Message::HideAllNativeTags => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.native_tag_state.hide_all();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Open the tag filter overlay and reset its UI state.
+        Message::ShowTagFilter => {
+            state.tag_filter_visible = true;
+            state.tag_filter_ui.reset();
+            UpdateResult::none()
+        }
+
+        // Close the tag filter overlay.
+        Message::HideTagFilter => {
+            state.tag_filter_visible = false;
+            UpdateResult::none()
+        }
+
+        // Move the tag filter selection up.
+        Message::TagFilterMoveUp => {
+            state.tag_filter_ui.move_up();
+            UpdateResult::none()
+        }
+
+        // Move the tag filter selection down (clamp at tag count - 1).
+        Message::TagFilterMoveDown => {
+            let tag_count = state
+                .session_manager
+                .selected()
+                .map(|h| h.native_tag_state.tag_count())
+                .unwrap_or(0);
+            let max_index = tag_count.saturating_sub(1);
+            state.tag_filter_ui.move_down(max_index);
+            UpdateResult::none()
+        }
+
+        // Toggle the visibility of the currently selected tag in the overlay.
+        Message::TagFilterToggleSelected => {
+            let selected = state.tag_filter_ui.selected_index;
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    // Collect the tag name at the selected index before mutating.
+                    let tag_name: Option<String> = handle
+                        .native_tag_state
+                        .sorted_tags()
+                        .get(selected)
+                        .map(|(tag, _)| tag.to_string());
+                    if let Some(tag) = tag_name {
+                        handle.native_tag_state.toggle_tag(&tag);
+                    }
+                }
             }
             UpdateResult::none()
         }

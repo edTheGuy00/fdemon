@@ -98,6 +98,30 @@ fn handle_key_search_input(state: &AppState, key: InputKey) -> Option<Message> {
 
 /// Handle key events in normal mode
 fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
+    // ─────────────────────────────────────────────────────────────────────────
+    // Tag filter overlay intercepts ALL keys when visible (Phase 2, Task 09)
+    // ─────────────────────────────────────────────────────────────────────────
+    if state.tag_filter_visible {
+        return match key {
+            // Close the overlay
+            InputKey::Esc | InputKey::Char('T') | InputKey::Char('t') => {
+                Some(Message::HideTagFilter)
+            }
+            // Navigate up
+            InputKey::Up | InputKey::Char('k') => Some(Message::TagFilterMoveUp),
+            // Navigate down
+            InputKey::Down | InputKey::Char('j') => Some(Message::TagFilterMoveDown),
+            // Toggle selected tag
+            InputKey::Char(' ') | InputKey::Enter => Some(Message::TagFilterToggleSelected),
+            // Show all tags
+            InputKey::Char('a') => Some(Message::ShowAllNativeTags),
+            // Hide all tags
+            InputKey::Char('n') => Some(Message::HideAllNativeTags),
+            // Consume all other keys while overlay is open
+            _ => None,
+        };
+    }
+
     // Check if any session is busy (reloading)
     let is_busy = state.session_manager.any_session_busy();
 
@@ -269,6 +293,12 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         // ─────────────────────────────────────────────────────────
         // ',' - Open settings panel
         InputKey::Char(',') => Some(Message::ShowSettings),
+
+        // ─────────────────────────────────────────────────────────
+        // Native Tag Filter (Phase 2, Task 09)
+        // ─────────────────────────────────────────────────────────
+        // 'T' - Open tag filter overlay (mnemonic: Tag filter)
+        InputKey::Char('T') | InputKey::Char('t') => Some(Message::ShowTagFilter),
 
         _ => None,
     }
