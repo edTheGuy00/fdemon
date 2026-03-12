@@ -416,6 +416,9 @@ pub enum UpdateAction {
         /// Native log settings snapshot (captured at action creation time so
         /// the action dispatcher does not need access to AppState).
         settings: crate::config::NativeLogsSettings,
+        /// Flutter project directory — used as the default working directory
+        /// for custom log source processes when `working_dir` is not specified.
+        project_path: std::path::PathBuf,
     },
 }
 

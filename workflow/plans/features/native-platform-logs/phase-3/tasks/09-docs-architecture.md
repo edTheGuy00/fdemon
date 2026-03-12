@@ -105,3 +105,35 @@ Document the `custom_source_handles` field:
 - Keep the existing content intact — only add new subsections and update existing tables/diagrams
 - The architecture section is technical reference for developers, not user-facing — use implementation details and type names
 - Follow the existing documentation style: ASCII diagrams, tables for structured data, code snippets for key types
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added "Custom Log Sources" subsection to Native Log Capture Subsystem (architecture diagram, format parser dispatch table, lifecycle messages table, design decisions); added `custom.rs` and `formats.rs` to module reference table; expanded `SessionHandle` fields diagram in Multi-Session Architecture |
+
+### Notable Decisions/Tradeoffs
+
+1. **Architecture diagram shows full pipeline**: The ASCII diagram extends past `NativeLogEvent` to show `Message::NativeLog` → `handler::update()` → `NativeTagState + log buffer`, making the integration with the existing pipeline explicit and self-contained within the subsection.
+
+2. **SessionHandle diagram expanded (not a new section)**: The task asked to document `custom_source_handles` under `SessionHandle`. Rather than creating a separate `SessionHandle` fields section in the Native Log Capture Subsystem, the existing `SessionHandle` tree diagram in the Multi-Session Architecture section was expanded to include all task/shutdown handle pairs (vm, perf, network, debug, native_log, custom_source). This is consistent with the file's style and avoids duplication.
+
+3. **Lifecycle messages table added**: `CustomSourceStarted` and `CustomSourceStopped` are documented in a table with their exact field names, matching the actual `message.rs` definitions. This was not explicitly listed in the task spec's section template but was called out in the acceptance criteria ("How custom source events integrate with the existing pipeline").
+
+4. **`syslog` platform caveat documented**: The format table notes that `OutputFormat::Syslog` returns `None` on non-macOS platforms (matching the `#[cfg(not(target_os = "macos"))]` stub in `formats.rs`).
+
+### Testing Performed
+
+- Visual inspection of all three edit locations confirmed correct placement and style alignment
+- `grep` verification confirmed all key terms present: `CustomLogCapture`, `custom_source_handles`, `formats.rs`, `custom.rs`, `CustomSourceStarted`, `CustomSourceStopped`, `parse_line`, `OutputFormat`
+- File structure verified: 1475 lines total, heading hierarchy intact
+
+### Risks/Limitations
+
+1. **Documentation-only change**: No automated tests; correctness relies on cross-referencing the actual implementation files (`custom.rs`, `formats.rs`, `handle.rs`, `message.rs`).

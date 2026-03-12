@@ -8,6 +8,22 @@ use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, 
 use super::native_tags::NativeTagState;
 use super::session::Session;
 
+/// Handle for a running custom log source process.
+///
+/// Stores the name of the source (used as a log tag), a shutdown sender
+/// for signalling graceful stop, and the task handle for aborting as
+/// a fallback. Stored in a Vec on `SessionHandle` because multiple custom
+/// sources can run concurrently per session.
+pub struct CustomSourceHandle {
+    /// Human-readable source name — used as the log tag in the tag filter overlay.
+    pub name: String,
+    /// Shutdown sender — send `true` to signal the capture task to stop.
+    /// Stored as `Arc` because the corresponding `Message` variant requires `Clone`.
+    pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    /// The background task handle — aborted as a fallback on session close.
+    pub task_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
 /// Handle for controlling a session's Flutter process
 pub struct SessionHandle {
     /// The session state
@@ -99,6 +115,13 @@ pub struct SessionHandle {
     /// and allows the user to toggle individual tags on/off via the tag
     /// filter UI. Reset to default when the session is stopped or restarted.
     pub native_tag_state: NativeTagState,
+
+    /// Running custom log source handles for this session.
+    ///
+    /// One entry per configured custom source that has been successfully
+    /// spawned. Cleared (and each source shut down) when the session ends.
+    /// Multiple sources can run simultaneously.
+    pub custom_source_handles: Vec<CustomSourceHandle>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -124,6 +147,7 @@ impl std::fmt::Debug for SessionHandle {
                 &self.native_log_task_handle.is_some(),
             )
             .field("native_tag_count", &self.native_tag_state.tag_count())
+            .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
     }
 }
@@ -147,6 +171,7 @@ impl SessionHandle {
             native_log_shutdown_tx: None,
             native_log_task_handle: None,
             native_tag_state: NativeTagState::default(),
+            custom_source_handles: Vec::new(),
         }
     }
 
@@ -154,6 +179,9 @@ impl SessionHandle {
     ///
     /// Sends `true` on the shutdown channel to signal graceful stop, then
     /// aborts the task as a fallback. Clears both fields on the handle.
+    ///
+    /// Also shuts down all custom log source processes registered for this
+    /// session and clears the `custom_source_handles` Vec.
     pub fn shutdown_native_logs(&mut self) {
         if let Some(tx) = self.native_log_shutdown_tx.take() {
             let _ = tx.send(true);
@@ -165,6 +193,17 @@ impl SessionHandle {
         if let Some(handle) = self.native_log_task_handle.take() {
             handle.abort();
         }
+
+        // Shut down all custom log source processes.
+        for handle in &self.custom_source_handles {
+            let _ = handle.shutdown_tx.send(true);
+            tracing::debug!(
+                "Sent shutdown signal to custom log source '{}' for session {}",
+                handle.name,
+                self.session.id
+            );
+        }
+        self.custom_source_handles.clear();
     }
 
     /// Attach a Flutter process to this session

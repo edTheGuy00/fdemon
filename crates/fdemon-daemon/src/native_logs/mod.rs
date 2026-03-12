@@ -15,6 +15,8 @@
 //! | Others   | Not needed (pipe)                    | —             |
 
 pub mod android;
+pub mod custom;
+pub mod formats;
 #[cfg(target_os = "macos")]
 pub mod ios;
 #[cfg(target_os = "macos")]

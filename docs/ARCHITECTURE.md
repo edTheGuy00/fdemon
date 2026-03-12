@@ -443,6 +443,8 @@ flutter-demon/
 | `native_logs/android.rs` | `AndroidLogCapture` — spawns `adb logcat`, parses logcat output |
 | `native_logs/macos.rs` | `MacOsLogCapture` — spawns `log stream`, parses macOS unified log output |
 | `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
+| `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
+| `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
 
 **Platform Support:**
 
@@ -676,7 +678,14 @@ SessionHandle
 ├── session: Session  (state)
 ├── process: Option<FlutterProcess>
 ├── cmd_sender: Option<CommandSender>
-└── request_tracker: Arc<RequestTracker>
+├── request_tracker: Arc<RequestTracker>
+├── vm_shutdown_tx / vm_request_handle  (VM Service connection)
+├── perf_shutdown_tx / perf_task_handle  (performance monitoring task)
+├── network_shutdown_tx / network_task_handle  (network monitoring task)
+├── debug_shutdown_tx / debug_task_handle  (DAP debug event task)
+├── native_log_shutdown_tx / native_log_task_handle  (platform capture task)
+├── native_tag_state: NativeTagState  (discovered tags + visibility)
+└── custom_source_handles: Vec<CustomSourceHandle>  (per-source handles)
 
 Session
 ├── id, name, phase
@@ -1059,6 +1068,72 @@ min_level = "info"
 | `log` | macOS | unified log stream capture | Required for macOS native logs |
 | `xcrun simctl` | macOS (iOS sim) | iOS simulator log stream | Requires Xcode CLI tools |
 | `idevicesyslog` | macOS (iOS phy) | Physical iOS device syslog relay | Optional; part of `libimobiledevice`. Graceful degradation if absent. |
+
+### Custom Log Sources
+
+Users can define arbitrary log source processes via `[[native_logs.custom_sources]]` configuration. Each custom source implements the same `NativeLogCapture` trait as platform backends.
+
+#### Architecture
+
+```
+                     NativeLogCapture trait
+┌──────────────────────────────────────────────────────────────────┐
+│ AndroidLogCapture │ MacOsLogCapture │ IosLogCapture │ CustomLogCapture │
+│ (adb logcat)      │ (log stream)    │ (xcrun simctl/│ (user-defined    │
+│                   │                 │  idevicesyslog)│  command)        │
+└──────────────────────────────────────────────────────────────────┘
+          │                  │               │               │
+          └──────────────────┴───────────────┴───────────────┘
+                                     │
+                              NativeLogEvent
+                                     │
+                         ┌───────────┴───────────┐
+                         │   Format Parser        │
+                         │   (formats.rs)         │
+                         │   Raw│Json│Logcat│Syslog│
+                         └───────────────────────┘
+                                     │
+                         Message::NativeLog
+                                     │
+                         handler::update()
+                                     │
+                         NativeTagState + log buffer
+```
+
+`CustomLogCapture` is separate from `create_native_log_capture()` (which dispatches by platform string). Multiple custom sources can be active concurrently within a single session.
+
+**Key design decisions:**
+
+- **No shell expansion**: Commands are spawned directly via `tokio::process::Command::new` with explicit args — never `sh -c`. This avoids injection risks.
+- **No auto-restart**: If the process exits, a warning is logged and the capture stops. Users must fix their command configuration.
+- **stderr not parsed**: stderr is piped to avoid orphaned pipe errors but its output is not forwarded as log events.
+- **Tag filtering**: Reuses `should_include_tag()` from `native_logs/mod.rs` with the per-source `include_tags`/`exclude_tags` lists.
+
+#### Format Parser Dispatch (`native_logs/formats.rs`)
+
+The `formats` module provides pluggable output parsing for custom sources via the `parse_line()` dispatch function:
+
+| Format | `OutputFormat` variant | Parser | Behavior |
+|--------|------------------------|--------|----------|
+| `raw` | `OutputFormat::Raw` | `parse_raw()` | Each non-empty line → `NativeLogEvent` (Info level, tag = source name) |
+| `json` | `OutputFormat::Json` | `parse_json()` | JSON objects with flexible field aliases: message/msg/text, tag/source/logger, level/severity/priority, timestamp/time/ts |
+| `logcat-threadtime` | `OutputFormat::LogcatThreadtime` | delegates to `android::parse_threadtime_line()` + `android::logcat_line_to_event()` | Android logcat threadtime format |
+| `syslog` | `OutputFormat::Syslog` | delegates to `macos::parse_syslog_line()` + `macos::syslog_line_to_event()` | macOS/iOS unified logging compact format (macOS-only; returns `None` on other platforms) |
+
+Custom sources integrate with the existing pipeline identically to platform backends:
+- Events flow through `NativeLogEvent` → `Message::NativeLog` → handler path
+- Tags are tracked in `NativeTagState` and appear in the tag filter overlay (`T` key)
+- `should_include_tag()` filtering applies identically to platform backends
+- `min_level` filtering uses the same `effective_min_level()` logic
+
+#### Custom Source Lifecycle Messages
+
+Two `Message` variants manage custom source lifecycle:
+
+| Message | When sent | Purpose |
+|---------|-----------|---------|
+| `CustomSourceStarted { session_id, name, shutdown_tx, task_handle }` | After `CustomLogCapture::spawn()` succeeds | TEA handler stores `shutdown_tx` and `task_handle` in `SessionHandle::custom_source_handles` |
+| `CustomSourceStopped { session_id, name }` | When the source's event channel closes (process exited) | TEA handler removes the named handle from `custom_source_handles` |
 
 ---
 

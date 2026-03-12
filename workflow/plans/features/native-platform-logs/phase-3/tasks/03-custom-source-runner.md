@@ -236,3 +236,36 @@ mod tests {
 - `tokio::io::BufReader::lines()` requires `use tokio::io::AsyncBufReadExt;`
 - The existing platform captures (Android, macOS, iOS) use a similar pattern — refer to `android.rs::run_logcat_capture` for the established loop structure
 - Consider whether `CustomSourceConfig` in the daemon should be a separate type from the config type in `fdemon-app`, or whether to reuse the same type. If layers need to stay separate, the daemon config type should be a simpler struct without serde derives, constructed from the app config type. Check the pattern used by `AndroidLogConfig`/`MacOsLogConfig`/`IosLogConfig`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/custom.rs` | NEW — `CustomSourceConfig`, `CustomLogCapture`, `run_custom_capture`, `create_custom_log_capture`, and 9 tests |
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Added `pub mod custom;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **`should_include_tag` argument order**: The task's code snippet shows `(&event.tag, &config.exclude_tags, &config.include_tags)` but the actual `mod.rs` signature is `(include_tags, exclude_tags, tag)`. Implemented with the correct order matching android.rs precedent: `(&config.include_tags, &config.exclude_tags, &event.tag)`.
+2. **`CustomSourceConfig` as daemon-layer type**: Follows the `AndroidLogConfig`/`MacOsLogConfig`/`IosLogConfig` pattern — plain struct without serde derives, no dependency on `fdemon-app`. App layer must construct this from its own config type.
+3. **`kill_on_drop(true)`**: Added to the command builder (matching android.rs) so that if the task is dropped without a graceful shutdown signal, the child process is still killed.
+4. **Factory test made `#[tokio::test]`**: The original `#[test]` for `test_create_custom_log_capture_returns_box` panicked because `spawn()` calls `tokio::spawn()` which requires a Tokio runtime context. Changed to `#[tokio::test] async fn`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon -- custom` - Passed (9 tests)
+- `cargo test -p fdemon-daemon -- native_logs` - Passed (105 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`printf` behavior in tests**: The echo/printf tests rely on Unix CLI tools available on macOS/Linux. The test suite would need adjustment for Windows builds, but this is consistent with the existing native log capture codebase (which is macOS-specific for iOS/macOS backends).
+2. **No stderr forwarding**: stderr is piped but silently discarded. This is by design (stated in the task) but could make debugging misconfigured custom sources harder.

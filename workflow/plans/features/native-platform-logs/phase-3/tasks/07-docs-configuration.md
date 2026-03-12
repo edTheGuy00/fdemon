@@ -123,3 +123,31 @@ format = "logcat-threadtime"
 - Follow the existing documentation style in `CONFIGURATION.md` — table format for settings, code blocks for examples
 - Make sure the defaults documented here match the actual `Default` impl in `config/types.rs`
 - Cross-reference the tag filter UI: mention the `T` key for runtime tag filtering alongside config-level filtering
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Added `[native_logs]` section (Native Logs Settings) including `[native_logs]`, `[native_logs.tags.<tag>]`, and `[[native_logs.custom_sources]]` subsections with tables, format options, and TOML examples. Updated Table of Contents. Added `[native_logs]` block to the complete config.toml example. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Defaults verified against source**: Cross-checked all documented defaults (`enabled = true`, `exclude_tags = ["flutter"]`, `include_tags = []`, `min_level = "info"`, `args = []`, `format = "raw"`, `env = {}`) against the actual `Default` impl in `crates/fdemon-app/src/config/types.rs` and the `OutputFormat` enum in `crates/fdemon-core/src/types.rs`. All match exactly.
+2. **TOML string values for OutputFormat**: The `#[serde(rename_all = "kebab-case")]` attribute means `LogcatThreadtime` serializes as `"logcat-threadtime"` — documented correctly.
+3. **Dotted tag name note added**: Added a practical note about quoting TOML keys for tag names containing dots (e.g., `com.example.plugin`), which the task outline did not include but is a real usability concern.
+4. **T-key cross-reference**: Mentioned the `T` key both in the `[native_logs]` block callout and in the per-tag section heading, as required by the task notes.
+
+### Testing Performed
+
+- Documentation only — no automated tests required per task spec.
+- All documented TOML examples were manually verified to match the struct fields and their `serde` names as seen in source.
+
+### Risks/Limitations
+
+1. **No compile-time TOML validation**: The examples are manually verified; there is no automated test that parses the docs examples against `NativeLogsSettings`. The task notes this is acceptable ("No automated tests needed for this task").

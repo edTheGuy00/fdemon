@@ -211,3 +211,37 @@ fn test_custom_source_min_level_filtering() {
 - Platform-specific tests should be gated with `#[cfg(unix)]` since they use Unix commands
 - Use `tokio::time::timeout` in async tests to prevent hangs from broken shutdown paths
 - Follow the test naming convention from `docs/CODE_STANDARDS.md`: `test_<scenario>_<expected_outcome>`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/formats.rs` | Added 2 edge-case tests: `test_json_format_ignores_unknown_fields`, `test_json_format_string_level_only_numeric_defaults_to_info` |
+| `crates/fdemon-daemon/src/native_logs/custom.rs` | Added 2 edge-case runner tests: `test_custom_capture_stderr_does_not_produce_events` (unix-gated), `test_custom_capture_concurrent_shutdown` (unix-gated) |
+| `crates/fdemon-app/src/config/types.rs` | Added 4 edge-case config tests: `test_custom_sources_round_trip_serde_via_native_logs_settings`, `test_custom_source_optional_fields_default_when_omitted`, `test_all_output_format_variants_deserialize_in_custom_source`, `test_custom_source_env_inline_table_with_path_prefix` |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Fixed pre-existing clippy warning: `clone()` on `Copy` type `OutputFormat` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing clippy fix**: `OutputFormat` implements `Copy`, so `.clone()` is redundant in `actions/native_logs.rs:266`. Fixed this to unblock the clippy quality gate — it was introduced by a previous task and not caught until this verification run.
+2. **stderr test uses `ls` on nonexistent path**: The no-shell rule prohibits `sh -c "echo err >&2"`. Using `ls /nonexistent/...` is a clean Unix-native way to produce stderr-only output with no stdout, which is what the test requires.
+3. **Concurrent shutdown gated with `#[cfg(unix)]`**: Both new runner tests use Unix-specific commands (`ls`, `yes`). Gating them prevents failure on Windows without masking the tests on macOS/Linux.
+4. **Round-trip at NativeLogsSettings level**: The existing `test_custom_source_config_round_trip` only tests `CustomSourceConfig` in isolation. The new test serializes a full `NativeLogsSettings` and re-parses it, covering the TOML array-of-tables nesting path.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon -- native_logs` - Passed (109 tests)
+- `cargo test -p fdemon-app -- custom_source` - Passed (24 tests, includes task 04 handler tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Handler integration tests (acceptance criterion 4)**: Task 04 owns `CustomSourceStarted`/`CustomSourceStopped` message variants. Those tests already exist (7 handler tests visible under the `custom_source` filter), so criterion 4 is satisfied by the parallel task. No additional handler tests were added here to avoid duplication.

@@ -595,6 +595,7 @@ pub fn handle_action(
             device_name,
             app_id,
             settings,
+            project_path,
         } => {
             native_logs::spawn_native_log_capture(
                 session_id,
@@ -603,6 +604,7 @@ pub fn handle_action(
                 device_name,
                 app_id,
                 &settings,
+                project_path,
                 msg_tx.clone(),
             );
         }

@@ -2023,6 +2023,67 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         }
 
         // ─────────────────────────────────────────────────────────
+        // Custom Log Source Lifecycle (Phase 3, Task 04)
+        // ─────────────────────────────────────────────────────────
+
+        // Custom source started — store shutdown sender and task handle.
+        Message::CustomSourceStarted {
+            session_id,
+            name,
+            shutdown_tx,
+            task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
+                let task_join_handle = if let Ok(mut slot) = task_handle.lock() {
+                    slot.take()
+                } else {
+                    None
+                };
+                handle
+                    .custom_source_handles
+                    .push(crate::session::CustomSourceHandle {
+                        name: name.clone(),
+                        shutdown_tx,
+                        task_handle: task_join_handle,
+                    });
+                tracing::debug!(
+                    "Custom log source '{}' handle stored for session {}",
+                    name,
+                    session_id
+                );
+            } else {
+                // Session was closed before the custom source started — shut down
+                // the orphaned task immediately.
+                let _ = shutdown_tx.send(true);
+                if let Ok(mut slot) = task_handle.lock() {
+                    if let Some(h) = slot.take() {
+                        h.abort();
+                    }
+                }
+                tracing::debug!(
+                    "Custom source '{}' arrived for closed session {} — shutting down",
+                    name,
+                    session_id
+                );
+            }
+            UpdateResult::none()
+        }
+
+        // Custom source stopped — remove its handle from the session.
+        Message::CustomSourceStopped { session_id, name } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.custom_source_handles.retain(|h| h.name != name);
+            }
+            tracing::debug!(
+                "Custom log source '{}' stopped for session {}",
+                name,
+                session_id
+            );
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
         // Native Tag Filter Messages (Phase 2, Task 07)
         // ─────────────────────────────────────────────────────────
 

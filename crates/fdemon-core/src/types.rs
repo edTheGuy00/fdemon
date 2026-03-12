@@ -795,6 +795,30 @@ impl BootableDevice {
     }
 }
 
+/// Output format for native log sources.
+///
+/// Determines how raw lines from a native log capture process are parsed
+/// into structured [`crate::types::NativeLogPriority`]-aware events.
+///
+/// Used by `fdemon-daemon`'s `native_logs::formats` module to dispatch
+/// the correct line parser for each custom log source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum OutputFormat {
+    /// Each non-empty line is a log event. Tag is set to the source name and
+    /// level is always [`LogLevel::Info`].
+    #[default]
+    Raw,
+    /// Each line is a JSON object. Flexible field name aliases are supported:
+    /// `message`/`msg`/`text`, `tag`/`source`/`logger`, `level`/`severity`/`priority`.
+    Json,
+    /// Android logcat threadtime format:
+    /// `MM-DD HH:MM:SS.mmm  PID  TID PRIO TAG: message`
+    LogcatThreadtime,
+    /// macOS `log stream --style compact` format, also used by iOS simulator.
+    Syslog,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

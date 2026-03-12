@@ -5,6 +5,7 @@
 //! - `Settings` - Global application settings
 //! - Related sub-types and enums
 
+use fdemon_core::types::OutputFormat;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -551,6 +552,80 @@ pub struct TagConfig {
     pub min_level: Option<String>,
 }
 
+/// Configuration for a custom log source process.
+///
+/// Defines an external command whose output is captured and parsed as native
+/// log entries. The `format` field selects the parser used to convert raw
+/// output lines into structured log events.
+///
+/// In `.fdemon/config.toml`, specify multiple sources using the TOML array-of-tables
+/// syntax: `[[native_logs.custom_sources]]`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CustomSourceConfig {
+    /// Display name — becomes the tag in the log view and tag filter overlay.
+    pub name: String,
+
+    /// Path to the command to execute (e.g., `"adb"`, `"/usr/local/bin/my-tool"`).
+    pub command: String,
+
+    /// Command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Output format parser to use when interpreting stdout/stderr lines.
+    #[serde(default)]
+    pub format: OutputFormat,
+
+    /// Working directory for the command.
+    ///
+    /// If `None`, defaults to the Flutter project root directory.
+    pub working_dir: Option<String>,
+
+    /// Environment variables to set for the spawned process.
+    ///
+    /// In TOML: `env = { LOG_LEVEL = "debug" }`.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+/// Well-known platform tag names that would be confusing to reuse as custom source names.
+///
+/// Used by [`CustomSourceConfig::validate`] to emit advisory warnings.
+const KNOWN_PLATFORM_TAGS: &[&str] = &["flutter", "dart", "flutterengine", "flutter engine"];
+
+impl CustomSourceConfig {
+    /// Validate this configuration, returning an error string if invalid.
+    ///
+    /// Returns `Ok(())` when the config is valid. Logs a warning (does not fail)
+    /// when `name` shadows a known platform tag.
+    ///
+    /// # Errors
+    ///
+    /// - `name` is empty or contains only whitespace
+    /// - `command` is empty
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("custom_source name must not be empty".to_string());
+        }
+        if self.command.is_empty() {
+            return Err(format!(
+                "custom_source '{}': command must not be empty",
+                self.name
+            ));
+        }
+        // Advisory warning — not an error
+        let lower = self.name.to_lowercase();
+        if KNOWN_PLATFORM_TAGS.contains(&lower.as_str()) {
+            tracing::warn!(
+                name = %self.name,
+                "custom_source name matches a known platform tag; \
+                 this will work but may cause confusion in the tag filter"
+            );
+        }
+        Ok(())
+    }
+}
+
 /// Configuration for native platform log capture.
 ///
 /// Controls whether fdemon runs parallel log capture processes (e.g., `adb logcat`,
@@ -583,6 +658,15 @@ pub struct NativeLogsSettings {
     /// `[native_logs.tags."com.example.myplugin"]` for dotted names.
     #[serde(default)]
     pub tags: HashMap<String, TagConfig>,
+
+    /// Custom log source processes to capture alongside native platform logs.
+    ///
+    /// Each entry defines an external command whose stdout/stderr output is
+    /// captured and parsed according to the specified `format`.
+    ///
+    /// In `.fdemon/config.toml`, use `[[native_logs.custom_sources]]` array syntax.
+    #[serde(default)]
+    pub custom_sources: Vec<CustomSourceConfig>,
 }
 
 fn default_native_logs_enabled() -> bool {
@@ -605,6 +689,7 @@ impl Default for NativeLogsSettings {
             include_tags: Vec::new(),
             min_level: default_native_logs_min_level(),
             tags: HashMap::new(),
+            custom_sources: Vec::new(),
         }
     }
 }
@@ -1800,5 +1885,361 @@ min_level = "debug"
     fn test_tag_config_default_has_no_min_level() {
         let tc = TagConfig::default();
         assert!(tc.min_level.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CustomSourceConfig & OutputFormat Tests (Phase 3 Task 01)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_output_format_kebab_case_serde() {
+        #[derive(Debug, Deserialize, Serialize, PartialEq)]
+        struct W {
+            format: OutputFormat,
+        }
+
+        let cases = [
+            ("raw", OutputFormat::Raw),
+            ("json", OutputFormat::Json),
+            ("logcat-threadtime", OutputFormat::LogcatThreadtime),
+            ("syslog", OutputFormat::Syslog),
+        ];
+
+        for (s, expected) in cases {
+            let toml = format!(r#"format = "{}""#, s);
+            let w: W = toml::from_str(&toml).unwrap();
+            assert_eq!(w.format, expected, "format = {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_output_format_serialize_kebab_case() {
+        #[derive(Debug, Deserialize, Serialize)]
+        struct W {
+            format: OutputFormat,
+        }
+        let w = W {
+            format: OutputFormat::LogcatThreadtime,
+        };
+        let s = toml::to_string(&w).unwrap();
+        assert!(s.contains("logcat-threadtime"), "got: {s}");
+    }
+
+    #[test]
+    fn test_output_format_default_is_raw() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Raw);
+    }
+
+    #[test]
+    fn test_custom_source_config_deserialize() {
+        let toml = r#"
+name = "go-backend"
+command = "adb"
+args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+format = "logcat-threadtime"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "go-backend");
+        assert_eq!(cfg.command, "adb");
+        assert_eq!(
+            cfg.args,
+            vec!["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+        );
+        assert_eq!(cfg.format, OutputFormat::LogcatThreadtime);
+        assert!(cfg.working_dir.is_none());
+        assert!(cfg.env.is_empty());
+    }
+
+    #[test]
+    fn test_custom_source_config_full_fields() {
+        let toml = r#"
+name = "my-server"
+command = "/usr/local/bin/my-log-tool"
+args = ["--follow", "--json"]
+format = "json"
+working_dir = "/tmp"
+
+[env]
+LOG_LEVEL = "debug"
+APP_ENV = "test"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "my-server");
+        assert_eq!(cfg.command, "/usr/local/bin/my-log-tool");
+        assert_eq!(cfg.format, OutputFormat::Json);
+        assert_eq!(cfg.working_dir, Some("/tmp".to_string()));
+        assert_eq!(cfg.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(cfg.env.get("APP_ENV"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_custom_source_default_format_is_raw() {
+        let toml = r#"
+name = "sidecar"
+command = "tail"
+args = ["-f", "/tmp/sidecar.log"]
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.format, OutputFormat::Raw);
+    }
+
+    #[test]
+    fn test_custom_source_config_round_trip() {
+        let mut env = HashMap::new();
+        env.insert("KEY".to_string(), "val".to_string());
+        let original = CustomSourceConfig {
+            name: "test-source".to_string(),
+            command: "my-cmd".to_string(),
+            args: vec!["--arg".to_string(), "value".to_string()],
+            format: OutputFormat::Json,
+            working_dir: Some("/tmp".to_string()),
+            env,
+        };
+        let serialized = toml::to_string(&original).unwrap();
+        let deserialized: CustomSourceConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, original.name);
+        assert_eq!(deserialized.command, original.command);
+        assert_eq!(deserialized.args, original.args);
+        assert_eq!(deserialized.format, original.format);
+        assert_eq!(deserialized.working_dir, original.working_dir);
+        assert_eq!(deserialized.env, original.env);
+    }
+
+    #[test]
+    fn test_custom_source_empty_name_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: String::new(),
+            command: "adb".to_string(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_err());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("name must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn test_custom_source_whitespace_only_name_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: "   ".to_string(),
+            command: "adb".to_string(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_custom_source_empty_command_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: String::new(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("command must not be empty"), "got: {err}");
+        assert!(
+            err.contains("my-source"),
+            "error should mention name; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_custom_source_valid_config_passes_validation() {
+        let cfg = CustomSourceConfig {
+            name: "logcat-watcher".to_string(),
+            command: "adb".to_string(),
+            args: vec!["logcat".to_string()],
+            format: OutputFormat::LogcatThreadtime,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_native_logs_settings_default_has_empty_custom_sources() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.custom_sources.is_empty());
+    }
+
+    #[test]
+    fn test_native_logs_settings_custom_sources_deserialize() {
+        let toml_str = r#"
+[[native_logs.custom_sources]]
+name = "go-backend"
+command = "adb"
+args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+format = "logcat-threadtime"
+
+[[native_logs.custom_sources]]
+name = "my-server"
+command = "/usr/local/bin/my-log-tool"
+args = ["--follow", "--json"]
+format = "json"
+
+[[native_logs.custom_sources]]
+name = "sidecar"
+command = "tail"
+args = ["-f", "/tmp/sidecar.log"]
+format = "raw"
+working_dir = "/tmp"
+"#;
+        #[derive(Deserialize)]
+        struct TestConfig {
+            native_logs: NativeLogsSettings,
+        }
+        let config: TestConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.native_logs.custom_sources.len(), 3);
+
+        let go = &config.native_logs.custom_sources[0];
+        assert_eq!(go.name, "go-backend");
+        assert_eq!(go.command, "adb");
+        assert_eq!(go.format, OutputFormat::LogcatThreadtime);
+
+        let server = &config.native_logs.custom_sources[1];
+        assert_eq!(server.name, "my-server");
+        assert_eq!(server.format, OutputFormat::Json);
+
+        let sidecar = &config.native_logs.custom_sources[2];
+        assert_eq!(sidecar.name, "sidecar");
+        assert_eq!(sidecar.format, OutputFormat::Raw);
+        assert_eq!(sidecar.working_dir, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_existing_config_without_custom_sources_still_works() {
+        // Existing config without custom_sources should deserialize fine (backward compat)
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+
+[tags.GoLog]
+min_level = "debug"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert!(settings.custom_sources.is_empty());
+        assert!(settings.enabled);
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+    }
+
+    #[test]
+    fn test_settings_without_native_logs_custom_sources_is_backward_compatible() {
+        let toml_str = "";
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.native_logs.custom_sources.is_empty());
+    }
+
+    #[test]
+    fn test_custom_source_env_inline_table_deserialize() {
+        // Test that TOML inline table env syntax works as documented
+        let toml = r#"
+name = "server"
+command = "my-tool"
+env = { LOG_LEVEL = "debug", TRACE = "1" }
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(cfg.env.get("TRACE"), Some(&"1".to_string()));
+    }
+
+    // ── Phase 3 Task 05 edge-case tests ──────────────────────────────────────
+
+    /// Round-trip serde at the `NativeLogsSettings` level, not just
+    /// `CustomSourceConfig`, to verify the full nesting serializes correctly.
+    #[test]
+    fn test_custom_sources_round_trip_serde_via_native_logs_settings() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: "test".to_string(),
+                command: "echo".to_string(),
+                args: vec!["hello".to_string()],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+            }],
+            ..NativeLogsSettings::default()
+        };
+
+        let serialized = toml::to_string(&settings).unwrap();
+        let parsed: NativeLogsSettings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(parsed.custom_sources.len(), 1);
+        assert_eq!(parsed.custom_sources[0].name, "test");
+        assert_eq!(parsed.custom_sources[0].command, "echo");
+        assert_eq!(parsed.custom_sources[0].args, vec!["hello"]);
+        assert_eq!(parsed.custom_sources[0].format, OutputFormat::Raw);
+        assert!(parsed.custom_sources[0].working_dir.is_none());
+        assert!(parsed.custom_sources[0].env.is_empty());
+    }
+
+    /// All optional fields of `CustomSourceConfig` must have sensible defaults
+    /// when omitted from the TOML: args=[], format=Raw, working_dir=None, env={}.
+    #[test]
+    fn test_custom_source_optional_fields_default_when_omitted() {
+        let toml = r#"
+name = "minimal"
+command = "echo"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "minimal");
+        assert_eq!(cfg.command, "echo");
+        assert!(cfg.args.is_empty(), "args should default to empty vec");
+        assert_eq!(
+            cfg.format,
+            OutputFormat::Raw,
+            "format should default to Raw"
+        );
+        assert!(
+            cfg.working_dir.is_none(),
+            "working_dir should default to None"
+        );
+        assert!(cfg.env.is_empty(), "env should default to empty map");
+    }
+
+    /// Deserialize all four `OutputFormat` variants inside a `CustomSourceConfig`.
+    #[test]
+    fn test_all_output_format_variants_deserialize_in_custom_source() {
+        let cases = [
+            ("raw", OutputFormat::Raw),
+            ("json", OutputFormat::Json),
+            ("logcat-threadtime", OutputFormat::LogcatThreadtime),
+            ("syslog", OutputFormat::Syslog),
+        ];
+
+        for (format_str, expected) in cases {
+            let toml = format!(
+                "name = \"src\"\ncommand = \"cmd\"\nformat = \"{}\"\n",
+                format_str
+            );
+            let cfg: CustomSourceConfig = toml::from_str(&toml)
+                .unwrap_or_else(|e| panic!("failed to parse format={format_str}: {e}"));
+            assert_eq!(
+                cfg.format, expected,
+                "format={format_str} should deserialize to {expected:?}"
+            );
+        }
+    }
+
+    /// Env inline-table with the exact example from the task description.
+    #[test]
+    fn test_custom_source_env_inline_table_with_path_prefix() {
+        let toml = r#"
+name = "with-env"
+command = "my-tool"
+env = { VERBOSE = "1", PATH_PREFIX = "/opt" }
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.env.get("VERBOSE"), Some(&"1".to_string()));
+        assert_eq!(cfg.env.get("PATH_PREFIX"), Some(&"/opt".to_string()));
+        assert_eq!(cfg.env.len(), 2, "env should have exactly 2 entries");
     }
 }

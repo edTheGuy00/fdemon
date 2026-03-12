@@ -298,38 +298,61 @@ pub fn maybe_start_native_log_capture(
         if let Some(handle) = state.session_manager.get(session_id) {
             let platform = &handle.session.platform;
 
-            // Guard: skip if the required tool is not installed on this host.
-            if !state.tool_availability.native_logs_available(platform) {
-                tracing::debug!(
-                    "Native log capture skipped for {}: tools not available",
-                    platform
+            // Guard: don't start a second capture if one is already running
+            // (prevents double-start on repeated AppStart, e.g. hot-restart).
+            if handle.native_log_shutdown_tx.is_some() {
+                tracing::info!(
+                    "[native-logs-debug] Skipping: already running for session {}",
+                    session_id
                 );
                 return None;
             }
 
-            // Guard: don't start a second capture if one is already running
-            // (prevents double-start on repeated AppStart, e.g. hot-restart).
-            if handle.native_log_shutdown_tx.is_some() {
-                return None;
-            }
-
-            // Only Android, macOS, and iOS need a separate capture process.
+            // Only Android, macOS, and iOS need a separate platform capture process.
             // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
             // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
-            let needs_capture = platform == "android"
+            let needs_platform_capture = platform == "android"
                 || (cfg!(target_os = "macos") && platform == "macos")
                 || (cfg!(target_os = "macos") && platform == "ios");
 
-            if needs_capture {
-                return Some(UpdateAction::StartNativeLogCapture {
-                    session_id,
-                    platform: platform.clone(),
-                    device_id: handle.session.device_id.clone(),
-                    device_name: handle.session.device_name.clone(),
-                    app_id: Some(app_start.app_id.clone()),
-                    settings: state.settings.native_logs.clone(),
-                });
+            let has_platform_tools = state.tool_availability.native_logs_available(platform);
+
+            let has_custom_sources = !state.settings.native_logs.custom_sources.is_empty();
+
+            tracing::info!(
+                "[native-logs-debug] platform={}, needs_platform={}, has_tools={}, custom_sources={}, enabled={}",
+                platform, needs_platform_capture, has_platform_tools, has_custom_sources,
+                state.settings.native_logs.enabled
+            );
+
+            // Determine if we should emit the action:
+            // - Platform capture is requested AND tools are available, OR
+            // - Custom sources are configured (these work regardless of platform/tools)
+            let should_start = (needs_platform_capture && has_platform_tools) || has_custom_sources;
+
+            if !should_start {
+                if needs_platform_capture && !has_platform_tools {
+                    tracing::debug!(
+                        "Native log capture skipped for {}: tools not available",
+                        platform
+                    );
+                }
+                return None;
             }
+
+            tracing::info!(
+                "[native-logs-debug] Emitting StartNativeLogCapture for session {}",
+                session_id
+            );
+            return Some(UpdateAction::StartNativeLogCapture {
+                session_id,
+                platform: platform.clone(),
+                device_id: handle.session.device_id.clone(),
+                device_name: handle.session.device_name.clone(),
+                app_id: Some(app_start.app_id.clone()),
+                settings: state.settings.native_logs.clone(),
+                project_path: state.project_path.clone(),
+            });
         }
     }
     None

@@ -70,7 +70,7 @@ pub fn parse_threadtime_line(line: &str) -> Option<LogcatLine> {
 /// Convert a parsed logcat line into a [`NativeLogEvent`].
 ///
 /// Returns `None` if the priority character is not recognized.
-fn logcat_line_to_event(line: &LogcatLine) -> Option<NativeLogEvent> {
+pub(crate) fn logcat_line_to_event(line: &LogcatLine) -> Option<NativeLogEvent> {
     let priority = NativeLogPriority::from_logcat_char(line.priority)?;
     Some(NativeLogEvent {
         tag: line.tag.clone(),

@@ -18,7 +18,7 @@ mod tests;
 pub use block_state::LogBlockState;
 pub use collapse::CollapseState;
 pub use debug_state::{DebugState, PauseReason, TrackedBreakpoint};
-pub use handle::SessionHandle;
+pub use handle::{CustomSourceHandle, SessionHandle};
 pub use log_batcher::LogBatcher;
 pub use native_tags::NativeTagState;
 pub use network::{NetworkDetailTab, NetworkState};

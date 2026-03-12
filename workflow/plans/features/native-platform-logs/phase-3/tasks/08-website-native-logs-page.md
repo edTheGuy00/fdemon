@@ -135,3 +135,33 @@ Keybinding {
 - Available icons in `components/icons.rs`: `Terminal` (line 30) is a good fit for native logs
 - The docs sidebar in `mod.rs` uses `DocItem` structs with `title`, `path`, `icon`, `description` fields
 - Keep the page content focused and scannable — use short paragraphs, tables, and code blocks over long prose
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/src/pages/docs/native_logs.rs` | Created new Leptos component with 7 sections: Overview, How It Works, Supported Platforms, Tag Filter UI, Configuration, Custom Log Sources, Troubleshooting |
+| `website/src/pages/docs/mod.rs` | Added `pub mod native_logs;`, imported `Terminal` icon, added `DocItem` for "Native Logs" between DevTools and Debugging |
+| `website/src/lib.rs` | Added `use pages::docs::native_logs::NativeLogs;` import and `<Route path=path!("/native-logs") view=NativeLogs />` in the docs `ParentRoute` |
+| `website/src/data.rs` | Added `T` key binding to the "Log Filtering" `KeybindingSection` between `F` and `Ctrl+F` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Unicode escape fix**: The original code draft used `\u{003capp\u{003e}` which Rust's lexer misparses (it sees `003c` then continues scanning hex digits, hitting `a` which is valid hex, then `p` which is not). Replaced with literal `<app>` in the prose string since HTML-escaping is not needed inside Leptos string literals.
+2. **Private sub-components**: Defined `Section`, `KeyRow`, `SettingsTable`, and `Tip` as private `#[component]` functions within `native_logs.rs`, matching the exact pattern used by `devtools.rs` and `configuration.rs`.
+3. **Sidebar position**: "Native Logs" is placed after "DevTools" and before "Debugging", matching the task specification and grouping feature-level docs together.
+
+### Testing Performed
+
+- `cargo check` (website crate) — Passed (1 pre-existing warning in `debugging.rs`, none from new code)
+
+### Risks/Limitations
+
+1. **No trunk build verification**: Full WASM compilation via `trunk build` was not run (requires trunk and the wasm32 target). The `cargo check` pass confirms all types, imports, and macros are correct.
+2. **Content accuracy**: Configuration key names (`enabled`, `min_level`, `buffer_size`, `exclude_tags`, `tag_levels`, source `format` values) are documented based on the implementation from earlier phase tasks. If the actual config struct differs, prose and table entries may need updating.

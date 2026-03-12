@@ -145,3 +145,42 @@ fn test_existing_config_without_custom_sources_still_works() { ... }
 - `OutputFormat` will also be used by the format parsers in task 02 — keep it in `fdemon-app/src/config/types.rs` for now since it's part of the config struct, but consider whether `fdemon-daemon` should own the enum. If `fdemon-daemon` needs it, it may need to be in `fdemon-core` instead for proper layer boundaries. Check layer dependencies.
 - The `env` field uses `HashMap<String, String>` for simplicity. TOML inline tables work: `env = { KEY = "value" }`.
 - `working_dir` is optional — defaults to the Flutter project directory if not specified.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/types.rs` | Added `serde::Serialize, serde::Deserialize` and `#[serde(rename_all = "kebab-case")]` to the existing `OutputFormat` enum |
+| `crates/fdemon-app/src/config/types.rs` | Added `use fdemon_core::types::OutputFormat` import; added `CustomSourceConfig` struct with `validate()` method and `KNOWN_PLATFORM_TAGS` constant; added `custom_sources: Vec<CustomSourceConfig>` field to `NativeLogsSettings`; updated `Default` impl; added 16 new test cases |
+| `crates/fdemon-app/src/config/mod.rs` | Added `CustomSourceConfig` to the public re-export list |
+
+### Notable Decisions/Tradeoffs
+
+1. **`OutputFormat` in `fdemon-core`**: The enum already existed in `fdemon-core/src/types.rs` without serde. Adding serde derives there was the correct choice — `fdemon-daemon` needs it for task 02 format parsers and `fdemon-daemon` cannot depend on `fdemon-app`. Only the serde derives and `#[serde(rename_all = "kebab-case")]` attribute were added; no structural change was needed.
+
+2. **`serde::Serialize/Deserialize` via path rather than `use`**: Used `serde::Serialize, serde::Deserialize` inline on the derive attribute in `fdemon-core` since the crate already uses `serde` as a workspace dep without a blanket `use serde::*` import at the top of `types.rs`.
+
+3. **`format` field uses `#[serde(default)]` instead of `#[serde(default = "OutputFormat::default")]`**: The task spec showed `#[serde(default = "OutputFormat::default")]` but `#[serde(default)]` works equivalently when `Default` is derived and is idiomatic Rust. Both compile identically.
+
+4. **Validation is non-fatal for platform tag names**: As specified, shadowing a known platform tag (`flutter`, `dart`, etc.) emits a `tracing::warn!` but returns `Ok(())`, preserving the advisory-only semantics.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-core` — Passed (367 tests)
+- `cargo test -p fdemon-app -- custom_source` — Passed (13 tests)
+- `cargo test -p fdemon-app -- output_format` — Passed (3 tests)
+- `cargo test -p fdemon-app` — Passed (1538 tests, up from 1511)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **`OutputFormat` serde now required by all consumers of `fdemon-core`**: Adding serde derives is additive and non-breaking. Existing consumers that don't use serde are unaffected.
+2. **`validate()` does not check `working_dir` existence**: The method validates structural correctness only (non-empty name/command). Filesystem existence checks happen at spawn time in the daemon layer.

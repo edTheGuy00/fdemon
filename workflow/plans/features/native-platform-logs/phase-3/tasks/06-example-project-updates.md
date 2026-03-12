@@ -119,3 +119,36 @@ min_level = "warning"
 - Keep READMEs concise and practical — users should be able to scan and understand the app's purpose in 30 seconds
 - The `.fdemon/config.toml` custom source examples should be commented out so the app works out of the box. Uncommented settings should only be the ones that enhance the default experience (like per-tag min_level overrides for the demo tags)
 - Don't add a `.fdemon/config.toml` to app1 — it's a Dart-only app with no native log configuration needs
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `example/app1/README.md` | Rewrote from generic Flutter stub to describe all Dart logging features: print/debugPrint/developer.log, logger package, talker package, sync/async errors, stack trace rendering, spam logs, env check, and how to run |
+| `example/app2/README.md` | Rewrote from generic Flutter stub with full documentation: native platform logs table (Android/iOS/macOS APIs and tags), network requests, mixed Dart logging, Flutter errors, how to run, per-platform testing steps with `T` key mentions, and config reference |
+| `example/app2/.fdemon/config.toml` | Extended existing config with `[native_logs]` section: `enabled`, `exclude_tags`, `min_level` settings; per-tag overrides for `GoLog` (debug) and `OkHttp` (warning); three commented-out `[[native_logs.custom_sources]]` examples (raw tail, json stream, logcat-threadtime) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Config updated, not created fresh**: `example/app2/.fdemon/config.toml` already existed with `[behavior]`, `[watcher]`, `[ui]`, `[devtools]`, `[editor]` sections. The native log section was appended after the existing sections, keeping the pre-existing settings intact rather than replacing the file.
+
+2. **T key mentioned in app2 only**: App1 has no native platform logs and no tag filtering need, so the `T` key is only documented in app2's platform-specific testing steps (Android, iOS, macOS).
+
+3. **Button label accuracy**: Verified button labels from actual Dart source — the button reads "Emit Native Log Burst" (not "Trigger Native Logs" as in the task outline), used the accurate label in the README.
+
+### Testing Performed
+
+- Read all Flutter source files (`main.dart`, `native_log_demo.dart`, `http_requests.dart`, `builtin_logging.dart`, Kotlin/Swift native files) to ground README content in what the apps actually do — no speculative feature descriptions
+- Verified TOML syntax: all `[section]` headers are valid, custom_sources blocks are fully commented, no stray uncommented lines in example blocks
+- No Rust code was changed; no build/test runs required for documentation-only changes
+
+### Risks/Limitations
+
+1. **iOS simulator command**: README says `xcrun simctl spawn booted log stream` — this matches the task outline wording and is accurate for how fdemon captures iOS simulator logs.
+2. **`NullPointerException` label in app1 README**: The Kotlin `NativeLogDemo.kt` emits a fake NullPointerException message, but this is for app2. App1's sync error triggers a Dart `NullPointerException` via reflection/null safety — the README accurately calls it out under "Sync errors".

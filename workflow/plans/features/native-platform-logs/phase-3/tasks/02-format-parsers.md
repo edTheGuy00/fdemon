@@ -200,3 +200,43 @@ fn test_syslog_delegates_to_existing_parser() { ... }
 - The `serde_json` dependency is already in the workspace — no new dependency needed
 - For the logcat-threadtime and syslog delegating parsers, ensure the `android.rs` and `macos.rs` parser functions are `pub(crate)` but not `pub` (internal to the daemon crate)
 - If making the existing parsers `pub(crate)` requires touching too many tests, consider extracting just the parsing functions to a shared submodule within `native_logs/`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/types.rs` | Added `OutputFormat` enum with `Raw`, `Json`, `LogcatThreadtime`, `Syslog` variants; derives `serde::Serialize/Deserialize` with `rename_all = "kebab-case"` |
+| `crates/fdemon-core/src/lib.rs` | Re-exported `OutputFormat` at crate root |
+| `crates/fdemon-daemon/src/native_logs/android.rs` | Changed `logcat_line_to_event` from private `fn` to `pub(crate) fn` |
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Added `pub mod formats;` declaration |
+| `crates/fdemon-daemon/src/native_logs/formats.rs` | **NEW** — 21 tests, 4 format parsers: `parse_raw`, `parse_json`, `parse_logcat_threadtime`, `parse_syslog` (macOS-gated with non-macOS stub returning `None`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`OutputFormat` placed in `fdemon-core`**: Task 01 had partially applied code that imported `OutputFormat` from `fdemon_core::types::OutputFormat`. Since `fdemon-daemon` cannot depend on `fdemon-app`, `fdemon-core` is the correct layer. The enum was added there as recommended by the task spec.
+
+2. **Syslog `source_name` parameter**: The task spec showed `syslog_line_to_event(syslog_line, source_name)` but the actual `macos.rs` function only takes `&SyslogLine`. The `source_name` parameter is accepted in `parse_syslog` for API consistency but prefixed with `_` and unused — the tag comes from the syslog line's category/subsystem fields.
+
+3. **`macos.rs` functions kept `pub`**: `parse_syslog_line` and `syslog_line_to_event` were already `pub`. No change was needed; `formats.rs` in the same crate can access them. Only `logcat_line_to_event` needed a visibility upgrade from private to `pub(crate)`.
+
+4. **`serde` derives on `OutputFormat`**: The linter added `serde::Serialize/Deserialize` and `#[serde(rename_all = "kebab-case")]`. This is consistent with task 01's requirement and how the type is used in `CustomSourceConfig`.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-daemon -- formats` — Passed (21 tests)
+- `cargo test -p fdemon-daemon -- native_logs` — Passed (96 tests)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Syslog on non-macOS**: `parse_syslog` returns `None` on non-macOS platforms. This is intentional and documented. Users on Linux/Windows who configure `format = "syslog"` will get no events — they should use `raw` or `json` instead.
+
+2. **Pre-existing snapshot failures**: 4 `fdemon-tui` snapshot tests fail independently of these changes (confirmed by testing before/after on stash). Not caused by this task.

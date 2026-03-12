@@ -65,15 +65,15 @@ Wave 5 (depends on 04+05; parallel with each other):        │
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-custom-source-config](tasks/01-custom-source-config.md) | Not Started | - | `fdemon-app/src/config/types.rs` |
-| 2 | [02-format-parsers](tasks/02-format-parsers.md) | Not Started | - | `fdemon-daemon/src/native_logs/formats.rs` (NEW) |
-| 3 | [03-custom-source-runner](tasks/03-custom-source-runner.md) | Not Started | 1, 2 | `fdemon-daemon/src/native_logs/custom.rs` (NEW) |
-| 4 | [04-app-custom-source-integration](tasks/04-app-custom-source-integration.md) | Not Started | 3 | `fdemon-app/src/actions/native_logs.rs`, `session/handle.rs`, `handler/session.rs` |
-| 5 | [05-custom-source-tests](tasks/05-custom-source-tests.md) | Not Started | 3 | All modified files |
-| 6 | [06-example-project-updates](tasks/06-example-project-updates.md) | Not Started | - | `example/app1/`, `example/app2/` |
-| 7 | [07-docs-configuration](tasks/07-docs-configuration.md) | Not Started | 4 | `docs/CONFIGURATION.md` |
-| 8 | [08-website-native-logs-page](tasks/08-website-native-logs-page.md) | Not Started | 4 | `website/src/pages/docs/native_logs.rs` (NEW), `mod.rs`, `lib.rs`, `data.rs` |
-| 9 | [09-docs-architecture](tasks/09-docs-architecture.md) | Not Started | 4 | `docs/ARCHITECTURE.md` |
+| 1 | [01-custom-source-config](tasks/01-custom-source-config.md) | Done | - | `fdemon-app/src/config/types.rs` |
+| 2 | [02-format-parsers](tasks/02-format-parsers.md) | Done | - | `fdemon-daemon/src/native_logs/formats.rs` (NEW) |
+| 3 | [03-custom-source-runner](tasks/03-custom-source-runner.md) | Done | 1, 2 | `fdemon-daemon/src/native_logs/custom.rs` (NEW) |
+| 4 | [04-app-custom-source-integration](tasks/04-app-custom-source-integration.md) | Done | 3 | `fdemon-app/src/actions/native_logs.rs`, `session/handle.rs`, `handler/session.rs` |
+| 5 | [05-custom-source-tests](tasks/05-custom-source-tests.md) | Done | 3 | All modified files |
+| 6 | [06-example-project-updates](tasks/06-example-project-updates.md) | Done | - | `example/app1/`, `example/app2/` |
+| 7 | [07-docs-configuration](tasks/07-docs-configuration.md) | Done | 4 | `docs/CONFIGURATION.md` |
+| 8 | [08-website-native-logs-page](tasks/08-website-native-logs-page.md) | Done | 4 | `website/src/pages/docs/native_logs.rs` (NEW), `mod.rs`, `lib.rs`, `data.rs` |
+| 9 | [09-docs-architecture](tasks/09-docs-architecture.md) | Done | 4 | `docs/ARCHITECTURE.md` |
 
 ## Execution Plan
 

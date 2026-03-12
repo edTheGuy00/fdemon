@@ -30,3 +30,23 @@ command = ""
 # Pattern for opening file at line/column
 # Variables: $EDITOR, $FILE, $LINE, $COLUMN
 open_pattern = "$EDITOR $FILE:$LINE"
+
+[native_logs]
+enabled = true
+
+# Custom log sources — demonstrates fdemon's ability to capture logs from
+# arbitrary processes alongside Flutter's Dart output.
+
+# Raw text log source — simulates a background service
+[[native_logs.custom_sources]]
+name = "worker"
+command = "bash"
+args = ["scripts/raw-log-source.sh"]
+format = "raw"
+
+# JSON structured log source — simulates a microservice
+[[native_logs.custom_sources]]
+name = "microservice"
+command = "bash"
+args = ["scripts/json-log-source.sh"]
+format = "json"

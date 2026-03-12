@@ -4,6 +4,9 @@
 //! `log stream` for macOS) and forwards their output as [`Message::NativeLog`]
 //! events into the TEA message loop.
 //!
+//! Also spawns user-defined custom log source processes configured via
+//! `[[native_logs.custom_sources]]` in `.fdemon/config.toml`.
+//!
 //! The public-to-module entry point is [`spawn_native_log_capture`], called
 //! from `actions/mod.rs` when a `StartNativeLogCapture` action is dispatched.
 
@@ -14,7 +17,10 @@ use tokio::sync::mpsc;
 use crate::config::NativeLogsSettings;
 use crate::message::Message;
 use crate::session::SessionId;
-use fdemon_daemon::native_logs::{create_native_log_capture, AndroidLogConfig};
+use fdemon_daemon::native_logs::{
+    create_native_log_capture, custom::create_custom_log_capture,
+    custom::CustomSourceConfig as DaemonCustomSourceConfig, AndroidLogConfig,
+};
 #[cfg(target_os = "macos")]
 use fdemon_daemon::native_logs::{IosLogConfig, MacOsLogConfig};
 
@@ -40,6 +46,7 @@ pub(super) fn spawn_native_log_capture(
     device_name: String,
     app_id: Option<String>,
     settings: &NativeLogsSettings,
+    project_path: std::path::PathBuf,
     msg_tx: mpsc::Sender<Message>,
 ) {
     if !settings.enabled {
@@ -49,6 +56,15 @@ pub(super) fn spawn_native_log_capture(
         );
         return;
     }
+
+    // Spawn custom sources regardless of platform (they are always user-defined).
+    // Custom sources share the same master toggle as platform capture.
+    tracing::info!(
+        "[native-logs-debug] spawn_native_log_capture called, {} custom sources configured, project_path={}",
+        settings.custom_sources.len(),
+        project_path.display()
+    );
+    spawn_custom_sources(session_id, settings, &project_path, &msg_tx);
 
     // Only Android, macOS, and iOS need a separate capture process.
     // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
@@ -219,6 +235,128 @@ pub(super) fn spawn_native_log_capture(
             .send(Message::NativeLogCaptureStopped { session_id })
             .await;
     });
+}
+
+/// Spawn all custom log source processes configured for this session.
+///
+/// Iterates over `settings.custom_sources` and, for each valid entry:
+/// 1. Builds a daemon-layer `CustomSourceConfig` from the app-layer config.
+/// 2. Spawns the custom capture backend.
+/// 3. Sends `Message::CustomSourceStarted` so the TEA handler can store
+///    the handles on `SessionHandle::custom_source_handles`.
+/// 4. Spawns a forwarding task that sends `Message::NativeLog` for each
+///    captured event and `Message::CustomSourceStopped` when the process exits.
+///
+/// Invalid configurations (empty name or command) are skipped with a warning.
+/// This function is synchronous; each capture is spawned as a Tokio task internally.
+fn spawn_custom_sources(
+    session_id: SessionId,
+    settings: &NativeLogsSettings,
+    project_path: &std::path::Path,
+    msg_tx: &mpsc::Sender<Message>,
+) {
+    for source_config in &settings.custom_sources {
+        // Validate config — skip silently on empty name/command.
+        if source_config.name.trim().is_empty() || source_config.command.trim().is_empty() {
+            tracing::warn!(
+                "Skipping custom log source with empty name or command for session {}",
+                session_id
+            );
+            continue;
+        }
+
+        // Build the daemon-layer config from the app-layer config.
+        // Default working_dir to the Flutter project directory so relative
+        // paths in command/args resolve correctly.
+        let working_dir = source_config
+            .working_dir
+            .clone()
+            .or_else(|| project_path.to_str().map(|s| s.to_string()));
+
+        let daemon_config = DaemonCustomSourceConfig {
+            name: source_config.name.clone(),
+            command: source_config.command.clone(),
+            args: source_config.args.clone(),
+            format: source_config.format,
+            working_dir,
+            env: source_config.env.clone(),
+            exclude_tags: settings.exclude_tags.clone(),
+            include_tags: settings.include_tags.clone(),
+        };
+
+        let capture = create_custom_log_capture(daemon_config);
+
+        let native_handle = match capture.spawn() {
+            Some(h) => h,
+            None => {
+                // spawn() on CustomLogCapture always returns Some — the real
+                // failure surfaces asynchronously when the background task
+                // cannot exec the command. This branch is a safety net.
+                tracing::warn!(
+                    "Failed to get handle for custom log source '{}' (session {})",
+                    source_config.name,
+                    session_id
+                );
+                continue;
+            }
+        };
+
+        let shutdown_tx = Arc::new(native_handle.shutdown_tx);
+        let task_handle_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            Arc::new(Mutex::new(Some(native_handle.task_handle)));
+        let source_name = source_config.name.clone();
+        let msg_tx_clone = msg_tx.clone();
+
+        // Notify TEA that this custom source started (stores handles on SessionHandle).
+        let startup_msg = Message::CustomSourceStarted {
+            session_id,
+            name: source_name.clone(),
+            shutdown_tx: shutdown_tx.clone(),
+            task_handle: task_handle_slot,
+        };
+
+        // Spawn a task to send the startup message and then forward events.
+        let mut event_rx = native_handle.event_rx;
+        tokio::spawn(async move {
+            // Send the lifecycle message first.
+            if msg_tx_clone.send(startup_msg).await.is_err() {
+                // Engine channel closed — nothing to do.
+                return;
+            }
+
+            tracing::debug!(
+                "Custom log source '{}' started for session {}",
+                source_name,
+                session_id
+            );
+
+            // Forward events through Message::NativeLog (same path as platform capture).
+            while let Some(event) = event_rx.recv().await {
+                if msg_tx_clone
+                    .send(Message::NativeLog { session_id, event })
+                    .await
+                    .is_err()
+                {
+                    // Engine channel closed.
+                    break;
+                }
+            }
+
+            // Notify TEA that the custom source has stopped.
+            let _ = msg_tx_clone
+                .send(Message::CustomSourceStopped {
+                    session_id,
+                    name: source_name.clone(),
+                })
+                .await;
+
+            tracing::debug!(
+                "Custom log source '{}' stopped for session {}",
+                source_name,
+                session_id
+            );
+        });
+    }
 }
 
 /// Resolve the Android app's process ID via `adb shell pidof -s <package>`.

@@ -7202,3 +7202,294 @@ fn test_native_log_tag_observed_even_when_level_filtered() {
         "GoLog must be visible in the T-overlay even though its event was dropped"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Custom Log Source Tests (Phase 3, Task 04)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: build a CustomSourceStarted message carrying a fresh watch channel
+/// and a trivial tokio task. Returns the message along with the watch receiver
+/// so tests can check whether the shutdown signal was sent.
+fn make_custom_source_started(
+    session_id: crate::session::SessionId,
+    name: &str,
+) -> (
+    Message,
+    tokio::sync::watch::Receiver<bool>,
+    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+) {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+    let msg = Message::CustomSourceStarted {
+        session_id,
+        name: name.to_string(),
+        shutdown_tx: std::sync::Arc::new(shutdown_tx),
+        task_handle: task_handle.clone(),
+    };
+    (msg, shutdown_rx, task_handle)
+}
+
+#[test]
+fn test_custom_source_started_stores_handle() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::CustomSourceStarted {
+                session_id,
+                name: "GoLog".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle,
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.custom_source_handles.len(),
+            1,
+            "custom_source_handles should have one entry"
+        );
+        assert_eq!(
+            handle.custom_source_handles[0].name, "GoLog",
+            "stored handle should have the correct name"
+        );
+        assert!(
+            handle.custom_source_handles[0].task_handle.is_some(),
+            "task_handle should be Some after CustomSourceStarted"
+        );
+    });
+}
+
+#[test]
+fn test_custom_source_started_multiple_sources_stored() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        for name in &["source-a", "source-b", "source-c"] {
+            let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+            let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+            let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+                std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+            update(
+                &mut state,
+                Message::CustomSourceStarted {
+                    session_id,
+                    name: name.to_string(),
+                    shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                    task_handle,
+                },
+            );
+        }
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.custom_source_handles.len(),
+            3,
+            "all three custom sources should be stored"
+        );
+        let names: Vec<&str> = handle
+            .custom_source_handles
+            .iter()
+            .map(|h| h.name.as_str())
+            .collect();
+        assert!(names.contains(&"source-a"));
+        assert!(names.contains(&"source-b"));
+        assert!(names.contains(&"source-c"));
+    });
+}
+
+#[test]
+fn test_custom_source_stopped_removes_handle() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add two custom source handles.
+        for name in &["keep-me", "remove-me"] {
+            let (msg, _rx, _task_slot) = make_custom_source_started(session_id, name);
+            update(&mut state, msg);
+        }
+
+        {
+            let h = state.session_manager.get(session_id).unwrap();
+            assert_eq!(
+                h.custom_source_handles.len(),
+                2,
+                "should have two handles before stop"
+            );
+        }
+
+        // Stop one of them.
+        update(
+            &mut state,
+            Message::CustomSourceStopped {
+                session_id,
+                name: "remove-me".to_string(),
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.custom_source_handles.len(),
+            1,
+            "one handle should remain after CustomSourceStopped"
+        );
+        assert_eq!(
+            handle.custom_source_handles[0].name, "keep-me",
+            "the surviving handle should be 'keep-me'"
+        );
+    });
+}
+
+#[test]
+fn test_custom_source_stopped_missing_session_is_no_op() {
+    // Sending CustomSourceStopped for a non-existent session must not panic.
+    let mut state = AppState::new();
+    let missing_id: crate::session::SessionId = u64::MAX;
+    update(
+        &mut state,
+        Message::CustomSourceStopped {
+            session_id: missing_id,
+            name: "any-source".to_string(),
+        },
+    );
+    // No assertion needed — test passes if no panic occurs.
+}
+
+#[test]
+fn test_custom_source_started_for_closed_session_sends_shutdown() {
+    // When CustomSourceStarted arrives for a session that no longer exists,
+    // the handler must send `true` on the shutdown channel so the orphaned
+    // custom source task stops immediately.
+    let mut state = AppState::new();
+    let missing_id: crate::session::SessionId = u64::MAX;
+
+    let (shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
+    let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(None));
+
+    update(
+        &mut state,
+        Message::CustomSourceStarted {
+            session_id: missing_id,
+            name: "orphaned".to_string(),
+            shutdown_tx: std::sync::Arc::new(shutdown_tx),
+            task_handle,
+        },
+    );
+
+    assert_eq!(
+        *shutdown_rx.borrow_and_update(),
+        true,
+        "shutdown_tx should have been signalled true when session is missing"
+    );
+}
+
+#[test]
+fn test_session_shutdown_cleans_custom_sources() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Add two custom sources.
+        let (msg_a, _rx_a, _slot_a) = make_custom_source_started(session_id, "source-a");
+        let (msg_b, _rx_b, _slot_b) = make_custom_source_started(session_id, "source-b");
+        update(&mut state, msg_a);
+        update(&mut state, msg_b);
+
+        {
+            let h = state.session_manager.get(session_id).unwrap();
+            assert_eq!(
+                h.custom_source_handles.len(),
+                2,
+                "two custom sources should be present before shutdown"
+            );
+        }
+
+        // Call shutdown_native_logs — this also clears custom source handles.
+        {
+            let handle = state.session_manager.get_mut(session_id).unwrap();
+            handle.shutdown_native_logs();
+        }
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.custom_source_handles.len(),
+            0,
+            "custom_source_handles should be empty after shutdown_native_logs"
+        );
+    });
+}
+
+#[test]
+fn test_custom_source_events_use_native_log_handler() {
+    // Verify that NativeLog events from custom sources (which have the
+    // same shape as platform events) flow through the same handler path.
+    use fdemon_core::LogLevel;
+    use fdemon_daemon::NativeLogEvent;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Register the custom source tag name as if the source started.
+    let (msg, _rx, _slot) = make_custom_source_started(session_id, "my-tool");
+    update(&mut state, msg);
+
+    // Send a NativeLog event with the custom source's tag.
+    let event = NativeLogEvent {
+        tag: "my-tool".to_string(),
+        level: LogLevel::Info,
+        message: "hello from custom source".to_string(),
+        timestamp: None,
+    };
+    update(&mut state, Message::NativeLog { session_id, event });
+
+    // Flush batched logs.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.flush_batched_logs();
+    }
+
+    let handle = state.session_manager.get(session_id).unwrap();
+
+    // The tag should appear in native_tag_state.
+    assert_eq!(
+        handle.native_tag_state.tag_count(),
+        1,
+        "custom source tag should be tracked in native_tag_state"
+    );
+    assert!(
+        handle.native_tag_state.is_tag_visible("my-tool"),
+        "custom source tag should be visible"
+    );
+
+    // The log entry should be in the buffer.
+    assert_eq!(
+        handle.session.logs.len(),
+        1,
+        "log entry from custom source should be in the log buffer"
+    );
+    assert_eq!(
+        handle.session.logs[0].message, "hello from custom source",
+        "log message should match the custom source event"
+    );
+}

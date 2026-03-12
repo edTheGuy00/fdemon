@@ -1149,6 +1149,45 @@ pub enum Message {
     NativeLogCaptureStopped { session_id: SessionId },
 
     // ─────────────────────────────────────────────────────────
+    // Custom Log Source Lifecycle Messages (Phase 3, Task 04)
+    // ─────────────────────────────────────────────────────────
+    /// A custom log source process started successfully for a session.
+    ///
+    /// Sent by `actions::native_logs::spawn_custom_sources` immediately
+    /// after `CustomLogCapture::spawn()` succeeds. The TEA handler stores the
+    /// shutdown sender and task handle in `SessionHandle::custom_source_handles`
+    /// so they can be signalled/aborted on session stop.
+    ///
+    /// Events from the custom source flow through `Message::NativeLog` — this
+    /// variant is only for lifecycle management (storing the handles).
+    CustomSourceStarted {
+        session_id: SessionId,
+        /// Human-readable name for this source (used as log tag).
+        name: String,
+        /// Shutdown sender — send `true` to signal the capture task to stop.
+        /// Stored as `Arc` because `Message` requires `Clone`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// JoinHandle for the capture forwarding task.
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out of the `Option` when
+        /// storing it on `SessionHandle`, leaving `None` for any subsequent
+        /// (unexpected) clone.
+        task_handle: SharedTaskHandle,
+    },
+
+    /// A custom log source process exited or was stopped.
+    ///
+    /// Sent by the forwarding task when the custom source's event channel
+    /// closes (i.e., the process exited). The handler removes the named
+    /// handle from `SessionHandle::custom_source_handles`.
+    CustomSourceStopped {
+        session_id: SessionId,
+        /// Name of the custom source that stopped (matches the name in
+        /// `CustomSourceHandle` for lookup and removal).
+        name: String,
+    },
+
+    // ─────────────────────────────────────────────────────────
     // Native Tag Filter Messages (Phase 2, Task 07)
     // ─────────────────────────────────────────────────────────
     /// Toggle a specific native log tag's visibility in the active session.
