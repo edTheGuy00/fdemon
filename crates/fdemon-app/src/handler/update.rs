@@ -301,12 +301,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.selected_mut() {
                 handle
                     .session
-                    .log_error(fdemon_core::LogSource::Watcher, message.clone());
+                    .log_error(fdemon_core::LogSource::Watcher, message);
             } else {
                 // No session yet — buffer for flush on first SessionStarted.
                 // Cap at MAX_PENDING_WATCHER_ERRORS to prevent unbounded growth.
                 if state.pending_watcher_errors.len() < MAX_PENDING_WATCHER_ERRORS {
-                    state.pending_watcher_errors.push(message.clone());
+                    state.pending_watcher_errors.push(message);
                 }
             }
             UpdateResult::none()
