@@ -195,15 +195,17 @@ impl SessionHandle {
         }
 
         // Shut down all custom log source processes.
-        for handle in &self.custom_source_handles {
+        for mut handle in self.custom_source_handles.drain(..) {
             let _ = handle.shutdown_tx.send(true);
+            if let Some(task) = handle.task_handle.take() {
+                task.abort();
+            }
             tracing::debug!(
-                "Sent shutdown signal to custom log source '{}' for session {}",
+                "Shut down custom log source '{}' for session {}",
                 handle.name,
                 self.session.id
             );
         }
-        self.custom_source_handles.clear();
     }
 
     /// Attach a Flutter process to this session

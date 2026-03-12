@@ -39,6 +39,7 @@ use fdemon_daemon::native_logs::{IosLogConfig, MacOsLogConfig};
 /// 1. [`Message::NativeLogCaptureStarted`] with shutdown + task handles.
 /// 2. One [`Message::NativeLog`] per captured line.
 /// 3. [`Message::NativeLogCaptureStopped`] when the capture process exits.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_native_log_capture(
     session_id: SessionId,
     platform: String,
@@ -59,8 +60,8 @@ pub(super) fn spawn_native_log_capture(
 
     // Spawn custom sources regardless of platform (they are always user-defined).
     // Custom sources share the same master toggle as platform capture.
-    tracing::info!(
-        "[native-logs-debug] spawn_native_log_capture called, {} custom sources configured, project_path={}",
+    tracing::debug!(
+        "spawn_native_log_capture called, {} custom sources configured, project_path={}",
         settings.custom_sources.len(),
         project_path.display()
     );
@@ -247,7 +248,7 @@ pub(super) fn spawn_native_log_capture(
 /// 4. Spawns a forwarding task that sends `Message::NativeLog` for each
 ///    captured event and `Message::CustomSourceStopped` when the process exits.
 ///
-/// Invalid configurations (empty name or command) are skipped with a warning.
+/// Invalid configurations are skipped with a warning (via [`crate::config::CustomSourceConfig::validate`]).
 /// This function is synchronous; each capture is spawned as a Tokio task internally.
 fn spawn_custom_sources(
     session_id: SessionId,
@@ -256,11 +257,12 @@ fn spawn_custom_sources(
     msg_tx: &mpsc::Sender<Message>,
 ) {
     for source_config in &settings.custom_sources {
-        // Validate config — skip silently on empty name/command.
-        if source_config.name.trim().is_empty() || source_config.command.trim().is_empty() {
+        // Validate config — skip and warn on invalid entries.
+        if let Err(e) = source_config.validate() {
             tracing::warn!(
-                "Skipping custom log source with empty name or command for session {}",
-                session_id
+                "Skipping invalid custom log source for session {}: {}",
+                session_id,
+                e
             );
             continue;
         }

@@ -71,3 +71,32 @@ Verify existing shutdown tests still pass. The abort is a fallback — the grace
 
 - Check whether `CustomSourceHandle::task_handle` is `Option<JoinHandle<()>>` or `JoinHandle<()>`. If it's not `Option`, wrap it to support `.take()`, or just call `.abort()` directly.
 - The `drain(..)` pattern is idiomatic Rust for consuming a Vec while iterating.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/handle.rs` | Replaced iterate-by-ref + clear() with drain(..) loop; added task.abort() call on each custom source handle's task_handle |
+
+### Notable Decisions/Tradeoffs
+
+1. **drain(..) consumes the Vec in place**: Using `drain(..)` rather than iterating `&self` then calling `clear()` is idiomatic and ensures each `CustomSourceHandle` is moved out, allowing `handle.task_handle.take()` without a borrow conflict. The Vec is empty after the loop completes — no separate `clear()` call is needed.
+2. **`task_handle` was already `Option<JoinHandle<()>>`**: No struct change was required. The `CustomSourceHandle` struct already had `task_handle: Option<tokio::task::JoinHandle<()>>` so `.take()` worked directly.
+3. **Pre-existing clippy failure in native_logs.rs**: `cargo clippy -p fdemon-app -- -D warnings` fails with a `too_many_arguments` warning in `actions/native_logs.rs:42`. This failure exists on the branch before this task's change (confirmed by stashing and re-running). It is not introduced by this task.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1549 passed, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Failed (pre-existing `too_many_arguments` in native_logs.rs, not introduced by this task)
+
+### Risks/Limitations
+
+1. **Pre-existing clippy warning**: The `too_many_arguments` lint in `actions/native_logs.rs` was present before this change. A separate task should add `#[allow(clippy::too_many_arguments)]` or refactor the function to use a params struct.

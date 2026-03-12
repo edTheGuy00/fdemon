@@ -159,7 +159,7 @@ async fn run_idevicesyslog_capture(
     event_tx: mpsc::Sender<NativeLogEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let min_level = super::parse_min_level(&config.min_level);
+    let min_level = LogLevel::from_level_str(&config.min_level);
 
     let mut cmd = build_idevicesyslog_command(&config);
     let mut child = match cmd.spawn() {
@@ -277,7 +277,7 @@ async fn run_simctl_log_capture(
     event_tx: mpsc::Sender<NativeLogEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
-    let min_level = super::parse_min_level(&config.min_level);
+    let min_level = LogLevel::from_level_str(&config.min_level);
 
     let mut cmd = build_simctl_log_stream_command(&config);
     let mut child = match cmd.spawn() {
@@ -429,8 +429,6 @@ impl IosLogCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    // parse_min_level was promoted to the parent native_logs module (mod.rs).
-    use super::super::parse_min_level;
 
     // ── parse_idevicesyslog_line tests ─────────────────────────────────────
 
@@ -599,25 +597,26 @@ mod tests {
         assert!(args.contains(&"--no-colors".to_string()));
     }
 
-    // ── parse_min_level tests ──────────────────────────────────────────────
+    // ── LogLevel::from_level_str delegation tests ─────────────────────────
+    // These tests verify the call sites in this module use from_level_str correctly.
 
     #[test]
-    fn test_parse_min_level() {
-        assert_eq!(parse_min_level("debug"), Some(LogLevel::Debug));
-        assert_eq!(parse_min_level("verbose"), Some(LogLevel::Debug));
-        assert_eq!(parse_min_level("info"), Some(LogLevel::Info));
-        assert_eq!(parse_min_level("warning"), Some(LogLevel::Warning));
-        assert_eq!(parse_min_level("error"), Some(LogLevel::Error));
-        assert_eq!(parse_min_level("invalid"), None);
-        assert_eq!(parse_min_level(""), None);
+    fn test_from_level_str_via_ios_call_sites() {
+        assert_eq!(LogLevel::from_level_str("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("verbose"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("info"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_level_str("warning"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_level_str("error"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::from_level_str("invalid"), None);
+        assert_eq!(LogLevel::from_level_str(""), None);
     }
 
     #[test]
-    fn test_parse_min_level_case_insensitive() {
-        assert_eq!(parse_min_level("DEBUG"), Some(LogLevel::Debug));
-        assert_eq!(parse_min_level("INFO"), Some(LogLevel::Info));
-        assert_eq!(parse_min_level("WARNING"), Some(LogLevel::Warning));
-        assert_eq!(parse_min_level("ERROR"), Some(LogLevel::Error));
+    fn test_from_level_str_case_insensitive_via_ios_call_sites() {
+        assert_eq!(LogLevel::from_level_str("DEBUG"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("INFO"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_level_str("WARNING"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_level_str("ERROR"), Some(LogLevel::Error));
     }
 
     // ── build_simctl_log_stream_command tests ──────────────────────────────
@@ -721,16 +720,16 @@ mod tests {
 
     // ── Simulator min_level filter tests ──────────────────────────────────
 
-    /// Verify that the simulator path applies the same `parse_min_level` + severity guard
+    /// Verify that the simulator path applies the same `LogLevel::from_level_str` + severity guard
     /// as the physical device path. This tests the filter logic directly without spawning
-    /// a process by exercising `parse_min_level` and `LogLevel::severity()` together.
+    /// a process by exercising `LogLevel::from_level_str` and `LogLevel::severity()` together.
     #[test]
     fn test_simctl_capture_filters_by_min_level() {
         // When min_level is "warning", only Warning and Error events should pass.
-        let min_level = parse_min_level("warning");
+        let min_level = LogLevel::from_level_str("warning");
         assert!(
             min_level.is_some(),
-            "parse_min_level must recognise 'warning'"
+            "LogLevel::from_level_str must recognise 'warning'"
         );
         let min = min_level.unwrap();
 
@@ -785,15 +784,15 @@ mod tests {
 
     #[test]
     fn test_simctl_capture_no_min_level_passes_all() {
-        // When min_level is unrecognised/empty, parse_min_level returns None,
+        // When min_level is unrecognised/empty, LogLevel::from_level_str returns None,
         // meaning no severity filter is applied and all events are forwarded.
-        let min_level = parse_min_level("");
+        let min_level = LogLevel::from_level_str("");
         assert!(
             min_level.is_none(),
             "Empty min_level must return None (no filter)"
         );
 
-        let min_level_invalid = parse_min_level("all");
+        let min_level_invalid = LogLevel::from_level_str("all");
         assert!(
             min_level_invalid.is_none(),
             "Unrecognised min_level must return None (no filter)"
@@ -803,7 +802,7 @@ mod tests {
     #[test]
     fn test_simctl_capture_min_level_debug_passes_all_levels() {
         // When min_level is "debug", all log levels (including Debug) should pass.
-        let min_level = parse_min_level("debug");
+        let min_level = LogLevel::from_level_str("debug");
         assert!(min_level.is_some());
         let min = min_level.unwrap();
 

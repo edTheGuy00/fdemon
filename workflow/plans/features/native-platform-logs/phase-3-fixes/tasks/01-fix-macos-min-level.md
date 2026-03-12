@@ -71,3 +71,33 @@ fn test_run_log_stream_capture_filters_below_min_level() {
 
 - If task 06 (move `parse_min_level` to core) is done first, call `LogLevel::from_level_str()` instead of `super::parse_min_level()`
 - The `--level` flag on `log stream` is still useful as a coarse pre-filter for `"debug"` and `"info"` levels — keep it
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/macos.rs` | Added `let min_level = super::parse_min_level(&config.min_level);` at top of `run_log_stream_capture`; added severity guard (`if let Some(min) = min_level { if event.level.severity() < min.severity() { continue; } }`) after `syslog_line_to_event` call and before `event_tx.send`; added `use super::super::parse_min_level;` import in test module; added 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of severity guard**: The guard is placed after the tag filter and after `syslog_line_to_event`, identical to the iOS simulator path in `ios.rs:339-344`. This is consistent and avoids redundant event construction for filtered-out tags.
+2. **Comment added**: Added inline comment explaining why the event-level guard is needed (the `--level` flag has no `"warning"` or `"error"` value), fulfilling the promise made in the existing `build_log_stream_command` comment ("Higher-level filtering is handled downstream").
+3. **Three tests added**: `test_run_log_stream_capture_filters_below_min_level` (warning floor — filters debug/info, passes error), `test_run_log_stream_capture_min_level_error_drops_info_and_warning` (error floor — filters info, passes fault/error), `test_run_log_stream_capture_no_min_level_passes_all` (None path — no filter applied). These follow the same pattern as the iOS simulator tests.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon --lib` - Passed (577 passed, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-daemon --lib native_logs::macos` - Passed (20 tests, including 3 new)
+
+### Risks/Limitations
+
+1. **No async integration test**: The async `run_log_stream_capture` function is not exercised end-to-end (it requires a real `log stream` process). Tests use the same `parse_min_level` + `LogLevel::severity()` pairing that the loop depends on, which is sufficient to verify the logic without spawning a process. This matches the approach used for iOS simulator tests.

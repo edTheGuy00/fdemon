@@ -44,28 +44,39 @@ impl NativeTagState {
     /// exists. Called for *every* incoming native log event regardless of
     /// whether the tag is currently hidden, so the count reflects total capture
     /// volume.
+    ///
+    /// Tags are normalised to ASCII lowercase so that `"GoLog"` and `"golog"`
+    /// map to the same entry, matching the case-insensitive behaviour of the
+    /// daemon-layer `should_include_tag`.
     pub fn observe_tag(&mut self, tag: &str) {
-        *self.discovered_tags.entry(tag.to_string()).or_insert(0) += 1;
+        let key = tag.to_ascii_lowercase();
+        *self.discovered_tags.entry(key).or_insert(0) += 1;
     }
 
     /// Whether a tag is currently visible (not hidden by the user).
     ///
     /// Unknown tags (not yet in `discovered_tags`) are considered visible so
     /// that new tags appear immediately when first seen.
+    ///
+    /// Tag lookup is case-insensitive: `"GoLog"` and `"golog"` resolve to the
+    /// same visibility state.
     pub fn is_tag_visible(&self, tag: &str) -> bool {
-        !self.hidden_tags.contains(tag)
+        !self.hidden_tags.contains(&tag.to_ascii_lowercase() as &str)
     }
 
     /// Toggle a tag's visibility.
     ///
     /// Returns the new visibility state: `true` means now visible, `false`
     /// means now hidden.
+    ///
+    /// Tag names are normalised to ASCII lowercase before storage.
     pub fn toggle_tag(&mut self, tag: &str) -> bool {
-        if self.hidden_tags.contains(tag) {
-            self.hidden_tags.remove(tag);
+        let key = tag.to_ascii_lowercase();
+        if self.hidden_tags.contains(&key as &str) {
+            self.hidden_tags.remove(&key as &str);
             true // now visible
         } else {
-            self.hidden_tags.insert(tag.to_string());
+            self.hidden_tags.insert(key);
             false // now hidden
         }
     }
@@ -111,7 +122,8 @@ mod tests {
         let mut state = NativeTagState::default();
         state.observe_tag("GoLog");
         assert_eq!(state.tag_count(), 1);
-        assert_eq!(state.discovered_tags["GoLog"], 1);
+        // Tags are normalised to ASCII lowercase at storage time.
+        assert_eq!(state.discovered_tags["golog"], 1);
     }
 
     #[test]
@@ -120,7 +132,8 @@ mod tests {
         state.observe_tag("GoLog");
         state.observe_tag("GoLog");
         state.observe_tag("GoLog");
-        assert_eq!(state.discovered_tags["GoLog"], 3);
+        // Tags are normalised to ASCII lowercase at storage time.
+        assert_eq!(state.discovered_tags["golog"], 3);
     }
 
     #[test]
@@ -130,7 +143,8 @@ mod tests {
         state.observe_tag("GoLog");
         state.observe_tag("MyPlugin");
         let tags: Vec<&String> = state.sorted_tags().iter().map(|(k, _)| *k).collect();
-        assert_eq!(tags, vec!["GoLog", "MyPlugin", "OkHttp"]);
+        // All stored as lowercase; BTreeMap sorts them lexicographically.
+        assert_eq!(tags, vec!["golog", "myplugin", "okhttp"]);
     }
 
     #[test]
@@ -197,9 +211,10 @@ mod tests {
         state.observe_tag("Mango");
         let tags = state.sorted_tags();
         assert_eq!(tags.len(), 3);
-        assert_eq!(tags[0].0, "Apple");
-        assert_eq!(tags[1].0, "Mango");
-        assert_eq!(tags[2].0, "Zebra");
+        // All stored as lowercase; relative alphabetical order is preserved.
+        assert_eq!(tags[0].0, "apple");
+        assert_eq!(tags[1].0, "mango");
+        assert_eq!(tags[2].0, "zebra");
     }
 
     #[test]
@@ -209,7 +224,8 @@ mod tests {
         state.observe_tag("GoLog");
         state.toggle_tag("GoLog"); // hide it
         state.observe_tag("GoLog"); // still increments count
-        assert_eq!(state.discovered_tags["GoLog"], 2);
+                                    // Tags are normalised to ASCII lowercase at storage time.
+        assert_eq!(state.discovered_tags["golog"], 2);
         assert!(!state.is_tag_visible("GoLog")); // still hidden
     }
 
@@ -219,9 +235,60 @@ mod tests {
         state.observe_tag("GoLog");
         state.hide_all();
 
-        // Known tag is hidden
+        // Known tag is hidden (case-insensitive lookup)
         assert!(!state.is_tag_visible("GoLog"));
+        assert!(!state.is_tag_visible("golog"));
         // Unknown tag is still visible
         assert!(state.is_tag_visible("NewTag"));
+    }
+
+    // ── Case-insensitivity tests (Issue #8) ──────────────────────────────────
+
+    #[test]
+    fn test_observe_tag_normalises_case() {
+        // "GoLog" and "golog" must collapse to a single entry.
+        let mut state = NativeTagState::default();
+        state.observe_tag("GoLog");
+        state.observe_tag("golog");
+        assert_eq!(state.tag_count(), 1, "case variants must map to one entry");
+        assert_eq!(state.discovered_tags["golog"], 2);
+    }
+
+    #[test]
+    fn test_observe_tag_mixed_case_variants_merge() {
+        // All case variants of a tag collapse into a single lowercase entry.
+        let mut state = NativeTagState::default();
+        state.observe_tag("OKHTTP");
+        state.observe_tag("OkHttp");
+        state.observe_tag("okhttp");
+        assert_eq!(state.tag_count(), 1);
+        assert_eq!(state.discovered_tags["okhttp"], 3);
+    }
+
+    #[test]
+    fn test_is_tag_visible_case_insensitive() {
+        // Hiding via one case variant makes all variants hidden.
+        let mut state = NativeTagState::default();
+        state.observe_tag("GoLog");
+        state.toggle_tag("golog"); // hide using lowercase
+        assert!(!state.is_tag_visible("GoLog")); // query using original case
+        assert!(!state.is_tag_visible("GOLOG"));
+        assert!(!state.is_tag_visible("golog"));
+    }
+
+    #[test]
+    fn test_toggle_tag_case_insensitive() {
+        // Toggling via a different case variant affects the same entry.
+        let mut state = NativeTagState::default();
+        state.observe_tag("OkHttp");
+        assert!(state.is_tag_visible("OkHttp"));
+
+        let visible = state.toggle_tag("OKHTTP"); // hide via uppercase
+        assert!(!visible);
+        assert!(!state.is_tag_visible("okhttp"));
+
+        let visible = state.toggle_tag("OkHttp"); // show via mixed case
+        assert!(visible);
+        assert!(state.is_tag_visible("OKHTTP"));
     }
 }

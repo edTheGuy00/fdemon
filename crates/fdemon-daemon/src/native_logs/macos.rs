@@ -154,6 +154,8 @@ async fn run_log_stream_capture(
     event_tx: mpsc::Sender<NativeLogEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
+    let min_level = fdemon_core::LogLevel::from_level_str(&config.min_level);
+
     let mut cmd = build_log_stream_command(&config);
     let mut child = match cmd.spawn() {
         Ok(c) => c,
@@ -205,6 +207,15 @@ async fn run_log_stream_capture(
                             }
 
                             let event = syslog_line_to_event(&parsed);
+
+                            // Apply level filter — `log stream --level` has no "warning"
+                            // or "error" value, so we enforce the floor here.
+                            if let Some(min) = min_level {
+                                if event.level.severity() < min.severity() {
+                                    continue;
+                                }
+                            }
+
                             if event_tx.send(event).await.is_err() {
                                 // Receiver dropped — stop capture
                                 break;
@@ -494,6 +505,103 @@ mod tests {
         assert_eq!(
             parsed.category,
             Some("com.apple.ManagedAppDistribution:Daemon".into())
+        );
+    }
+
+    /// Verify that `run_log_stream_capture` applies the `min_level` severity guard.
+    ///
+    /// This test exercises the `LogLevel::from_level_str` + `LogLevel::severity()` pairing
+    /// that the async loop uses — identical in structure to the iOS simulator path.
+    #[test]
+    fn test_run_log_stream_capture_filters_below_min_level() {
+        // Configure min_level = "warning"
+        let min_level = LogLevel::from_level_str("warning");
+        assert!(
+            min_level.is_some(),
+            "LogLevel::from_level_str must recognise 'warning'"
+        );
+        let min = min_level.unwrap();
+
+        // Helper: build a NativeLogEvent from a compact syslog line at a given level.
+        let make_event = |level_str: &str| -> NativeLogEvent {
+            let line = SyslogLine {
+                timestamp: "2026-03-12 01:36:06.386".into(),
+                level: level_str.into(),
+                subsystem: Some("TestSubsystem".into()),
+                category: None,
+                message: "test message".into(),
+            };
+            syslog_line_to_event(&line)
+        };
+
+        // Debug ("D") → LogLevel::Debug — must be filtered (severity < warning)
+        let debug_event = make_event("D");
+        assert_eq!(debug_event.level, LogLevel::Debug);
+        assert!(
+            debug_event.level.severity() < min.severity(),
+            "Debug must be below Warning floor — event should be dropped"
+        );
+
+        // Info ("I") → LogLevel::Info — must be filtered (severity < warning)
+        let info_event = make_event("I");
+        assert_eq!(info_event.level, LogLevel::Info);
+        assert!(
+            info_event.level.severity() < min.severity(),
+            "Info must be below Warning floor — event should be dropped"
+        );
+
+        // Error ("E") → LogLevel::Error — must pass (severity > warning)
+        let error_event = make_event("E");
+        assert_eq!(error_event.level, LogLevel::Error);
+        assert!(
+            error_event.level.severity() >= min.severity(),
+            "Error must meet Warning floor — event should be forwarded"
+        );
+    }
+
+    #[test]
+    fn test_run_log_stream_capture_min_level_error_drops_info_and_warning() {
+        let min_level = LogLevel::from_level_str("error");
+        assert!(min_level.is_some());
+        let min = min_level.unwrap();
+
+        let make_event = |level_str: &str| -> NativeLogEvent {
+            let line = SyslogLine {
+                timestamp: "2026-03-12 01:36:06.386".into(),
+                level: level_str.into(),
+                subsystem: Some("TestSubsystem".into()),
+                category: None,
+                message: "test message".into(),
+            };
+            syslog_line_to_event(&line)
+        };
+
+        // Info ("I") → below error floor → drop
+        let info_event = make_event("I");
+        assert!(
+            info_event.level.severity() < min.severity(),
+            "Info must be below Error floor — event should be dropped"
+        );
+
+        // Fault ("F") → LogLevel::Error — passes the error floor
+        let fault_event = make_event("F");
+        assert_eq!(fault_event.level, LogLevel::Error);
+        assert!(
+            fault_event.level.severity() >= min.severity(),
+            "Fault (Error) must meet Error floor — event should be forwarded"
+        );
+    }
+
+    #[test]
+    fn test_run_log_stream_capture_no_min_level_passes_all() {
+        // Empty / unrecognised min_level → None → no filter applied.
+        assert!(
+            LogLevel::from_level_str("").is_none(),
+            "Empty min_level must return None (no filter)"
+        );
+        assert!(
+            LogLevel::from_level_str("all").is_none(),
+            "Unrecognised min_level must return None (no filter)"
         );
     }
 }

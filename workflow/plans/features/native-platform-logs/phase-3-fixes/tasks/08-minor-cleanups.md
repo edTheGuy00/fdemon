@@ -103,3 +103,40 @@ Option 2 (config-time rejection) is preferred since it catches the error before 
 
 - Issue #7 also connects to issue #11 (duplicate names) — if task 07 adds a `NativeLogsSettings::validate()`, call it from the same validation point
 - Issue #10: The "fall back to raw" approach is more user-friendly but less explicit. Config-time rejection is safer.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/native_logs.rs` | Replaced inline empty-name/empty-command guard with `source_config.validate()` call; updated doc comment |
+| `crates/fdemon-app/src/config/types.rs` | Added `#[cfg(not(target_os = "macos"))]` syslog rejection to `CustomSourceConfig::validate()`; added two new tests (`test_custom_source_syslog_format_rejected_on_non_macos`, `test_custom_source_syslog_format_allowed_on_macos`) |
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Promoted `let tag_col_width: usize = 20;` to module-level `const TAG_COLUMN_WIDTH: usize = 20;` with derivation doc comment; replaced all usage sites |
+
+### Notable Decisions/Tradeoffs
+
+1. **Issue #10 — Config-time rejection chosen over runtime warning**: The task preferred Option 2 (config-time rejection via `validate()`) over Option 1 (runtime warning in `formats.rs`). Since `validate()` is now called in `spawn_custom_sources` (fix #7), syslog rejection flows naturally through the same validation gate without any changes to `formats.rs`. The `#[cfg(not(target_os = "macos"))]` block in `validate()` surfaces the error before any process is spawned, which is cleaner than warning per-line in the format parser.
+
+2. **Task 07 connection**: The task notes mention calling `NativeLogsSettings::validate()` once it's added by task 07. Task 07 is not yet implemented, so the connection point in `spawn_custom_sources` is not yet hooked up to the higher-level duplicate-name check. When task 07 is done, a call to `settings.validate()` can be added before the loop.
+
+3. **`formats.rs` left unchanged**: The task listed `formats.rs` as a potential target for a runtime warning (Option 1), but since Option 2 was chosen (and flows through `validate()` which is now live), no changes to `formats.rs` were needed.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (6 crates, no errors)
+- `cargo test -p fdemon-app --lib` - Passed (1551 tests, 4 ignored)
+- `cargo test -p fdemon-tui --lib tag_filter` - Passed (17 tests)
+- `cargo test -p fdemon-daemon --lib` - Passed (574 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+**Pre-existing failures (unrelated to this task):** 4 snapshot tests in `fdemon-tui::render::tests` fail due to version string drift (`v0.1.0` in snapshots vs `v0.2.1` in binary). Not introduced by this task.
+
+### Risks/Limitations
+
+1. **Non-macOS syslog rejection is only caught if `validate()` is called**: The validation only runs at spawn time (in `spawn_custom_sources`). If `CustomSourceConfig` is used elsewhere without calling `validate()`, the check won't fire. The config-load path does not currently call `validate()`, so a user could still deserialize a syslog config without getting an error — they'd only see the error when `spawn_native_log_capture` is called. This is acceptable for now; a future improvement would be to call `validate()` during config loading.

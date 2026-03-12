@@ -6724,6 +6724,90 @@ fn test_maybe_start_native_log_capture_returns_none_for_linux() {
     );
 }
 
+/// Helper: attach a `CustomSourceHandle` to a session, simulating a custom
+/// source that is already running (native_log_shutdown_tx stays None).
+/// Returns a receiver that can be used to verify the shutdown signal.
+fn attach_custom_source_handle(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+    name: &str,
+) -> tokio::sync::watch::Receiver<bool> {
+    let (tx, rx) = tokio::sync::watch::channel(false);
+    let handle = state.session_manager.get_mut(session_id).unwrap();
+    handle
+        .custom_source_handles
+        .push(crate::session::CustomSourceHandle {
+            name: name.to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+        });
+    rx
+}
+
+#[test]
+fn test_hot_restart_skips_duplicate_custom_sources() {
+    // Regression guard: for sessions that only run custom sources (e.g. Linux /
+    // Windows / Web targets where platform capture is skipped),
+    // `native_log_shutdown_tx` is never set.  Without the extended guard the
+    // function would return `Some(StartNativeLogCapture)` on every hot-restart,
+    // spawning duplicate processes.
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    // Use a Linux device so needs_platform_capture = false.
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability::default();
+    state.settings.native_logs.enabled = true;
+    // Configure a custom source so the first AppStart would normally emit the action.
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "GoLog".to_string(),
+        command: "go".to_string(),
+        args: vec!["run".to_string(), "logger.go".to_string()],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+    }];
+
+    // Simulate that the first AppStart already spawned the custom source —
+    // populate custom_source_handles without setting native_log_shutdown_tx.
+    let _rx = attach_custom_source_handle(&mut state, session_id, "GoLog");
+
+    // Sanity: native_log_shutdown_tx must still be None (it is never set for
+    // custom-sources-only sessions).
+    {
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.native_log_shutdown_tx.is_none(),
+            "native_log_shutdown_tx must be None for this test to be meaningful"
+        );
+        assert_eq!(
+            h.custom_source_handles.len(),
+            1,
+            "custom_source_handles must be non-empty"
+        );
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Now simulate a hot-restart: the guard must fire and return None.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+
+    assert!(
+        action.is_none(),
+        "Expected None (guard fired) when custom_source_handles is non-empty, got {:?}",
+        action
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Native Tag Filter Handler Tests (Phase 2, Task 07)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -6757,7 +6841,8 @@ fn test_native_log_observes_tag() {
 
     let handle = state.session_manager.get(session_id).unwrap();
     assert_eq!(handle.native_tag_state.tag_count(), 1);
-    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 1);
+    // Tags are normalised to ASCII lowercase at storage time.
+    assert_eq!(handle.native_tag_state.discovered_tags["golog"], 1);
 }
 
 #[test]
@@ -6772,8 +6857,9 @@ fn test_native_log_increments_tag_count() {
 
     let handle = state.session_manager.get(session_id).unwrap();
     assert_eq!(handle.native_tag_state.tag_count(), 2);
-    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 2);
-    assert_eq!(handle.native_tag_state.discovered_tags["OkHttp"], 1);
+    // Tags are normalised to ASCII lowercase at storage time.
+    assert_eq!(handle.native_tag_state.discovered_tags["golog"], 2);
+    assert_eq!(handle.native_tag_state.discovered_tags["okhttp"], 1);
 }
 
 #[test]
@@ -6830,7 +6916,8 @@ fn test_native_log_hidden_tag_not_added_to_buffer() {
 
     // The tag count should still be incremented even for hidden entries.
     let handle = state.session_manager.get(session_id).unwrap();
-    assert_eq!(handle.native_tag_state.discovered_tags["GoLog"], 2);
+    // Tags are normalised to ASCII lowercase at storage time.
+    assert_eq!(handle.native_tag_state.discovered_tags["golog"], 2);
 }
 
 #[test]
@@ -6954,6 +7041,92 @@ fn test_native_log_capture_stopped_resets_tag_state() {
         handle.native_tag_state.tag_count(),
         0,
         "Tag state should be reset when native log capture stops"
+    );
+}
+
+#[test]
+fn test_native_log_capture_stopped_preserves_tags_when_custom_sources_running() {
+    // When adb logcat exits while custom sources are still active, the user's
+    // per-tag visibility choices must NOT be wiped out.
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Discover a tag via platform capture.
+    send_native_log(&mut state, session_id, "GoLog", "msg");
+    // Hide the tag so we can verify the choice is preserved.
+    update(
+        &mut state,
+        Message::ToggleNativeTag {
+            tag: "GoLog".to_string(),
+        },
+    );
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            !handle.native_tag_state.is_tag_visible("GoLog"),
+            "precondition: tag should be hidden"
+        );
+        assert_eq!(handle.native_tag_state.hidden_count(), 1);
+    }
+
+    // Attach a custom source so custom_source_handles is non-empty.
+    let _rx = attach_custom_source_handle(&mut state, session_id, "my-custom-source");
+
+    // Platform capture (adb logcat) exits.
+    update(&mut state, Message::NativeLogCaptureStopped { session_id });
+
+    // Tag state must be preserved because custom sources are still running.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.native_tag_state.tag_count(),
+        1,
+        "Tag state must be preserved when custom sources are still running"
+    );
+    assert!(
+        !handle.native_tag_state.is_tag_visible("GoLog"),
+        "Hidden tag must remain hidden when custom sources are still running"
+    );
+    assert_eq!(
+        handle.native_tag_state.hidden_count(),
+        1,
+        "Hidden count must be preserved when custom sources are still running"
+    );
+    // Platform capture handles should be cleared.
+    assert!(handle.native_log_shutdown_tx.is_none());
+    assert!(handle.native_log_task_handle.is_none());
+}
+
+#[test]
+fn test_native_log_capture_stopped_resets_tags_when_no_custom_sources() {
+    // When adb logcat exits and no custom sources are running, tag state
+    // should reset as before (no regression).
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Discover a tag via platform capture.
+    send_native_log(&mut state, session_id, "GoLog", "msg");
+    {
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.native_tag_state.tag_count(),
+            1,
+            "precondition: tag present"
+        );
+    }
+
+    // No custom sources attached — custom_source_handles is empty.
+
+    // Platform capture exits.
+    update(&mut state, Message::NativeLogCaptureStopped { session_id });
+
+    // Tag state must be reset because no custom sources are running.
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.native_tag_state.tag_count(),
+        0,
+        "Tag state must be reset when no custom sources are running"
     );
 }
 
@@ -7193,8 +7366,9 @@ fn test_native_log_tag_observed_even_when_level_filtered() {
         1,
         "Tag must be observed even when its event is level-filtered"
     );
+    // Tags are normalised to ASCII lowercase at storage time.
     assert_eq!(
-        handle.native_tag_state.discovered_tags["GoLog"], 1,
+        handle.native_tag_state.discovered_tags["golog"], 1,
         "GoLog observation count must be 1 even though the event was dropped"
     );
     assert!(

@@ -91,3 +91,37 @@ fn test_duplicate_custom_source_name_rejected() {
 - The daemon-layer `should_include_tag` is already case-insensitive — no changes needed there
 - Normalising to lowercase at storage time is simpler than doing it at every lookup
 - The duplicate name check at config level is preventive — runtime deduplication is not needed if validation catches it early
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session/native_tags.rs` | `observe_tag` now stores `tag.to_ascii_lowercase()`; `is_tag_visible` and `toggle_tag` normalise the input before lookup; existing tests updated for lowercase keys; 4 new case-insensitivity tests added |
+| `crates/fdemon-app/src/config/types.rs` | `effective_min_level` uses `eq_ignore_ascii_case` iteration instead of exact HashMap lookup; new `NativeLogsSettings::validate()` method checks for duplicate custom source names (case-insensitive); 6 new tests added |
+| `crates/fdemon-app/src/handler/tests.rs` | 4 existing handler tests updated to use lowercase tag keys (`"golog"`, `"okhttp"`) in `discovered_tags` index expressions |
+
+### Notable Decisions/Tradeoffs
+
+1. **`effective_min_level` uses linear scan**: The `tags` HashMap keys retain their original case from TOML (e.g., `"GoLog"`), so an O(n) `iter().find(|k| k.eq_ignore_ascii_case(tag))` is used instead of a hash lookup. For typical configs with fewer than 20 tag overrides this is negligible. An alternative would be to normalise keys at deserialisation time (a `#[serde(deserialize_with=...)]` shim), but that changes the observable type and breaks existing tests that set `tags["GoLog"]` directly — the linear scan is a simpler, non-breaking approach.
+
+2. **`observe_tag` / `is_tag_visible` / `toggle_tag` use `to_ascii_lowercase` at the boundary**: Normalising at storage time means all downstream code (sorted_tags, hide_all, etc.) works without change. The trade-off is that the original casing is lost; the tag filter overlay will show lowercase keys. This is consistent with the task spec.
+
+3. **`handler/update.rs` not changed**: The task mentions normalising in the handler, but since normalisation is now done inside `observe_tag` and `effective_min_level`, no handler changes are needed. The task note says "normalise at the point they enter the system" which these callee-side fixes satisfy.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1564 tests: 1564 passed, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Tag display now shows lowercase**: The `sorted_tags()` output exposes lowercase keys to the TUI's tag filter overlay. If the overlay previously showed `"GoLog"`, it now shows `"golog"`. This is a visual change but is consistent and correct; no TUI code was changed as part of this task.
+2. **`effective_min_level` O(n) lookup**: As noted above, linear scan is fine for small configs but would be a concern for configs with hundreds of tag overrides.

@@ -80,3 +80,32 @@ fn test_native_log_capture_stopped_resets_tags_when_no_custom_sources() {
 ### Notes
 
 - There is a symmetric concern for `CustomSourceStopped` — when the last custom source stops but platform capture is still running, should tag state be preserved? Current behavior preserves it (no reset in `CustomSourceStopped`), which is correct.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Wrapped `native_tag_state` reset in `NativeLogCaptureStopped` handler with `if handle.custom_source_handles.is_empty()` guard |
+| `crates/fdemon-app/src/handler/tests.rs` | Added two new tests: `test_native_log_capture_stopped_preserves_tags_when_custom_sources_running` and `test_native_log_capture_stopped_resets_tags_when_no_custom_sources` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comment placement**: Added an explanatory comment above the guard condition to make the intent clear to future readers — the asymmetry between `NativeLogCaptureStopped` (platform only) and session exit (resets both) warrants explicit documentation.
+2. **Test coverage of hidden state**: The preserve-test toggles a tag to hidden before sending the stop message, directly verifying both `tag_count` and `hidden_count` survive the message. This exercises the user's actual concern (filter choices being wiped).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1553 tests, 0 failed; all 4 `NativeLogCaptureStopped` tests pass)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None identified**: The guard is a minimal one-liner using the already-populated `custom_source_handles` vec. Session-exit reset paths in `session.rs` are unaffected and continue to reset unconditionally.

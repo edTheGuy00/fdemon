@@ -9,7 +9,7 @@
 
 use crate::message::{AutoLaunchSuccess, Message};
 use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode};
-use fdemon_core::{AppPhase, LogSource};
+use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::warn;
 
 use super::{
@@ -1938,7 +1938,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Read per-tag min level config before borrowing state mutably.
             // effective_min_level returns a &str into settings, so we must
             // resolve it to an owned Option<LogLevel> before get_mut.
-            let min_level_filter = fdemon_daemon::native_logs::parse_min_level(
+            let min_level_filter = LogLevel::from_level_str(
                 state.settings.native_logs.effective_min_level(&event.tag),
             );
 
@@ -2016,7 +2016,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.native_log_shutdown_tx = None;
                 handle.native_log_task_handle = None;
-                handle.native_tag_state = crate::session::NativeTagState::default();
+                // Only reset tag state if no custom sources are still emitting events.
+                // Custom sources have independent lifecycles and may still be running;
+                // resetting here would destroy the user's per-tag visibility choices.
+                if handle.custom_source_handles.is_empty() {
+                    handle.native_tag_state = crate::session::NativeTagState::default();
+                }
                 tracing::debug!("Native log capture stopped for session {}", session_id);
             }
             UpdateResult::none()

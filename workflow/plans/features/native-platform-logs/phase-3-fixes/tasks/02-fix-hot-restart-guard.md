@@ -73,3 +73,36 @@ fn test_hot_restart_skips_duplicate_custom_sources() {
 
 - This guard is the entry point for all native log lifecycle — changes here affect both platform and custom source paths
 - The `shutdown_native_logs` method in `handle.rs` already treats both resource types as co-equal (cleans up both), so this guard extension is consistent with that pattern
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Extended guard in `maybe_start_native_log_capture` to check `custom_source_handles.is_empty()` in addition to `native_log_shutdown_tx.is_some()`; replaced `tracing::info!` with `tracing::debug!` and removed `[native-logs-debug]` prefix |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `attach_custom_source_handle` helper and `test_hot_restart_skips_duplicate_custom_sources` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing clippy lint not fixed**: `native_logs.rs` has a pre-existing `clippy::too_many_arguments` lint on `spawn_native_log_capture`. This was present before this task and is outside the task's scope (`handler/session.rs` only). The files I changed produce no new clippy warnings.
+
+2. **Test uses `CustomSourceConfig` from `crate::config`**: The test sets `state.settings.native_logs.custom_sources` (which uses `CustomSourceConfig`) to ensure `has_custom_sources = true` is the reason the guard fires in production, and directly populates `custom_source_handles` to simulate the state after the first `AppStart` has spawned processes.
+
+3. **Inline `||` operator on single line**: After `cargo fmt`, the guard condition fits on one line (`if handle.native_log_shutdown_tx.is_some() || !handle.custom_source_handles.is_empty()`), which is idiomatic Rust.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib -- test_hot_restart_skips_duplicate_custom_sources test_maybe_start_native_log_capture` - Passed (6 tests)
+- `cargo test -p fdemon-app --lib` - Passed (1551 tests)
+- `cargo fmt --all` - Passed
+- `cargo clippy -p fdemon-app -- -D warnings` - Failed on pre-existing `too_many_arguments` lint in `native_logs.rs` (not introduced by this task; no new warnings in modified files)
+
+### Risks/Limitations
+
+1. **Pre-existing clippy failure**: The quality gate technically fails due to `clippy::too_many_arguments` in `actions/native_logs.rs`. This lint existed before this task on the branch and is unrelated to the guard fix.

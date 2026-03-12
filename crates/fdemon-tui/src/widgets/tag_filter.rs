@@ -22,6 +22,12 @@ const TAG_FILTER_MIN_WIDTH: u16 = 42;
 /// Maximum number of visible tag rows before the list scrolls.
 const TAG_FILTER_MAX_VISIBLE_TAGS: u16 = 15;
 
+/// Width of the tag name column in the filter overlay, in characters.
+///
+/// Derived from: overlay min-width (42) minus checkbox `"[x] "` (4),
+/// count suffix `" (N entries)"` (~14), and padding.
+const TAG_COLUMN_WIDTH: usize = 20;
+
 /// Render the tag filter overlay onto the given frame area.
 ///
 /// The overlay is centered within `area`. When no tags have been discovered
@@ -90,23 +96,20 @@ pub fn render_tag_filter(
     let tags = tag_state.sorted_tags();
 
     // Compute how many characters are available for the tag name column.
-    // Layout: "[x] " (4) + tag (tag_col_width) + " (" (2) + count digits + ")" (1) + padding
-    // Use a fixed 20-char tag column to match the spec.
-    let tag_col_width: usize = 20;
-
+    // Layout: "[x] " (4) + tag (TAG_COLUMN_WIDTH) + " (" (2) + count digits + ")" (1) + padding
     let items: Vec<ListItem> = tags
         .iter()
         .enumerate()
         .map(|(i, (tag, count))| {
             let visible = tag_state.is_tag_visible(tag);
             let checkbox = if visible { "[x]" } else { "[ ]" };
-            let truncated = truncate_tag(tag, tag_col_width);
+            let truncated = truncate_tag(tag, TAG_COLUMN_WIDTH);
             let line = format!(
                 "{} {:<width$} ({} entries)",
                 checkbox,
                 truncated,
                 count,
-                width = tag_col_width
+                width = TAG_COLUMN_WIDTH
             );
 
             let style = if i == ui_state.selected_index {
@@ -364,16 +367,16 @@ mod tests {
             })
             .unwrap();
 
-        // Verify the overlay rendered something — check for tag names.
+        // Verify the overlay rendered something — check for tag names (lowercased by observe_tag).
         let rendered = buffer_to_string(terminal.backend().buffer());
         assert!(
-            rendered.contains("GoLog"),
-            "expected GoLog in rendered output, got: {:?}",
+            rendered.contains("golog"),
+            "expected golog in rendered output, got: {:?}",
             rendered
         );
         assert!(
-            rendered.contains("OkHttp"),
-            "expected OkHttp in rendered output, got: {:?}",
+            rendered.contains("okhttp"),
+            "expected okhttp in rendered output, got: {:?}",
             rendered
         );
     }

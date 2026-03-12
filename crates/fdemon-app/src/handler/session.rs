@@ -300,9 +300,18 @@ pub fn maybe_start_native_log_capture(
 
             // Guard: don't start a second capture if one is already running
             // (prevents double-start on repeated AppStart, e.g. hot-restart).
-            if handle.native_log_shutdown_tx.is_some() {
-                tracing::info!(
-                    "[native-logs-debug] Skipping: already running for session {}",
+            //
+            // Two conditions indicate capture is active:
+            // - `native_log_shutdown_tx.is_some()`: platform capture task is running
+            //   (Android logcat / macOS log stream / iOS simulator).
+            // - `!custom_source_handles.is_empty()`: custom source processes are
+            //   running.  For custom-sources-only sessions (Linux/Windows/Web) the
+            //   platform path is skipped and `native_log_shutdown_tx` is never set,
+            //   so without this second check the guard would be bypassed on every
+            //   hot-restart, spawning duplicate processes.
+            if handle.native_log_shutdown_tx.is_some() || !handle.custom_source_handles.is_empty() {
+                tracing::debug!(
+                    "Native log capture already running for session {}",
                     session_id
                 );
                 return None;
@@ -319,9 +328,12 @@ pub fn maybe_start_native_log_capture(
 
             let has_custom_sources = !state.settings.native_logs.custom_sources.is_empty();
 
-            tracing::info!(
-                "[native-logs-debug] platform={}, needs_platform={}, has_tools={}, custom_sources={}, enabled={}",
-                platform, needs_platform_capture, has_platform_tools, has_custom_sources,
+            tracing::debug!(
+                "platform={}, needs_platform={}, has_tools={}, custom_sources={}, enabled={}",
+                platform,
+                needs_platform_capture,
+                has_platform_tools,
+                has_custom_sources,
                 state.settings.native_logs.enabled
             );
 
@@ -340,10 +352,7 @@ pub fn maybe_start_native_log_capture(
                 return None;
             }
 
-            tracing::info!(
-                "[native-logs-debug] Emitting StartNativeLogCapture for session {}",
-                session_id
-            );
+            tracing::debug!("Emitting StartNativeLogCapture for session {}", session_id);
             return Some(UpdateAction::StartNativeLogCapture {
                 session_id,
                 platform: platform.clone(),

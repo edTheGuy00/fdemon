@@ -603,6 +603,7 @@ impl CustomSourceConfig {
     ///
     /// - `name` is empty or contains only whitespace
     /// - `command` is empty
+    /// - `format = "syslog"` on a non-macOS host (syslog is macOS-only)
     pub fn validate(&self) -> Result<(), String> {
         if self.name.trim().is_empty() {
             return Err("custom_source name must not be empty".to_string());
@@ -610,6 +611,16 @@ impl CustomSourceConfig {
         if self.command.is_empty() {
             return Err(format!(
                 "custom_source '{}': command must not be empty",
+                self.name
+            ));
+        }
+        // Syslog format is only available on macOS; reject it at config-parse
+        // time on other platforms so the user gets a clear error instead of
+        // silent empty output.
+        #[cfg(not(target_os = "macos"))]
+        if self.format == OutputFormat::Syslog {
+            return Err(format!(
+                "custom_source '{}': syslog format is only supported on macOS",
                 self.name
             ));
         }
@@ -712,11 +723,40 @@ impl NativeLogsSettings {
     ///
     /// Returns the per-tag override from `tags` if configured and has a `min_level` set,
     /// otherwise falls back to the global `min_level`.
+    ///
+    /// Lookup is case-insensitive: `"GoLog"` and `"golog"` resolve to the same
+    /// per-tag config entry regardless of how the key was written in the TOML.
+    /// This matches the behaviour of the daemon-layer `should_include_tag` and
+    /// the session-layer `NativeTagState`.
     pub fn effective_min_level(&self, tag: &str) -> &str {
         self.tags
-            .get(tag)
-            .and_then(|tc| tc.min_level.as_deref())
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(tag))
+            .and_then(|(_, tc)| tc.min_level.as_deref())
             .unwrap_or(&self.min_level)
+    }
+
+    /// Validate `NativeLogsSettings`, returning an error string if invalid.
+    ///
+    /// Currently checks that no two `custom_sources` share the same name
+    /// (case-insensitive), because `CustomSourceStopped` removes handles by
+    /// name and would orphan a process if duplicates exist.
+    ///
+    /// Also delegates to [`CustomSourceConfig::validate`] for each source.
+    ///
+    /// # Errors
+    ///
+    /// - Any `CustomSourceConfig` fails its own validation
+    /// - Two custom sources share the same name (case-insensitive)
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for source in &self.custom_sources {
+            source.validate()?;
+            if !seen.insert(source.name.to_ascii_lowercase()) {
+                return Err(format!("Duplicate custom source name: '{}'", source.name));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1887,6 +1927,154 @@ min_level = "debug"
         assert!(tc.min_level.is_none());
     }
 
+    // ── Case-insensitivity tests for effective_min_level (Issue #8) ──────────
+
+    #[test]
+    fn test_effective_min_level_case_insensitive() {
+        // Config has tags.GoLog.min_level = "error"; lookup must work regardless
+        // of the case used at call time.
+        let mut settings = NativeLogsSettings::default();
+        settings.tags.insert(
+            "GoLog".to_string(),
+            TagConfig {
+                min_level: Some("error".to_string()),
+            },
+        );
+        assert_eq!(settings.effective_min_level("GoLog"), "error");
+        assert_eq!(settings.effective_min_level("goLog"), "error");
+        assert_eq!(settings.effective_min_level("GOLOG"), "error");
+        assert_eq!(settings.effective_min_level("golog"), "error");
+    }
+
+    #[test]
+    fn test_effective_min_level_case_insensitive_toml() {
+        // Same as above but via TOML deserialization to match real usage.
+        let toml_str = r#"
+min_level = "info"
+
+[tags.GoLog]
+min_level = "error"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.effective_min_level("GoLog"), "error");
+        assert_eq!(settings.effective_min_level("golog"), "error");
+        assert_eq!(settings.effective_min_level("GOLOG"), "error");
+    }
+
+    // ── Duplicate custom source name validation tests (Issue #11) ─────────────
+
+    #[test]
+    fn test_native_logs_settings_validate_no_custom_sources() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn test_native_logs_settings_validate_unique_names_passes() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "go-backend".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "my-server".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_custom_source_name_rejected() {
+        // Two sources with the exact same name must fail validation.
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let result = settings.validate();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("Duplicate custom source name"),
+            "error should mention 'Duplicate custom source name'"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_custom_source_name_case_insensitive_rejected() {
+        // "mylog" and "MyLog" are the same name — must be rejected.
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "MyLog".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let result = settings.validate();
+        assert!(
+            result.is_err(),
+            "case-insensitive duplicate should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_invalid_custom_source_propagates_error() {
+        // validate() must propagate errors from CustomSourceConfig::validate().
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: String::new(), // invalid: empty name
+                command: "adb".to_string(),
+                args: vec![],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+            }],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.validate().is_err());
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // CustomSourceConfig & OutputFormat Tests (Phase 3 Task 01)
     // ─────────────────────────────────────────────────────────────────────────
@@ -2058,6 +2246,42 @@ args = ["-f", "/tmp/sidecar.log"]
             command: "adb".to_string(),
             args: vec!["logcat".to_string()],
             format: OutputFormat::LogcatThreadtime,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// On non-macOS platforms, `format = "syslog"` must be rejected at config
+    /// validation time so users get an actionable error instead of silent empty output.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_custom_source_syslog_format_rejected_on_non_macos() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: "my-tool".to_string(),
+            args: vec![],
+            format: OutputFormat::Syslog,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            err.contains("syslog format is only supported on macOS"),
+            "expected syslog rejection message, got: {:?}",
+            err
+        );
+    }
+
+    /// On macOS, `format = "syslog"` is valid and must pass validation.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_custom_source_syslog_format_allowed_on_macos() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: "log".to_string(),
+            args: vec!["stream".to_string()],
+            format: OutputFormat::Syslog,
             working_dir: None,
             env: HashMap::new(),
         };

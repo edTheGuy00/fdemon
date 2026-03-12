@@ -49,14 +49,14 @@ Wave 2 (parallel — no dependencies on wave 1):
 
 | # | Task | Status | Depends On | Issues | Modules |
 |---|------|--------|------------|--------|---------|
-| 1 | [01-fix-macos-min-level](tasks/01-fix-macos-min-level.md) | Not Started | — | #1 (CRITICAL) | `fdemon-daemon/src/native_logs/macos.rs` |
-| 2 | [02-fix-hot-restart-guard](tasks/02-fix-hot-restart-guard.md) | Not Started | — | #2 (MAJOR) | `fdemon-app/src/handler/session.rs` |
-| 3 | [03-fix-tag-state-reset](tasks/03-fix-tag-state-reset.md) | Not Started | 2 | #3 (MAJOR) | `fdemon-app/src/handler/update.rs` |
-| 4 | [04-abort-custom-source-tasks](tasks/04-abort-custom-source-tasks.md) | Not Started | — | #4 (MAJOR) | `fdemon-app/src/session/handle.rs` |
-| 5 | [05-remove-debug-scaffolding](tasks/05-remove-debug-scaffolding.md) | Not Started | — | #5 (MAJOR) | `fdemon-app/src/actions/native_logs.rs`, `fdemon-app/src/handler/session.rs` |
-| 6 | [06-move-parse-min-level-to-core](tasks/06-move-parse-min-level-to-core.md) | Not Started | — | #6 (MINOR) | `fdemon-core/src/types.rs`, `fdemon-daemon/src/native_logs/mod.rs`, `fdemon-app/src/handler/update.rs` |
-| 7 | [07-fix-tag-case-sensitivity](tasks/07-fix-tag-case-sensitivity.md) | Not Started | — | #8, #11 (MINOR) | `fdemon-app/src/config/types.rs`, `fdemon-app/src/session/native_tags.rs`, `fdemon-app/src/handler/update.rs` |
-| 8 | [08-minor-cleanups](tasks/08-minor-cleanups.md) | Not Started | — | #7, #9, #10 (MINOR) | `fdemon-app/src/config/types.rs`, `fdemon-app/src/actions/native_logs.rs`, `fdemon-tui/src/widgets/tag_filter.rs`, `fdemon-daemon/src/native_logs/formats.rs` |
+| 1 | [01-fix-macos-min-level](tasks/01-fix-macos-min-level.md) | Done | — | #1 (CRITICAL) | `fdemon-daemon/src/native_logs/macos.rs` |
+| 2 | [02-fix-hot-restart-guard](tasks/02-fix-hot-restart-guard.md) | Done | — | #2 (MAJOR) | `fdemon-app/src/handler/session.rs` |
+| 3 | [03-fix-tag-state-reset](tasks/03-fix-tag-state-reset.md) | Done | 2 | #3 (MAJOR) | `fdemon-app/src/handler/update.rs` |
+| 4 | [04-abort-custom-source-tasks](tasks/04-abort-custom-source-tasks.md) | Done | — | #4 (MAJOR) | `fdemon-app/src/session/handle.rs` |
+| 5 | [05-remove-debug-scaffolding](tasks/05-remove-debug-scaffolding.md) | Done | — | #5 (MAJOR) | `fdemon-app/src/actions/native_logs.rs`, `fdemon-app/src/handler/session.rs` |
+| 6 | [06-move-parse-min-level-to-core](tasks/06-move-parse-min-level-to-core.md) | Done | — | #6 (MINOR) | `fdemon-core/src/types.rs`, `fdemon-daemon/src/native_logs/mod.rs`, `fdemon-app/src/handler/update.rs` |
+| 7 | [07-fix-tag-case-sensitivity](tasks/07-fix-tag-case-sensitivity.md) | Done | — | #8, #11 (MINOR) | `fdemon-app/src/config/types.rs`, `fdemon-app/src/session/native_tags.rs`, `fdemon-app/src/handler/update.rs` |
+| 8 | [08-minor-cleanups](tasks/08-minor-cleanups.md) | Done | — | #7, #9, #10 (MINOR) | `fdemon-app/src/config/types.rs`, `fdemon-app/src/actions/native_logs.rs`, `fdemon-tui/src/widgets/tag_filter.rs`, `fdemon-daemon/src/native_logs/formats.rs` |
 
 ## Execution Plan
 

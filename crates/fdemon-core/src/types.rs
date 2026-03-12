@@ -169,6 +169,23 @@ impl LogLevel {
             other
         }
     }
+
+    /// Parses a level string (case-insensitive) into a `LogLevel`.
+    ///
+    /// Accepts: "verbose", "debug", "info", "warning", "error".
+    /// Returns `None` for unrecognised strings.
+    ///
+    /// Note: `"verbose"` maps to `LogLevel::Debug` because the domain model
+    /// does not have a separate verbose variant.
+    pub fn from_level_str(s: &str) -> Option<LogLevel> {
+        match s.to_lowercase().as_str() {
+            "verbose" | "debug" => Some(LogLevel::Debug),
+            "info" => Some(LogLevel::Info),
+            "warning" => Some(LogLevel::Warning),
+            "error" => Some(LogLevel::Error),
+            _ => None,
+        }
+    }
 }
 
 /// Filter for log levels - controls which severity levels are displayed
@@ -1131,6 +1148,45 @@ mod tests {
             LogLevel::Error
         );
         assert_eq!(LogLevel::Info.max_severity(LogLevel::Info), LogLevel::Info);
+    }
+
+    // ── LogLevel::from_level_str tests ────────────────────────────────────────
+
+    #[test]
+    fn test_from_level_str() {
+        assert_eq!(LogLevel::from_level_str("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("verbose"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("INFO"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_level_str("Warning"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_level_str("ERROR"), Some(LogLevel::Error));
+        assert_eq!(LogLevel::from_level_str("unknown"), None);
+        assert_eq!(LogLevel::from_level_str(""), None);
+    }
+
+    #[test]
+    fn test_from_level_str_all_recognized_values() {
+        assert_eq!(LogLevel::from_level_str("verbose"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("debug"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("info"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_level_str("warning"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_level_str("error"), Some(LogLevel::Error));
+    }
+
+    #[test]
+    fn test_from_level_str_unrecognized_returns_none() {
+        assert_eq!(LogLevel::from_level_str("invalid"), None);
+        assert_eq!(LogLevel::from_level_str("all"), None);
+        assert_eq!(LogLevel::from_level_str("trace"), None);
+        assert_eq!(LogLevel::from_level_str(""), None);
+    }
+
+    #[test]
+    fn test_from_level_str_case_insensitive() {
+        assert_eq!(LogLevel::from_level_str("DEBUG"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("VERBOSE"), Some(LogLevel::Debug));
+        assert_eq!(LogLevel::from_level_str("INFO"), Some(LogLevel::Info));
+        assert_eq!(LogLevel::from_level_str("WARNING"), Some(LogLevel::Warning));
+        assert_eq!(LogLevel::from_level_str("ERROR"), Some(LogLevel::Error));
     }
 
     // LogSourceFilter tests
