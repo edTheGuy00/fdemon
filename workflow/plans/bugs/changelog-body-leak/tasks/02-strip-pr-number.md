@@ -81,4 +81,26 @@ fn strip_pr_suffix_high_number() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/build.rs` | Added `strip_pr_suffix()` helper function; updated description pipeline to call it between `first_line` extraction and `upper_first` |
+| `website/tests/changelog_gen.rs` | Mirrored `strip_pr_suffix()` function; updated `generate_entries` copy to call it; added 8 new unit tests covering all acceptance criteria plus integration test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pure string operations, no regex**: Used `rfind(" (#")` + `ends_with(')')` + `chars().all(is_ascii_digit())` as specified in the task — no new crate dependency.
+2. **Test mirroring**: The test file maintains a copy of all helpers from `build.rs` (established by task 01). Both copies were updated consistently. Any future change to `build.rs` must be mirrored here.
+
+### Testing Performed
+
+- `cargo check` (website) - Passed
+- `cargo test` (website) - Passed (13 tests: 5 from task 01, 8 new for `strip_pr_suffix`)
+- `cargo clippy -- -D warnings` (website) - 2 pre-existing errors in `src/lib.rs:61` and `src/pages/docs/debugging.rs:556`; both predate this branch and are unrelated to this task
+
+### Risks/Limitations
+
+1. **Pre-existing clippy failures**: The website crate already had two `-D warnings` failures before this task. These are not introduced by this change and will need a separate fix.

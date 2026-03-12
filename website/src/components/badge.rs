@@ -19,10 +19,7 @@ impl BadgeColor {
 }
 
 #[component]
-pub fn Badge(
-    children: Children,
-    #[prop(optional)] color: BadgeColor,
-) -> impl IntoView {
+pub fn Badge(children: Children, #[prop(optional)] color: BadgeColor) -> impl IntoView {
     view! {
         <span class=color.class()>
             {children()}

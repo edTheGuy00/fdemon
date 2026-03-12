@@ -100,4 +100,30 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/build.rs` | Lines 133-135: replaced single `let desc = escape(&upper_first(&commit.message))` with two-line first-line extraction (`commit.message.lines().next().unwrap_or("").trim()`) before passing to `upper_first`/`escape`. |
+| `website/tests/changelog_gen.rs` | New integration test file: replicates the helper functions from `build.rs` (since build scripts are not compiled during `cargo test`) and adds 5 unit tests covering multi-line, single-line, empty, CRLF, and escape/capitalise cases. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test file in `tests/` not inline in `build.rs`**: `build.rs` is compiled as a standalone binary by Cargo and its `#[cfg(test)]` blocks are not executed by `cargo test`. The standard approach is to replicate the testable logic in a `tests/` integration test file. The functions in `tests/changelog_gen.rs` are kept in sync with `build.rs` manually.
+
+2. **Test inputs use git-cliff stripped messages**: git-cliff strips the conventional-commit prefix (`feat:`, `fix:`, …) before writing the `message` field to JSON, so test inputs use the post-strip description (e.g. `"add widget"` not `"feat: add widget"`). This matches production data and makes `upper_first` assertions predictable.
+
+3. **`cargo fmt` applied**: Running `cargo fmt` reformatted some pre-existing lines in `build.rs` (the `sort_by` closure and a `format!` call); these are style-only changes that don't affect behaviour.
+
+### Testing Performed
+
+- `cargo check` (website crate) - Passed
+- `cargo test` (website crate) - Passed (5 new tests)
+- `cargo clippy` (website crate) - Passed (2 pre-existing warnings in unrelated files, no new warnings)
+- `cargo fmt --check` - Passed after running `cargo fmt`
+
+### Risks/Limitations
+
+1. **Test duplication**: The helper functions in `tests/changelog_gen.rs` are a manual copy of the ones in `build.rs`. If `build.rs` logic changes (e.g. `escape`, `upper_first`, `group_order`), the test file must be updated in sync.

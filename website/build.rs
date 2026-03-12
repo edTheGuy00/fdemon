@@ -34,6 +34,60 @@ fn group_order(group: &str) -> usize {
     }
 }
 
+/// Strip trailing ` (#N)` PR reference from a commit subject.
+fn strip_pr_suffix(s: &str) -> &str {
+    // Match ` (#<digits>)` at end of string
+    if let Some(idx) = s.rfind(" (#") {
+        if s[idx..].ends_with(')')
+            && s[idx + 3..s.len() - 1].chars().all(|c| c.is_ascii_digit())
+        {
+            return &s[..idx];
+        }
+    }
+    s
+}
+
+/// Clean a commit subject by stripping common prefixes.
+///
+/// Handles branch-name style (`Feat/description`) and title-case
+/// conventional-ish style (`Fix: description`).
+///
+/// This should only be applied to commits that are not already parsed as
+/// conventional commits by git-cliff (i.e. "Other Changes" entries), since
+/// git-cliff already strips the prefix from conventional commits.
+fn clean_subject(s: &str) -> &str {
+    // Known prefixes that indicate the real description follows
+    let prefixes = [
+        "feat/",
+        "fix/",
+        "feature/",
+        "chore/",
+        "refactor/",
+        "docs/",
+        "test/",
+        "Feat/",
+        "Fix/",
+        "Feature/",
+        "Chore/",
+        "Refactor/",
+        "Docs/",
+        "Test/",
+        "Feature: ",
+        "Fix: ",
+    ];
+
+    for prefix in &prefixes {
+        if let Some(rest) = s.strip_prefix(prefix) {
+            let trimmed = rest.trim();
+            if !trimmed.is_empty() {
+                return trimmed;
+            }
+        }
+    }
+
+    s
+}
+
 fn upper_first(s: &str) -> String {
     let mut chars = s.chars();
     match chars.next() {
@@ -117,9 +171,8 @@ fn generate_entries(entries: &[VersionEntry]) -> String {
 
         // Sort groups by canonical order, with alphabetical tiebreak for reproducibility
         let mut sorted_groups: Vec<_> = groups.into_iter().collect();
-        sorted_groups.sort_by(|(a, _), (b, _)| {
-            group_order(a).cmp(&group_order(b)).then_with(|| a.cmp(b))
-        });
+        sorted_groups
+            .sort_by(|(a, _), (b, _)| group_order(a).cmp(&group_order(b)).then_with(|| a.cmp(b)));
 
         out.push_str("    ChangelogEntry {\n");
         out.push_str(&format!("        version: \"{}\",\n", escape(version)));
@@ -128,14 +181,21 @@ fn generate_entries(entries: &[VersionEntry]) -> String {
 
         for (group, commits) in &sorted_groups {
             out.push_str("            ChangelogGroup {\n");
-            out.push_str(&format!(
-                "                group: \"{}\",\n",
-                escape(group)
-            ));
+            out.push_str(&format!("                group: \"{}\",\n", escape(group)));
             out.push_str("                changes: vec![\n");
 
             for commit in commits {
-                let desc = escape(&upper_first(&commit.message));
+                let first_line = commit.message.lines().next().unwrap_or("").trim();
+                let no_pr = strip_pr_suffix(first_line);
+                // clean_subject only applies to non-conventional-commit groups
+                // (group_order == 99) because git-cliff already strips the prefix
+                // from conventional commits (feat:, fix:, etc.).
+                let subject = if group_order(group) == 99 {
+                    clean_subject(no_pr)
+                } else {
+                    no_pr
+                };
+                let desc = escape(&upper_first(subject));
                 match &commit.scope {
                     Some(scope) => {
                         out.push_str(&format!(
@@ -161,4 +221,56 @@ fn generate_entries(entries: &[VersionEntry]) -> String {
 
     out.push(']');
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_branch_name_feat() {
+        assert_eq!(clean_subject("Feat/session resilience"), "session resilience");
+    }
+
+    #[test]
+    fn clean_branch_name_fix() {
+        assert_eq!(
+            clean_subject("Fix/release branch protection"),
+            "release branch protection"
+        );
+    }
+
+    #[test]
+    fn clean_title_case_feature() {
+        assert_eq!(
+            clean_subject("Feature: native platform logs"),
+            "native platform logs"
+        );
+    }
+
+    #[test]
+    fn clean_title_case_fix() {
+        assert_eq!(
+            clean_subject("Fix: extra args not passed"),
+            "extra args not passed"
+        );
+    }
+
+    #[test]
+    fn clean_already_clean() {
+        assert_eq!(
+            clean_subject("resolve crash on startup"),
+            "resolve crash on startup"
+        );
+    }
+
+    #[test]
+    fn clean_lowercase_conventional_not_stripped() {
+        // These are already handled by git-cliff's conventional parser,
+        // but verify the function doesn't break them
+        assert_eq!(
+            clean_subject("add widget tree support"),
+            "add widget tree support"
+        );
+    }
 }

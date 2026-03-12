@@ -71,7 +71,7 @@ pub fn Debugging() -> impl IntoView {
                         <div class="flex-1">
                             <p class="text-white font-medium mb-1">"Connect your IDE to the DAP server"</p>
                             <CodeBlock language="bash" code="# TCP attach — replace 4711 with the port shown in the status bar
-127.0.0.1:4711" />
+    127.0.0.1:4711" />
                         </div>
                     </div>
                 </div>
@@ -108,7 +108,7 @@ fdemon" />
                              The TUI is not rendered in this mode."
                         </p>
                         <CodeBlock language="bash" code="# IDE subprocess launch — not for interactive use
-fdemon --dap-stdio" />
+    fdemon --dap-stdio" />
                     </div>
                 </div>
 
@@ -184,7 +184,7 @@ fdemon --dap-config neovim --dap-port 4711" />
                      "<code class="text-blue-400 bg-slate-900 px-1 rounded">".fdemon/config.toml"</code>":"
                 </p>
                 <CodeBlock language="toml" code="[dap]
-auto_configure_ide = false" />
+    auto_configure_ide = false" />
             </Section>
 
             // ── IDE Setup ─────────────────────────────────────────────
@@ -563,11 +563,7 @@ fn KeyRow(key: &'static str, action: &'static str) -> impl IntoView {
 }
 
 #[component]
-fn SettingsRow(
-    prop: &'static str,
-    default: &'static str,
-    desc: &'static str,
-) -> impl IntoView {
+fn SettingsRow(prop: &'static str, default: &'static str, desc: &'static str) -> impl IntoView {
     view! {
         <tr class="hover:bg-slate-900/50">
             <td class="p-4 font-mono text-blue-400 whitespace-nowrap">{prop}</td>

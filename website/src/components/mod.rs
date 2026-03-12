@@ -1,7 +1,7 @@
-pub mod icons;
-pub mod navbar;
-pub mod footer;
 pub mod badge;
 pub mod code_block;
-pub mod terminal_mockup;
 pub mod diagrams;
+pub mod footer;
+pub mod icons;
+pub mod navbar;
+pub mod terminal_mockup;

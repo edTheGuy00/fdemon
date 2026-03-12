@@ -26,9 +26,9 @@ Fix the website changelog to show clean one-line entries instead of massive para
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-strip-message-first-line](tasks/01-strip-message-first-line.md) | Not Started | - | 0.5-1h | `website/build.rs` |
-| 2 | [02-strip-pr-number](tasks/02-strip-pr-number.md) | Not Started | 01 | 0.5h | `website/build.rs` |
-| 3 | [03-clean-branch-names](tasks/03-clean-branch-names.md) | Not Started | 01 | 0.5-1h | `website/build.rs` |
+| 1 | [01-strip-message-first-line](tasks/01-strip-message-first-line.md) | Done | - | 0.5-1h | `website/build.rs` |
+| 2 | [02-strip-pr-number](tasks/02-strip-pr-number.md) | Done | 01 | 0.5h | `website/build.rs` |
+| 3 | [03-clean-branch-names](tasks/03-clean-branch-names.md) | Done | 01 | 0.5-1h | `website/build.rs` |
 
 ## Success Criteria
 

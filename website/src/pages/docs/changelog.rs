@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::data::{ChangelogEntry, ChangelogGroup, changelog_entries};
+use crate::data::{changelog_entries, ChangelogEntry, ChangelogGroup};
 
 #[component]
 pub fn Changelog() -> impl IntoView {

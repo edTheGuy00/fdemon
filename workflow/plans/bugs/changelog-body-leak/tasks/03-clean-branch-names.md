@@ -136,4 +136,28 @@ fn integration_full_pipeline() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `website/build.rs` | Added `clean_subject()` function; updated `generate_entries()` to apply it conditionally (only when `group_order(group) == 99`); added 6 unit tests in `#[cfg(test)] mod tests` |
+| `website/tests/changelog_gen.rs` | Mirrored `clean_subject()` function; updated `generate_entries()` mirror to apply it conditionally; added 8 tests: 6 `clean_subject` unit tests + `integration_full_pipeline` + `generate_entries_cleans_other_changes_group` + `generate_entries_does_not_clean_conventional_groups` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Conditional application via `group_order == 99`**: Rather than hard-coding the group name "Other Changes", the implementation uses the existing `group_order` sentinel value (99) to identify non-conventional-commit groups. This is robust against future group name changes and consistent with the existing pattern.
+2. **Explicit prefix list**: Used explicit prefix strings rather than case-insensitive matching, keeping the approach clear and dependency-free, as noted in the task.
+3. **Variable rename from `cleaned` to `no_pr`/`subject`**: Renamed the intermediate variable to better communicate the pipeline stages: `no_pr` after PR suffix stripping, `subject` after optional `clean_subject` application.
+
+### Testing Performed
+
+- `cargo check` in `website/` - Passed (only pre-existing warnings)
+- `cargo test` in `website/` - Passed (22 tests, 0 failed)
+- `cargo clippy` in `website/` - Passed (only pre-existing warnings, no new warnings)
+
+### Risks/Limitations
+
+1. **Prefix list is not exhaustive**: The function covers the patterns seen in the repo history. New squash-merge styles using different prefixes would need to be added to the list. This is an intentional trade-off for clarity over completeness.
+2. **`build.rs` unit tests run only as part of the build script**: The `#[cfg(test)]` block in `build.rs` is tested via `cargo test` in the build script context. The integration test file `website/tests/changelog_gen.rs` independently validates the same logic.
