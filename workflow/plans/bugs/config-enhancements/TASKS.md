@@ -29,11 +29,11 @@ Fix two configuration bugs: watcher paths from config.toml being silently ignore
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-watcher-paths](tasks/01-fix-watcher-paths.md) | Not Started | - | `engine.rs`, `watcher/mod.rs` |
-| 2 | [02-watcher-tests](tasks/02-watcher-tests.md) | Not Started | 1 | `engine.rs`, `watcher/mod.rs` |
-| 3 | [03-fix-auto-start](tasks/03-fix-auto-start.md) | Not Started | - | `startup.rs`, `runner.rs` |
-| 4 | [04-auto-start-tests](tasks/04-auto-start-tests.md) | Not Started | 3 | `startup.rs`, `runner.rs` |
-| 5 | [05-example-apps-testing](tasks/05-example-apps-testing.md) | Not Started | 1, 2, 3, 4 | `example/` |
+| 1 | [01-fix-watcher-paths](tasks/01-fix-watcher-paths.md) | Done | - | `engine.rs`, `watcher/mod.rs` |
+| 2 | [02-watcher-tests](tasks/02-watcher-tests.md) | Done | 1 | `engine.rs`, `watcher/mod.rs` |
+| 3 | [03-fix-auto-start](tasks/03-fix-auto-start.md) | Done | - | `startup.rs`, `runner.rs` |
+| 4 | [04-auto-start-tests](tasks/04-auto-start-tests.md) | Done | 3 | `startup.rs`, `runner.rs` |
+| 5 | [05-example-apps-testing](tasks/05-example-apps-testing.md) | Done | 1, 2, 3, 4 | `example/` |
 
 ## Success Criteria
 

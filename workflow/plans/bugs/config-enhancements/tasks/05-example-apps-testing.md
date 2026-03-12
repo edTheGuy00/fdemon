@@ -141,4 +141,44 @@ Manual testing with each example app. Verify by:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `example/app1/.fdemon/launch.toml` | Added `auto_start = true` to the "App1 | Default" config |
+| `example/app1/.fdemon/config.toml` | Updated `[watcher]` paths to `["lib", "../app2/lib"]` for cross-project test |
+| `example/app3/.fdemon/launch.toml` | Created: 3 configs, "Staging" has `auto_start = true` (Issue #18 exact reproduction) |
+| `example/app3/.fdemon/config.toml` | Created: `behavior.auto_start = false`, `native_logs.enabled = false` |
+| `example/app3/pubspec.yaml` | Created: minimal Flutter project descriptor |
+| `example/app3/lib/main.dart` | Created: minimal Flutter app with descriptive comment |
+| `example/app4/.fdemon/config.toml` | Created: `paths = ["lib", "../../shared_lib", "../app1/lib"]`, `extensions = ["dart", "json"]` |
+| `example/app4/.fdemon/launch.toml` | Created: single config, no auto_start |
+| `example/app4/pubspec.yaml` | Created: minimal Flutter project descriptor |
+| `example/app4/lib/main.dart` | Created: minimal Flutter app with descriptive comment |
+| `example/shared_lib/shared_utils.dart` | Created: sample Dart file for cross-project watcher testing |
+| `example/TESTING.md` | Created: manual test procedures for Tests A-H |
+
+### Notable Decisions/Tradeoffs
+
+1. **app1 `behavior.auto_start` left as-is**: The existing `config.toml` already has `[behavior] auto_start = true`. The task asked to add `auto_start = true` to the first launch config entry (not the behavior section), which was done. Both the global behavior flag and the per-config flag are now present, exercising the per-config path.
+
+2. **Minimal Flutter app structure for app3/app4**: Per the task notes, app3 and app4 only need `pubspec.yaml` and `lib/main.dart` for project discovery. They do not have the full Flutter scaffold (no `android/`, `ios/`, etc.) since they are fixtures, not runnable apps. The task explicitly stated "they don't need to be runnable Flutter apps, just recognized as Flutter projects."
+
+3. **`shared_lib` is not a Flutter project**: Intentionally has no `pubspec.yaml` — it is a raw shared code directory, matching the monorepo pattern described in the task.
+
+4. **Pre-existing snapshot test failures**: 4 `fdemon-tui` snapshot tests fail due to a version string mismatch (`v0.1.0` vs `v0.2.1`). Confirmed pre-existing before this task's changes.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - 826 passed, 4 failed (pre-existing snapshot failures unrelated to this task)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **app3/app4 not runnable**: Without a full Flutter scaffold, `cargo run -- example/app3` will start fdemon but flutter will fail to build. The fixture is only suitable for testing fdemon startup behaviour (dialog vs auto-launch) and watcher path resolution, not end-to-end hot reload.
+
+2. **`../../shared_lib` path traversal**: The resolved path `example/shared_lib` exists, but if fdemon is invoked from a non-standard working directory the relative resolution may differ. The watcher path fix (task 01) should handle canonicalization relative to the project root.

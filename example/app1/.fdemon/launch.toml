@@ -4,6 +4,7 @@
 [[configurations]]
 name = "App1 | Default"
 device = "auto"
+auto_start = true    # Triggers auto-launch — skips device selection dialog
 
 [[configurations]]
 name = "App1 | Staging (with env file)"

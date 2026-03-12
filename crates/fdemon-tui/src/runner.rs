@@ -29,8 +29,8 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
-    // TUI-specific startup: show NewSessionDialog, load configs
-    let _startup_result =
+    // TUI-specific startup: detect auto-start or show NewSessionDialog
+    let startup_result =
         startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
 
     // Render first frame
@@ -40,7 +40,21 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    spawn::spawn_device_discovery(engine.msg_sender());
+
+    // Dispatch based on auto-start detection
+    match startup_result {
+        startup::StartupAction::AutoStart { configs } => {
+            // Auto-start detected: send StartAutoLaunch which triggers device
+            // discovery and auto-launches the session. spawn_device_discovery()
+            // is NOT called here — the StartAutoLaunch handler dispatches
+            // DiscoverDevicesAndAutoLaunch internally.
+            engine.process_message(Message::StartAutoLaunch { configs });
+        }
+        startup::StartupAction::Ready => {
+            // No auto-start — discover devices for the NewSessionDialog
+            spawn::spawn_device_discovery(engine.msg_sender());
+        }
+    }
 
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
@@ -101,8 +115,8 @@ pub async fn run_with_project_and_dap(
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
-    // TUI-specific startup: show NewSessionDialog, load configs
-    let _startup_result =
+    // TUI-specific startup: detect auto-start or show NewSessionDialog
+    let startup_result =
         startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
 
     // Render first frame
@@ -112,7 +126,21 @@ pub async fn run_with_project_and_dap(
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    spawn::spawn_device_discovery(engine.msg_sender());
+
+    // Dispatch based on auto-start detection
+    match startup_result {
+        startup::StartupAction::AutoStart { configs } => {
+            // Auto-start detected: send StartAutoLaunch which triggers device
+            // discovery and auto-launches the session. spawn_device_discovery()
+            // is NOT called here — the StartAutoLaunch handler dispatches
+            // DiscoverDevicesAndAutoLaunch internally.
+            engine.process_message(Message::StartAutoLaunch { configs });
+        }
+        startup::StartupAction::Ready => {
+            // No auto-start — discover devices for the NewSessionDialog
+            spawn::spawn_device_discovery(engine.msg_sender());
+        }
+    }
 
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);

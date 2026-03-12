@@ -88,4 +88,28 @@ cargo test -p fdemon-app -- engine
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/engine.rs` | Added `.with_paths()` and `.with_extensions()` to the `WatcherConfig` builder in `start_file_watcher()`, wiring `settings.watcher.paths` and `settings.watcher.extensions` through from config |
+| `crates/fdemon-app/src/watcher/mod.rs` | Added path canonicalization in `run_watcher()`: absolute paths bypass project-root join, then `canonicalize()` resolves `../..` components and symlinks with `unwrap_or(full_path)` fallback |
+
+### Notable Decisions/Tradeoffs
+
+1. **`unwrap_or(full_path)` fallback**: `canonicalize()` fails if the path does not exist at call time. The fallback preserves the original (non-canonical) path so the existing "does not exist" warning is still emitted — no silent swallowing of missing-path cases.
+2. **`settings.watcher.paths.iter().map(PathBuf::from).collect()`**: `WatcherSettings.paths` is `Vec<String>`, so a `map(PathBuf::from)` conversion is needed to match `WatcherConfig.paths: Vec<PathBuf>`. `PathBuf` was already in scope in `engine.rs`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app -- watcher` - Passed (17 tests)
+- `cargo test -p fdemon-app -- engine` - Passed (25 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Canonicalization at start time only**: Paths are canonicalized once when the watcher starts. Symlinks created after startup are not re-resolved; this matches the existing behavior and is acceptable for typical Flutter project layouts.

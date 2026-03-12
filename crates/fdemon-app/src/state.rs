@@ -968,6 +968,10 @@ pub struct AppState {
 
     /// UI state for the tag filter overlay (selection, scroll).
     pub tag_filter_ui: TagFilterUiState,
+
+    /// Watcher errors that arrived before any session existed.
+    /// Flushed into the first session on `SessionStarted`.
+    pub pending_watcher_errors: Vec<String>,
 }
 
 impl Default for AppState {
@@ -1012,6 +1016,7 @@ impl AppState {
             cli_dap_config_override: None,
             tag_filter_visible: false,
             tag_filter_ui: TagFilterUiState::default(),
+            pending_watcher_errors: Vec::new(),
         }
     }
 

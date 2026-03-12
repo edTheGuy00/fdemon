@@ -1,0 +1,15 @@
+name: flutter_demon_app4
+description: "Flutter Demon example app 4 — watcher path edge cases test fixture."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

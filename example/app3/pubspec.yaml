@@ -1,0 +1,15 @@
+name: flutter_demon_app3
+description: "Flutter Demon example app 3 — multi-config auto_start test fixture."
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.10.3
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

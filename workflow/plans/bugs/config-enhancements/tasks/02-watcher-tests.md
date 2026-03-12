@@ -53,4 +53,32 @@ cargo test -p fdemon-app -- engine
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/watcher/mod.rs` | Extracted path resolution into `pub(crate) fn resolve_watch_paths()`, updated `run_watcher` to use it, added 8 new unit tests covering all path resolution scenarios |
+| `crates/fdemon-app/src/engine.rs` | Added 3 new tests verifying `WatcherConfig` construction from `Settings` defaults and custom paths/extensions |
+
+### Notable Decisions/Tradeoffs
+
+1. **Extracted `resolve_watch_paths` helper**: The path resolution logic was embedded in `run_watcher` (a blocking fn tied to the notify debouncer). Extracting it as a `pub(crate)` pure function makes it directly testable without starting an actual file system watcher. This also makes the logic more readable in `run_watcher` itself.
+
+2. **`test_resolve_parent_relative_path` uses `../shared` not `../../shared`**: The original task description mentioned `../../shared` as an example, but the correct relative path depends on the directory structure. Using `root/project` + `../shared` is cleaner and unambiguous. Also, on macOS, `tempfile::tempdir()` returns a `/var/...` path (non-canonical); the test canonicalizes `project_root` before calling `resolve_watch_paths` to ensure the `..` traversal resolves correctly via `realpath(3)`.
+
+3. **Engine tests mirror `start_file_watcher` logic**: Since `file_watcher` is a private field, engine tests verify the settings-to-WatcherConfig mapping by reproducing the same builder chain used in `start_file_watcher`. This is a white-box test of the mapping logic, not an integration test of the watcher itself.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app -- watcher` - Passed (29 tests, 8 new)
+- `cargo test -p fdemon-app -- engine` - Passed (29 tests, 3 new + 1 existing engine default settings test)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing snapshot failures**: 4 snapshot tests in `fdemon-tui` fail due to version string mismatch (`v0.1.0` vs `v0.2.1`) — these failures pre-date this task and are unrelated to watcher changes.
+2. **macOS-specific `..` traversal**: `canonicalize()` on macOS resolves `..` via the kernel (not string manipulation), which requires the parent directories to exist at call time. The test accounts for this by canonicalizing `project_root` first.

@@ -298,6 +298,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::WatcherError { message } => {
             tracing::error!("Watcher error: {}", message);
+            if let Some(handle) = state.session_manager.selected_mut() {
+                handle
+                    .session
+                    .log_error(fdemon_core::LogSource::Watcher, message.clone());
+            } else {
+                // No session yet — buffer for flush on first SessionStarted
+                state.pending_watcher_errors.push(message.clone());
+            }
             UpdateResult::none()
         }
 

@@ -72,4 +72,33 @@ cargo test --workspace
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/startup.rs` | Added 3 new test functions: `test_startup_flutter_prefers_launch_config_auto_start`, `test_startup_flutter_auto_start_configs_passed_through`, `test_startup_flutter_multiple_configs_one_auto_start` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing tests covered most criteria**: Task 03-fix-auto-start already implemented the broken-behavior test removal and the basic new tests. This task added the 3 remaining test cases that weren't covered.
+
+2. **PartialEq not added to StartupAction**: The new tests use `matches!` macro and `if let`/`match` destructuring, which avoids needing `PartialEq` on `StartupAction`. Since `LoadedConfigs` doesn't implement `PartialEq`, adding it to `StartupAction` would require additional derives elsewhere — unnecessary.
+
+3. **All configs in AutoStart**: The `test_startup_flutter_multiple_configs_one_auto_start` test verifies that all 3 configs (not just the auto_start one) are carried in the `AutoStart` variant, confirming the implementation correctly passes the full `LoadedConfigs` struct.
+
+4. **Snapshot test failures are pre-existing**: 4 snapshot tests fail due to a version string mismatch (`v0.1.0` vs `v0.2.1`) that predates this task. No new failures were introduced.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui -- startup` - Passed (7 tests)
+- `cargo test -p fdemon-app -- auto_launch` - Passed (39 tests)
+- `cargo test --workspace` - Passed (822 passed, 4 pre-existing snapshot failures unrelated to this task)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Snapshot test failures**: 4 pre-existing snapshot test failures remain (`render::tests::snapshot_normal_mode_*`) due to version string mismatch. These are not introduced by this task.

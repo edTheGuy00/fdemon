@@ -30,6 +30,11 @@ pub fn handle_session_started(
                 pid.map_or("unknown".to_string(), |p| p.to_string())
             ),
         );
+
+        // Flush any watcher errors that arrived before this session existed
+        for err in state.pending_watcher_errors.drain(..) {
+            handle.session.log_error(LogSource::Watcher, err);
+        }
     }
 
     UpdateResult::none()

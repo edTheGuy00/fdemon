@@ -109,4 +109,32 @@ cargo test -p fdemon-app -- auto_launch
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/startup.rs` | Added `AutoStart { configs: LoadedConfigs }` variant to `StartupAction`; modified `startup_flutter()` to check `get_first_auto_start` and `settings.behavior.auto_start`, returning `AutoStart` when either is true; updated tests (renamed existing, added 3 new tests for all branches) |
+| `crates/fdemon-tui/src/runner.rs` | Updated both `run_with_project()` and `run_with_project_and_dap()` to match on `StartupAction`; `AutoStart` path calls `engine.process_message(Message::StartAutoLaunch { configs })`, `Ready` path calls `spawn_device_discovery()` as before |
+
+### Notable Decisions/Tradeoffs
+
+1. **`process_message` over `msg_sender().send().await`**: Used `engine.process_message()` directly (matching the `StartDapServer` pattern in `run_with_project_and_dap`) rather than the async send approach mentioned in the task notes. This is consistent with existing code, avoids async overhead, and processes the resulting `UpdateAction::DiscoverDevicesAndAutoLaunch` synchronously before the event loop begins.
+
+2. **No `spawn_device_discovery` on auto-start**: When `AutoStart` fires, `StartAutoLaunch` handler returns `UpdateAction::DiscoverDevicesAndAutoLaunch` which handles device discovery internally via `spawn_auto_launch`. Calling `spawn_device_discovery` separately would cause redundant discovery.
+
+3. **Test renamed**: The existing `test_startup_flutter_ignores_auto_start_setting` test described incorrect/old behavior. It was replaced with `test_startup_flutter_returns_auto_start_when_behavior_auto_start_enabled` which tests the correct new behavior.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-tui -- startup` - Passed (4 tests)
+- `cargo test -p fdemon-app -- auto_launch` - Passed (39 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No E2E test for auto-start flow**: The full end-to-end path (config file with `auto_start=true` → device discovery → session launch) is covered by unit tests in `fdemon-app` but not by an integration test due to the PTY timing issues in the `tests/` directory (62 ignored integration tests).
+2. **`run()` entry point untouched**: The demo/test `run()` function in `runner.rs` doesn't call `startup_flutter()` at all (no project path), so it correctly remains unaffected by this change.
