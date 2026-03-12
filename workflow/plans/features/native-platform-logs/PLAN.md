@@ -275,25 +275,94 @@ The macOS `log stream` command accepts `--predicate 'process == "YourApp"'`. The
 
 ---
 
-### Phase 3: Custom Log Sources (Future)
+### Phase 3: Custom Log Sources + Documentation & Website
 
-**Goal**: Allow users to define arbitrary log source processes for any platform.
+**Goal**: Allow users to define arbitrary log source processes for any platform via configuration, update example projects with proper documentation, and create comprehensive user-facing documentation including a website page.
 
-#### Steps
+#### Stream A: Custom Log Sources
 
-1. **Custom source configuration:**
+1. **Custom Source Configuration Types**
+   - Add `CustomSourceConfig` struct to `fdemon-app/src/config/types.rs`
+   - Parse `[[native_logs.custom_sources]]` TOML array
+   - Fields: `name` (required, becomes the tag), `command` (required), `args` (optional vec), `format` (enum: `raw`, `json`, `logcat-threadtime`, `syslog`), `working_dir` (optional), `env` (optional key-value map)
+   - Validation: reject empty name/command, validate format string, ensure name doesn't conflict with built-in platform tags
    ```toml
    [[native_logs.custom_sources]]
    name = "go-backend"
-   command = "adb logcat GoLog:D *:S -v threadtime"
-   format = "logcat-threadtime"   # or "raw", "json", "syslog"
+   command = "adb"
+   args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+   format = "logcat-threadtime"
+
+   [[native_logs.custom_sources]]
+   name = "my-server"
+   command = "/usr/local/bin/my-log-tool"
+   args = ["--follow", "--json"]
+   format = "json"
+   env = { LOG_LEVEL = "debug" }
+
+   [[native_logs.custom_sources]]
+   name = "sidecar"
+   command = "tail"
+   args = ["-f", "/tmp/sidecar.log"]
+   format = "raw"
    ```
 
-2. **Generic process runner** that spawns user-defined commands and parses output
-3. **Named source tags** that appear in the filter UI as first-class sources
-4. This is the escape hatch for platforms where we don't have built-in support, or for non-standard logging setups (custom log aggregators, remote log streams, etc.)
+2. **Pluggable Format Parsers**
+   - Create `crates/fdemon-daemon/src/native_logs/formats.rs` — **NEW** module
+   - Define `OutputFormat` enum: `Raw`, `Json`, `LogcatThreadtime`, `Syslog`
+   - Define `fn parse_line(format: &OutputFormat, line: &str, source_name: &str) -> Option<NativeLogEvent>` dispatch function
+   - **Raw**: entire line becomes message, tag = source name, level = Info
+   - **Json**: expects `{"level": "...", "tag": "...", "message": "...", "timestamp": "..."}` with flexible field names (`tag`/`source`/`logger`, `level`/`severity`/`priority`, `message`/`msg`/`text`). Unknown fields ignored.
+   - **LogcatThreadtime**: reuse existing `parse_threadtime_line()` from `android.rs` (extract to shared function or call directly)
+   - **Syslog**: reuse existing `parse_syslog_line()` from `macos.rs` (already shared with iOS simulator)
 
-**Milestone**: Users can define completely custom log sources for any native process or tool.
+3. **Generic Custom Source Runner**
+   - Create `crates/fdemon-daemon/src/native_logs/custom.rs` — **NEW** module
+   - `CustomLogCapture` struct implementing `NativeLogCapture` trait
+   - Spawns the user-defined command with args/env/working_dir
+   - Reads stdout line-by-line, passes through format parser
+   - Lifecycle: shutdown via `watch::Sender<bool>`, detect process exit/crash and log warning (no auto-restart — user must fix their command)
+   - Apply `exclude_tags`/`include_tags`/`min_level` filters from `NativeLogsSettings` (reuse `should_include_tag()`)
+
+4. **App Layer Integration for Custom Sources**
+   - Extend `actions/native_logs.rs`: after spawning platform capture, iterate `settings.native_logs.custom_sources` and spawn each as additional `CustomLogCapture`
+   - Each custom source gets its own `NativeLogHandle` — store as `Vec<NativeLogHandle>` on `SessionHandle` (or alongside existing `native_log_shutdown_tx`)
+   - Custom source tags appear in `NativeTagState` / tag filter UI automatically (existing `observe_tag()` handles this)
+   - Custom sources spawn after `AppStarted` (same lifecycle as platform capture) — but optionally configurable to spawn at session creation (for sources that don't depend on the app running)
+   - Shutdown all custom sources on session end (alongside platform capture shutdown)
+
+#### Stream B: Example Project Updates
+
+5. **Example Project READMEs and Custom Source Demo**
+   - Update `example/app1/README.md` — describe it as a Dart logging and error testing app
+   - Update `example/app2/README.md` — describe it as a native platform logs demo (Android Kotlin, iOS Swift, macOS Swift) with custom source configuration example
+   - Add sample `.fdemon/config.toml` to `example/app2/` demonstrating `[[native_logs.custom_sources]]` configuration alongside the standard `[native_logs]` settings
+
+#### Stream C: Documentation & Website
+
+6. **Update `docs/CONFIGURATION.md`**
+   - Add full `[native_logs]` configuration reference section
+   - Document all settings: `enabled`, `exclude_tags`, `include_tags`, `min_level`
+   - Document per-tag overrides: `[native_logs.tags.<tag>]` with `min_level`
+   - Document custom sources: `[[native_logs.custom_sources]]` with all fields
+   - Document format options with examples for each
+
+7. **Website: Native Logs Documentation Page**
+   - Create `website/src/pages/docs/native_logs.rs` — **NEW** Leptos component
+   - Register route in `website/src/lib.rs`: `/docs/native-logs`
+   - Add sidebar entry in `website/src/pages/docs/mod.rs` with icon
+   - Content sections: Overview (platform support matrix), How It Works (automatic capture lifecycle), Supported Platforms (Android/iOS/macOS details + what's already covered on Linux/Windows/Web), Tag Filter UI (`T` key overlay), Custom Sources (config + format reference), Configuration Reference (settings table), Troubleshooting (common issues)
+
+8. **Website: Keybindings & Configuration Data Updates**
+   - Add `T` key to `website/src/data.rs` Log Filtering section: "Tag Filter Overlay — Open/close native platform log tag filter overlay"
+   - Update `website/src/pages/docs/configuration.rs` to reference native logs config section or link to the new native logs page
+
+9. **Update `docs/ARCHITECTURE.md`**
+   - Add custom source runner to the Native Log Capture Subsystem section
+   - Document the `OutputFormat` enum and format parser dispatch
+   - Update the architecture diagram to show custom sources alongside platform capture
+
+**Milestone**: Users can define completely custom log sources for any native process or tool via `[[native_logs.custom_sources]]` config. Example projects have proper READMEs. All documentation is up to date including a dedicated website page for native platform logs.
 
 ---
 
@@ -349,6 +418,22 @@ These platforms are already well-served by the existing `--machine` stdout/stder
 - **Risk:** macOS `log stream` is only available on macOS. Adding it may complicate cross-compilation.
 - **Mitigation:** Gate macOS native log code behind `#[cfg(target_os = "macos")]`. The existing `ToolAvailability` already uses this pattern for `xcrun simctl`. fdemon's macOS desktop log capture only makes sense when fdemon itself runs on macOS.
 
+### Custom Source Command Security (Phase 3)
+- **Risk:** Users configure arbitrary shell commands that could be dangerous or fail in unexpected ways
+- **Mitigation:** Commands are explicitly user-configured (not generated), so the user owns the risk. Validate that command paths are non-empty. Never use shell expansion — use `Command::new()` with explicit args (no `sh -c`). Log command details at debug level on spawn. Capture stderr for error reporting.
+
+### Custom Source Process Lifecycle (Phase 3)
+- **Risk:** Custom source processes may crash, hang, or produce no output
+- **Mitigation:** Detect process exit and log a warning with the exit code. Do not auto-restart (user must fix their command). Apply a reasonable read timeout to detect hung processes. If the process never produces output, it simply contributes nothing — no harm done.
+
+### Custom Source Output Volume (Phase 3)
+- **Risk:** A poorly filtered custom source command could flood the log buffer
+- **Mitigation:** Custom sources go through the same `min_level` filter and `should_include_tag()` checks as platform capture. The existing ring buffer and batching handle high throughput. Users can adjust with `exclude_tags` or per-tag `min_level` overrides.
+
+### JSON Format Flexibility (Phase 3)
+- **Risk:** Users may have JSON logs with non-standard field names or nested structures
+- **Mitigation:** Support common field name aliases (`tag`/`source`/`logger`, `level`/`severity`/`priority`, `message`/`msg`/`text`). Ignore unknown fields. If required fields are missing, fall back to raw line treatment. Do not attempt to handle deeply nested JSON — flat objects only.
+
 ---
 
 ## Configuration Additions
@@ -366,6 +451,20 @@ min_level = "info"                      # Minimum priority level (default: "info
 # Per-tag overrides (Phase 2)
 # [native_logs.tags.GoLog]
 # min_level = "debug"
+
+# Custom log sources (Phase 3)
+# [[native_logs.custom_sources]]
+# name = "go-backend"
+# command = "adb"
+# args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+# format = "logcat-threadtime"    # Options: "raw", "json", "logcat-threadtime", "syslog"
+#
+# [[native_logs.custom_sources]]
+# name = "my-server"
+# command = "/usr/local/bin/my-log-tool"
+# args = ["--follow", "--json"]
+# format = "json"
+# env = { LOG_LEVEL = "debug" }
 ```
 
 ---
@@ -397,10 +496,27 @@ min_level = "info"                      # Minimum priority level (default: "info
 - [ ] No regressions in existing log pipeline
 
 ### Phase 2 Complete When:
-- [ ] iOS native logs captured on physical devices and simulators
-- [ ] Per-tag filter UI allows toggling individual tags
-- [ ] Per-tag priority thresholds configurable
-- [ ] Works across iOS 15+ / Xcode 15+ (graceful degradation for older versions)
+- [x] iOS native logs captured on physical devices and simulators
+- [x] Per-tag filter UI allows toggling individual tags
+- [x] Per-tag priority thresholds configurable
+- [x] Works across iOS 15+ / Xcode 15+ (graceful degradation for older versions)
+
+### Phase 3 Complete When:
+- [ ] `[[native_logs.custom_sources]]` TOML config parsed and validated
+- [ ] All 4 format parsers work: raw, json, logcat-threadtime, syslog
+- [ ] Custom source processes spawned alongside platform capture after `AppStarted`
+- [ ] Custom source tags appear in tag filter UI (`T` key overlay)
+- [ ] Custom source processes shut down cleanly on session end
+- [ ] Process exit/crash logged as warning (no silent failures)
+- [ ] `example/app1/README.md` and `example/app2/README.md` properly document the apps
+- [ ] `example/app2/` includes sample `.fdemon/config.toml` with custom source config
+- [ ] `docs/CONFIGURATION.md` has full `[native_logs]` reference including custom sources
+- [ ] Website has `/docs/native-logs` page with platform support, config reference, and custom sources guide
+- [ ] `T` key added to website keybindings data
+- [ ] `docs/ARCHITECTURE.md` updated with custom source subsystem
+- [ ] All new code has unit tests
+- [ ] No regressions in existing native log pipeline
+- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
 
 ---
 
