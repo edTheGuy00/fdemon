@@ -9,10 +9,12 @@ pub mod keybindings;
 pub mod native_logs;
 
 use leptos::prelude::*;
-use leptos_router::components::{A, Outlet};
+use leptos_router::components::{Outlet, A};
 use leptos_router::hooks::use_location;
 
-use crate::components::icons::{Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings, Terminal};
+use crate::components::icons::{
+    Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings, Terminal,
+};
 
 struct DocItem {
     href: &'static str,

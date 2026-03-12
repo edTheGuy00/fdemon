@@ -2,7 +2,9 @@ use leptos::prelude::*;
 use leptos_router::components::A;
 
 use crate::components::code_block::CodeBlock;
-use crate::components::icons::{Cpu, Keyboard, Layout, Search, Settings, Smartphone, Terminal, Zap};
+use crate::components::icons::{
+    Cpu, Keyboard, Layout, Search, Settings, Smartphone, Terminal, Zap,
+};
 
 #[component]
 pub fn Introduction() -> impl IntoView {

@@ -356,7 +356,9 @@ fn Section(title: &'static str, children: Children) -> impl IntoView {
 }
 
 #[component]
-fn SettingsTable(entries: Vec<(&'static str, &'static str, &'static str, &'static str)>) -> impl IntoView {
+fn SettingsTable(
+    entries: Vec<(&'static str, &'static str, &'static str, &'static str)>,
+) -> impl IntoView {
     view! {
         <div class="overflow-hidden rounded-lg border border-slate-800">
             <table class="w-full text-left text-sm">

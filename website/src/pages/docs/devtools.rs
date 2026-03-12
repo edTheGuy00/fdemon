@@ -709,11 +709,7 @@ fn KeyRow(key: &'static str, action: &'static str) -> impl IntoView {
 }
 
 #[component]
-fn SettingsRow(
-    prop: &'static str,
-    default: &'static str,
-    desc: &'static str,
-) -> impl IntoView {
+fn SettingsRow(prop: &'static str, default: &'static str, desc: &'static str) -> impl IntoView {
     view! {
         <tr class="hover:bg-slate-900/50">
             <td class="p-4 font-mono text-blue-400 whitespace-nowrap">{prop}</td>
