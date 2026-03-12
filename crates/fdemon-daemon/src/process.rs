@@ -10,6 +10,7 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use super::commands::{CommandSender, DaemonCommand, RequestTracker};
+use super::flutter_locator::find_flutter_executable;
 use fdemon_core::events::DaemonEvent;
 use fdemon_core::prelude::*;
 
@@ -58,26 +59,44 @@ impl FlutterProcess {
             });
         }
 
+        // Find Flutter executable
+        let flutter_exe = find_flutter_executable().ok_or(Error::FlutterNotFound)?;
+
+        info!("Using Flutter executable: {:?}", flutter_exe.path());
         info!("Spawning Flutter: flutter {}", args.join(" "));
 
         // Spawn the Flutter process
-        let mut child = Command::new("flutter")
-            .args(args)
-            .current_dir(project_path)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true) // Critical: cleanup on drop
-            .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Error::FlutterNotFound
-                } else {
-                    Error::ProcessSpawn {
-                        reason: e.to_string(),
-                    }
+        // On Windows with batch files, we need to use cmd /c
+        let mut child = if flutter_exe.is_windows_batch() {
+            let (cmd, cmd_args) = flutter_exe.to_command();
+            Command::new(cmd)
+                .args(cmd_args)
+                .args(args)
+                .current_dir(project_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+        } else {
+            Command::new(flutter_exe.path())
+                .args(args)
+                .current_dir(project_path)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .spawn()
+        }
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                Error::FlutterNotFound
+            } else {
+                Error::ProcessSpawn {
+                    reason: e.to_string(),
                 }
-            })?;
+            }
+        })?;
 
         let pid = child.id();
         info!("Flutter process started with PID: {:?}", pid);

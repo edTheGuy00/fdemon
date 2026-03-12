@@ -1,5 +1,6 @@
 //! Device discovery using flutter devices command
 
+use crate::flutter_locator::find_flutter_executable;
 use fdemon_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -177,20 +178,36 @@ pub async fn discover_devices_with_timeout(
 
 /// Run flutter devices command
 async fn run_flutter_devices() -> Result<FlutterOutput> {
-    let output = Command::new("flutter")
-        .args(["devices", "--machine"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await
-        .map_err(|e| {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                Error::FlutterNotFound
-            } else {
-                Error::process(format!("Failed to run flutter devices: {}", e))
-            }
-        })?;
+    // Find Flutter executable
+    let flutter_exe = find_flutter_executable().ok_or(Error::FlutterNotFound)?;
+
+    // On Windows with batch files, we need to use cmd /c
+    let output = if flutter_exe.is_windows_batch() {
+        let (cmd, cmd_args) = flutter_exe.to_command();
+        Command::new(cmd)
+            .args(cmd_args)
+            .args(["devices", "--machine"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+    } else {
+        Command::new(flutter_exe.path())
+            .args(["devices", "--machine"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await
+    }
+    .map_err(|e| {
+        if e.kind() == std::io::ErrorKind::NotFound {
+            Error::FlutterNotFound
+        } else {
+            Error::process(format!("Failed to run flutter devices: {}", e))
+        }
+    })?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
