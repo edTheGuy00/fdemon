@@ -117,6 +117,8 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
             InputKey::Char('a') => Some(Message::ShowAllNativeTags),
             // Hide all tags
             InputKey::Char('n') => Some(Message::HideAllNativeTags),
+            // Force quit even while overlay is open (consistent with all other overlays)
+            InputKey::CharCtrl('c') => Some(Message::Quit),
             // Consume all other keys while overlay is open
             _ => None,
         };
@@ -1849,6 +1851,103 @@ mod dap_key_tests {
         assert!(
             result.is_none(),
             "'d' (DevTools) should return None when no session is active"
+        );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tag filter overlay key handling (Phase 2, Task 09 + fix Task 04)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tag_filter_key_tests {
+    use super::*;
+
+    #[test]
+    fn test_tag_filter_ctrl_c_quits() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::CharCtrl('c'));
+        assert!(
+            matches!(result, Some(Message::Quit)),
+            "Ctrl+C while tag filter overlay is open should emit Message::Quit"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_esc_hides_overlay() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Esc);
+        assert!(
+            matches!(result, Some(Message::HideTagFilter)),
+            "Esc while tag filter overlay is open should emit Message::HideTagFilter"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_t_hides_overlay() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char('t'));
+        assert!(
+            matches!(result, Some(Message::HideTagFilter)),
+            "'t' while tag filter overlay is open should emit Message::HideTagFilter"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_j_moves_down() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char('j'));
+        assert!(
+            matches!(result, Some(Message::TagFilterMoveDown)),
+            "'j' while tag filter overlay is open should emit Message::TagFilterMoveDown"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_k_moves_up() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char('k'));
+        assert!(
+            matches!(result, Some(Message::TagFilterMoveUp)),
+            "'k' while tag filter overlay is open should emit Message::TagFilterMoveUp"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_space_toggles_selected() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char(' '));
+        assert!(
+            matches!(result, Some(Message::TagFilterToggleSelected)),
+            "Space while tag filter overlay is open should emit Message::TagFilterToggleSelected"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_a_shows_all() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char('a'));
+        assert!(
+            matches!(result, Some(Message::ShowAllNativeTags)),
+            "'a' while tag filter overlay is open should emit Message::ShowAllNativeTags"
+        );
+    }
+
+    #[test]
+    fn test_tag_filter_n_hides_all() {
+        let mut state = AppState::new();
+        state.tag_filter_visible = true;
+        let result = handle_key_normal(&state, InputKey::Char('n'));
+        assert!(
+            matches!(result, Some(Message::HideAllNativeTags)),
+            "'n' while tag filter overlay is open should emit Message::HideAllNativeTags"
         );
     }
 }

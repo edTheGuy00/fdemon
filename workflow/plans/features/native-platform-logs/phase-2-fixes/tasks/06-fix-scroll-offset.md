@@ -86,4 +86,30 @@ fn test_tag_filter_scroll_follows_selection() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Added `use std::cell::Cell`; replaced `scroll_offset: usize` with `last_known_visible_height: Cell<usize>`; updated doc comment; removed `self.scroll_offset = 0` from `reset()` |
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Added `ListState` to ratatui imports; added render-hint write-back (`ui_state.last_known_visible_height.set(visible_height)`) with TEA exception comment; replaced `render_widget(list, ...)` with `render_stateful_widget(list, ..., &mut list_state)` using `ListState::default().with_selected(Some(ui_state.selected_index))`; updated all test struct literals from `scroll_offset: 0` to `..Default::default()`; added two new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A chosen (ListState)**: `ratatui::widgets::ListState::with_selected(Some(index))` causes ratatui to automatically scroll the list viewport to keep the selected item visible. This eliminates all custom scroll-offset arithmetic and is the canonical ratatui pattern for scrollable lists.
+
+2. **No highlight_style set on List**: The per-item styling already applies the accent highlight to the selected row. Setting a `highlight_style` on `List` would double-apply styling on the selected row. Leaving it unset preserves the existing visual appearance while getting ratatui's scroll-following for free.
+
+3. **Handler unchanged**: `update.rs` has no code that reads `scroll_offset`, so no handler changes were needed. The `last_known_visible_height` field is available if future scroll-clamping logic is needed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test --workspace --lib` — 817 passed; 4 pre-existing snapshot failures (version string `v0.1.0` vs `v0.2.1`, unrelated to this task); +3 new tests from this task
+- `cargo clippy --workspace -- -D warnings` — Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **Snapshot test failures are pre-existing**: The 4 `render::tests::snapshot_*` failures existed before this change and are due to a version string mismatch (`v0.1.0` vs `v0.2.1`) in snapshot files, not related to scroll offset changes.

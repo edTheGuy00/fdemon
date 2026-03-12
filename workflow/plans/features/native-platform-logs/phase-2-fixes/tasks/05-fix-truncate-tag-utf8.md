@@ -93,4 +93,25 @@ fn test_truncate_tag_multibyte_utf8() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/tag_filter.rs` | Replaced byte-level slicing in `truncate_tag` with `chars().count()` / `chars().take()`. Updated doc comment. Added `test_truncate_tag_multibyte_utf8` test with CJK, mixed, and emoji cases. Corrected one test assertion from the task spec (`"Go日本"` has 4 chars and fits exactly at `max_len=4`; added a 5-char variant `"Go日本語"` to cover the truncation path). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Task spec assertion correction**: The spec asserted `truncate_tag("Go日本", 4) == "G..."`. "Go日本" is exactly 4 Unicode scalar values, so with the correct char-based guard (`char_count <= max_len`) it is returned unchanged as `"Go日本"`. The test was corrected to assert `"Go日本"` and a separate 5-char case `"Go日本語"` was added to exercise the truncation path to `"G..."`.
+
+2. **`chars().count()` vs grapheme clusters**: The fix uses Unicode scalar values (not grapheme clusters). The task notes this is acceptable and out of scope; display-width accuracy with `unicode-width` is a separate concern.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- truncate_tag` - Passed (7 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Display-width vs char count**: Multi-byte characters like CJK glyphs occupy 2 terminal columns each. `chars().count()` counts scalar values, not display columns. This is a pre-existing limitation noted in the task spec and out of scope for this fix.

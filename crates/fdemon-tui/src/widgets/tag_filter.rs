@@ -12,7 +12,7 @@ use fdemon_app::TagFilterUiState;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::*;
 use ratatui::symbols;
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::theme::palette;
 
@@ -126,8 +126,13 @@ pub fn render_tag_filter(
         })
         .collect();
 
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md
+    let visible_height = chunks[0].height as usize;
+    ui_state.last_known_visible_height.set(visible_height);
+
+    let mut list_state = ListState::default().with_selected(Some(ui_state.selected_index));
     let list = List::new(items);
-    frame.render_widget(list, chunks[0]);
+    frame.render_stateful_widget(list, chunks[0], &mut list_state);
 
     // ── Separator ────────────────────────────────────────────────────────────
     let sep = Paragraph::new("─".repeat(inner.width as usize))
@@ -140,17 +145,22 @@ pub fn render_tag_filter(
     frame.render_widget(footer, chunks[2]);
 }
 
-/// Truncate a tag name to at most `max_len` characters.
+/// Truncate a tag name to at most `max_len` Unicode scalar values.
 ///
-/// If the tag is longer than `max_len`, it is truncated and `...` is appended,
-/// keeping the total length equal to `max_len`.
+/// If the tag is longer than `max_len` characters, it is truncated and `...`
+/// is appended, keeping the total character count equal to `max_len`.
+///
+/// Character-based (not byte-based) to avoid panics on multi-byte UTF-8
+/// sequences such as CJK subsystem names or emoji.
 pub fn truncate_tag(tag: &str, max_len: usize) -> String {
-    if tag.len() <= max_len {
+    let char_count = tag.chars().count();
+    if char_count <= max_len {
         tag.to_string()
     } else if max_len <= 3 {
-        tag[..max_len].to_string()
+        tag.chars().take(max_len).collect()
     } else {
-        format!("{}...", &tag[..max_len - 3])
+        let truncated: String = tag.chars().take(max_len - 3).collect();
+        format!("{}...", truncated)
     }
 }
 
@@ -164,14 +174,14 @@ mod tests {
     fn test_tag_filter_ui_state_default() {
         let state = TagFilterUiState::default();
         assert_eq!(state.selected_index, 0);
-        assert_eq!(state.scroll_offset, 0);
+        assert_eq!(state.last_known_visible_height.get(), 0);
     }
 
     #[test]
     fn test_tag_filter_ui_state_move_up() {
         let mut state = TagFilterUiState {
             selected_index: 3,
-            scroll_offset: 0,
+            ..Default::default()
         };
         state.move_up();
         assert_eq!(state.selected_index, 2);
@@ -195,7 +205,7 @@ mod tests {
     fn test_tag_filter_ui_state_move_down_at_max() {
         let mut state = TagFilterUiState {
             selected_index: 5,
-            scroll_offset: 0,
+            ..Default::default()
         };
         state.move_down(5);
         assert_eq!(state.selected_index, 5); // stays at max
@@ -205,11 +215,43 @@ mod tests {
     fn test_tag_filter_ui_state_reset() {
         let mut state = TagFilterUiState {
             selected_index: 4,
-            scroll_offset: 2,
+            ..Default::default()
         };
         state.reset();
         assert_eq!(state.selected_index, 0);
-        assert_eq!(state.scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_tag_filter_scroll_follows_selection() {
+        // Create a state with 20 tags and navigate deep into the list.
+        // Verify that selected_index reaches 18 (unbounded by visible window).
+        let mut ui_state = TagFilterUiState::default();
+        for _ in 0..18 {
+            ui_state.move_down(19); // max_index = 19 (20 tags, 0-indexed)
+        }
+        assert_eq!(ui_state.selected_index, 18);
+    }
+
+    #[test]
+    fn test_tag_filter_render_hint_written_during_render() {
+        // Verify that render_tag_filter writes last_known_visible_height each frame.
+        let backend = ratatui::backend::TestBackend::new(80, 30);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        let mut tag_state = NativeTagState::default();
+        for i in 0..20 {
+            tag_state.observe_tag(&format!("Tag{:02}", i));
+        }
+        let ui_state = TagFilterUiState::default();
+        terminal
+            .draw(|frame| {
+                render_tag_filter(frame, frame.area(), &tag_state, &ui_state);
+            })
+            .unwrap();
+        // After rendering, the visible height hint must be non-zero.
+        assert!(
+            ui_state.last_known_visible_height.get() > 0,
+            "expected last_known_visible_height > 0 after render"
+        );
     }
 
     // ── truncate_tag unit tests ──────────────────────────────────────────────
@@ -251,6 +293,22 @@ mod tests {
     #[test]
     fn test_truncate_tag_max_len_three() {
         assert_eq!(truncate_tag("Hello", 3), "Hel");
+    }
+
+    #[test]
+    fn test_truncate_tag_multibyte_utf8() {
+        // CJK characters (3 bytes each in UTF-8)
+        assert_eq!(truncate_tag("日本語タグ名", 5), "日本...");
+        assert_eq!(truncate_tag("日本語", 3), "日本語");
+        assert_eq!(truncate_tag("日本語", 2), "日本"); // max_len <= 3
+
+        // Mixed ASCII and multi-byte — "Go日本" is exactly 4 chars, fits exactly
+        assert_eq!(truncate_tag("Go日本", 4), "Go日本");
+        // 5-char mixed string truncated to 4: "Go日本語" → "G..."
+        assert_eq!(truncate_tag("Go日本語", 4), "G...");
+
+        // Emoji (4 bytes each in UTF-8)
+        assert_eq!(truncate_tag("🔥🔥🔥", 2), "🔥🔥"); // max_len <= 3
     }
 
     // ── Rendering smoke test ─────────────────────────────────────────────────

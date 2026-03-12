@@ -262,18 +262,14 @@ fn derive_macos_process_name(app_id: &Option<String>) -> String {
     "Runner".to_string()
 }
 
-/// Derive the iOS process name from the Flutter app ID.
+/// Derive the iOS process name for native log filtering.
 ///
-/// iOS Flutter apps use the same bundle identifier / process name convention
-/// as macOS — the process name is typically the last component of the bundle
-/// identifier (e.g., `"com.example.myApp"` → `"myApp"`).
-/// Falls back to `"Runner"` (Flutter's default iOS app name) when no
-/// `app_id` is available.
-///
-/// Uses the same logic as [`derive_macos_process_name`] since both platforms
-/// share the same naming convention.
-fn derive_ios_process_name(app_id: &Option<String>) -> String {
-    derive_macos_process_name(app_id)
+/// iOS Flutter apps always use `"Runner"` as the Xcode target/process name.
+/// Unlike macOS, the process name does not correspond to the bundle ID.
+/// The `_app_id` parameter is kept for API consistency with
+/// [`derive_macos_process_name`] and `derive_android_process_name`.
+fn derive_ios_process_name(_app_id: &Option<String>) -> String {
+    "Runner".to_string()
 }
 
 /// Detect whether an iOS device is a simulator based on its metadata.
@@ -427,14 +423,16 @@ mod tests {
 
     #[test]
     fn test_derive_ios_process_name_from_bundle_id() {
+        // iOS always returns "Runner" regardless of bundle ID
         assert_eq!(
             derive_ios_process_name(&Some("com.example.myApp".to_string())),
-            "myApp"
+            "Runner"
         );
     }
 
     #[test]
     fn test_derive_ios_process_name_fallback() {
+        // iOS unconditionally returns "Runner" — no app_id required
         assert_eq!(derive_ios_process_name(&None), "Runner");
     }
 
@@ -444,5 +442,19 @@ mod tests {
             derive_ios_process_name(&Some("Runner".to_string())),
             "Runner"
         );
+    }
+
+    #[test]
+    fn test_derive_ios_process_name_always_runner() {
+        // iOS Flutter apps always use "Runner" regardless of bundle ID
+        assert_eq!(
+            derive_ios_process_name(&Some("com.example.myApp".to_string())),
+            "Runner"
+        );
+        assert_eq!(
+            derive_ios_process_name(&Some("org.flutter.app".to_string())),
+            "Runner"
+        );
+        assert_eq!(derive_ios_process_name(&None), "Runner");
     }
 }

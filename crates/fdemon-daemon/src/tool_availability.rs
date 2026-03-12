@@ -183,17 +183,27 @@ impl ToolAvailability {
     /// Flutter also ships a bundled copy in its SDK cache.
     ///
     /// Not needed for simulators — those use `xcrun simctl spawn log stream`.
+    ///
+    /// We spawn `idevicesyslog --help` but accept any exit code — some versions
+    /// of libimobiledevice exit non-zero on `--help`, which would cause a false
+    /// negative if we checked `s.success()`. We only return `false` when the OS
+    /// reports the binary was not found (`ErrorKind::NotFound`).
     #[cfg(target_os = "macos")]
     async fn check_idevicesyslog() -> bool {
-        Command::new("idevicesyslog")
+        match Command::new("idevicesyslog")
             .arg("--help")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .await
-            .map(|s| s.success())
-            .inspect_err(|e| tracing::debug!("idevicesyslog check failed: {}", e))
-            .unwrap_or(false)
+        {
+            Ok(_) => true, // Binary found — any exit code is acceptable
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                tracing::debug!("idevicesyslog check failed: {}", e);
+                false
+            }
+        }
     }
 
     /// Get list of paths to try for emulator command

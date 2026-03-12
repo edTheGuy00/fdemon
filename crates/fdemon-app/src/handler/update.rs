@@ -1935,10 +1935,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // A native log line was captured — track the tag and, if visible,
         // convert to `LogEntry` and queue.
         Message::NativeLog { session_id, event } => {
+            // Read per-tag min level config before borrowing state mutably.
+            // effective_min_level returns a &str into settings, so we must
+            // resolve it to an owned Option<LogLevel> before get_mut.
+            let min_level_filter = fdemon_daemon::native_logs::parse_min_level(
+                state.settings.native_logs.effective_min_level(&event.tag),
+            );
+
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Always observe the tag so the count reflects total capture
-                // volume regardless of the current visibility setting.
+                // volume regardless of the current visibility setting. This
+                // must happen BEFORE level filtering so tags appear in the
+                // T-overlay even when their events are below the threshold.
                 handle.native_tag_state.observe_tag(&event.tag);
+
+                // Filter by the effective per-tag (or global) minimum level.
+                // Per-tag config `[native_logs.tags.GoLog] min_level = "warning"`
+                // overrides the global `min_level` for the specified tag.
+                if let Some(min_level) = min_level_filter {
+                    if event.level.severity() < min_level.severity() {
+                        return UpdateResult::none();
+                    }
+                }
 
                 // Skip the log entry if the user has hidden this tag.
                 // This filters at the handler level rather than at render time,

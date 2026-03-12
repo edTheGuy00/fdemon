@@ -84,4 +84,23 @@ fn test_derive_ios_process_name_always_runner() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/native_logs.rs` | Replaced `derive_ios_process_name` body to unconditionally return `"Runner"`; updated `test_derive_ios_process_name_from_bundle_id` assertion from `"myApp"` to `"Runner"`; updated `test_derive_ios_process_name_fallback` comment to reflect unconditional behavior; added `test_derive_ios_process_name_always_runner` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`_app_id` parameter retained**: The parameter is kept (prefixed with `_`) for API consistency with `derive_macos_process_name` and `derive_android_process_name`, even though iOS ignores the value. This avoids changing call sites and preserves a uniform function signature across platform variants.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- derive_ios_process_name` - Passed (4 tests: `test_derive_ios_process_name_fallback`, `test_derive_ios_process_name_single_component`, `test_derive_ios_process_name_always_runner`, `test_derive_ios_process_name_from_bundle_id`)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Hard-coded process name**: If a Flutter project ever changes the Xcode target name away from `"Runner"`, this function would need updating. This is expected to be rare — the Flutter toolchain defaults to `Runner` and projects rarely rename it.

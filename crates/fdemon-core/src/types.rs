@@ -370,13 +370,16 @@ impl NativeLogPriority {
     ///
     /// Maps macOS-specific levels (`"default"`, `"notice"`, `"fault"`) to the
     /// closest `NativeLogPriority` equivalent. Returns `None` for unrecognized strings.
+    ///
+    /// Also accepts compact format abbreviations (`"df"`, `"i"`, `"d"`, `"e"`, `"f"`)
+    /// produced by `log stream --style compact`.
     pub fn from_macos_level(level: &str) -> Option<Self> {
         match level.to_lowercase().as_str() {
-            "default" | "notice" => Some(Self::Info),
-            "info" => Some(Self::Info),
-            "debug" => Some(Self::Debug),
-            "error" => Some(Self::Error),
-            "fault" => Some(Self::Fatal),
+            "default" | "notice" | "df" => Some(Self::Info),
+            "info" | "i" => Some(Self::Info),
+            "debug" | "d" => Some(Self::Debug),
+            "error" | "e" => Some(Self::Error),
+            "fault" | "f" => Some(Self::Fatal),
             _ => None,
         }
     }
@@ -1915,6 +1918,28 @@ mod tests {
             Some(NativeLogPriority::Fatal)
         );
         assert_eq!(NativeLogPriority::from_macos_level("unknown"), None);
+
+        // Compact format abbreviations (from `log stream --style compact`)
+        assert_eq!(
+            NativeLogPriority::from_macos_level("Df"),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("I"),
+            Some(NativeLogPriority::Info)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("D"),
+            Some(NativeLogPriority::Debug)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("E"),
+            Some(NativeLogPriority::Error)
+        );
+        assert_eq!(
+            NativeLogPriority::from_macos_level("F"),
+            Some(NativeLogPriority::Fatal)
+        );
     }
 
     #[test]

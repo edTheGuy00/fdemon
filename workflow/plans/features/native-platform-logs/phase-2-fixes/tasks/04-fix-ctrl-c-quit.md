@@ -78,4 +78,24 @@ fn test_tag_filter_ctrl_c_quits() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Added `InputKey::CharCtrl('c') => Some(Message::Quit)` arm to tag filter overlay match block; added `tag_filter_key_tests` module with 8 tests covering all overlay keys including the new Ctrl+C case |
+
+### Notable Decisions/Tradeoffs
+
+1. **`matches!` instead of `assert_eq!`**: `Message` does not derive `PartialEq`, so all assertions use `matches!` consistent with every other test module in the file.
+2. **8 tests instead of 1**: The task specified a minimum of `test_tag_filter_ctrl_c_quits`. Added 7 additional tests covering all existing overlay keys (acceptance criterion 2: "all other tag filter keys still work") to make the new test module self-contained and consistent in coverage depth with other test modules.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- keys` - Passed (72 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: Single-line fix to a match arm, consistent with the pattern used by every other overlay handler in the same file.

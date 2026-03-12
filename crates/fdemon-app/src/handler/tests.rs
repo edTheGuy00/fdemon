@@ -6998,3 +6998,207 @@ fn test_hide_all_native_tags_no_session_is_no_op() {
     let result = update(&mut state, Message::HideAllNativeTags);
     assert!(result.action.is_none());
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Effective Min Level Handler Tests (Phase 2-fixes, Task 02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: send a NativeLog event at a given level and flush batched logs.
+fn send_native_log_with_level(
+    state: &mut AppState,
+    session_id: crate::session::SessionId,
+    tag: &str,
+    level: fdemon_core::LogLevel,
+    message: &str,
+) {
+    use fdemon_daemon::NativeLogEvent;
+    let event = NativeLogEvent {
+        tag: tag.to_string(),
+        level,
+        message: message.to_string(),
+        timestamp: None,
+    };
+    update(state, Message::NativeLog { session_id, event });
+    state.session_manager.flush_all_pending_logs();
+}
+
+#[test]
+fn test_native_log_filtered_by_effective_min_level() {
+    use crate::config::{NativeLogsSettings, TagConfig};
+    use fdemon_core::LogLevel;
+
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Setup: global min_level = "info", per-tag "GoLog" = "warning"
+    state.settings.native_logs = NativeLogsSettings {
+        min_level: "info".to_string(),
+        ..Default::default()
+    };
+    state.settings.native_logs.tags.insert(
+        "GoLog".to_string(),
+        TagConfig {
+            min_level: Some("warning".to_string()),
+        },
+    );
+
+    // Send Debug event for "GoLog" → should be filtered (below warning)
+    send_native_log_with_level(
+        &mut state,
+        session_id,
+        "GoLog",
+        LogLevel::Debug,
+        "debug msg",
+    );
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 0,
+        "Debug event for GoLog must be filtered (below per-tag warning floor)"
+    );
+
+    // Send Info event for "GoLog" → should be filtered (below warning)
+    send_native_log_with_level(&mut state, session_id, "GoLog", LogLevel::Info, "info msg");
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 0,
+        "Info event for GoLog must be filtered (below per-tag warning floor)"
+    );
+
+    // Send Warning event for "GoLog" → should pass (meets warning floor)
+    send_native_log_with_level(
+        &mut state,
+        session_id,
+        "GoLog",
+        LogLevel::Warning,
+        "warn msg",
+    );
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 1,
+        "Warning event for GoLog must pass (meets per-tag warning floor)"
+    );
+
+    // Send Error event for "GoLog" → should pass (above warning floor)
+    send_native_log_with_level(
+        &mut state,
+        session_id,
+        "GoLog",
+        LogLevel::Error,
+        "error msg",
+    );
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 2,
+        "Error event for GoLog must pass (above per-tag warning floor)"
+    );
+
+    // Send Debug event for "OtherTag" → should be filtered (global "info" floor)
+    send_native_log_with_level(&mut state, session_id, "OtherTag", LogLevel::Debug, "debug");
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 2,
+        "Debug event for OtherTag must be filtered (below global info floor)"
+    );
+
+    // Send Info event for "OtherTag" → should pass (meets global "info" floor)
+    send_native_log_with_level(&mut state, session_id, "OtherTag", LogLevel::Info, "info");
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 3,
+        "Info event for OtherTag must pass (meets global info floor)"
+    );
+}
+
+#[test]
+fn test_native_log_tag_observed_even_when_level_filtered() {
+    use crate::config::{NativeLogsSettings, TagConfig};
+    use fdemon_core::LogLevel;
+
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set per-tag min_level = "warning" for "GoLog"
+    state.settings.native_logs = NativeLogsSettings::default();
+    state.settings.native_logs.tags.insert(
+        "GoLog".to_string(),
+        TagConfig {
+            min_level: Some("warning".to_string()),
+        },
+    );
+
+    // Send a Debug event — it will be filtered (below warning floor)
+    send_native_log_with_level(
+        &mut state,
+        session_id,
+        "GoLog",
+        LogLevel::Debug,
+        "below threshold",
+    );
+
+    // Event must be dropped (no log entry in buffer)
+    let log_count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        log_count, 0,
+        "Filtered event must not be added to the log buffer"
+    );
+
+    // But the tag must still appear in native_tag_state (observe_tag called before filter)
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert_eq!(
+        handle.native_tag_state.tag_count(),
+        1,
+        "Tag must be observed even when its event is level-filtered"
+    );
+    assert_eq!(
+        handle.native_tag_state.discovered_tags["GoLog"], 1,
+        "GoLog observation count must be 1 even though the event was dropped"
+    );
+    assert!(
+        handle.native_tag_state.is_tag_visible("GoLog"),
+        "GoLog must be visible in the T-overlay even though its event was dropped"
+    );
+}

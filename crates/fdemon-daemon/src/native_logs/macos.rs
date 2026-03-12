@@ -1,7 +1,7 @@
 //! macOS unified log capture backend.
 //!
 //! Implements [`NativeLogCapture`] by spawning `log stream` with process-name
-//! filtering, parsing the syslog-style output, and emitting [`NativeLogEvent`]s.
+//! filtering, parsing the compact-style output, and emitting [`NativeLogEvent`]s.
 //!
 //! All code in this module is gated behind `#[cfg(target_os = "macos")]` via
 //! the conditional module declaration in `mod.rs`.
@@ -18,29 +18,35 @@ use fdemon_core::NativeLogPriority;
 
 use super::{MacOsLogConfig, NativeLogCapture, NativeLogEvent, NativeLogHandle};
 
-/// Number of header lines emitted by `log stream --style syslog` before data.
+/// Number of header lines emitted by `log stream --style compact` before data.
 ///
-/// Line 1: `Filtering the log data using "..."`
-/// Line 2: Column header: `Timestamp  Thread  Type  Activity  PID  TTL`
+/// Line 1: `Filtering the log data using "..."` (present when `--predicate` is used)
+/// Line 2: Column header: `Timestamp               Ty Process[PID:TID]`
 const LOG_STREAM_HEADER_LINES: usize = 2;
 
-/// Regex for macOS `log stream --style syslog` output.
+/// Regex for macOS `log stream --style compact` output.
 ///
-/// Format: `timestamp  thread  type  activity  pid  ttl  process: (subsystem) [category] message`
+/// Format: `timestamp  type  process[pid:tid]  (subsystem)? [category]? message`
 ///
-/// The subsystem `(...)` and category `[...]` parts are both optional.
+/// The type field is 1-2 characters (e.g., `Df` = Default, `I` = Info, `D` = Debug,
+/// `E` = Error, `F` = Fault). The subsystem `(...)` and category `[...]` parts
+/// are both optional.
+///
+/// Note: The `--style syslog` format changed in macOS Tahoe (26) to a BSD-style
+/// format that omits the type/level field. We use `--style compact` instead
+/// because it consistently includes the type across macOS versions.
 static SYSLOG_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(
-        r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+[-+]\d{4})\s+\S+\s+(\w+)\s+\S+\s+\d+\s+\d+\s+\S+:\s*(?:\(([^)]*)\))?\s*(?:\[([^\]]*)\])?\s*(.*)$"
-    ).expect("syslog regex is valid")
+        r"^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+)\s+(\w+)\s+\S+?\[\d+:\w+\]\s*(?:\(([^)]*)\))?\s*(?:\[([^\]]*)\])?\s*(.*)$"
+    ).expect("compact log stream regex is valid")
 });
 
-/// A parsed line from `log stream --style syslog` output.
+/// A parsed line from `log stream --style compact` output.
 #[derive(Debug, Clone)]
 pub struct SyslogLine {
-    /// Raw timestamp string from the log line (e.g., `"2024-03-10 14:30:00.123456-0700"`).
+    /// Raw timestamp string from the log line (e.g., `"2024-03-10 14:30:00.123"`).
     pub timestamp: String,
-    /// macOS log level string (e.g., `"Default"`, `"Info"`, `"Debug"`, `"Error"`, `"Fault"`).
+    /// macOS log type abbreviation (e.g., `"Df"`, `"I"`, `"D"`, `"E"`, `"F"`).
     pub level: String,
     /// Optional subsystem name (e.g., `"MyPlugin"`, `"Foundation"`).
     pub subsystem: Option<String>,
@@ -50,10 +56,10 @@ pub struct SyslogLine {
     pub message: String,
 }
 
-/// Parse a single `log stream --style syslog` data line.
+/// Parse a single `log stream --style compact` data line.
 ///
 /// Returns `None` for header lines, blank lines, or lines that do not match
-/// the expected syslog format.
+/// the expected compact format.
 pub fn parse_syslog_line(line: &str) -> Option<SyslogLine> {
     let caps = SYSLOG_RE.captures(line)?;
     Some(SyslogLine {
@@ -125,8 +131,10 @@ fn build_log_stream_command(config: &MacOsLogConfig) -> Command {
     };
     cmd.arg("--level").arg(level);
 
-    // Use syslog style for structured, parseable output
-    cmd.arg("--style").arg("syslog");
+    // Use compact style which includes the type/level abbreviation.
+    // The syslog style changed in macOS Tahoe (26) to omit the type field,
+    // making it impossible to determine event severity.
+    cmd.arg("--style").arg("compact");
 
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
@@ -219,7 +227,7 @@ async fn run_log_stream_capture(
 
 /// macOS unified log capture backend.
 ///
-/// Spawns `log stream --process <name> --style syslog` and parses the output
+/// Spawns `log stream --process <name> --style compact` and parses the output
 /// into [`NativeLogEvent`] values that are forwarded via an async channel.
 pub struct MacOsLogCapture {
     config: MacOsLogConfig,
@@ -257,9 +265,9 @@ mod tests {
 
     #[test]
     fn test_parse_syslog_line_with_subsystem_and_category() {
-        let line = "2024-03-10 14:30:00.123456-0700  0x1234     Info        0x0                  5678   0    my_app: (MyPlugin) [com.example.plugin:default] Hello from plugin";
+        let line = "2024-03-10 14:30:00.123 I  my_app[5678:abcde] (MyPlugin) [com.example.plugin:default] Hello from plugin";
         let parsed = parse_syslog_line(line).unwrap();
-        assert_eq!(parsed.level, "Info");
+        assert_eq!(parsed.level, "I");
         assert_eq!(parsed.subsystem, Some("MyPlugin".into()));
         assert_eq!(parsed.category, Some("com.example.plugin:default".into()));
         assert_eq!(parsed.message, "Hello from plugin");
@@ -267,19 +275,28 @@ mod tests {
 
     #[test]
     fn test_parse_syslog_line_without_subsystem() {
-        let line = "2024-03-10 14:30:00.123456-0700  0x1234     Error       0x0                  5678   0    my_app: NSLog message here";
+        let line = "2024-03-10 14:30:00.123 E  my_app[5678:abcde] NSLog message here";
         let parsed = parse_syslog_line(line).unwrap();
-        assert_eq!(parsed.level, "Error");
+        assert_eq!(parsed.level, "E");
         assert!(parsed.subsystem.is_none());
         assert!(parsed.category.is_none());
         assert_eq!(parsed.message, "NSLog message here");
     }
 
     #[test]
+    fn test_parse_syslog_line_default_type() {
+        let line = "2024-03-10 14:30:00.123 Df my_app[5678:abcde] (Foundation) default message";
+        let parsed = parse_syslog_line(line).unwrap();
+        assert_eq!(parsed.level, "Df");
+        assert_eq!(parsed.subsystem, Some("Foundation".into()));
+        assert_eq!(parsed.message, "default message");
+    }
+
+    #[test]
     fn test_derive_tag_from_category() {
         let line = SyslogLine {
             timestamp: "".into(),
-            level: "Info".into(),
+            level: "I".into(),
             subsystem: Some("MyPlugin".into()),
             category: Some("com.example.plugin:default".into()),
             message: "test".into(),
@@ -291,7 +308,7 @@ mod tests {
     fn test_derive_tag_from_subsystem_fallback() {
         let line = SyslogLine {
             timestamp: "".into(),
-            level: "Info".into(),
+            level: "I".into(),
             subsystem: Some("Foundation".into()),
             category: None,
             message: "test".into(),
@@ -303,7 +320,7 @@ mod tests {
     fn test_derive_tag_native_fallback() {
         let line = SyslogLine {
             timestamp: "".into(),
-            level: "Info".into(),
+            level: "I".into(),
             subsystem: None,
             category: None,
             message: "test".into(),
@@ -314,33 +331,18 @@ mod tests {
     #[test]
     fn test_syslog_line_to_event_level_mapping() {
         let make_line = |level: &str| SyslogLine {
-            timestamp: "2024-03-10 14:30:00.123456-0700".into(),
+            timestamp: "2024-03-10 14:30:00.123".into(),
             level: level.into(),
             subsystem: Some("Test".into()),
             category: None,
             message: "msg".into(),
         };
 
-        assert_eq!(
-            syslog_line_to_event(&make_line("Debug")).level,
-            LogLevel::Debug
-        );
-        assert_eq!(
-            syslog_line_to_event(&make_line("Info")).level,
-            LogLevel::Info
-        );
-        assert_eq!(
-            syslog_line_to_event(&make_line("Default")).level,
-            LogLevel::Info
-        );
-        assert_eq!(
-            syslog_line_to_event(&make_line("Error")).level,
-            LogLevel::Error
-        );
-        assert_eq!(
-            syslog_line_to_event(&make_line("Fault")).level,
-            LogLevel::Error
-        );
+        assert_eq!(syslog_line_to_event(&make_line("D")).level, LogLevel::Debug);
+        assert_eq!(syslog_line_to_event(&make_line("I")).level, LogLevel::Info);
+        assert_eq!(syslog_line_to_event(&make_line("Df")).level, LogLevel::Info);
+        assert_eq!(syslog_line_to_event(&make_line("E")).level, LogLevel::Error);
+        assert_eq!(syslog_line_to_event(&make_line("F")).level, LogLevel::Error);
     }
 
     #[test]
@@ -349,7 +351,7 @@ mod tests {
             parse_syslog_line("Filtering the log data using \"process == \\\"my_app\\\"\"")
                 .is_none()
         );
-        assert!(parse_syslog_line("Timestamp                       Thread     Type        Activity             PID    TTL").is_none());
+        assert!(parse_syslog_line("Timestamp               Ty Process[PID:TID]").is_none());
     }
 
     /// Valid levels accepted by `log stream --level`: "default", "info", "debug".
@@ -397,10 +399,27 @@ mod tests {
     }
 
     #[test]
+    fn test_build_log_stream_command_uses_compact_style() {
+        let config = MacOsLogConfig {
+            process_name: "test_app".into(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            min_level: "debug".into(),
+        };
+        let cmd = build_log_stream_command(&config);
+        let args: Vec<_> = cmd.as_std().get_args().collect();
+        let args_str: Vec<&str> = args.iter().filter_map(|a| a.to_str()).collect();
+
+        let style_pos = args_str.iter().position(|&a| a == "--style");
+        let style_pos = style_pos.expect("--style arg must be present");
+        assert_eq!(args_str[style_pos + 1], "compact");
+    }
+
+    #[test]
     fn test_derive_tag_category_with_no_colon_suffix() {
         let line = SyslogLine {
             timestamp: "".into(),
-            level: "Info".into(),
+            level: "I".into(),
             subsystem: None,
             category: Some("com.example.plugin".into()),
             message: "test".into(),
@@ -410,16 +429,16 @@ mod tests {
 
     #[test]
     fn test_parse_syslog_line_captures_timestamp() {
-        let line = "2024-03-10 14:30:00.123456-0700  0x1234     Info        0x0                  5678   0    my_app: hello";
+        let line = "2024-03-10 14:30:00.123 I  my_app[5678:abcde] hello";
         let parsed = parse_syslog_line(line).unwrap();
-        assert_eq!(parsed.timestamp, "2024-03-10 14:30:00.123456-0700");
+        assert_eq!(parsed.timestamp, "2024-03-10 14:30:00.123");
     }
 
     #[test]
     fn test_syslog_line_to_event_uses_subsystem_as_tag() {
         let line = SyslogLine {
-            timestamp: "2024-03-10 14:30:00.123456-0700".into(),
-            level: "Info".into(),
+            timestamp: "2024-03-10 14:30:00.123".into(),
+            level: "I".into(),
             subsystem: Some("Foundation".into()),
             category: None,
             message: "Some Foundation log".into(),
@@ -427,10 +446,7 @@ mod tests {
         let event = syslog_line_to_event(&line);
         assert_eq!(event.tag, "Foundation");
         assert_eq!(event.message, "Some Foundation log");
-        assert_eq!(
-            event.timestamp,
-            Some("2024-03-10 14:30:00.123456-0700".into())
-        );
+        assert_eq!(event.timestamp, Some("2024-03-10 14:30:00.123".into()));
     }
 
     #[test]
@@ -443,5 +459,41 @@ mod tests {
         };
         let capture = MacOsLogCapture::new(config);
         assert_eq!(capture.config.process_name, "test_app");
+    }
+
+    #[test]
+    fn test_parse_real_compact_output() {
+        // Real output from `xcrun simctl spawn <udid> log stream --style compact`
+        let line = "2026-03-12 01:36:06.386 Df locationd[39460:aa46e] [com.apple.locationd.Position:GeneralCLX] @ClxSimulated, Fix, 1";
+        let parsed = parse_syslog_line(line).unwrap();
+        assert_eq!(parsed.timestamp, "2026-03-12 01:36:06.386");
+        assert_eq!(parsed.level, "Df");
+        assert!(parsed.subsystem.is_none());
+        assert_eq!(
+            parsed.category,
+            Some("com.apple.locationd.Position:GeneralCLX".into())
+        );
+        assert_eq!(parsed.message, "@ClxSimulated, Fix, 1");
+    }
+
+    #[test]
+    fn test_parse_compact_with_subsystem() {
+        let line = "2026-03-12 01:36:06.387 A  locationd[39460:aa46e] (libsystem_trace.dylib) Activity for state dumps";
+        let parsed = parse_syslog_line(line).unwrap();
+        assert_eq!(parsed.level, "A");
+        assert_eq!(parsed.subsystem, Some("libsystem_trace.dylib".into()));
+        assert!(parsed.category.is_none());
+        assert_eq!(parsed.message, "Activity for state dumps");
+    }
+
+    #[test]
+    fn test_parse_compact_error() {
+        let line = "2026-03-12 01:33:19.777 E  managedappdistributiond[40987:afbf2] [com.apple.ManagedAppDistribution:Daemon] Simulator is not supported";
+        let parsed = parse_syslog_line(line).unwrap();
+        assert_eq!(parsed.level, "E");
+        assert_eq!(
+            parsed.category,
+            Some("com.apple.ManagedAppDistribution:Daemon".into())
+        );
     }
 }

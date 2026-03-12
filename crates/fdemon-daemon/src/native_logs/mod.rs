@@ -130,6 +130,26 @@ pub struct IosLogConfig {
     pub min_level: String,
 }
 
+/// Parse a `min_level` string into a [`LogLevel`] for downstream filtering.
+///
+/// Maps user-facing level names to the corresponding [`LogLevel`] variant.
+/// Returns `None` for unrecognized strings, meaning no minimum filter is applied.
+///
+/// Recognized values (case-insensitive):
+/// - `"verbose"` / `"debug"` → [`LogLevel::Debug`]
+/// - `"info"` → [`LogLevel::Info`]
+/// - `"warning"` → [`LogLevel::Warning`]
+/// - `"error"` → [`LogLevel::Error`]
+pub fn parse_min_level(level: &str) -> Option<LogLevel> {
+    match level.to_lowercase().as_str() {
+        "verbose" | "debug" => Some(LogLevel::Debug),
+        "info" => Some(LogLevel::Info),
+        "warning" => Some(LogLevel::Warning),
+        "error" => Some(LogLevel::Error),
+        _ => None,
+    }
+}
+
 /// Decide whether a tag should be included based on include/exclude tag lists.
 ///
 /// - If `include_tags` is non-empty, only those tags pass (whitelist mode).
@@ -325,5 +345,33 @@ mod tests {
     fn test_dispatch_ios_without_config_returns_none() {
         let result = create_native_log_capture("ios", None, None, None);
         assert!(result.is_none());
+    }
+
+    // ── parse_min_level tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_min_level_recognized_values() {
+        assert_eq!(parse_min_level("debug"), Some(LogLevel::Debug));
+        assert_eq!(parse_min_level("verbose"), Some(LogLevel::Debug));
+        assert_eq!(parse_min_level("info"), Some(LogLevel::Info));
+        assert_eq!(parse_min_level("warning"), Some(LogLevel::Warning));
+        assert_eq!(parse_min_level("error"), Some(LogLevel::Error));
+    }
+
+    #[test]
+    fn test_parse_min_level_unrecognized_returns_none() {
+        assert_eq!(parse_min_level("invalid"), None);
+        assert_eq!(parse_min_level(""), None);
+        assert_eq!(parse_min_level("all"), None);
+        assert_eq!(parse_min_level("trace"), None);
+    }
+
+    #[test]
+    fn test_parse_min_level_case_insensitive() {
+        assert_eq!(parse_min_level("DEBUG"), Some(LogLevel::Debug));
+        assert_eq!(parse_min_level("VERBOSE"), Some(LogLevel::Debug));
+        assert_eq!(parse_min_level("INFO"), Some(LogLevel::Info));
+        assert_eq!(parse_min_level("WARNING"), Some(LogLevel::Warning));
+        assert_eq!(parse_min_level("ERROR"), Some(LogLevel::Error));
     }
 }

@@ -104,4 +104,34 @@ fn test_native_log_tag_observed_even_when_level_filtered() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/mod.rs` | Promoted `parse_min_level` from `ios.rs` as a `pub fn`; added 3 tests (`test_parse_min_level_recognized_values`, `test_parse_min_level_unrecognized_returns_none`, `test_parse_min_level_case_insensitive`) |
+| `crates/fdemon-daemon/src/native_logs/ios.rs` | Removed local `parse_min_level` function; updated both call sites (`run_idevicesyslog_capture`, `run_simctl_log_capture`) to use `super::parse_min_level`; added `use super::super::parse_min_level;` in test module |
+| `crates/fdemon-app/src/handler/update.rs` | Added `effective_min_level()` call before `get_mut` borrow; added level filter after `observe_tag` and before `is_tag_visible` in the `NativeLog` handler |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 2 new tests: `test_native_log_filtered_by_effective_min_level` and `test_native_log_tag_observed_even_when_level_filtered`; added `send_native_log_with_level` helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A chosen (promote to mod.rs)**: `parse_min_level` was promoted to `fdemon-daemon/src/native_logs/mod.rs` as a cross-platform `pub fn`, consistent with how `should_include_tag` was promoted in phase-1-fixes task 04. Both `run_idevicesyslog_capture` and `run_simctl_log_capture` in `ios.rs` now call `super::parse_min_level`.
+
+2. **Read settings before `get_mut`**: To avoid a Rust borrow-checker conflict (mutable borrow of `state.session_manager` vs immutable borrow of `state.settings`), the `parse_min_level` call is evaluated before the `get_mut` block. The result is captured as `min_level_filter: Option<LogLevel>` (owned, not a borrowed `&str`). This follows the established pattern in the codebase (lines 1337–1342 use the same approach).
+
+3. **Filter ordering preserved**: `observe_tag` is called before the level filter check, ensuring the tag always appears in the T-overlay regardless of its event level, which matches the acceptance criteria.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon` - PASS (535 tests, 0 failed) — includes 3 new `parse_min_level` tests in `mod.rs`
+- `cargo test -p fdemon-app` - PASS (1522 tests, 0 failed) — includes 2 new level-filter handler tests
+- `cargo clippy -p fdemon-daemon -- -D warnings` - PASS (no warnings)
+- `cargo clippy -p fdemon-app -- -D warnings` - PASS (no warnings)
+- `cargo fmt --all` - PASS
+- `cargo check --workspace` - PASS
+
+### Risks/Limitations
+
+1. **Test 03 already used local `parse_min_level`**: Task 03 (fix-simctl-min-level) was completed before this task and used the local `parse_min_level` in `ios.rs`. After this task, that local function is removed and both call sites use `super::parse_min_level`. All existing tests in `ios.rs` continue to pass via the `use super::super::parse_min_level;` import added to the test module.

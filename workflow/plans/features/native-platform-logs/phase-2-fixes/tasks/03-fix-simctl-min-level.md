@@ -87,4 +87,24 @@ fn test_simctl_capture_filters_by_min_level() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/ios.rs` | Added `parse_min_level` call at top of `run_simctl_log_capture`; added severity guard in read loop after tag filter; added 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local `parse_min_level`**: Task 02 did not promote `parse_min_level` to `mod.rs`, so the existing local function in `ios.rs` (line 125) was used directly — exactly as noted in the task's "Notes" section.
+2. **Test approach**: Tests exercise `parse_min_level` + `LogLevel::severity()` directly without spawning a process, making them fast, hermetic, and consistent with the existing test style in the module. Three tests were added: one verifying warning/error pass and debug/info are dropped (`test_simctl_capture_filters_by_min_level`), one verifying `None` min_level passes all events (`test_simctl_capture_no_min_level_passes_all`), and one verifying debug floor passes all levels (`test_simctl_capture_min_level_debug_passes_all_levels`).
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon -- ios` — PASS (35 tests, 0 failed)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — PASS (no warnings)
+
+### Risks/Limitations
+
+1. **No integration test**: The severity guard in the async loop path is not exercised by a live process test; however, the logic is identical to the physical device path (which had the same test approach), and the unit tests verify the filter semantics correctly.

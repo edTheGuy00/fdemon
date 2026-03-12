@@ -113,4 +113,26 @@ fn test_parse_idevicesyslog_line_device_name_with_parentheses() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/ios.rs` | Changed `\S+\s+` to `.+?\s+` in `IDEVICESYSLOG_RE`; expanded doc comment with new examples; added two new tests for device names with spaces and parentheses |
+| `crates/fdemon-daemon/src/tool_availability.rs` | Replaced `Ok(s) => s.success()` pattern with `Ok(_) => true` / `Err(e) if e.kind() == ErrorKind::NotFound => false` / `Err(e) => { debug!(...); false }` in `check_idevicesyslog`; updated doc comment to explain the rationale |
+
+### Notable Decisions/Tradeoffs
+
+1. **Non-greedy `.+?` anchor**: The `.+?` quantifier is safe because the process name is always followed by `(framework)[pid]`, giving a reliable right anchor. The non-greedy match stops at the earliest `\s+(\w+)\(` that completes the full pattern, so device names with arbitrary spaces and punctuation (apostrophes, parentheses) are handled without ambiguity.
+
+2. **Mirroring `check_macos_log` pattern**: Rather than using path-existence checking (which would require knowing the binary's install location), the fix follows the same "accept any exit code, only reject NotFound" logic established for `check_macos_log`. This handles the case where `idevicesyslog --help` exits non-zero on some libimobiledevice versions.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon -- idevicesyslog` - Passed (15 tests: 13 pre-existing + 2 new)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`test_parse_idevicesyslog_line_device_name_with_parentheses`**: The test input `"iPhone (2) Runner(Flutter)[2037]"` contains parentheses in both the device name field and the framework field. The regex handles this correctly because `[^)]*` inside the framework capture group prevents the framework group from consuming the `)` that closes the device-name parenthesis — the non-greedy device-name match will consume "iPhone (2)" as a unit before anchoring on `Runner(`.

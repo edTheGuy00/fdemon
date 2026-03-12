@@ -44,14 +44,14 @@ Wave 3 (parallel — no dependencies on waves 1-2):
 
 | # | Task | Status | Depends On | Issues | Modules |
 |---|------|--------|------------|--------|---------|
-| 1 | [01-fix-ios-process-name](tasks/01-fix-ios-process-name.md) | Not Started | — | #1 | `fdemon-app/src/actions/native_logs.rs` |
-| 2 | [02-wire-effective-min-level](tasks/02-wire-effective-min-level.md) | Not Started | 1 | #2 | `fdemon-app/src/handler/update.rs`, `fdemon-daemon/src/native_logs/mod.rs` |
-| 3 | [03-fix-simctl-min-level](tasks/03-fix-simctl-min-level.md) | Not Started | — | #3 | `fdemon-daemon/src/native_logs/ios.rs` |
-| 4 | [04-fix-ctrl-c-quit](tasks/04-fix-ctrl-c-quit.md) | Not Started | — | #5 | `fdemon-app/src/handler/keys.rs` |
-| 5 | [05-fix-truncate-tag-utf8](tasks/05-fix-truncate-tag-utf8.md) | Not Started | — | #6 | `fdemon-tui/src/widgets/tag_filter.rs` |
-| 6 | [06-fix-scroll-offset](tasks/06-fix-scroll-offset.md) | Not Started | — | #4 | `fdemon-app/src/state.rs`, `fdemon-tui/src/widgets/tag_filter.rs`, `fdemon-app/src/handler/update.rs` |
-| 7 | [07-fix-idevicesyslog-regex](tasks/07-fix-idevicesyslog-regex.md) | Not Started | — | #8, #10 | `fdemon-daemon/src/native_logs/ios.rs`, `fdemon-daemon/src/tool_availability.rs` |
-| 8 | [08-minor-cleanups](tasks/08-minor-cleanups.md) | Not Started | — | #7, #9 | `fdemon-app/src/state.rs`, `fdemon-daemon/src/native_logs/ios.rs` |
+| 1 | [01-fix-ios-process-name](tasks/01-fix-ios-process-name.md) | Done | — | #1 | `fdemon-app/src/actions/native_logs.rs` |
+| 2 | [02-wire-effective-min-level](tasks/02-wire-effective-min-level.md) | Done | 1 | #2 | `fdemon-app/src/handler/update.rs`, `fdemon-daemon/src/native_logs/mod.rs` |
+| 3 | [03-fix-simctl-min-level](tasks/03-fix-simctl-min-level.md) | Done | — | #3 | `fdemon-daemon/src/native_logs/ios.rs` |
+| 4 | [04-fix-ctrl-c-quit](tasks/04-fix-ctrl-c-quit.md) | Done | — | #5 | `fdemon-app/src/handler/keys.rs` |
+| 5 | [05-fix-truncate-tag-utf8](tasks/05-fix-truncate-tag-utf8.md) | Done | — | #6 | `fdemon-tui/src/widgets/tag_filter.rs` |
+| 6 | [06-fix-scroll-offset](tasks/06-fix-scroll-offset.md) | Done | — | #4 | `fdemon-app/src/state.rs`, `fdemon-tui/src/widgets/tag_filter.rs`, `fdemon-app/src/handler/update.rs` |
+| 7 | [07-fix-idevicesyslog-regex](tasks/07-fix-idevicesyslog-regex.md) | Done | — | #8, #10 | `fdemon-daemon/src/native_logs/ios.rs`, `fdemon-daemon/src/tool_availability.rs` |
+| 8 | [08-minor-cleanups](tasks/08-minor-cleanups.md) | Done | — | #7, #9 | `fdemon-app/src/state.rs`, `fdemon-daemon/src/native_logs/ios.rs` |
 
 ## Execution Plan
 
