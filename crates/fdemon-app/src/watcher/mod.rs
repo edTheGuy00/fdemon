@@ -1,7 +1,7 @@
 //! File watcher module for auto-reload functionality
 //!
-//! Watches the `lib/` directory for Dart file changes and triggers
-//! automatic hot reload with debouncing.
+//! Watches one or more configured directories for Dart file changes
+//! and triggers automatic hot reload with debouncing.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -213,17 +213,37 @@ impl FileWatcher {
             }
         };
 
+        // Warn when no paths are configured — the watcher will run but never
+        // trigger a reload. This is valid (e.g. paths added dynamically later)
+        // but is almost always unintentional, so surface it as a warning.
+        if config.paths.is_empty() {
+            warn!("No watch paths configured — file watcher will not trigger reloads");
+        }
+
         // Add watched paths
-        for relative_path in &config.paths {
-            let full_path = project_root.join(relative_path);
-            if full_path.exists() {
-                if let Err(e) = debouncer.watch(&full_path, RecursiveMode::Recursive) {
-                    warn!("Failed to watch {}: {}", full_path.display(), e);
+        let resolved_paths = resolve_watch_paths(&project_root, &config.paths);
+
+        // Warn when all configured paths were filtered out (e.g. none exist on disk).
+        // Emit only when paths *were* configured but none survived resolution.
+        if !config.paths.is_empty()
+            && resolved_paths.iter().all(|p| !p.exists())
+            && !resolved_paths.is_empty()
+        {
+            warn!("All configured watch paths are invalid or do not exist — file watcher will not trigger reloads");
+        }
+
+        for resolved in resolved_paths {
+            if resolved.exists() {
+                if let Err(e) = debouncer.watch(&resolved, RecursiveMode::Recursive) {
+                    warn!("Failed to watch {}: {}", resolved.display(), e);
                 } else {
-                    info!("Watching: {}", full_path.display());
+                    info!("Watching: {}", resolved.display());
                 }
             } else {
-                warn!("Watch path does not exist: {}", full_path.display());
+                warn!("Watch path does not exist: {}", resolved.display());
+                let _ = event_tx.blocking_send(WatcherEvent::Error {
+                    message: format!("Watch path does not exist: {}", resolved.display()),
+                });
             }
         }
 
@@ -247,6 +267,35 @@ impl Drop for FileWatcher {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// Resolve a list of config paths against a project root, returning canonical
+/// absolute paths ready for the OS-level watcher.
+///
+/// For each path in `config_paths`:
+/// - Absolute paths are used as-is.
+/// - Relative paths (including those with `../` components) are joined onto
+///   `project_root` then canonicalized to resolve `..` and symlinks.
+/// - If canonicalization fails (path does not exist), the raw joined path is
+///   returned so that the caller can emit an appropriate warning rather than
+///   silently dropping the entry.
+pub(crate) fn resolve_watch_paths(
+    project_root: &std::path::Path,
+    config_paths: &[PathBuf],
+) -> Vec<PathBuf> {
+    config_paths
+        .iter()
+        .map(|p| {
+            let full = if p.is_absolute() {
+                p.clone()
+            } else {
+                project_root.join(p)
+            };
+            // Canonicalize resolves `..` and symlinks.
+            // Falls back to the raw path when the directory doesn't exist yet.
+            full.canonicalize().unwrap_or(full)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -354,5 +403,201 @@ mod tests {
         assert!(config.auto_reload);
         assert_eq!(config.paths, vec![PathBuf::from("src")]);
         assert_eq!(config.extensions, vec!["dart".to_string()]);
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Path resolution tests (resolve_watch_paths)
+    // ─────────────────────────────────────────────────────────
+
+    /// Default WatcherConfig has ["lib"] as its paths list.
+    #[test]
+    fn test_default_paths_is_lib() {
+        let config = WatcherConfig::default();
+        assert_eq!(config.paths, vec![PathBuf::from("lib")]);
+    }
+
+    /// A single relative path `"lib"` is joined onto project_root and
+    /// canonicalized when the directory exists.
+    #[test]
+    fn test_resolve_single_relative_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // Create the `lib` directory so canonicalize() succeeds.
+        let lib_dir = project_root.join("lib");
+        std::fs::create_dir_all(&lib_dir).unwrap();
+
+        let resolved = resolve_watch_paths(&project_root, &[PathBuf::from("lib")]);
+
+        assert_eq!(resolved.len(), 1);
+        // canonicalize() produces the real, absolute path.
+        let expected = lib_dir.canonicalize().unwrap();
+        assert_eq!(resolved[0], expected);
+    }
+
+    /// A path containing `../` components is resolved correctly as long as
+    /// the target directory actually exists.
+    #[test]
+    fn test_resolve_parent_relative_path() {
+        // Directory layout:  root/project/  and  root/shared/
+        // From project/, `../shared` resolves to root/shared/.
+        //
+        // Canonicalize project_root so that `..` resolution works correctly
+        // on platforms where tempdir returns a non-canonical path (e.g. macOS
+        // where /var is a symlink to /private/var).
+        let root = tempfile::tempdir().unwrap();
+        let project_root_raw = root.path().join("project");
+        std::fs::create_dir_all(&project_root_raw).unwrap();
+        // Use the canonical form so intermediate `..` steps resolve correctly.
+        let project_root = project_root_raw.canonicalize().unwrap();
+
+        let shared_dir = root.path().join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        // "../shared" from `project_root` should resolve to `shared_dir`.
+        let resolved = resolve_watch_paths(&project_root, &[PathBuf::from("../shared")]);
+
+        assert_eq!(resolved.len(), 1);
+        let expected = shared_dir.canonicalize().unwrap();
+        assert_eq!(resolved[0], expected);
+    }
+
+    /// Multiple relative paths are all resolved independently.
+    #[test]
+    fn test_resolve_multiple_relative_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        std::fs::create_dir_all(project_root.join("lib")).unwrap();
+        std::fs::create_dir_all(project_root.join("test")).unwrap();
+
+        let paths = vec![PathBuf::from("lib"), PathBuf::from("test")];
+        let resolved = resolve_watch_paths(&project_root, &paths);
+
+        assert_eq!(resolved.len(), 2);
+        assert_eq!(
+            resolved[0],
+            project_root.join("lib").canonicalize().unwrap()
+        );
+        assert_eq!(
+            resolved[1],
+            project_root.join("test").canonicalize().unwrap()
+        );
+    }
+
+    /// An absolute path is returned as-is (not joined with project_root).
+    #[test]
+    fn test_resolve_absolute_path_used_as_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // Create a separate absolute directory (not inside project_root).
+        let absolute_dir = tempfile::tempdir().unwrap();
+        let abs_path = absolute_dir.path().to_path_buf();
+
+        let resolved = resolve_watch_paths(&project_root, &[abs_path.clone()]);
+
+        assert_eq!(resolved.len(), 1);
+        // The result must not start with project_root.
+        assert!(!resolved[0].starts_with(&project_root));
+        // It must equal the canonicalized form of abs_path.
+        assert_eq!(resolved[0], abs_path.canonicalize().unwrap());
+    }
+
+    /// Mixed absolute and relative paths both resolve correctly in the same call.
+    #[test]
+    fn test_resolve_mixed_absolute_and_relative() {
+        let project_dir = tempfile::tempdir().unwrap();
+        let project_root = project_dir.path().to_path_buf();
+        std::fs::create_dir_all(project_root.join("lib")).unwrap();
+
+        let absolute_dir = tempfile::tempdir().unwrap();
+        let abs_path = absolute_dir.path().to_path_buf();
+
+        let paths = vec![PathBuf::from("lib"), abs_path.clone()];
+        let resolved = resolve_watch_paths(&project_root, &paths);
+
+        assert_eq!(resolved.len(), 2);
+
+        // Relative path resolves under project_root.
+        assert_eq!(
+            resolved[0],
+            project_root.join("lib").canonicalize().unwrap()
+        );
+        // Absolute path is unchanged.
+        assert_eq!(resolved[1], abs_path.canonicalize().unwrap());
+    }
+
+    /// A non-existent relative path does not panic; the raw (unresolved) path
+    /// is returned so the caller can warn about it.
+    #[test]
+    fn test_resolve_nonexistent_path_does_not_crash() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // "does_not_exist" is never created.
+        let paths = vec![PathBuf::from("does_not_exist")];
+        let resolved = resolve_watch_paths(&project_root, &paths);
+
+        // Should return exactly one entry — the raw joined path.
+        assert_eq!(resolved.len(), 1);
+        // The path should not exist.
+        assert!(!resolved[0].exists());
+        // But it should still start with project_root (joined, not canonicalized).
+        assert!(resolved[0].starts_with(&project_root));
+    }
+
+    /// An empty paths list produces an empty result; no panic.
+    #[test]
+    fn test_resolve_empty_paths_list() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        let resolved = resolve_watch_paths(&project_root, &[]);
+
+        assert!(resolved.is_empty());
+    }
+
+    /// When `config.paths` is empty, `resolve_watch_paths` returns an empty
+    /// vec.  This is the same precondition checked by the `warn!` in
+    /// `run_watcher` — the watcher still starts, but the warning branch is
+    /// exercised (the log itself cannot be asserted in a unit test without a
+    /// tracing subscriber, so we document the invariant here instead).
+    #[test]
+    fn test_empty_paths_resolves_to_empty_vec() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // Mirrors the check `config.paths.is_empty()` inside run_watcher.
+        let paths: Vec<PathBuf> = vec![];
+        assert!(paths.is_empty(), "precondition: no paths configured");
+
+        let resolved = resolve_watch_paths(&project_root, &paths);
+        assert!(
+            resolved.is_empty(),
+            "empty paths config must yield empty resolved list"
+        );
+    }
+
+    /// When all configured paths are non-existent, every resolved entry fails
+    /// `exists()`.  This is the precondition for the secondary `warn!` inside
+    /// `run_watcher` ("All configured watch paths are invalid…").
+    #[test]
+    fn test_all_nonexistent_paths_none_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        let paths = vec![
+            PathBuf::from("does_not_exist_a"),
+            PathBuf::from("does_not_exist_b"),
+        ];
+
+        let resolved = resolve_watch_paths(&project_root, &paths);
+
+        assert!(!resolved.is_empty(), "should still have entries");
+        assert!(
+            resolved.iter().all(|p| !p.exists()),
+            "all entries should be non-existent so the all-invalid warning fires"
+        );
     }
 }

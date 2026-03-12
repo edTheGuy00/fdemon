@@ -748,6 +748,8 @@ impl Engine {
         let mut watcher = FileWatcher::new(
             project_path.to_path_buf(),
             WatcherConfig::new()
+                .with_paths(settings.watcher.paths.iter().map(PathBuf::from).collect())
+                .with_extensions(settings.watcher.extensions.clone())
                 .with_debounce_ms(settings.watcher.debounce_ms)
                 .with_auto_reload(settings.watcher.auto_reload),
         );
@@ -987,5 +989,86 @@ mod tests {
     async fn test_event_type_label() {
         let event = EngineEvent::Shutdown;
         assert_eq!(event.event_type(), "shutdown");
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Watcher settings pass-through tests (Task 02)
+    // ─────────────────────────────────────────────────────────
+
+    /// `Engine::new()` uses default settings when no config file is present.
+    /// Default watcher paths should be `["lib"]` and extensions `["dart"]`.
+    #[tokio::test]
+    async fn test_engine_default_watcher_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(dir.path().to_path_buf());
+
+        assert_eq!(engine.settings.watcher.paths, vec!["lib".to_string()]);
+        assert_eq!(engine.settings.watcher.extensions, vec!["dart".to_string()]);
+        assert!(engine.settings.watcher.auto_reload);
+    }
+
+    /// `WatcherConfig` constructed from settings correctly maps custom paths.
+    /// Mirrors the logic in `start_file_watcher` so we can verify it without
+    /// accessing the private `file_watcher` field.
+    #[test]
+    fn test_watcher_config_from_settings_custom_paths() {
+        use crate::config::Settings;
+        use crate::watcher::WatcherConfig;
+
+        let mut settings = Settings::default();
+        settings.watcher.paths = vec!["lib".to_string(), "../shared/lib".to_string()];
+
+        let config = WatcherConfig::new()
+            .with_paths(settings.watcher.paths.iter().map(PathBuf::from).collect())
+            .with_extensions(settings.watcher.extensions.clone())
+            .with_debounce_ms(settings.watcher.debounce_ms)
+            .with_auto_reload(settings.watcher.auto_reload);
+
+        assert_eq!(
+            config.paths,
+            vec![PathBuf::from("lib"), PathBuf::from("../shared/lib")]
+        );
+    }
+
+    /// `WatcherConfig` constructed from settings correctly maps custom extensions.
+    #[test]
+    fn test_watcher_config_from_settings_custom_extensions() {
+        use crate::config::Settings;
+        use crate::watcher::WatcherConfig;
+
+        let mut settings = Settings::default();
+        settings.watcher.extensions = vec!["dart".to_string(), "yaml".to_string()];
+
+        let config = WatcherConfig::new()
+            .with_paths(settings.watcher.paths.iter().map(PathBuf::from).collect())
+            .with_extensions(settings.watcher.extensions.clone())
+            .with_debounce_ms(settings.watcher.debounce_ms)
+            .with_auto_reload(settings.watcher.auto_reload);
+
+        assert_eq!(
+            config.extensions,
+            vec!["dart".to_string(), "yaml".to_string()]
+        );
+    }
+
+    /// Default `Settings` values produce a `WatcherConfig` with default paths
+    /// and extensions (i.e. no custom config.toml present).
+    #[test]
+    fn test_watcher_config_from_default_settings() {
+        use crate::config::Settings;
+        use crate::watcher::WatcherConfig;
+
+        let settings = Settings::default();
+
+        let config = WatcherConfig::new()
+            .with_paths(settings.watcher.paths.iter().map(PathBuf::from).collect())
+            .with_extensions(settings.watcher.extensions.clone())
+            .with_debounce_ms(settings.watcher.debounce_ms)
+            .with_auto_reload(settings.watcher.auto_reload);
+
+        // Defaults: paths=["lib"], extensions=["dart"]
+        assert_eq!(config.paths, vec![PathBuf::from("lib")]);
+        assert_eq!(config.extensions, vec!["dart".to_string()]);
+        assert!(config.auto_reload);
     }
 }

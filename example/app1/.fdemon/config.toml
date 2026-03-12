@@ -6,7 +6,7 @@ auto_start = true      # Set to true to skip device selection
 confirm_quit = true     # Ask before quitting with running apps
 
 [watcher]
-paths = ["lib"]
+paths = ["lib", "../app2/lib"]   # Watch own lib + app2's lib (cross-project watcher test)
 debounce_ms = 500
 auto_reload = true
 extensions = ["dart"]

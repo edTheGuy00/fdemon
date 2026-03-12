@@ -1,0 +1,18 @@
+# Launch configurations for multi-config auto_start test (Issue #18 reproduction)
+# The "Staging" config has auto_start = true — fdemon should auto-launch with it.
+# The other configs do NOT have auto_start, so only one auto-start is present.
+
+[[configurations]]
+name = "Development"
+device = "auto"
+
+[[configurations]]
+name = "Staging"
+device = "auto"
+auto_start = true
+flavor = "staging"
+
+[[configurations]]
+name = "Production"
+device = "auto"
+flavor = "production"

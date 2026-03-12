@@ -29,8 +29,8 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
-    // TUI-specific startup: show NewSessionDialog, load configs
-    let _startup_result =
+    // TUI-specific startup: detect auto-start or show NewSessionDialog
+    let startup_result =
         startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
 
     // Render first frame
@@ -40,7 +40,9 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    spawn::spawn_device_discovery(engine.msg_sender());
+
+    // Dispatch based on auto-start detection
+    dispatch_startup_action(&mut engine, startup_result);
 
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
@@ -94,6 +96,12 @@ pub async fn run_with_project_and_dap(
 
     // Evaluate DAP auto-start (covers config-enabled and IDE-detected scenarios).
     // --dap-port already sets dap.enabled=true above, so this handles all paths.
+    //
+    // ORDERING: process_message is called synchronously before run_loop starts.
+    // This is safe because StartDapServer returns an UpdateAction (async side
+    // effect), not a follow-up Message. If the handler is changed to return a
+    // follow-up Message, this call site must switch to
+    // engine.msg_sender().try_send() to preserve ordering.
     if should_auto_start_dap(&engine.settings) {
         engine.process_message(Message::StartDapServer);
     }
@@ -101,8 +109,8 @@ pub async fn run_with_project_and_dap(
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
-    // TUI-specific startup: show NewSessionDialog, load configs
-    let _startup_result =
+    // TUI-specific startup: detect auto-start or show NewSessionDialog
+    let startup_result =
         startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
 
     // Render first frame
@@ -112,7 +120,9 @@ pub async fn run_with_project_and_dap(
 
     // Trigger startup discovery (non-blocking)
     spawn::spawn_tool_availability_check(engine.msg_sender());
-    spawn::spawn_device_discovery(engine.msg_sender());
+
+    // Dispatch based on auto-start detection
+    dispatch_startup_action(&mut engine, startup_result);
 
     // Run the main loop
     let result = run_loop(&mut term, &mut engine);
@@ -146,6 +156,35 @@ pub async fn run() -> Result<()> {
     // Restore terminal
     ratatui::restore();
     result
+}
+
+/// Dispatch the startup action returned by [`startup::startup_flutter`].
+///
+/// Auto-start sends `StartAutoLaunch` (which internally triggers device
+/// discovery and auto-launches the session). Ready state triggers device
+/// discovery directly so the NewSessionDialog is populated.
+///
+/// # Ordering
+///
+/// `process_message` is called synchronously before `run_loop` starts.
+/// This is safe because `StartAutoLaunch` returns an `UpdateAction` (async
+/// side effect), not a follow-up `Message`. If the handler is changed to
+/// return a follow-up `Message`, this call site must switch to
+/// `engine.msg_sender().try_send()` to preserve ordering.
+fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) {
+    match action {
+        startup::StartupAction::AutoStart { configs } => {
+            // Auto-start detected: send StartAutoLaunch which triggers device
+            // discovery and auto-launches the session. spawn_device_discovery()
+            // is NOT called here — the StartAutoLaunch handler dispatches
+            // DiscoverDevicesAndAutoLaunch internally.
+            engine.process_message(Message::StartAutoLaunch { configs });
+        }
+        startup::StartupAction::Ready => {
+            // No auto-start — discover devices for the NewSessionDialog
+            spawn::spawn_device_discovery(engine.msg_sender());
+        }
+    }
 }
 
 /// Main event loop

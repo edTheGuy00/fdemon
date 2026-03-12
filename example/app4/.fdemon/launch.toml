@@ -1,0 +1,5 @@
+# Launch configurations for watcher path edge cases test (Issue #17)
+
+[[configurations]]
+name = "App4 | Default"
+device = "auto"
