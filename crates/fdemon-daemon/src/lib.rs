@@ -35,6 +35,7 @@ pub mod avds;
 pub mod commands;
 pub mod devices;
 pub mod emulators;
+pub mod flutter_locator;
 pub mod process;
 pub mod protocol;
 pub mod simulators;
@@ -60,6 +61,7 @@ pub use emulators::{
 };
 /// Re-exported from `fdemon_core` for convenience. Canonical import: `fdemon_core::DaemonMessage`.
 pub use fdemon_core::DaemonMessage;
+pub use flutter_locator::{find_flutter_executable, FlutterExecutable};
 pub use process::FlutterProcess;
 pub use protocol::{
     detect_log_level, parse_daemon_message, parse_flutter_log, to_log_entry, LogEntryInfo,
