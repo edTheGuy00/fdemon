@@ -130,6 +130,7 @@ pub fn all_keybinding_sections() -> Vec<KeybindingSection> {
             bindings: vec![
                 Keybinding { key: "f", action: "Cycle Level Filter", description: "Cycle through: All \u{2192} Errors \u{2192} Warnings \u{2192} Info \u{2192} Debug" },
                 Keybinding { key: "F", action: "Cycle Source Filter", description: "Cycle through: All \u{2192} App \u{2192} Daemon \u{2192} Flutter \u{2192} Watcher" },
+                Keybinding { key: "T", action: "Tag Filter Overlay", description: "Open/close native platform log tag filter overlay" },
                 Keybinding { key: "Ctrl+F", action: "Reset Filters", description: "Clear all active filters" },
             ],
         },

@@ -64,6 +64,9 @@ pub const SOURCE_DAEMON: Color = STATUS_YELLOW; // Daemon logs use yellow
 pub const SOURCE_FLUTTER: Color = STATUS_INDIGO; // Flutter logs use indigo
 pub const SOURCE_FLUTTER_ERROR: Color = STATUS_RED; // Flutter error logs use red
 pub const SOURCE_WATCHER: Color = STATUS_BLUE; // Watcher logs use blue
+/// Color for native platform log sources (Android logcat, macOS log stream).
+/// Light purple/lavender — visually distinct from all other source colors.
+pub const SOURCE_NATIVE: Color = Color::Rgb(206, 147, 216);
 
 // --- Search highlight ---
 pub const SEARCH_HIGHLIGHT_FG: Color = Color::Rgb(0, 0, 0);

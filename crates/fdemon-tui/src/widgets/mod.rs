@@ -9,6 +9,7 @@ pub mod new_session_dialog;
 mod search_input;
 pub mod settings_panel;
 mod tabs;
+pub mod tag_filter;
 
 pub use confirm_dialog::ConfirmDialog;
 pub use devtools::{DevToolsView, PerformancePanel, WidgetInspector};
@@ -18,6 +19,7 @@ pub use new_session_dialog::*;
 pub use search_input::SearchInput;
 pub use settings_panel::SettingsPanel;
 pub use tabs::SessionTabs;
+pub use tag_filter::render_tag_filter;
 
 // Re-export state types from app layer (these are used by render/)
 pub use fdemon_app::confirm_dialog::ConfirmDialogState;

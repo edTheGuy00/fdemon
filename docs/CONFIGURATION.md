@@ -24,6 +24,7 @@ This document provides a complete reference for all configuration options availa
   - [Watcher Settings](#watcher-settings)
   - [UI Settings](#ui-settings)
   - [DevTools Settings](#devtools-settings)
+  - [Native Logs Settings](#native-logs-settings)
   - [Editor Settings](#editor-settings)
 - [Launch Configuration Reference](#launch-configuration-reference)
   - [Configuration Properties](#configuration-properties)
@@ -305,6 +306,100 @@ browser = ""               # Browser command (empty = system default)
 |----------|------|---------|-------------|
 | `auto_open` | `boolean` | `false` | If `true`, automatically opens DevTools in a browser when the app starts. |
 | `browser` | `string` | `""` | Browser command to use (e.g., `"chrome"`, `"firefox"`). Empty string uses system default. |
+
+### Native Logs Settings
+
+Native platform log capture settings. Controls how fdemon captures and displays native logs from Android (`adb logcat`), iOS (`idevicesyslog`/`simctl`), and macOS (`log stream`) alongside Flutter's Dart-level output.
+
+#### `[native_logs]`
+
+```toml
+[native_logs]
+enabled = true
+exclude_tags = ["flutter"]
+include_tags = []
+min_level = "info"
+```
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Master toggle for native log capture. When `false`, no native log processes are spawned. |
+| `exclude_tags` | `array<string>` | `["flutter"]` | Tags to exclude from native capture. The `flutter` tag is excluded by default to avoid duplicating logs already captured via Flutter's `--machine` protocol. |
+| `include_tags` | `array<string>` | `[]` | If non-empty, only show logs from these tags (whitelist). Overrides `exclude_tags` when set. |
+| `min_level` | `string` | `"info"` | Minimum log level for native logs. Options: `"verbose"`, `"debug"`, `"info"`, `"warning"`, `"error"`. |
+
+> **Runtime filtering:** Press `T` in the TUI to open the tag filter overlay, which lets you toggle individual tags on and off at runtime without changing your config file. Config-level settings (`exclude_tags`, `include_tags`) apply before the runtime overlay.
+
+#### `[native_logs.tags.<tag>]`
+
+Per-tag level overrides. Applied before the UI-level tag filter (`T` key overlay). Useful for increasing verbosity on a specific tag without lowering the global `min_level`.
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `min_level` | `string` | (inherits global) | Minimum log level for this specific tag. Overrides the global `min_level`. Options: `"verbose"`, `"debug"`, `"info"`, `"warning"`, `"error"`. |
+
+**Example:** Show debug-level logs for `GoLog` and suppress noisy `OkHttp` logs:
+
+```toml
+[native_logs.tags.GoLog]
+min_level = "debug"
+
+[native_logs.tags.OkHttp]
+min_level = "warning"
+```
+
+For tag names that contain dots (e.g., `com.example.plugin`), quote the key:
+
+```toml
+[native_logs.tags."com.example.plugin"]
+min_level = "verbose"
+```
+
+#### `[[native_logs.custom_sources]]`
+
+Define arbitrary log source processes. Each custom source spawns a command and parses its stdout as log entries. Custom sources run alongside the built-in platform capture (logcat, log stream, idevicesyslog).
+
+| Property | Type | Default | Description |
+|----------|------|---------|-------------|
+| `name` | `string` | (required) | Display name — becomes the tag in the log view and tag filter overlay. |
+| `command` | `string` | (required) | Path to the command to execute (e.g., `"adb"`, `"/usr/local/bin/my-tool"`). |
+| `args` | `array<string>` | `[]` | Command arguments. |
+| `format` | `string` | `"raw"` | Output format parser. Options: `"raw"`, `"json"`, `"logcat-threadtime"`, `"syslog"`. |
+| `working_dir` | `string` | (project dir) | Working directory for the command. Defaults to the Flutter project root when omitted. |
+| `env` | `table` | `{}` | Environment variables to set for the spawned process. |
+
+#### Format Options
+
+- **`raw`**: Each non-empty line becomes a log message at Info level. The `name` field is used as the tag. Use this for unstructured output like tailed log files.
+- **`json`**: Each line is parsed as a JSON object. Flexible field name aliases are supported: `message`/`msg`/`text` for the message, `level`/`severity`/`priority` for the log level, `tag`/`source`/`logger` for the tag name, `timestamp`/`time`/`ts` for the time. Unknown fields are ignored.
+- **`logcat-threadtime`**: Android logcat `threadtime` format: `MM-DD HH:MM:SS.mmm  PID  TID PRIO TAG: message`. Use this when running `adb logcat -v threadtime`.
+- **`syslog`**: macOS `log stream --style compact` format, also used by the iOS simulator. Use this for custom macOS/iOS log stream commands.
+
+**Examples:**
+
+```toml
+# Tail a local log file
+[[native_logs.custom_sources]]
+name = "sidecar"
+command = "tail"
+args = ["-f", "/tmp/my-app.log"]
+format = "raw"
+
+# JSON-structured log stream from a companion service
+[[native_logs.custom_sources]]
+name = "api-server"
+command = "/usr/local/bin/my-log-tool"
+args = ["--follow", "--json"]
+format = "json"
+env = { LOG_LEVEL = "debug" }
+
+# Filtered Android logcat for a specific tag
+[[native_logs.custom_sources]]
+name = "go-backend"
+command = "adb"
+args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+format = "logcat-threadtime"
+```
 
 ### Editor Settings
 
@@ -625,6 +720,11 @@ stack_trace_max_frames = 3
 [devtools]
 auto_open = false
 browser = ""
+
+[native_logs]
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
 
 [editor]
 command = ""  # Auto-detect

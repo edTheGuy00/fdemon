@@ -1,11 +1,22 @@
 //! Tool availability checking for device management
 //!
 //! This module provides functionality to check for the availability of external tools
-//! needed for device discovery and management, specifically `xcrun simctl` (iOS) and
-//! `emulator` (Android SDK).
+//! needed for device discovery and management, specifically `xcrun simctl` (iOS),
+//! `emulator` (Android SDK), `adb` (Android Debug Bridge), the macOS `log` command,
+//! and `idevicesyslog` (libimobiledevice) for physical iOS device log capture.
 
 use std::process::Stdio;
 use tokio::process::Command;
+
+/// Available tools for iOS native log capture.
+#[cfg(target_os = "macos")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IosLogTool {
+    /// `xcrun simctl spawn <udid> log stream` — for iOS simulators.
+    SimctlLogStream,
+    /// `idevicesyslog -u <udid> -p <process>` — for physical iOS devices.
+    Idevicesyslog,
+}
 
 /// Cached availability of external tools for device discovery
 #[derive(Debug, Clone, Default)]
@@ -18,18 +29,75 @@ pub struct ToolAvailability {
 
     /// Path to emulator command if found
     pub emulator_path: Option<String>,
+
+    /// Whether `adb` is available on PATH (required for Android logcat capture)
+    pub adb: bool,
+
+    /// Whether the macOS `log` command is available (required for unified log capture)
+    #[cfg(target_os = "macos")]
+    pub macos_log: bool,
+
+    /// Whether `idevicesyslog` is available (required for iOS physical device log capture).
+    /// Part of the `libimobiledevice` suite. Not needed for simulators (uses `xcrun simctl`).
+    #[cfg(target_os = "macos")]
+    pub idevicesyslog: bool,
 }
 
 impl ToolAvailability {
     /// Check tool availability (run once at startup)
     pub async fn check() -> Self {
-        let xcrun_simctl = Self::check_xcrun_simctl().await;
-        let (android_emulator, emulator_path) = Self::check_android_emulator().await;
+        let (xcrun_simctl, (android_emulator, emulator_path), adb) = tokio::join!(
+            Self::check_xcrun_simctl(),
+            Self::check_android_emulator(),
+            Self::check_adb(),
+        );
+
+        #[cfg(target_os = "macos")]
+        let (macos_log, idevicesyslog) =
+            tokio::join!(Self::check_macos_log(), Self::check_idevicesyslog(),);
 
         Self {
             xcrun_simctl,
             android_emulator,
             emulator_path,
+            adb,
+            #[cfg(target_os = "macos")]
+            macos_log,
+            #[cfg(target_os = "macos")]
+            idevicesyslog,
+        }
+    }
+
+    /// Whether native log capture is available for the given platform.
+    ///
+    /// Returns `true` if the required tool for capturing native logs on the specified
+    /// platform is available. Used by the log capture subsystem before spawning capture
+    /// processes.
+    pub fn native_logs_available(&self, platform: &str) -> bool {
+        match platform {
+            "android" => self.adb,
+            #[cfg(target_os = "macos")]
+            "macos" => self.macos_log,
+            #[cfg(target_os = "macos")]
+            "ios" => self.xcrun_simctl || self.idevicesyslog,
+            _ => false,
+        }
+    }
+
+    /// Determine which iOS native log capture tool is available for a given device.
+    ///
+    /// - Simulators always use `xcrun simctl spawn log stream` (requires `xcrun_simctl`).
+    /// - Physical devices use `idevicesyslog` (requires the `libimobiledevice` tool).
+    ///
+    /// Returns `None` if no suitable tool is available.
+    #[cfg(target_os = "macos")]
+    pub fn ios_native_log_tool(&self, is_simulator: bool) -> Option<IosLogTool> {
+        if is_simulator && self.xcrun_simctl {
+            Some(IosLogTool::SimctlLogStream)
+        } else if !is_simulator && self.idevicesyslog {
+            Some(IosLogTool::Idevicesyslog)
+        } else {
+            None
         }
     }
 
@@ -76,6 +144,66 @@ impl ToolAvailability {
         }
 
         (false, None)
+    }
+
+    /// Check if `adb` is available on PATH.
+    ///
+    /// Uses `adb version` which is lightweight and does not require a device to be
+    /// connected, avoiding the ADB server startup prompt that `adb devices` triggers.
+    async fn check_adb() -> bool {
+        Command::new("adb")
+            .arg("version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .inspect_err(|e| tracing::debug!("adb check failed: {}", e))
+            .unwrap_or(false)
+    }
+
+    /// Check if the macOS `log` command is available.
+    ///
+    /// This is a system utility present since macOS 10.12 (Sierra) and should always
+    /// be available. The check is defensive in case of unusual environments.
+    ///
+    /// We check for the binary at its canonical path `/usr/bin/log` rather than
+    /// invoking it with a help subcommand because every invocation of `log` exits
+    /// with code 64 (EX_USAGE) regardless of the arguments on newer macOS versions,
+    /// making exit-code-based availability detection unreliable.
+    #[cfg(target_os = "macos")]
+    async fn check_macos_log() -> bool {
+        std::path::Path::new("/usr/bin/log").exists()
+    }
+
+    /// Check if `idevicesyslog` is available on PATH.
+    ///
+    /// Required for physical iOS device native log capture. Part of the
+    /// `libimobiledevice` suite, installable via `brew install libimobiledevice`.
+    /// Flutter also ships a bundled copy in its SDK cache.
+    ///
+    /// Not needed for simulators — those use `xcrun simctl spawn log stream`.
+    ///
+    /// We spawn `idevicesyslog --help` but accept any exit code — some versions
+    /// of libimobiledevice exit non-zero on `--help`, which would cause a false
+    /// negative if we checked `s.success()`. We only return `false` when the OS
+    /// reports the binary was not found (`ErrorKind::NotFound`).
+    #[cfg(target_os = "macos")]
+    async fn check_idevicesyslog() -> bool {
+        match Command::new("idevicesyslog")
+            .arg("--help")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+        {
+            Ok(_) => true, // Binary found — any exit code is acceptable
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+            Err(e) => {
+                tracing::debug!("idevicesyslog check failed: {}", e);
+                false
+            }
+        }
     }
 
     /// Get list of paths to try for emulator command
@@ -176,6 +304,11 @@ mod tests {
             xcrun_simctl: true,
             android_emulator: false,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
         assert!(availability.ios_unavailable_message().is_none());
     }
@@ -186,7 +319,165 @@ mod tests {
             xcrun_simctl: false,
             android_emulator: true,
             emulator_path: Some("/path/to/emulator".to_string()),
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
         assert!(availability.android_unavailable_message().is_none());
+    }
+
+    #[test]
+    fn test_tool_availability_new_fields() {
+        // Verify struct can be constructed with new fields
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: true,
+            #[cfg(target_os = "macos")]
+            macos_log: true,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
+        };
+        assert!(tools.adb);
+        assert!(tools.native_logs_available("android"));
+        assert!(!tools.native_logs_available("linux"));
+        assert!(!tools.native_logs_available("windows"));
+    }
+
+    #[test]
+    fn test_native_logs_available_android_false_when_no_adb() {
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
+        };
+        assert!(!tools.native_logs_available("android"));
+    }
+
+    #[test]
+    fn test_native_logs_available_unknown_platform_returns_false() {
+        let tools = ToolAvailability::default();
+        assert!(!tools.native_logs_available("web"));
+        assert!(!tools.native_logs_available("fuchsia"));
+        assert!(!tools.native_logs_available(""));
+    }
+
+    #[tokio::test]
+    async fn test_check_adb_does_not_panic() {
+        // Verifies the check doesn't panic regardless of whether adb is installed.
+        let result = ToolAvailability::check_adb().await;
+        // Result depends on environment — just verify no panic
+        let _ = result;
+    }
+
+    /// Verify that `check_macos_log()` returns `true` on macOS.
+    ///
+    /// The `log` command is a system utility present since macOS 10.12 (Sierra)
+    /// and must always be available on any macOS machine running CI or development.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_check_macos_log_returns_true_on_macos() {
+        // On macOS, the `log` command is always present (since Sierra 10.12).
+        let result = ToolAvailability::check_macos_log().await;
+        assert!(result, "check_macos_log() should return true on macOS");
+    }
+
+    #[test]
+    fn test_native_logs_available_ios_with_simctl() {
+        let tools = ToolAvailability {
+            xcrun_simctl: true,
+            android_emulator: false,
+            emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
+        };
+        assert!(tools.native_logs_available("ios"));
+    }
+
+    #[test]
+    fn test_native_logs_available_ios_with_idevicesyslog() {
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: true,
+        };
+        assert!(tools.native_logs_available("ios"));
+    }
+
+    #[test]
+    fn test_native_logs_available_ios_no_tools() {
+        let tools = ToolAvailability {
+            xcrun_simctl: false,
+            android_emulator: false,
+            emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
+        };
+        assert!(!tools.native_logs_available("ios"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_ios_native_log_tool_simulator() {
+        let tools = ToolAvailability {
+            xcrun_simctl: true,
+            idevicesyslog: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            tools.ios_native_log_tool(true),
+            Some(IosLogTool::SimctlLogStream)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_ios_native_log_tool_physical() {
+        let tools = ToolAvailability {
+            xcrun_simctl: true,
+            idevicesyslog: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            tools.ios_native_log_tool(false),
+            Some(IosLogTool::Idevicesyslog)
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_ios_native_log_tool_physical_no_idevicesyslog() {
+        let tools = ToolAvailability {
+            xcrun_simctl: true,
+            idevicesyslog: false,
+            ..Default::default()
+        };
+        assert_eq!(tools.ios_native_log_tool(false), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn test_check_idevicesyslog_does_not_panic() {
+        let result = ToolAvailability::check_idevicesyslog().await;
+        let _ = result;
     }
 }

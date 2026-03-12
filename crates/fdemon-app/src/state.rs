@@ -1,5 +1,6 @@
 //! Application state (Model in TEA pattern)
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -822,6 +823,49 @@ impl DapStatus {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tag Filter UI State (Phase 2, Task 09)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// UI state for the native tag filter overlay.
+///
+/// Tracks the currently selected row within the tag list.
+/// Lives on `AppState` so the TUI render function can read it without reaching
+/// into session state.
+///
+/// `last_known_visible_height` uses `Cell<usize>` interior mutability and is
+/// written by the renderer each frame as a render-hint feedback channel. It must
+/// not be used as a correctness input to business logic or participate in state
+/// equality comparisons. See `docs/CODE_STANDARDS.md` "Principle 3" for rationale.
+#[derive(Debug, Clone, Default)]
+pub struct TagFilterUiState {
+    /// Currently selected index in the tag list.
+    pub selected_index: usize,
+    /// Render-hint: actual visible height from the last rendered frame.
+    /// Defaults to 0, which signals "not yet rendered — use fallback".
+    /// Written by the renderer; not mutated by message handlers.
+    pub last_known_visible_height: Cell<usize>,
+}
+
+impl TagFilterUiState {
+    /// Move selection up by one, saturating at 0.
+    pub fn move_up(&mut self) {
+        self.selected_index = self.selected_index.saturating_sub(1);
+    }
+
+    /// Move selection down by one, clamping at `max_index`.
+    pub fn move_down(&mut self, max_index: usize) {
+        if self.selected_index < max_index {
+            self.selected_index += 1;
+        }
+    }
+
+    /// Reset selection when the overlay is opened.
+    pub fn reset(&mut self) {
+        self.selected_index = 0;
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -913,6 +957,17 @@ pub struct AppState {
     /// CLI-provided IDE override for DAP config generation (`--dap-config <ide>`).
     /// When set, bypasses environment-based IDE detection.
     pub cli_dap_config_override: Option<crate::config::ParentIde>,
+
+    // ── Tag Filter Overlay (Phase 2, Task 09) ────────────────────────────────
+    /// Whether the native tag filter overlay is currently visible.
+    ///
+    /// Set to `true` by `Message::ShowTagFilter`, cleared by
+    /// `Message::HideTagFilter`. When `true`, the TUI renders the tag filter
+    /// overlay and all key events are routed to the overlay handler first.
+    pub tag_filter_visible: bool,
+
+    /// UI state for the tag filter overlay (selection, scroll).
+    pub tag_filter_ui: TagFilterUiState,
 }
 
 impl Default for AppState {
@@ -955,6 +1010,8 @@ impl AppState {
             pending_file_changes: 0,
             dap_config_status: None,
             cli_dap_config_override: None,
+            tag_filter_visible: false,
+            tag_filter_ui: TagFilterUiState::default(),
         }
     }
 

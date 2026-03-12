@@ -522,6 +522,11 @@ mod tests {
             xcrun_simctl: true,
             android_emulator: true,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();
@@ -547,6 +552,11 @@ mod tests {
             xcrun_simctl: false,
             android_emulator: false,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();
@@ -572,6 +582,11 @@ mod tests {
             xcrun_simctl: true,
             android_emulator: true,
             emulator_path: None,
+            adb: false,
+            #[cfg(target_os = "macos")]
+            macos_log: false,
+            #[cfg(target_os = "macos")]
+            idevicesyslog: false,
         };
 
         let mut terminal = TestTerminal::new();

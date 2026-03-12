@@ -5,6 +5,7 @@
 //! - `Settings` - Global application settings
 //! - Related sub-types and enums
 
+use fdemon_core::types::OutputFormat;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -126,6 +127,9 @@ pub struct Settings {
 
     #[serde(default)]
     pub dap: DapSettings,
+
+    #[serde(default)]
+    pub native_logs: NativeLogsSettings,
 }
 
 /// Behavior settings
@@ -530,6 +534,229 @@ impl Default for DapSettings {
             suppress_reload_on_pause: default_suppress_reload(),
             auto_configure_ide: default_auto_configure_ide(),
         }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native Log Settings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Per-tag configuration override for native log capture.
+///
+/// Allows individual tags to have their own minimum log level, overriding the
+/// global `min_level` in `NativeLogsSettings`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TagConfig {
+    /// Minimum log level for this tag (overrides the global `min_level`).
+    /// Options: "verbose", "debug", "info", "warning", "error"
+    pub min_level: Option<String>,
+}
+
+/// Configuration for a custom log source process.
+///
+/// Defines an external command whose output is captured and parsed as native
+/// log entries. The `format` field selects the parser used to convert raw
+/// output lines into structured log events.
+///
+/// In `.fdemon/config.toml`, specify multiple sources using the TOML array-of-tables
+/// syntax: `[[native_logs.custom_sources]]`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CustomSourceConfig {
+    /// Display name — becomes the tag in the log view and tag filter overlay.
+    pub name: String,
+
+    /// Path to the command to execute (e.g., `"adb"`, `"/usr/local/bin/my-tool"`).
+    pub command: String,
+
+    /// Command arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
+
+    /// Output format parser to use when interpreting stdout/stderr lines.
+    #[serde(default)]
+    pub format: OutputFormat,
+
+    /// Working directory for the command.
+    ///
+    /// If `None`, defaults to the Flutter project root directory.
+    pub working_dir: Option<String>,
+
+    /// Environment variables to set for the spawned process.
+    ///
+    /// In TOML: `env = { LOG_LEVEL = "debug" }`.
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+}
+
+/// Well-known platform tag names that would be confusing to reuse as custom source names.
+///
+/// Used by [`CustomSourceConfig::validate`] to emit advisory warnings.
+const KNOWN_PLATFORM_TAGS: &[&str] = &["flutter", "dart", "flutterengine", "flutter engine"];
+
+impl CustomSourceConfig {
+    /// Validate this configuration, returning an error string if invalid.
+    ///
+    /// Returns `Ok(())` when the config is valid. Logs a warning (does not fail)
+    /// when `name` shadows a known platform tag.
+    ///
+    /// # Errors
+    ///
+    /// - `name` is empty or contains only whitespace
+    /// - `command` is empty
+    /// - `format = "syslog"` on a non-macOS host (syslog is macOS-only)
+    pub fn validate(&self) -> Result<(), String> {
+        if self.name.trim().is_empty() {
+            return Err("custom_source name must not be empty".to_string());
+        }
+        if self.command.is_empty() {
+            return Err(format!(
+                "custom_source '{}': command must not be empty",
+                self.name
+            ));
+        }
+        // Syslog format is only available on macOS; reject it at config-parse
+        // time on other platforms so the user gets a clear error instead of
+        // silent empty output.
+        #[cfg(not(target_os = "macos"))]
+        if self.format == OutputFormat::Syslog {
+            return Err(format!(
+                "custom_source '{}': syslog format is only supported on macOS",
+                self.name
+            ));
+        }
+        // Advisory warning — not an error
+        let lower = self.name.to_lowercase();
+        if KNOWN_PLATFORM_TAGS.contains(&lower.as_str()) {
+            tracing::warn!(
+                name = %self.name,
+                "custom_source name matches a known platform tag; \
+                 this will work but may cause confusion in the tag filter"
+            );
+        }
+        Ok(())
+    }
+}
+
+/// Configuration for native platform log capture.
+///
+/// Controls whether fdemon runs parallel log capture processes (e.g., `adb logcat`,
+/// `log stream`) to surface native plugin logs alongside Flutter logs.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct NativeLogsSettings {
+    /// Master toggle for native log capture. When false, no native log processes are spawned.
+    #[serde(default = "default_native_logs_enabled")]
+    pub enabled: bool,
+
+    /// Tags to exclude from native log output. Default: `["flutter"]` to avoid
+    /// duplicating Flutter's own log output which is already captured via `--machine`.
+    #[serde(default = "default_native_logs_exclude_tags")]
+    pub exclude_tags: Vec<String>,
+
+    /// If set, ONLY show logs from these tags (overrides `exclude_tags`).
+    /// Empty means "show all tags (minus exclude_tags)".
+    #[serde(default)]
+    pub include_tags: Vec<String>,
+
+    /// Minimum native log priority level. Logs below this level are discarded.
+    /// Options: "verbose", "debug", "info", "warning", "error"
+    #[serde(default = "default_native_logs_min_level")]
+    pub min_level: String,
+
+    /// Per-tag configuration overrides.
+    ///
+    /// Key: tag name (e.g., "GoLog", "OkHttp", "com.example.myplugin").
+    /// In `.fdemon/config.toml`, use `[native_logs.tags.GoLog]` or
+    /// `[native_logs.tags."com.example.myplugin"]` for dotted names.
+    #[serde(default)]
+    pub tags: HashMap<String, TagConfig>,
+
+    /// Custom log source processes to capture alongside native platform logs.
+    ///
+    /// Each entry defines an external command whose stdout/stderr output is
+    /// captured and parsed according to the specified `format`.
+    ///
+    /// In `.fdemon/config.toml`, use `[[native_logs.custom_sources]]` array syntax.
+    #[serde(default)]
+    pub custom_sources: Vec<CustomSourceConfig>,
+}
+
+fn default_native_logs_enabled() -> bool {
+    true
+}
+
+fn default_native_logs_exclude_tags() -> Vec<String> {
+    vec!["flutter".to_string()]
+}
+
+fn default_native_logs_min_level() -> String {
+    "info".to_string()
+}
+
+impl Default for NativeLogsSettings {
+    fn default() -> Self {
+        Self {
+            enabled: default_native_logs_enabled(),
+            exclude_tags: default_native_logs_exclude_tags(),
+            include_tags: Vec::new(),
+            min_level: default_native_logs_min_level(),
+            tags: HashMap::new(),
+            custom_sources: Vec::new(),
+        }
+    }
+}
+
+impl NativeLogsSettings {
+    /// Check if a given tag should be included in native log output.
+    ///
+    /// When `include_tags` is non-empty, operates in whitelist mode: only tags
+    /// present in `include_tags` are included, and `exclude_tags` is ignored.
+    ///
+    /// When `include_tags` is empty, operates in blacklist mode: all tags are
+    /// included except those present in `exclude_tags`.
+    ///
+    /// Tag matching is case-insensitive.
+    pub fn should_include_tag(&self, tag: &str) -> bool {
+        fdemon_daemon::native_logs::should_include_tag(&self.include_tags, &self.exclude_tags, tag)
+    }
+
+    /// Get the effective minimum log level for a specific tag.
+    ///
+    /// Returns the per-tag override from `tags` if configured and has a `min_level` set,
+    /// otherwise falls back to the global `min_level`.
+    ///
+    /// Lookup is case-insensitive: `"GoLog"` and `"golog"` resolve to the same
+    /// per-tag config entry regardless of how the key was written in the TOML.
+    /// This matches the behaviour of the daemon-layer `should_include_tag` and
+    /// the session-layer `NativeTagState`.
+    pub fn effective_min_level(&self, tag: &str) -> &str {
+        self.tags
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(tag))
+            .and_then(|(_, tc)| tc.min_level.as_deref())
+            .unwrap_or(&self.min_level)
+    }
+
+    /// Validate `NativeLogsSettings`, returning an error string if invalid.
+    ///
+    /// Currently checks that no two `custom_sources` share the same name
+    /// (case-insensitive), because `CustomSourceStopped` removes handles by
+    /// name and would orphan a process if duplicates exist.
+    ///
+    /// Also delegates to [`CustomSourceConfig::validate`] for each source.
+    ///
+    /// # Errors
+    ///
+    /// - Any `CustomSourceConfig` fails its own validation
+    /// - Two custom sources share the same name (case-insensitive)
+    pub fn validate(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for source in &self.custom_sources {
+            source.validate()?;
+            if !seen.insert(source.name.to_ascii_lowercase()) {
+                return Err(format!("Duplicate custom source name: '{}'", source.name));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1505,5 +1732,738 @@ theme = "default"
             ParentIde::AndroidStudio.dap_config_path(std::path::Path::new("/p")),
             None
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // NativeLogsSettings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_native_logs_settings_default() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.enabled);
+        assert_eq!(settings.exclude_tags, vec!["flutter".to_string()]);
+        assert!(settings.include_tags.is_empty());
+        assert_eq!(settings.min_level, "info");
+        assert!(settings.tags.is_empty());
+    }
+
+    #[test]
+    fn test_should_include_tag_default_excludes_flutter() {
+        let settings = NativeLogsSettings::default();
+        assert!(!settings.should_include_tag("flutter"));
+        assert!(!settings.should_include_tag("Flutter")); // case-insensitive
+        assert!(settings.should_include_tag("GoLog"));
+        assert!(settings.should_include_tag("OkHttp"));
+    }
+
+    #[test]
+    fn test_should_include_tag_whitelist_mode() {
+        let settings = NativeLogsSettings {
+            include_tags: vec!["GoLog".to_string(), "MyPlugin".to_string()],
+            ..Default::default()
+        };
+        assert!(settings.should_include_tag("GoLog"));
+        assert!(settings.should_include_tag("golog")); // case-insensitive
+        assert!(settings.should_include_tag("MyPlugin"));
+        assert!(!settings.should_include_tag("OkHttp"));
+        // include_tags overrides exclude_tags
+        assert!(!settings.should_include_tag("flutter"));
+    }
+
+    #[test]
+    fn test_native_logs_settings_toml_deserialization() {
+        let toml_str = r#"
+            [native_logs]
+            enabled = false
+            exclude_tags = ["flutter", "art"]
+            min_level = "debug"
+        "#;
+        // Wrap in a Settings-like struct for testing
+        #[derive(Deserialize)]
+        struct TestConfig {
+            native_logs: NativeLogsSettings,
+        }
+        let config: TestConfig = toml::from_str(toml_str).unwrap();
+        assert!(!config.native_logs.enabled);
+        assert_eq!(config.native_logs.exclude_tags, vec!["flutter", "art"]);
+        assert_eq!(config.native_logs.min_level, "debug");
+    }
+
+    #[test]
+    fn test_native_logs_settings_missing_section_uses_defaults() {
+        let toml_str = "";
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.native_logs.enabled);
+        assert_eq!(
+            settings.native_logs.exclude_tags,
+            vec!["flutter".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_native_logs_settings_include_tags_deserialization() {
+        let toml_str = r#"
+            [native_logs]
+            include_tags = ["GoLog", "MyPlugin"]
+        "#;
+        #[derive(Deserialize)]
+        struct TestConfig {
+            native_logs: NativeLogsSettings,
+        }
+        let config: TestConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            config.native_logs.include_tags,
+            vec!["GoLog".to_string(), "MyPlugin".to_string()]
+        );
+        // include_tags overrides exclude_tags in whitelist mode
+        assert!(!config.native_logs.should_include_tag("OkHttp"));
+        assert!(config.native_logs.should_include_tag("GoLog"));
+    }
+
+    #[test]
+    fn test_settings_default_includes_native_logs() {
+        let settings = Settings::default();
+        assert!(settings.native_logs.enabled);
+        assert_eq!(
+            settings.native_logs.exclude_tags,
+            vec!["flutter".to_string()]
+        );
+        assert!(settings.native_logs.include_tags.is_empty());
+        assert_eq!(settings.native_logs.min_level, "info");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Per-tag configuration tests (Task 08)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_default_settings_empty_tags() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.tags.is_empty());
+    }
+
+    #[test]
+    fn test_effective_min_level_global_fallback() {
+        let settings = NativeLogsSettings {
+            min_level: "info".to_string(),
+            tags: HashMap::new(),
+            ..Default::default()
+        };
+        assert_eq!(settings.effective_min_level("GoLog"), "info");
+    }
+
+    #[test]
+    fn test_effective_min_level_per_tag_override() {
+        let mut settings = NativeLogsSettings::default();
+        settings.tags.insert(
+            "GoLog".to_string(),
+            TagConfig {
+                min_level: Some("debug".to_string()),
+            },
+        );
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+        assert_eq!(settings.effective_min_level("OkHttp"), "info"); // fallback to global
+    }
+
+    #[test]
+    fn test_effective_min_level_per_tag_none_uses_global() {
+        let mut settings = NativeLogsSettings::default();
+        settings
+            .tags
+            .insert("GoLog".to_string(), TagConfig { min_level: None });
+        assert_eq!(settings.effective_min_level("GoLog"), "info"); // global default
+    }
+
+    #[test]
+    fn test_toml_deserialization_with_tags() {
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+
+[tags.GoLog]
+min_level = "debug"
+
+[tags.OkHttp]
+min_level = "warning"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+        assert_eq!(settings.effective_min_level("OkHttp"), "warning");
+        assert_eq!(settings.effective_min_level("Unknown"), "info");
+    }
+
+    #[test]
+    fn test_toml_deserialization_no_tags_section() {
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert!(settings.tags.is_empty());
+    }
+
+    #[test]
+    fn test_toml_deserialization_dotted_tag_name() {
+        let toml_str = r#"
+enabled = true
+min_level = "info"
+
+[tags."com.example.myplugin"]
+min_level = "debug"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            settings.effective_min_level("com.example.myplugin"),
+            "debug"
+        );
+    }
+
+    #[test]
+    fn test_tag_config_default_has_no_min_level() {
+        let tc = TagConfig::default();
+        assert!(tc.min_level.is_none());
+    }
+
+    // ── Case-insensitivity tests for effective_min_level (Issue #8) ──────────
+
+    #[test]
+    fn test_effective_min_level_case_insensitive() {
+        // Config has tags.GoLog.min_level = "error"; lookup must work regardless
+        // of the case used at call time.
+        let mut settings = NativeLogsSettings::default();
+        settings.tags.insert(
+            "GoLog".to_string(),
+            TagConfig {
+                min_level: Some("error".to_string()),
+            },
+        );
+        assert_eq!(settings.effective_min_level("GoLog"), "error");
+        assert_eq!(settings.effective_min_level("goLog"), "error");
+        assert_eq!(settings.effective_min_level("GOLOG"), "error");
+        assert_eq!(settings.effective_min_level("golog"), "error");
+    }
+
+    #[test]
+    fn test_effective_min_level_case_insensitive_toml() {
+        // Same as above but via TOML deserialization to match real usage.
+        let toml_str = r#"
+min_level = "info"
+
+[tags.GoLog]
+min_level = "error"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert_eq!(settings.effective_min_level("GoLog"), "error");
+        assert_eq!(settings.effective_min_level("golog"), "error");
+        assert_eq!(settings.effective_min_level("GOLOG"), "error");
+    }
+
+    // ── Duplicate custom source name validation tests (Issue #11) ─────────────
+
+    #[test]
+    fn test_native_logs_settings_validate_no_custom_sources() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn test_native_logs_settings_validate_unique_names_passes() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "go-backend".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "my-server".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn test_duplicate_custom_source_name_rejected() {
+        // Two sources with the exact same name must fail validation.
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let result = settings.validate();
+        assert!(result.is_err());
+        assert!(
+            result.unwrap_err().contains("Duplicate custom source name"),
+            "error should mention 'Duplicate custom source name'"
+        );
+    }
+
+    #[test]
+    fn test_duplicate_custom_source_name_case_insensitive_rejected() {
+        // "mylog" and "MyLog" are the same name — must be rejected.
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "mylog".to_string(),
+                    command: "adb".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+                CustomSourceConfig {
+                    name: "MyLog".to_string(),
+                    command: "my-tool".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let result = settings.validate();
+        assert!(
+            result.is_err(),
+            "case-insensitive duplicate should fail validation"
+        );
+    }
+
+    #[test]
+    fn test_invalid_custom_source_propagates_error() {
+        // validate() must propagate errors from CustomSourceConfig::validate().
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: String::new(), // invalid: empty name
+                command: "adb".to_string(),
+                args: vec![],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+            }],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.validate().is_err());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // CustomSourceConfig & OutputFormat Tests (Phase 3 Task 01)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_output_format_kebab_case_serde() {
+        #[derive(Debug, Deserialize, Serialize, PartialEq)]
+        struct W {
+            format: OutputFormat,
+        }
+
+        let cases = [
+            ("raw", OutputFormat::Raw),
+            ("json", OutputFormat::Json),
+            ("logcat-threadtime", OutputFormat::LogcatThreadtime),
+            ("syslog", OutputFormat::Syslog),
+        ];
+
+        for (s, expected) in cases {
+            let toml = format!(r#"format = "{}""#, s);
+            let w: W = toml::from_str(&toml).unwrap();
+            assert_eq!(w.format, expected, "format = {s:?}");
+        }
+    }
+
+    #[test]
+    fn test_output_format_serialize_kebab_case() {
+        #[derive(Debug, Deserialize, Serialize)]
+        struct W {
+            format: OutputFormat,
+        }
+        let w = W {
+            format: OutputFormat::LogcatThreadtime,
+        };
+        let s = toml::to_string(&w).unwrap();
+        assert!(s.contains("logcat-threadtime"), "got: {s}");
+    }
+
+    #[test]
+    fn test_output_format_default_is_raw() {
+        assert_eq!(OutputFormat::default(), OutputFormat::Raw);
+    }
+
+    #[test]
+    fn test_custom_source_config_deserialize() {
+        let toml = r#"
+name = "go-backend"
+command = "adb"
+args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+format = "logcat-threadtime"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "go-backend");
+        assert_eq!(cfg.command, "adb");
+        assert_eq!(
+            cfg.args,
+            vec!["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+        );
+        assert_eq!(cfg.format, OutputFormat::LogcatThreadtime);
+        assert!(cfg.working_dir.is_none());
+        assert!(cfg.env.is_empty());
+    }
+
+    #[test]
+    fn test_custom_source_config_full_fields() {
+        let toml = r#"
+name = "my-server"
+command = "/usr/local/bin/my-log-tool"
+args = ["--follow", "--json"]
+format = "json"
+working_dir = "/tmp"
+
+[env]
+LOG_LEVEL = "debug"
+APP_ENV = "test"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "my-server");
+        assert_eq!(cfg.command, "/usr/local/bin/my-log-tool");
+        assert_eq!(cfg.format, OutputFormat::Json);
+        assert_eq!(cfg.working_dir, Some("/tmp".to_string()));
+        assert_eq!(cfg.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(cfg.env.get("APP_ENV"), Some(&"test".to_string()));
+    }
+
+    #[test]
+    fn test_custom_source_default_format_is_raw() {
+        let toml = r#"
+name = "sidecar"
+command = "tail"
+args = ["-f", "/tmp/sidecar.log"]
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.format, OutputFormat::Raw);
+    }
+
+    #[test]
+    fn test_custom_source_config_round_trip() {
+        let mut env = HashMap::new();
+        env.insert("KEY".to_string(), "val".to_string());
+        let original = CustomSourceConfig {
+            name: "test-source".to_string(),
+            command: "my-cmd".to_string(),
+            args: vec!["--arg".to_string(), "value".to_string()],
+            format: OutputFormat::Json,
+            working_dir: Some("/tmp".to_string()),
+            env,
+        };
+        let serialized = toml::to_string(&original).unwrap();
+        let deserialized: CustomSourceConfig = toml::from_str(&serialized).unwrap();
+        assert_eq!(deserialized.name, original.name);
+        assert_eq!(deserialized.command, original.command);
+        assert_eq!(deserialized.args, original.args);
+        assert_eq!(deserialized.format, original.format);
+        assert_eq!(deserialized.working_dir, original.working_dir);
+        assert_eq!(deserialized.env, original.env);
+    }
+
+    #[test]
+    fn test_custom_source_empty_name_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: String::new(),
+            command: "adb".to_string(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_err());
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("name must not be empty"), "got: {err}");
+    }
+
+    #[test]
+    fn test_custom_source_whitespace_only_name_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: "   ".to_string(),
+            command: "adb".to_string(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_err());
+    }
+
+    #[test]
+    fn test_custom_source_empty_command_fails_validation() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: String::new(),
+            args: vec![],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(err.contains("command must not be empty"), "got: {err}");
+        assert!(
+            err.contains("my-source"),
+            "error should mention name; got: {err}"
+        );
+    }
+
+    #[test]
+    fn test_custom_source_valid_config_passes_validation() {
+        let cfg = CustomSourceConfig {
+            name: "logcat-watcher".to_string(),
+            command: "adb".to_string(),
+            args: vec!["logcat".to_string()],
+            format: OutputFormat::LogcatThreadtime,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    /// On non-macOS platforms, `format = "syslog"` must be rejected at config
+    /// validation time so users get an actionable error instead of silent empty output.
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn test_custom_source_syslog_format_rejected_on_non_macos() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: "my-tool".to_string(),
+            args: vec![],
+            format: OutputFormat::Syslog,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        let err = cfg.validate().unwrap_err();
+        assert!(
+            err.contains("syslog format is only supported on macOS"),
+            "expected syslog rejection message, got: {:?}",
+            err
+        );
+    }
+
+    /// On macOS, `format = "syslog"` is valid and must pass validation.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn test_custom_source_syslog_format_allowed_on_macos() {
+        let cfg = CustomSourceConfig {
+            name: "my-source".to_string(),
+            command: "log".to_string(),
+            args: vec!["stream".to_string()],
+            format: OutputFormat::Syslog,
+            working_dir: None,
+            env: HashMap::new(),
+        };
+        assert!(cfg.validate().is_ok());
+    }
+
+    #[test]
+    fn test_native_logs_settings_default_has_empty_custom_sources() {
+        let settings = NativeLogsSettings::default();
+        assert!(settings.custom_sources.is_empty());
+    }
+
+    #[test]
+    fn test_native_logs_settings_custom_sources_deserialize() {
+        let toml_str = r#"
+[[native_logs.custom_sources]]
+name = "go-backend"
+command = "adb"
+args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
+format = "logcat-threadtime"
+
+[[native_logs.custom_sources]]
+name = "my-server"
+command = "/usr/local/bin/my-log-tool"
+args = ["--follow", "--json"]
+format = "json"
+
+[[native_logs.custom_sources]]
+name = "sidecar"
+command = "tail"
+args = ["-f", "/tmp/sidecar.log"]
+format = "raw"
+working_dir = "/tmp"
+"#;
+        #[derive(Deserialize)]
+        struct TestConfig {
+            native_logs: NativeLogsSettings,
+        }
+        let config: TestConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.native_logs.custom_sources.len(), 3);
+
+        let go = &config.native_logs.custom_sources[0];
+        assert_eq!(go.name, "go-backend");
+        assert_eq!(go.command, "adb");
+        assert_eq!(go.format, OutputFormat::LogcatThreadtime);
+
+        let server = &config.native_logs.custom_sources[1];
+        assert_eq!(server.name, "my-server");
+        assert_eq!(server.format, OutputFormat::Json);
+
+        let sidecar = &config.native_logs.custom_sources[2];
+        assert_eq!(sidecar.name, "sidecar");
+        assert_eq!(sidecar.format, OutputFormat::Raw);
+        assert_eq!(sidecar.working_dir, Some("/tmp".to_string()));
+    }
+
+    #[test]
+    fn test_existing_config_without_custom_sources_still_works() {
+        // Existing config without custom_sources should deserialize fine (backward compat)
+        let toml_str = r#"
+enabled = true
+exclude_tags = ["flutter"]
+min_level = "info"
+
+[tags.GoLog]
+min_level = "debug"
+"#;
+        let settings: NativeLogsSettings = toml::from_str(toml_str).unwrap();
+        assert!(settings.custom_sources.is_empty());
+        assert!(settings.enabled);
+        assert_eq!(settings.effective_min_level("GoLog"), "debug");
+    }
+
+    #[test]
+    fn test_settings_without_native_logs_custom_sources_is_backward_compatible() {
+        let toml_str = "";
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.native_logs.custom_sources.is_empty());
+    }
+
+    #[test]
+    fn test_custom_source_env_inline_table_deserialize() {
+        // Test that TOML inline table env syntax works as documented
+        let toml = r#"
+name = "server"
+command = "my-tool"
+env = { LOG_LEVEL = "debug", TRACE = "1" }
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.env.get("LOG_LEVEL"), Some(&"debug".to_string()));
+        assert_eq!(cfg.env.get("TRACE"), Some(&"1".to_string()));
+    }
+
+    // ── Phase 3 Task 05 edge-case tests ──────────────────────────────────────
+
+    /// Round-trip serde at the `NativeLogsSettings` level, not just
+    /// `CustomSourceConfig`, to verify the full nesting serializes correctly.
+    #[test]
+    fn test_custom_sources_round_trip_serde_via_native_logs_settings() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: "test".to_string(),
+                command: "echo".to_string(),
+                args: vec!["hello".to_string()],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+            }],
+            ..NativeLogsSettings::default()
+        };
+
+        let serialized = toml::to_string(&settings).unwrap();
+        let parsed: NativeLogsSettings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(parsed.custom_sources.len(), 1);
+        assert_eq!(parsed.custom_sources[0].name, "test");
+        assert_eq!(parsed.custom_sources[0].command, "echo");
+        assert_eq!(parsed.custom_sources[0].args, vec!["hello"]);
+        assert_eq!(parsed.custom_sources[0].format, OutputFormat::Raw);
+        assert!(parsed.custom_sources[0].working_dir.is_none());
+        assert!(parsed.custom_sources[0].env.is_empty());
+    }
+
+    /// All optional fields of `CustomSourceConfig` must have sensible defaults
+    /// when omitted from the TOML: args=[], format=Raw, working_dir=None, env={}.
+    #[test]
+    fn test_custom_source_optional_fields_default_when_omitted() {
+        let toml = r#"
+name = "minimal"
+command = "echo"
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.name, "minimal");
+        assert_eq!(cfg.command, "echo");
+        assert!(cfg.args.is_empty(), "args should default to empty vec");
+        assert_eq!(
+            cfg.format,
+            OutputFormat::Raw,
+            "format should default to Raw"
+        );
+        assert!(
+            cfg.working_dir.is_none(),
+            "working_dir should default to None"
+        );
+        assert!(cfg.env.is_empty(), "env should default to empty map");
+    }
+
+    /// Deserialize all four `OutputFormat` variants inside a `CustomSourceConfig`.
+    #[test]
+    fn test_all_output_format_variants_deserialize_in_custom_source() {
+        let cases = [
+            ("raw", OutputFormat::Raw),
+            ("json", OutputFormat::Json),
+            ("logcat-threadtime", OutputFormat::LogcatThreadtime),
+            ("syslog", OutputFormat::Syslog),
+        ];
+
+        for (format_str, expected) in cases {
+            let toml = format!(
+                "name = \"src\"\ncommand = \"cmd\"\nformat = \"{}\"\n",
+                format_str
+            );
+            let cfg: CustomSourceConfig = toml::from_str(&toml)
+                .unwrap_or_else(|e| panic!("failed to parse format={format_str}: {e}"));
+            assert_eq!(
+                cfg.format, expected,
+                "format={format_str} should deserialize to {expected:?}"
+            );
+        }
+    }
+
+    /// Env inline-table with the exact example from the task description.
+    #[test]
+    fn test_custom_source_env_inline_table_with_path_prefix() {
+        let toml = r#"
+name = "with-env"
+command = "my-tool"
+env = { VERBOSE = "1", PATH_PREFIX = "/opt" }
+"#;
+        let cfg: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert_eq!(cfg.env.get("VERBOSE"), Some(&"1".to_string()));
+        assert_eq!(cfg.env.get("PATH_PREFIX"), Some(&"/opt".to_string()));
+        assert_eq!(cfg.env.len(), 2, "env should have exactly 2 entries");
     }
 }

@@ -6,12 +6,13 @@ pub mod devtools;
 pub mod installation;
 pub mod introduction;
 pub mod keybindings;
+pub mod native_logs;
 
 use leptos::prelude::*;
 use leptos_router::components::{A, Outlet};
 use leptos_router::hooks::use_location;
 
-use crate::components::icons::{Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings};
+use crate::components::icons::{Bug, Cpu, Download, Eye, FileText, Keyboard, Menu, ScrollText, Settings, Terminal};
 
 struct DocItem {
     href: &'static str,
@@ -40,6 +41,11 @@ fn doc_items() -> Vec<DocItem> {
             href: "/docs/devtools",
             label: "DevTools",
             icon: || view! { <Eye class="w-4 h-4 mr-3" /> }.into_any(),
+        },
+        DocItem {
+            href: "/docs/native-logs",
+            label: "Native Logs",
+            icon: || view! { <Terminal class="w-4 h-4 mr-3" /> }.into_any(),
         },
         DocItem {
             href: "/docs/debugging",

@@ -155,6 +155,13 @@ pub fn handle_session_exited(state: &mut AppState, session_id: SessionId, code: 
             );
         }
 
+        // Shut down the native log capture task (if running).
+        handle.shutdown_native_logs();
+
+        // Reset native tag state — tags from the previous run should not
+        // persist across a session stop/restart.
+        handle.native_tag_state = crate::session::NativeTagState::default();
+
         // Don't auto-quit - let user decide what to do with the session
         // The session tab remains visible showing the exit log
     }
@@ -215,6 +222,13 @@ pub fn handle_session_message_state(
                     let _ = tx.send(true);
                     tracing::info!("Sent network shutdown signal for session {}", session_id);
                 }
+
+                // Shut down the native log capture task (if running).
+                handle.shutdown_native_logs();
+
+                // Reset native tag state — tags from the previous run should
+                // not persist when the app is restarted within the same session.
+                handle.native_tag_state = crate::session::NativeTagState::default();
             }
         }
     }
@@ -254,6 +268,100 @@ pub fn maybe_connect_vm_service(
                     ws_uri: debug_port.ws_uri.clone(),
                 });
             }
+        }
+    }
+    None
+}
+
+/// Check if an `AppStart` event should trigger native platform log capture.
+///
+/// Returns `Some(StartNativeLogCapture)` when the message is an `AppStart` and
+/// the session's platform is `"android"`, `"macos"`, or `"ios"` (native log
+/// capture is only needed on these platforms — Linux/Windows/Web already
+/// surface native logs via Flutter's stdout pipe).
+///
+/// iOS capture is only attempted on macOS hosts (gated by `cfg!(target_os = "macos")`).
+///
+/// Returns `None` for non-`AppStart` messages, unsupported platforms, or when
+/// native logs are disabled in settings.
+pub fn maybe_start_native_log_capture(
+    state: &AppState,
+    session_id: SessionId,
+    msg: &DaemonMessage,
+) -> Option<UpdateAction> {
+    if let DaemonMessage::AppStart(app_start) = msg {
+        // Guard: only start if native logs are enabled.
+        if !state.settings.native_logs.enabled {
+            return None;
+        }
+
+        if let Some(handle) = state.session_manager.get(session_id) {
+            let platform = &handle.session.platform;
+
+            // Guard: don't start a second capture if one is already running
+            // (prevents double-start on repeated AppStart, e.g. hot-restart).
+            //
+            // Two conditions indicate capture is active:
+            // - `native_log_shutdown_tx.is_some()`: platform capture task is running
+            //   (Android logcat / macOS log stream / iOS simulator).
+            // - `!custom_source_handles.is_empty()`: custom source processes are
+            //   running.  For custom-sources-only sessions (Linux/Windows/Web) the
+            //   platform path is skipped and `native_log_shutdown_tx` is never set,
+            //   so without this second check the guard would be bypassed on every
+            //   hot-restart, spawning duplicate processes.
+            if handle.native_log_shutdown_tx.is_some() || !handle.custom_source_handles.is_empty() {
+                tracing::debug!(
+                    "Native log capture already running for session {}",
+                    session_id
+                );
+                return None;
+            }
+
+            // Only Android, macOS, and iOS need a separate platform capture process.
+            // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
+            // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
+            let needs_platform_capture = platform == "android"
+                || (cfg!(target_os = "macos") && platform == "macos")
+                || (cfg!(target_os = "macos") && platform == "ios");
+
+            let has_platform_tools = state.tool_availability.native_logs_available(platform);
+
+            let has_custom_sources = !state.settings.native_logs.custom_sources.is_empty();
+
+            tracing::debug!(
+                "platform={}, needs_platform={}, has_tools={}, custom_sources={}, enabled={}",
+                platform,
+                needs_platform_capture,
+                has_platform_tools,
+                has_custom_sources,
+                state.settings.native_logs.enabled
+            );
+
+            // Determine if we should emit the action:
+            // - Platform capture is requested AND tools are available, OR
+            // - Custom sources are configured (these work regardless of platform/tools)
+            let should_start = (needs_platform_capture && has_platform_tools) || has_custom_sources;
+
+            if !should_start {
+                if needs_platform_capture && !has_platform_tools {
+                    tracing::debug!(
+                        "Native log capture skipped for {}: tools not available",
+                        platform
+                    );
+                }
+                return None;
+            }
+
+            tracing::debug!("Emitting StartNativeLogCapture for session {}", session_id);
+            return Some(UpdateAction::StartNativeLogCapture {
+                session_id,
+                platform: platform.clone(),
+                device_id: handle.session.device_id.clone(),
+                device_name: handle.session.device_name.clone(),
+                app_id: Some(app_start.app_id.clone()),
+                settings: state.settings.native_logs.clone(),
+                project_path: state.project_path.clone(),
+            });
         }
     }
     None

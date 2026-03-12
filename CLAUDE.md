@@ -53,7 +53,7 @@ The project follows **The Elm Architecture (TEA)** pattern with a **Cargo worksp
 ### Workspace Crates
 
 - **`fdemon-core`** (`crates/fdemon-core/`): Domain types (`LogEntry`, `LogLevel`, `AppPhase`), performance types (`FrameTiming`, `MemorySample`, `RingBuffer`), network types (`HttpProfileEntry`, `NetworkTiming`), widget tree types (`DiagnosticsNode`, `LayoutInfo`), project discovery, error handling. **Zero internal dependencies.**
-- **`fdemon-daemon`** (`crates/fdemon-daemon/`): Flutter process management, JSON-RPC protocol parsing (`--machine` mode), device/emulator discovery, VM Service WebSocket client (`vm_service/`) with extensions for inspector, performance, and network profiling. Depends on `fdemon-core`.
+- **`fdemon-daemon`** (`crates/fdemon-daemon/`): Flutter process management, JSON-RPC protocol parsing (`--machine` mode), device/emulator discovery, native platform log capture (`native_logs/` — Android logcat, macOS log stream, iOS simulator/physical), VM Service WebSocket client (`vm_service/`) with extensions for inspector, performance, and network profiling. Depends on `fdemon-core`.
 - **`fdemon-app`** (`crates/fdemon-app/`): TEA implementation - `AppState` (model), `Message` (events), `handler::update()` (state transitions), Engine orchestration, services, config, watcher. DevTools handlers in `handler/devtools/` with per-session state (`PerformanceState`, `NetworkState`). Depends on `fdemon-core` + `fdemon-daemon`.
 - **`fdemon-tui`** (`crates/fdemon-tui/`): Ratatui-based terminal UI with widgets. DevTools panels in `widgets/devtools/` (Inspector, Performance, Network) with sub-component decomposition. Depends on `fdemon-core` + `fdemon-app`.
 - **`flutter-demon`** (binary): CLI parsing, project discovery, headless mode. Depends on all 4 crates.
@@ -74,12 +74,12 @@ The project follows **The Elm Architecture (TEA)** pattern with a **Cargo worksp
 Unit tests use inline `#[cfg(test)] mod tests` or separate `tests.rs` files for larger suites:
 
 - `crates/fdemon-core/src/` - 357 unit tests
-- `crates/fdemon-daemon/src/` - 375 unit tests
-- `crates/fdemon-app/src/` - 1,039 unit tests (state transitions, DevTools handlers, settings key handlers)
-- `crates/fdemon-tui/src/widgets/` - 754 unit tests (rendering, DevTools panels)
+- `crates/fdemon-daemon/src/` - 527 unit tests (includes iOS/Android/macOS native log capture tests)
+- `crates/fdemon-app/src/` - 1,511 unit tests (state transitions, DevTools handlers, settings key handlers, native tag state)
+- `crates/fdemon-tui/src/widgets/` - 814 unit tests (rendering, DevTools panels, tag filter overlay)
 - `tests/` directory - Integration tests (binary crate): 80 passing, 62 ignored (PTY stream timing issues)
 
-Total: 2,525 unit tests across 4 crates
+Total: ~3,209 unit tests across 4 crates
 
 ## Configuration
 
@@ -99,3 +99,5 @@ Total: 2,525 unit tests across 4 crates
 - **VM Service client**: `fdemon-daemon/vm_service/` provides WebSocket-based communication with the Dart VM Service for inspector, performance monitoring, and network profiling
 - **DevTools handler decomposition**: `fdemon-app/handler/devtools/` splits DevTools message handling into `inspector.rs`, `performance.rs`, `network.rs` sub-modules
 - **Per-session DevTools state**: `session/performance.rs` and `session/network.rs` hold ring-buffered telemetry per Flutter session
+- **Native log capture**: `fdemon-daemon/native_logs/` provides platform-specific capture backends (`android.rs`, `macos.rs`, `ios.rs`) implementing the `NativeLogCapture` trait
+- **Per-session tag filtering**: `session/native_tags.rs` tracks discovered native log tags and per-session visibility state; `widgets/tag_filter.rs` provides the `T`-key overlay UI

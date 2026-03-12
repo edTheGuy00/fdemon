@@ -5,6 +5,7 @@ mod collapse;
 pub mod debug_state;
 mod handle;
 pub(crate) mod log_batcher;
+mod native_tags;
 pub(crate) mod network;
 pub(crate) mod performance;
 #[allow(clippy::module_inception)]
@@ -17,8 +18,9 @@ mod tests;
 pub use block_state::LogBlockState;
 pub use collapse::CollapseState;
 pub use debug_state::{DebugState, PauseReason, TrackedBreakpoint};
-pub use handle::SessionHandle;
+pub use handle::{CustomSourceHandle, SessionHandle};
 pub use log_batcher::LogBatcher;
+pub use native_tags::NativeTagState;
 pub use network::{NetworkDetailTab, NetworkState};
 pub(crate) use performance::STATS_RECOMPUTE_INTERVAL;
 pub use performance::{AllocationSortColumn, PerformanceState};

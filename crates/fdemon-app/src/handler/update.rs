@@ -9,7 +9,7 @@
 
 use crate::message::{AutoLaunchSuccess, Message};
 use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode};
-use fdemon_core::{AppPhase, LogSource};
+use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::warn;
 
 use super::{
@@ -1927,6 +1927,255 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         | Message::DapClientConnected { .. }
         | Message::DapClientDisconnected { .. }
         | Message::DapConfigGenerated { .. } => dap::handle_dap_message(state, &message),
+
+        // ─────────────────────────────────────────────────────────
+        // Native Platform Log Messages (Phase 1, Task 07)
+        // ─────────────────────────────────────────────────────────
+
+        // A native log line was captured — track the tag and, if visible,
+        // convert to `LogEntry` and queue.
+        Message::NativeLog { session_id, event } => {
+            // Read per-tag min level config before borrowing state mutably.
+            // effective_min_level returns a &str into settings, so we must
+            // resolve it to an owned Option<LogLevel> before get_mut.
+            let min_level_filter = LogLevel::from_level_str(
+                state.settings.native_logs.effective_min_level(&event.tag),
+            );
+
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Always observe the tag so the count reflects total capture
+                // volume regardless of the current visibility setting. This
+                // must happen BEFORE level filtering so tags appear in the
+                // T-overlay even when their events are below the threshold.
+                handle.native_tag_state.observe_tag(&event.tag);
+
+                // Filter by the effective per-tag (or global) minimum level.
+                // Per-tag config `[native_logs.tags.GoLog] min_level = "warning"`
+                // overrides the global `min_level` for the specified tag.
+                if let Some(min_level) = min_level_filter {
+                    if event.level.severity() < min_level.severity() {
+                        return UpdateResult::none();
+                    }
+                }
+
+                // Skip the log entry if the user has hidden this tag.
+                // This filters at the handler level rather than at render time,
+                // keeping the log buffer free of invisible entries.
+                if !handle.native_tag_state.is_tag_visible(&event.tag) {
+                    return UpdateResult::none();
+                }
+
+                let entry = fdemon_core::LogEntry::new(
+                    event.level,
+                    LogSource::Native { tag: event.tag },
+                    event.message,
+                );
+                // Use batched logging so high-volume native logs don't overwhelm
+                // the render loop (same approach as Flutter stdout logs).
+                if handle.session.queue_log(entry) {
+                    handle.session.flush_batched_logs();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Native log capture started — store shutdown sender and task handle.
+        Message::NativeLogCaptureStarted {
+            session_id,
+            shutdown_tx,
+            task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.native_log_shutdown_tx = Some(shutdown_tx);
+                // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
+                // The Option is taken so any subsequent (unexpected) clone of the
+                // message sees None, preventing double-store.
+                if let Ok(mut slot) = task_handle.lock() {
+                    handle.native_log_task_handle = slot.take();
+                }
+                tracing::debug!("Native log capture started for session {}", session_id);
+            } else {
+                // Session was closed before capture started — shut down the
+                // orphaned task so it does not run indefinitely.
+                let _ = shutdown_tx.send(true);
+                if let Ok(mut slot) = task_handle.lock() {
+                    if let Some(h) = slot.take() {
+                        h.abort();
+                    }
+                }
+                tracing::debug!(
+                    "Native log capture arrived for closed session {} — shutting down",
+                    session_id
+                );
+            }
+            UpdateResult::none()
+        }
+
+        // Native log capture stopped — clear stored handles and reset tag state.
+        Message::NativeLogCaptureStopped { session_id } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.native_log_shutdown_tx = None;
+                handle.native_log_task_handle = None;
+                // Only reset tag state if no custom sources are still emitting events.
+                // Custom sources have independent lifecycles and may still be running;
+                // resetting here would destroy the user's per-tag visibility choices.
+                if handle.custom_source_handles.is_empty() {
+                    handle.native_tag_state = crate::session::NativeTagState::default();
+                }
+                tracing::debug!("Native log capture stopped for session {}", session_id);
+            }
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Custom Log Source Lifecycle (Phase 3, Task 04)
+        // ─────────────────────────────────────────────────────────
+
+        // Custom source started — store shutdown sender and task handle.
+        Message::CustomSourceStarted {
+            session_id,
+            name,
+            shutdown_tx,
+            task_handle,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
+                let task_join_handle = if let Ok(mut slot) = task_handle.lock() {
+                    slot.take()
+                } else {
+                    None
+                };
+                handle
+                    .custom_source_handles
+                    .push(crate::session::CustomSourceHandle {
+                        name: name.clone(),
+                        shutdown_tx,
+                        task_handle: task_join_handle,
+                    });
+                tracing::debug!(
+                    "Custom log source '{}' handle stored for session {}",
+                    name,
+                    session_id
+                );
+            } else {
+                // Session was closed before the custom source started — shut down
+                // the orphaned task immediately.
+                let _ = shutdown_tx.send(true);
+                if let Ok(mut slot) = task_handle.lock() {
+                    if let Some(h) = slot.take() {
+                        h.abort();
+                    }
+                }
+                tracing::debug!(
+                    "Custom source '{}' arrived for closed session {} — shutting down",
+                    name,
+                    session_id
+                );
+            }
+            UpdateResult::none()
+        }
+
+        // Custom source stopped — remove its handle from the session.
+        Message::CustomSourceStopped { session_id, name } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.custom_source_handles.retain(|h| h.name != name);
+            }
+            tracing::debug!(
+                "Custom log source '{}' stopped for session {}",
+                name,
+                session_id
+            );
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Native Tag Filter Messages (Phase 2, Task 07)
+        // ─────────────────────────────────────────────────────────
+
+        // Toggle a specific tag's visibility in the active session.
+        Message::ToggleNativeTag { tag } => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    let visible = handle.native_tag_state.toggle_tag(&tag);
+                    tracing::debug!(
+                        "Tag '{}' is now {}",
+                        tag,
+                        if visible { "visible" } else { "hidden" }
+                    );
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Show all native log tags in the active session.
+        Message::ShowAllNativeTags => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.native_tag_state.show_all();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Hide all native log tags in the active session.
+        Message::HideAllNativeTags => {
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    handle.native_tag_state.hide_all();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // Open the tag filter overlay and reset its UI state.
+        Message::ShowTagFilter => {
+            state.tag_filter_visible = true;
+            state.tag_filter_ui.reset();
+            UpdateResult::none()
+        }
+
+        // Close the tag filter overlay.
+        Message::HideTagFilter => {
+            state.tag_filter_visible = false;
+            UpdateResult::none()
+        }
+
+        // Move the tag filter selection up.
+        Message::TagFilterMoveUp => {
+            state.tag_filter_ui.move_up();
+            UpdateResult::none()
+        }
+
+        // Move the tag filter selection down (clamp at tag count - 1).
+        Message::TagFilterMoveDown => {
+            let tag_count = state
+                .session_manager
+                .selected()
+                .map(|h| h.native_tag_state.tag_count())
+                .unwrap_or(0);
+            let max_index = tag_count.saturating_sub(1);
+            state.tag_filter_ui.move_down(max_index);
+            UpdateResult::none()
+        }
+
+        // Toggle the visibility of the currently selected tag in the overlay.
+        Message::TagFilterToggleSelected => {
+            let selected = state.tag_filter_ui.selected_index;
+            if let Some(session_id) = state.session_manager.selected_id() {
+                if let Some(handle) = state.session_manager.get_mut(session_id) {
+                    // Collect the tag name at the selected index before mutating.
+                    let tag_name: Option<String> = handle
+                        .native_tag_state
+                        .sorted_tags()
+                        .get(selected)
+                        .map(|(tag, _)| tag.to_string());
+                    if let Some(tag) = tag_name {
+                        handle.native_tag_state.toggle_tag(&tag);
+                    }
+                }
+            }
+            UpdateResult::none()
+        }
     }
 }
 

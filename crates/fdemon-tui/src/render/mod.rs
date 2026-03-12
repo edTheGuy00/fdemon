@@ -158,6 +158,18 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         UiMode::Normal => {
             // No overlay - but show search status if search has results
             render_search_overlay(frame, &areas, state, false);
+
+            // Tag filter overlay (Phase 2, Task 09) — drawn on top of normal log view.
+            if state.tag_filter_visible {
+                if let Some(handle) = state.session_manager.selected() {
+                    widgets::render_tag_filter(
+                        frame,
+                        areas.logs,
+                        &handle.native_tag_state,
+                        &state.tag_filter_ui,
+                    );
+                }
+            }
         }
         UiMode::LinkHighlight => {
             // Link mode is active - the log view handles badge rendering

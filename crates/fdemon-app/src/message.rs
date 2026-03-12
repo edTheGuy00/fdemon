@@ -9,7 +9,7 @@ use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
-    IosSimulator, ToolAvailability,
+    IosSimulator, NativeLogEvent, ToolAvailability,
 };
 
 /// Shared, abort-able handle to a background task.
@@ -1108,4 +1108,132 @@ pub enum Message {
         /// What happened: `"Created"`, `"Updated"`, or `"Skipped: <reason>"`.
         action: String,
     },
+
+    // ─────────────────────────────────────────────────────────
+    // Native Platform Log Messages (Phase 1, Task 07)
+    // ─────────────────────────────────────────────────────────
+    /// A native platform log line was captured (from adb logcat, log stream, etc.).
+    ///
+    /// Sent by the native log capture forwarding task for each log event.
+    /// The update handler converts this to a `LogEntry` with
+    /// `LogSource::Native { tag }` and queues it on the session log buffer.
+    NativeLog {
+        session_id: SessionId,
+        event: NativeLogEvent,
+    },
+
+    /// Native log capture process started successfully for a session.
+    ///
+    /// Sent by `actions::native_logs::spawn_native_log_capture` immediately
+    /// after `NativeLogCapture::spawn()` succeeds. The TEA handler stores the
+    /// shutdown sender and task handle on the `SessionHandle` so they can be
+    /// signalled/aborted on session stop.
+    NativeLogCaptureStarted {
+        session_id: SessionId,
+        /// Shutdown sender — send `true` to signal the capture task to stop.
+        /// Stored as `Arc` because `Message` requires `Clone`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// JoinHandle for the capture forwarding task.
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out of the `Option` when
+        /// storing it on `SessionHandle`, leaving `None` for any subsequent
+        /// (unexpected) clone.
+        task_handle: SharedTaskHandle,
+    },
+
+    /// Native log capture process ended (exited or failed to start).
+    ///
+    /// Sent by the forwarding task when the capture process's event channel
+    /// closes (i.e., the capture process exited). The handler clears the
+    /// stored handles from `SessionHandle`.
+    NativeLogCaptureStopped { session_id: SessionId },
+
+    // ─────────────────────────────────────────────────────────
+    // Custom Log Source Lifecycle Messages (Phase 3, Task 04)
+    // ─────────────────────────────────────────────────────────
+    /// A custom log source process started successfully for a session.
+    ///
+    /// Sent by `actions::native_logs::spawn_custom_sources` immediately
+    /// after `CustomLogCapture::spawn()` succeeds. The TEA handler stores the
+    /// shutdown sender and task handle in `SessionHandle::custom_source_handles`
+    /// so they can be signalled/aborted on session stop.
+    ///
+    /// Events from the custom source flow through `Message::NativeLog` — this
+    /// variant is only for lifecycle management (storing the handles).
+    CustomSourceStarted {
+        session_id: SessionId,
+        /// Human-readable name for this source (used as log tag).
+        name: String,
+        /// Shutdown sender — send `true` to signal the capture task to stop.
+        /// Stored as `Arc` because `Message` requires `Clone`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// JoinHandle for the capture forwarding task.
+        /// Wrapped in `Arc<Mutex<Option<>>>` to satisfy the `Clone` bound on
+        /// `Message`. The handler takes the handle out of the `Option` when
+        /// storing it on `SessionHandle`, leaving `None` for any subsequent
+        /// (unexpected) clone.
+        task_handle: SharedTaskHandle,
+    },
+
+    /// A custom log source process exited or was stopped.
+    ///
+    /// Sent by the forwarding task when the custom source's event channel
+    /// closes (i.e., the process exited). The handler removes the named
+    /// handle from `SessionHandle::custom_source_handles`.
+    CustomSourceStopped {
+        session_id: SessionId,
+        /// Name of the custom source that stopped (matches the name in
+        /// `CustomSourceHandle` for lookup and removal).
+        name: String,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // Native Tag Filter Messages (Phase 2, Task 07)
+    // ─────────────────────────────────────────────────────────
+    /// Toggle a specific native log tag's visibility in the active session.
+    ///
+    /// If the tag is currently visible, it becomes hidden (future log entries
+    /// with this tag are not added to the log buffer). If hidden, it becomes
+    /// visible (future entries appear in the log).
+    ///
+    /// The tag must already be in `NativeTagState::discovered_tags` for the
+    /// toggle to have an observable effect; toggling an unknown tag is a no-op
+    /// on the `hidden_tags` set but will pre-hide the tag when it is first seen.
+    ToggleNativeTag { tag: String },
+
+    /// Show all native log tags in the active session.
+    ///
+    /// Clears the hidden set so every tag becomes visible. Future log entries
+    /// from all tags will be added to the log buffer.
+    ShowAllNativeTags,
+
+    /// Hide all native log tags in the active session.
+    ///
+    /// Hides every tag currently in `discovered_tags`. Future entries from
+    /// any of these tags will not be added to the log buffer until un-hidden.
+    HideAllNativeTags,
+
+    /// Open the native tag filter overlay.
+    ///
+    /// Switches the UI into tag-filter mode where the user can see the list
+    /// of discovered tags and toggle their visibility. Handled by task 09
+    /// (per-tag filter UI).
+    ShowTagFilter,
+
+    /// Close the native tag filter overlay.
+    ///
+    /// Returns the UI to normal mode without changing tag visibility state.
+    HideTagFilter,
+
+    // ─────────────────────────────────────────────────────────
+    // Tag Filter Navigation Messages (Phase 2, Task 09)
+    // ─────────────────────────────────────────────────────────
+    /// Move the tag filter list selection up by one row.
+    TagFilterMoveUp,
+
+    /// Move the tag filter list selection down by one row.
+    TagFilterMoveDown,
+
+    /// Toggle the visibility of the currently selected tag in the filter overlay.
+    TagFilterToggleSelected,
 }

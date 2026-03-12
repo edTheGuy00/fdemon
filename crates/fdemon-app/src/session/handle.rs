@@ -5,7 +5,24 @@ use std::sync::Arc;
 use fdemon_core::AppPhase;
 use fdemon_daemon::{vm_service::VmRequestHandle, CommandSender, FlutterProcess, RequestTracker};
 
+use super::native_tags::NativeTagState;
 use super::session::Session;
+
+/// Handle for a running custom log source process.
+///
+/// Stores the name of the source (used as a log tag), a shutdown sender
+/// for signalling graceful stop, and the task handle for aborting as
+/// a fallback. Stored in a Vec on `SessionHandle` because multiple custom
+/// sources can run concurrently per session.
+pub struct CustomSourceHandle {
+    /// Human-readable source name — used as the log tag in the tag filter overlay.
+    pub name: String,
+    /// Shutdown sender — send `true` to signal the capture task to stop.
+    /// Stored as `Arc` because the corresponding `Message` variant requires `Clone`.
+    pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    /// The background task handle — aborted as a fallback on session close.
+    pub task_handle: Option<tokio::task::JoinHandle<()>>,
+}
 
 /// Handle for controlling a session's Flutter process
 pub struct SessionHandle {
@@ -77,6 +94,34 @@ pub struct SessionHandle {
     /// tasks. Initialized to `None`; set in Phase 2 when the DAP server
     /// spawns the per-session debug event forwarding task.
     pub debug_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Shutdown sender for the native platform log capture task.
+    ///
+    /// Sending `true` signals the native log capture forwarding task to stop.
+    /// Stored as `Arc` because the `Message` enum requires `Clone`.
+    /// Set by `NativeLogCaptureStarted`, cleared on session stop or capture exit.
+    pub native_log_shutdown_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// JoinHandle for the native log capture forwarding task.
+    ///
+    /// Aborted on session close or app stop to prevent zombie capture tasks
+    /// from continuing after the session has ended. Set by `NativeLogCaptureStarted`,
+    /// cleared on session stop or capture exit.
+    pub native_log_task_handle: Option<tokio::task::JoinHandle<()>>,
+
+    /// Per-session native log tag discovery and visibility state.
+    ///
+    /// Tracks every distinct tag seen in this session's native log stream
+    /// and allows the user to toggle individual tags on/off via the tag
+    /// filter UI. Reset to default when the session is stopped or restarted.
+    pub native_tag_state: NativeTagState,
+
+    /// Running custom log source handles for this session.
+    ///
+    /// One entry per configured custom source that has been successfully
+    /// spawned. Cleared (and each source shut down) when the session ends.
+    /// Multiple sources can run simultaneously.
+    pub custom_source_handles: Vec<CustomSourceHandle>,
 }
 
 impl std::fmt::Debug for SessionHandle {
@@ -93,6 +138,16 @@ impl std::fmt::Debug for SessionHandle {
             .field("has_network_task", &self.network_task_handle.is_some())
             .field("has_debug_shutdown", &self.debug_shutdown_tx.is_some())
             .field("has_debug_task", &self.debug_task_handle.is_some())
+            .field(
+                "has_native_log_shutdown",
+                &self.native_log_shutdown_tx.is_some(),
+            )
+            .field(
+                "has_native_log_task",
+                &self.native_log_task_handle.is_some(),
+            )
+            .field("native_tag_count", &self.native_tag_state.tag_count())
+            .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
     }
 }
@@ -113,6 +168,43 @@ impl SessionHandle {
             network_task_handle: None,
             debug_shutdown_tx: None,
             debug_task_handle: None,
+            native_log_shutdown_tx: None,
+            native_log_task_handle: None,
+            native_tag_state: NativeTagState::default(),
+            custom_source_handles: Vec::new(),
+        }
+    }
+
+    /// Shut down the native platform log capture task (if running).
+    ///
+    /// Sends `true` on the shutdown channel to signal graceful stop, then
+    /// aborts the task as a fallback. Clears both fields on the handle.
+    ///
+    /// Also shuts down all custom log source processes registered for this
+    /// session and clears the `custom_source_handles` Vec.
+    pub fn shutdown_native_logs(&mut self) {
+        if let Some(tx) = self.native_log_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::debug!(
+                "Sent native log shutdown signal for session {}",
+                self.session.id
+            );
+        }
+        if let Some(handle) = self.native_log_task_handle.take() {
+            handle.abort();
+        }
+
+        // Shut down all custom log source processes.
+        for mut handle in self.custom_source_handles.drain(..) {
+            let _ = handle.shutdown_tx.send(true);
+            if let Some(task) = handle.task_handle.take() {
+                task.abort();
+            }
+            tracing::debug!(
+                "Shut down custom log source '{}' for session {}",
+                handle.name,
+                self.session.id
+            );
         }
     }
 

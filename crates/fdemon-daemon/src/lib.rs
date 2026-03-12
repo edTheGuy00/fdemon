@@ -30,11 +30,21 @@
 //! ### Platform Utilities
 //! - [`IosSimulator`], [`AndroidAvd`] - Platform-specific device types
 //! - [`ToolAvailability`] - Check for Android SDK, iOS tools
+//! - [`IosLogTool`] - Available tool for iOS native log capture (macOS only)
+//!
+//! ### Native Log Capture
+//! - [`NativeLogCapture`] - Trait for platform-specific log capture backends
+//! - [`NativeLogEvent`] - Parsed log event from a native capture backend
+//! - [`NativeLogHandle`] - Handle to a running capture process (channel + shutdown)
+//! - [`AndroidLogConfig`] - Configuration for Android logcat capture
+//! - [`IosLogConfig`] - Configuration for iOS native log capture (macOS only)
+//! - [`create_native_log_capture()`](native_logs::create_native_log_capture) - Platform dispatch
 
 pub mod avds;
 pub mod commands;
 pub mod devices;
 pub mod emulators;
+pub mod native_logs;
 pub mod process;
 pub mod protocol;
 pub mod simulators;
@@ -60,6 +70,11 @@ pub use emulators::{
 };
 /// Re-exported from `fdemon_core` for convenience. Canonical import: `fdemon_core::DaemonMessage`.
 pub use fdemon_core::DaemonMessage;
+#[cfg(target_os = "macos")]
+pub use native_logs::IosLogConfig;
+#[cfg(target_os = "macos")]
+pub use native_logs::MacOsLogConfig;
+pub use native_logs::{AndroidLogConfig, NativeLogCapture, NativeLogEvent, NativeLogHandle};
 pub use process::FlutterProcess;
 pub use protocol::{
     detect_log_level, parse_daemon_message, parse_flutter_log, to_log_entry, LogEntryInfo,
@@ -68,6 +83,8 @@ pub use simulators::{
     boot_simulator, group_simulators_by_runtime, list_ios_simulators, shutdown_simulator,
     IosSimulator, SimulatorState,
 };
+#[cfg(target_os = "macos")]
+pub use tool_availability::IosLogTool;
 pub use tool_availability::ToolAvailability;
 
 use fdemon_core::prelude::*;

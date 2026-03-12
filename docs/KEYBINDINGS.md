@@ -122,6 +122,7 @@ Filter logs by level or source to focus on relevant information.
 | `f` | Cycle Level Filter | Cycle through: All → Errors → Warnings → Info → Debug |
 | `F` | Cycle Source Filter | Cycle through: All → App → Daemon → Flutter → Watcher |
 | `Ctrl+F` | Reset Filters | Clear all active filters |
+| `T` | Open/close native tag filter overlay | Toggle visibility of individual native platform log tags (Android/iOS/macOS) |
 
 ### Log Search
 

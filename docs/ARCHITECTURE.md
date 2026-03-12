@@ -12,6 +12,7 @@ This document describes the internal architecture of Flutter Demon, a high-perfo
 - [Key Patterns](#key-patterns)
 - [DevTools Subsystem](#devtools-subsystem)
 - [DAP Server Subsystem](#dap-server-subsystem)
+- [Native Log Capture Subsystem](#native-log-capture-subsystem)
 - [Data Flow](#data-flow)
 - [Key Types](#key-types)
 - [Future Considerations](#future-considerations)
@@ -253,8 +254,13 @@ flutter-demon/
 │   │       ├── emulators.rs      # Emulator discovery and launch
 │   │       ├── avds.rs           # Android AVD utilities
 │   │       ├── simulators.rs     # iOS simulator utilities
-│   │       ├── tool_availability.rs  # Tool detection
+│   │       ├── tool_availability.rs  # Tool detection (adb, xcrun simctl, idevicesyslog)
 │   │       ├── test_utils.rs     # Test helpers
+│   │       ├── native_logs/      # Native platform log capture
+│   │       │   ├── mod.rs        # NativeLogCapture trait, shared types, platform dispatch
+│   │       │   ├── android.rs    # adb logcat capture
+│   │       │   ├── macos.rs      # macOS log stream capture
+│   │       │   └── ios.rs        # iOS simulator (xcrun simctl) + physical (idevicesyslog)
 │   │       └── vm_service/       # VM Service WebSocket client
 │   │           ├── mod.rs        # VmServiceHandle, connection management
 │   │           ├── client.rs     # WebSocket client transport
@@ -291,7 +297,8 @@ flutter-demon/
 │   │       │   ├── session.rs    # Session struct and core state
 │   │       │   ├── handle.rs     # SessionHandle
 │   │       │   ├── network.rs    # NetworkState — per-session network monitoring
-│   │       │   └── performance.rs # PerformanceState — per-session perf monitoring
+│   │       │   ├── performance.rs # PerformanceState — per-session perf monitoring
+│   │       │   └── native_tags.rs # NativeTagState — per-session tag discovery/filtering
 │   │       ├── session_manager.rs  # Multi-session coordination
 │   │       ├── watcher.rs        # File system watching
 │   │       ├── config/           # Configuration parsing
@@ -341,6 +348,7 @@ flutter-demon/
 │               │   ├── mod.rs
 │               │   └── styles.rs
 │               ├── confirm_dialog.rs
+│               ├── tag_filter.rs     # Native tag filter overlay (toggle visibility per tag)
 │               ├── new_session_dialog/
 │               │   ├── mod.rs
 │               │   └── target_selector.rs
@@ -429,8 +437,30 @@ flutter-demon/
 | `emulators.rs` | `Emulator` type, `discover_emulators()`, `launch_emulator()` |
 | `avds.rs` | Android AVD utilities |
 | `simulators.rs` | iOS simulator utilities |
-| `tool_availability.rs` | Tool detection (Android SDK, iOS simulators) |
+| `tool_availability.rs` | Tool detection (`adb`, `xcrun simctl`, `idevicesyslog`, `log`). `IosLogTool` enum selects the iOS capture backend at runtime. |
 | `test_utils.rs` | Test helpers for device/emulator testing |
+| `native_logs/mod.rs` | `NativeLogCapture` trait, `NativeLogHandle`, shared types (`NativeLogEvent`, `AndroidLogConfig`, `MacOsLogConfig`, `IosLogConfig`), and `create_native_log_capture()` platform dispatch |
+| `native_logs/android.rs` | `AndroidLogCapture` — spawns `adb logcat`, parses logcat output |
+| `native_logs/macos.rs` | `MacOsLogCapture` — spawns `log stream`, parses macOS unified log output |
+| `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
+| `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
+| `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
+
+**Platform Support:**
+
+| Platform | Mechanism          | Module        |
+|----------|--------------------|---------------|
+| Android  | `adb logcat`       | `android.rs`  |
+| macOS    | `log stream`       | `macos.rs`    |
+| iOS (sim)| `simctl log stream`| `ios.rs`      |
+| iOS (phy)| `idevicesyslog`    | `ios.rs`      |
+| Others   | Not needed (pipe)  | —             |
+
+**Tool Dependencies:**
+- `adb` — Android Debug Bridge, required for Android logcat capture
+- `log` — macOS unified logging tool, required for macOS native log capture
+- `xcrun simctl` — Xcode CLI tools, required for iOS simulator log capture
+- `idevicesyslog` — part of the `libimobiledevice` suite, required for physical iOS device log capture (optional; graceful degradation if absent)
 
 **Key Protocol:**
 - Flutter's `--machine` flag outputs JSON-RPC over stdout
@@ -454,7 +484,7 @@ flutter-demon/
 | `message.rs` | `Message` enum — all possible events/actions |
 | `signals.rs` | Signal handling for SIGINT/SIGTERM |
 | `handler/` | `update()` function and handler helpers (TEA) |
-| `session.rs` | `Session`, `SessionHandle` — per-device session state |
+| `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
 
@@ -536,6 +566,7 @@ The services layer provides trait-based abstractions for Flutter control operati
 | `device_selector.rs` | Modal for device/emulator selection |
 | `settings_panel/` | Settings editor (project, user prefs, launch configs, VSCode) |
 | `confirm_dialog.rs` | Confirmation dialog widget |
+| `tag_filter.rs` | Native tag filter overlay — toggle per-tag visibility, shows tag counts |
 | `new_session_dialog/` | New session creation dialog |
 
 ### `fdemon-dap` — DAP Server
@@ -647,7 +678,14 @@ SessionHandle
 ├── session: Session  (state)
 ├── process: Option<FlutterProcess>
 ├── cmd_sender: Option<CommandSender>
-└── request_tracker: Arc<RequestTracker>
+├── request_tracker: Arc<RequestTracker>
+├── vm_shutdown_tx / vm_request_handle  (VM Service connection)
+├── perf_shutdown_tx / perf_task_handle  (performance monitoring task)
+├── network_shutdown_tx / network_task_handle  (network monitoring task)
+├── debug_shutdown_tx / debug_task_handle  (DAP debug event task)
+├── native_log_shutdown_tx / native_log_task_handle  (platform capture task)
+├── native_tag_state: NativeTagState  (discovered tags + visibility)
+└── custom_source_handles: Vec<CustomSourceHandle>  (per-source handles)
 
 Session
 ├── id, name, phase
@@ -969,6 +1007,133 @@ fdemon-dap (defines trait)              fdemon-app (implements trait)
 calling VM Service RPCs directly. This ensures reload lifecycle, phase tracking,
 and EngineEvent broadcasting all work consistently whether reload is triggered
 from the TUI, file watcher, or IDE.
+
+---
+
+## Native Log Capture Subsystem
+
+Flutter apps on Android and iOS/macOS emit native platform logs (e.g., Go plugin logs, OkHttp network logs) that do not appear on Flutter's stdout/stderr pipe. The native log capture subsystem bridges these platform-specific log streams into the fdemon log view.
+
+### Architecture
+
+```
+FlutterProcess starts
+    │
+    ▼
+fdemon-daemon: create_native_log_capture(platform, …)
+    │
+    ├── "android" ──► AndroidLogCapture
+    │                 spawns: adb logcat --pid <pid>
+    │
+    ├── "macos"   ──► MacOsLogCapture
+    │                 spawns: log stream --process <name>
+    │
+    └── "ios"     ──► IosLogCapture
+                      ├── is_simulator=true → xcrun simctl spawn <udid> log stream
+                      └── is_simulator=false → idevicesyslog -u <udid> -p <process>
+```
+
+Each backend implements `NativeLogCapture::spawn()` which returns a `NativeLogHandle` with:
+- `event_rx`: `mpsc::Receiver<NativeLogEvent>` — parsed log events
+- `shutdown_tx`: `watch::Sender<bool>` — graceful stop signal
+- `task_handle`: `JoinHandle<()>` — background task (abortable as fallback)
+
+### Tag Filtering
+
+All native log events include a `tag` field (e.g., `"GoLog"`, `"OkHttp"`). Per-session tag state is tracked in `NativeTagState` (in `fdemon-app/session/native_tags.rs`):
+
+- Tags are discovered as events arrive and added to `discovered_tags` (a `BTreeMap<String, usize>` tracking count per tag)
+- Users can hide individual tags via the tag filter overlay (press `T` in normal mode)
+- Hidden tags are stored in `hidden_tags` (`BTreeSet<String>`)
+- Filtering is applied at the handler level: entries for hidden tags are not added to the session log buffer
+- Un-hiding a tag only applies to future entries (consistent with `LogSourceFilter` behaviour)
+
+### Per-Tag Configuration
+
+Individual tags can be configured in `.fdemon/config.toml` under `[native_logs.tags.<TagName>]`:
+
+```toml
+[native_logs.tags.GoLog]
+min_level = "debug"   # per-tag minimum level override
+
+[native_logs.tags.OkHttp]
+min_level = "info"
+```
+
+### Tool Dependencies
+
+| Tool | Platform | Purpose | Availability |
+|------|----------|---------|--------------|
+| `adb` | Android | logcat log capture | Required for Android native logs |
+| `log` | macOS | unified log stream capture | Required for macOS native logs |
+| `xcrun simctl` | macOS (iOS sim) | iOS simulator log stream | Requires Xcode CLI tools |
+| `idevicesyslog` | macOS (iOS phy) | Physical iOS device syslog relay | Optional; part of `libimobiledevice`. Graceful degradation if absent. |
+
+### Custom Log Sources
+
+Users can define arbitrary log source processes via `[[native_logs.custom_sources]]` configuration. Each custom source implements the same `NativeLogCapture` trait as platform backends.
+
+#### Architecture
+
+```
+                     NativeLogCapture trait
+┌──────────────────────────────────────────────────────────────────┐
+│ AndroidLogCapture │ MacOsLogCapture │ IosLogCapture │ CustomLogCapture │
+│ (adb logcat)      │ (log stream)    │ (xcrun simctl/│ (user-defined    │
+│                   │                 │  idevicesyslog)│  command)        │
+└──────────────────────────────────────────────────────────────────┘
+          │                  │               │               │
+          └──────────────────┴───────────────┴───────────────┘
+                                     │
+                              NativeLogEvent
+                                     │
+                         ┌───────────┴───────────┐
+                         │   Format Parser        │
+                         │   (formats.rs)         │
+                         │   Raw│Json│Logcat│Syslog│
+                         └───────────────────────┘
+                                     │
+                         Message::NativeLog
+                                     │
+                         handler::update()
+                                     │
+                         NativeTagState + log buffer
+```
+
+`CustomLogCapture` is separate from `create_native_log_capture()` (which dispatches by platform string). Multiple custom sources can be active concurrently within a single session.
+
+**Key design decisions:**
+
+- **No shell expansion**: Commands are spawned directly via `tokio::process::Command::new` with explicit args — never `sh -c`. This avoids injection risks.
+- **No auto-restart**: If the process exits, a warning is logged and the capture stops. Users must fix their command configuration.
+- **stderr not parsed**: stderr is piped to avoid orphaned pipe errors but its output is not forwarded as log events.
+- **Tag filtering**: Reuses `should_include_tag()` from `native_logs/mod.rs` with the per-source `include_tags`/`exclude_tags` lists.
+
+#### Format Parser Dispatch (`native_logs/formats.rs`)
+
+The `formats` module provides pluggable output parsing for custom sources via the `parse_line()` dispatch function:
+
+| Format | `OutputFormat` variant | Parser | Behavior |
+|--------|------------------------|--------|----------|
+| `raw` | `OutputFormat::Raw` | `parse_raw()` | Each non-empty line → `NativeLogEvent` (Info level, tag = source name) |
+| `json` | `OutputFormat::Json` | `parse_json()` | JSON objects with flexible field aliases: message/msg/text, tag/source/logger, level/severity/priority, timestamp/time/ts |
+| `logcat-threadtime` | `OutputFormat::LogcatThreadtime` | delegates to `android::parse_threadtime_line()` + `android::logcat_line_to_event()` | Android logcat threadtime format |
+| `syslog` | `OutputFormat::Syslog` | delegates to `macos::parse_syslog_line()` + `macos::syslog_line_to_event()` | macOS/iOS unified logging compact format (macOS-only; returns `None` on other platforms) |
+
+Custom sources integrate with the existing pipeline identically to platform backends:
+- Events flow through `NativeLogEvent` → `Message::NativeLog` → handler path
+- Tags are tracked in `NativeTagState` and appear in the tag filter overlay (`T` key)
+- `should_include_tag()` filtering applies identically to platform backends
+- `min_level` filtering uses the same `effective_min_level()` logic
+
+#### Custom Source Lifecycle Messages
+
+Two `Message` variants manage custom source lifecycle:
+
+| Message | When sent | Purpose |
+|---------|-----------|---------|
+| `CustomSourceStarted { session_id, name, shutdown_tx, task_handle }` | After `CustomLogCapture::spawn()` succeeds | TEA handler stores `shutdown_tx` and `task_handle` in `SessionHandle::custom_source_handles` |
+| `CustomSourceStopped { session_id, name }` | When the source's event channel closes (process exited) | TEA handler removes the named handle from `custom_source_handles` |
 
 ---
 
