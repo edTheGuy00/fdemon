@@ -41,3 +41,31 @@ No tests needed — documentation-only change.
 
 - If task 09 (extract startup dispatch) is implemented first, this comment would go on the extracted helper instead
 - Consider whether an `assert!` or `debug_assert!` checking that no follow-up message was returned would be appropriate as a runtime safety net
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/runner.rs` | Added `# Ordering` doc section to `dispatch_startup_action` function; added `ORDERING:` inline comment block to the `StartDapServer` call site in `run_with_project_and_dap` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comment placement on helper vs. call sites**: Task 09 was already complete, so the primary ordering comment was added as a `# Ordering` rustdoc section on `dispatch_startup_action` (the extracted helper). The `StartDapServer` call site in `run_with_project_and_dap` received a parallel inline `ORDERING:` comment since it is a separate synchronous `process_message` call not covered by the helper.
+
+2. **Two-location coverage**: The original task referenced "lines ~51 and ~137" as the two `StartAutoLaunch` call sites. Since task 09 consolidated those into the `dispatch_startup_action` helper, the comment on the helper covers both former call sites. The `StartDapServer` call site was also documented as it follows the same pre-loop synchronous dispatch pattern.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Documentation only**: No runtime enforcement. The comment describes a constraint that a future developer could violate without a compile-time guard. An optional `debug_assert!` was noted in the task but not added — it would require introspecting the `UpdateResult` return value, which would need a refactor beyond this documentation task's scope.

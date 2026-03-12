@@ -76,3 +76,31 @@ cargo clippy --workspace -- -D warnings
 
 - All 3 fixes are single-line changes — this task should be very quick
 - The clone fix may also be caught by clippy in future versions as a redundant clone warning
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/startup.rs` | Removed `.clone()` on `configs` (line 44); replaced `Path::new("/tmp/test")` with `tempfile::tempdir().unwrap()` / `dir.path()` in two test functions (lines 61, 75) |
+| `crates/fdemon-app/src/watcher/mod.rs` | Updated module doc from "Watches the `lib/` directory" to "Watches one or more configured directories" (lines 1-4) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import retention**: The `use std::path::Path` import in `startup.rs` was kept because it is still required for the `project_path: &Path` parameter in the `startup_flutter` function signature — only the test-local `Path::new("/tmp/test")` usages were removed.
+
+2. **tempdir binding placement**: The `let dir = tempfile::tempdir().unwrap();` binding was placed as the first line of each test function so the `TempDir` value lives for the entire test, keeping `dir.path()` valid throughout the assertion phase.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- startup` - Passed (7 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: All three changes are purely cosmetic or test-hygiene — no production logic was altered, and no behavioral changes were introduced.

@@ -70,3 +70,30 @@ cargo clippy -p fdemon-tui -- -D warnings
 
 - The review suggested tracking this for extraction "when a third call site or variant is added." Creating this task now for tracking purposes — implementation can be deferred if preferred.
 - The startup consolidation is lower priority since the two-step pattern is a documented exception for TUI startup initialization.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/runner.rs` | Extracted `dispatch_startup_action` private helper; replaced both duplicated `match startup_result` blocks in `run_with_project` and `run_with_project_and_dap` with a single call to the helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **startup.rs consolidation skipped**: The optional `prepare_startup_dialog` consolidation was not implemented as the task marked it lower priority and the two-step pattern is a documented exception for TUI startup initialization.
+2. **Helper placed before `run_loop`**: The `dispatch_startup_action` function is positioned just above `run_loop` to group the private helpers together at the bottom of the file, keeping public entry points at the top.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui` - 822 passed, 4 pre-existing snapshot failures unrelated to this change (version string mismatch `v0.1.0` vs `v0.2.1` in snapshots, confirmed failing on unmodified branch)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (zero warnings)
+- `cargo fmt -p fdemon-tui -- --check` - Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **Pre-existing snapshot failures**: The 4 `render::tests::snapshot_normal_mode_*` failures exist on the branch before this change and are caused by a version string mismatch in snapshots, not this refactor.

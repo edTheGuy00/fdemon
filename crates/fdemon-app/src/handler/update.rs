@@ -8,7 +8,7 @@
 //! - `settings_handlers`: Settings page handlers (Phase 6.1, Task 04)
 
 use crate::message::{AutoLaunchSuccess, Message};
-use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode};
+use crate::state::{AppState, DevToolsError, DevToolsPanel, UiMode, MAX_PENDING_WATCHER_ERRORS};
 use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::warn;
 
@@ -303,8 +303,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     .session
                     .log_error(fdemon_core::LogSource::Watcher, message.clone());
             } else {
-                // No session yet — buffer for flush on first SessionStarted
-                state.pending_watcher_errors.push(message.clone());
+                // No session yet — buffer for flush on first SessionStarted.
+                // Cap at MAX_PENDING_WATCHER_ERRORS to prevent unbounded growth.
+                if state.pending_watcher_errors.len() < MAX_PENDING_WATCHER_ERRORS {
+                    state.pending_watcher_errors.push(message.clone());
+                }
             }
             UpdateResult::none()
         }

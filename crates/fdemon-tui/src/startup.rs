@@ -41,7 +41,7 @@ pub fn startup_flutter(
     }
 
     // Default: show NewSessionDialog at startup (Startup mode)
-    state.show_new_session_dialog(configs.clone());
+    state.show_new_session_dialog(configs);
     state.ui_mode = UiMode::Startup; // Override to Startup mode
 
     // Return Ready - the runner will trigger tool availability and device discovery
@@ -56,9 +56,10 @@ mod tests {
 
     #[test]
     fn test_startup_flutter_shows_new_session_dialog_when_no_auto_start() {
+        let dir = tempfile::tempdir().unwrap();
         let mut state = AppState::new();
         let settings = Settings::default();
-        let project_path = Path::new("/tmp/test");
+        let project_path = dir.path();
 
         let result = startup_flutter(&mut state, &settings, project_path);
 
@@ -69,10 +70,11 @@ mod tests {
 
     #[test]
     fn test_startup_flutter_returns_auto_start_when_behavior_auto_start_enabled() {
+        let dir = tempfile::tempdir().unwrap();
         let mut state = AppState::new();
         let mut settings = Settings::default();
         settings.behavior.auto_start = true;
-        let project_path = Path::new("/tmp/test");
+        let project_path = dir.path();
 
         let result = startup_flutter(&mut state, &settings, project_path);
 

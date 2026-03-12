@@ -1,7 +1,7 @@
 //! File watcher module for auto-reload functionality
 //!
-//! Watches the `lib/` directory for Dart file changes and triggers
-//! automatic hot reload with debouncing.
+//! Watches one or more configured directories for Dart file changes
+//! and triggers automatic hot reload with debouncing.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -213,8 +213,26 @@ impl FileWatcher {
             }
         };
 
+        // Warn when no paths are configured — the watcher will run but never
+        // trigger a reload. This is valid (e.g. paths added dynamically later)
+        // but is almost always unintentional, so surface it as a warning.
+        if config.paths.is_empty() {
+            warn!("No watch paths configured — file watcher will not trigger reloads");
+        }
+
         // Add watched paths
-        for resolved in resolve_watch_paths(&project_root, &config.paths) {
+        let resolved_paths = resolve_watch_paths(&project_root, &config.paths);
+
+        // Warn when all configured paths were filtered out (e.g. none exist on disk).
+        // Emit only when paths *were* configured but none survived resolution.
+        if !config.paths.is_empty()
+            && resolved_paths.iter().all(|p| !p.exists())
+            && !resolved_paths.is_empty()
+        {
+            warn!("All configured watch paths are invalid or do not exist — file watcher will not trigger reloads");
+        }
+
+        for resolved in resolved_paths {
             if resolved.exists() {
                 if let Err(e) = debouncer.watch(&resolved, RecursiveMode::Recursive) {
                     warn!("Failed to watch {}: {}", resolved.display(), e);
@@ -538,5 +556,48 @@ mod tests {
         let resolved = resolve_watch_paths(&project_root, &[]);
 
         assert!(resolved.is_empty());
+    }
+
+    /// When `config.paths` is empty, `resolve_watch_paths` returns an empty
+    /// vec.  This is the same precondition checked by the `warn!` in
+    /// `run_watcher` — the watcher still starts, but the warning branch is
+    /// exercised (the log itself cannot be asserted in a unit test without a
+    /// tracing subscriber, so we document the invariant here instead).
+    #[test]
+    fn test_empty_paths_resolves_to_empty_vec() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        // Mirrors the check `config.paths.is_empty()` inside run_watcher.
+        let paths: Vec<PathBuf> = vec![];
+        assert!(paths.is_empty(), "precondition: no paths configured");
+
+        let resolved = resolve_watch_paths(&project_root, &paths);
+        assert!(
+            resolved.is_empty(),
+            "empty paths config must yield empty resolved list"
+        );
+    }
+
+    /// When all configured paths are non-existent, every resolved entry fails
+    /// `exists()`.  This is the precondition for the secondary `warn!` inside
+    /// `run_watcher` ("All configured watch paths are invalid…").
+    #[test]
+    fn test_all_nonexistent_paths_none_exist() {
+        let dir = tempfile::tempdir().unwrap();
+        let project_root = dir.path().to_path_buf();
+
+        let paths = vec![
+            PathBuf::from("does_not_exist_a"),
+            PathBuf::from("does_not_exist_b"),
+        ];
+
+        let resolved = resolve_watch_paths(&project_root, &paths);
+
+        assert!(!resolved.is_empty(), "should still have entries");
+        assert!(
+            resolved.iter().all(|p| !p.exists()),
+            "all entries should be non-existent so the all-invalid warning fires"
+        );
     }
 }

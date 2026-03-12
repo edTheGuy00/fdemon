@@ -3,7 +3,9 @@
 use super::*;
 use crate::input_key::InputKey;
 use crate::message::Message;
-use crate::state::{AppState, DevToolsError, UiMode, VmConnectionStatus};
+use crate::state::{
+    AppState, DevToolsError, UiMode, VmConnectionStatus, MAX_PENDING_WATCHER_ERRORS,
+};
 use fdemon_core::{AppPhase, DaemonEvent};
 
 /// Helper function to create a test Device with minimal required fields
@@ -7665,5 +7667,89 @@ fn test_custom_source_events_use_native_log_handler() {
     assert_eq!(
         handle.session.logs[0].message, "hello from custom source",
         "log message should match the custom source event"
+    );
+}
+
+// ── pending_watcher_errors cap tests ──────────────────────────────────────────
+
+#[test]
+fn test_pending_watcher_errors_buffered_when_no_session() {
+    let mut state = AppState::new();
+    assert!(state.session_manager.selected_mut().is_none());
+
+    update(
+        &mut state,
+        Message::WatcherError {
+            message: "watch failed".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.pending_watcher_errors.len(),
+        1,
+        "error should be buffered when no session exists"
+    );
+    assert_eq!(state.pending_watcher_errors[0], "watch failed");
+}
+
+#[test]
+fn test_pending_watcher_errors_capped_at_maximum() {
+    let mut state = AppState::new();
+    assert!(state.session_manager.selected_mut().is_none());
+
+    // Push one more than the cap.
+    for i in 0..=MAX_PENDING_WATCHER_ERRORS {
+        update(
+            &mut state,
+            Message::WatcherError {
+                message: format!("error {i}"),
+            },
+        );
+    }
+
+    assert_eq!(
+        state.pending_watcher_errors.len(),
+        MAX_PENDING_WATCHER_ERRORS,
+        "pending_watcher_errors must not exceed MAX_PENDING_WATCHER_ERRORS"
+    );
+}
+
+#[test]
+fn test_pending_watcher_errors_oldest_errors_kept_when_cap_reached() {
+    let mut state = AppState::new();
+    assert!(state.session_manager.selected_mut().is_none());
+
+    // Fill to the cap.
+    for i in 0..MAX_PENDING_WATCHER_ERRORS {
+        update(
+            &mut state,
+            Message::WatcherError {
+                message: format!("error {i}"),
+            },
+        );
+    }
+
+    // Push one more; it should be silently dropped.
+    update(
+        &mut state,
+        Message::WatcherError {
+            message: "overflow error".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.pending_watcher_errors.len(),
+        MAX_PENDING_WATCHER_ERRORS,
+        "buffer size unchanged after overflow"
+    );
+    assert!(
+        !state
+            .pending_watcher_errors
+            .contains(&"overflow error".to_string()),
+        "the overflow error should have been dropped, not appended"
+    );
+    assert_eq!(
+        state.pending_watcher_errors[0], "error 0",
+        "oldest error (index 0) should be retained"
     );
 }

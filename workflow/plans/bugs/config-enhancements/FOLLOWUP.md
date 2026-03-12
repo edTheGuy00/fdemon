@@ -30,21 +30,21 @@ Wave 3 (optional improvements — all independent):
 
 | # | Task | Priority | Status | Depends On | Modules |
 |---|------|----------|--------|------------|---------|
-| 6 | [06-review-code-quality-fixes](tasks/06-review-code-quality-fixes.md) | Must Fix | Not Started | - | `startup.rs`, `watcher/mod.rs` |
-| 7 | [07-empty-watcher-paths-warning](tasks/07-empty-watcher-paths-warning.md) | Should Fix | Not Started | - | `watcher/mod.rs` |
-| 8 | [08-testing-md-path-fixes](tasks/08-testing-md-path-fixes.md) | Should Fix | Not Started | - | `example/TESTING.md`, `example/app4/.fdemon/config.toml` |
-| 9 | [09-extract-startup-dispatch](tasks/09-extract-startup-dispatch.md) | Consider | Not Started | - | `runner.rs`, `startup.rs` |
-| 10 | [10-cap-pending-watcher-errors](tasks/10-cap-pending-watcher-errors.md) | Consider | Not Started | - | `state.rs`, `handler/update.rs` |
-| 11 | [11-doc-sync-process-message](tasks/11-doc-sync-process-message.md) | Consider | Not Started | - | `runner.rs` |
+| 6 | [06-review-code-quality-fixes](tasks/06-review-code-quality-fixes.md) | Must Fix | Done | - | `startup.rs`, `watcher/mod.rs` |
+| 7 | [07-empty-watcher-paths-warning](tasks/07-empty-watcher-paths-warning.md) | Should Fix | Done | - | `watcher/mod.rs` |
+| 8 | [08-testing-md-path-fixes](tasks/08-testing-md-path-fixes.md) | Should Fix | Done | - | `example/TESTING.md`, `example/app4/.fdemon/config.toml` |
+| 9 | [09-extract-startup-dispatch](tasks/09-extract-startup-dispatch.md) | Consider | Done | - | `runner.rs`, `startup.rs` |
+| 10 | [10-cap-pending-watcher-errors](tasks/10-cap-pending-watcher-errors.md) | Consider | Done | - | `state.rs`, `handler/update.rs` |
+| 11 | [11-doc-sync-process-message](tasks/11-doc-sync-process-message.md) | Consider | Done | - | `runner.rs` |
 
 ## Success Criteria
 
 Follow-up is complete when:
 
-- [ ] All "Must Fix" items resolved (task 06)
-- [ ] All "Should Fix" items resolved (tasks 07-08)
-- [ ] `cargo test --workspace` passes
-- [ ] `cargo clippy --workspace -- -D warnings` clean
+- [x] All "Must Fix" items resolved (task 06)
+- [x] All "Should Fix" items resolved (tasks 07-08)
+- [x] `cargo test --workspace` passes (4 pre-existing snapshot failures unrelated to these changes)
+- [x] `cargo clippy --workspace -- -D warnings` clean
 
 ## Notes
 

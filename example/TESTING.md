@@ -59,16 +59,21 @@ triggers reload in app1's session.
 
 ---
 
-## Test C — Verify `../../` watcher paths (app4, `../../shared_lib`)
+## Test C — Verify `../` watcher paths (app4, `../shared_lib`)
 
-**Purpose**: Confirm that a path using two levels of `..` traversal resolves
-correctly to `example/shared_lib/` from `example/app4/`.
+**Purpose**: Confirm that a relative path using `..` traversal resolves
+correctly to `example/shared_lib/` from `example/app4/`. Also confirms that a
+permanently configured non-existent path produces a warning without crashing
+(see Test G).
 
 **Configuration:** `example/app4/.fdemon/config.toml`
 ```toml
 [watcher]
-paths = ["lib", "../../shared_lib", "../app1/lib"]
+paths = ["lib", "../shared_lib", "../app1/lib", "../nonexistent"]
 ```
+
+Note: `../nonexistent` does not exist on disk and is kept in the config
+intentionally to exercise non-existent path warning behavior.
 
 **Steps:**
 
@@ -76,15 +81,17 @@ paths = ["lib", "../../shared_lib", "../app1/lib"]
    ```
    cargo run -- example/app4
    ```
-2. Confirm fdemon logs show `Watching:` for all three paths:
+2. Confirm fdemon logs show `Watching:` for the three valid paths:
    - `example/app4/lib`
    - `example/shared_lib`
    - `example/app1/lib`
-3. Edit `example/shared_lib/shared_utils.dart` and save.
-4. Verify fdemon triggers hot reload.
+3. Confirm fdemon logs a warning for `../nonexistent` (path does not exist).
+4. Edit `example/shared_lib/shared_utils.dart` and save.
+5. Verify fdemon triggers hot reload.
 
-**Expected result**: `../../shared_lib` resolves to `example/shared_lib/`;
-editing the shared file triggers reload.
+**Expected result**: `../shared_lib` resolves to `example/shared_lib/`;
+editing the shared file triggers reload. A warning is logged for the
+non-existent path but fdemon does not crash.
 
 ---
 
@@ -183,24 +190,21 @@ auto_start = false
 **Purpose**: Confirm that fdemon logs a warning (and does not crash) when a
 watcher path does not exist on disk.
 
+**Note**: `example/app4/.fdemon/config.toml` already includes `"../nonexistent"`
+as a permanent entry for this purpose — no config edits are needed.
+
 **Steps:**
 
-1. Temporarily add a non-existent path to `example/app4/.fdemon/config.toml`:
-   ```toml
-   [watcher]
-   paths = ["lib", "../../shared_lib", "../app1/lib", "nonexistent/path"]
-   ```
-2. Start app4:
+1. Start app4:
    ```
    cargo run -- example/app4
    ```
-3. Check fdemon log output for a warning about the non-existent path.
-4. Verify fdemon still starts and watches the valid paths.
+2. Check fdemon log output for a warning about `../nonexistent`.
+3. Verify fdemon still starts and watches the three valid paths (`lib`,
+   `../shared_lib`, `../app1/lib`).
 
-**Expected result**: A warning is logged for `nonexistent/path`; the other
+**Expected result**: A warning is logged for `../nonexistent`; the other
 three paths are watched normally; fdemon does not crash.
-
-**Cleanup**: Revert the config.toml change after the test.
 
 ---
 
@@ -256,9 +260,9 @@ example/
 │   └── lib/
 ├── app4/                  # Watcher path edge cases (Issue #17 reproduction)
 │   ├── .fdemon/
-│   │   ├── config.toml    # paths = ["lib", "../../shared_lib", "../app1/lib"]
+│   │   ├── config.toml    # paths = ["lib", "../shared_lib", "../app1/lib", "../nonexistent"]
 │   │   └── launch.toml    # single config, no auto_start
 │   └── lib/
 └── shared_lib/            # Shared Dart code — NOT a Flutter project
-    └── shared_utils.dart  # Edit this to test ../../ watcher resolution
+    └── shared_utils.dart  # Edit this to test ../ watcher resolution
 ```

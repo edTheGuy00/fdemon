@@ -971,8 +971,19 @@ pub struct AppState {
 
     /// Watcher errors that arrived before any session existed.
     /// Flushed into the first session on `SessionStarted`.
+    /// Capped at [`MAX_PENDING_WATCHER_ERRORS`] to prevent unbounded growth.
     pub pending_watcher_errors: Vec<String>,
 }
+
+/// Maximum number of watcher errors buffered before a session exists.
+///
+/// Errors arriving before any Flutter session has started are held in
+/// `AppState::pending_watcher_errors` and replayed into the first session's
+/// log on `SessionStarted`. Without a cap, a misconfigured watcher path that
+/// the OS repeatedly reports errors for could grow this buffer without bound.
+/// 50 errors is far more than any real misconfiguration scenario needs and
+/// keeps memory impact negligible.
+pub const MAX_PENDING_WATCHER_ERRORS: usize = 50;
 
 impl Default for AppState {
     fn default() -> Self {

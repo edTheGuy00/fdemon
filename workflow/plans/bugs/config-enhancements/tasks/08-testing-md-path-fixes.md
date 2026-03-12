@@ -57,3 +57,29 @@ No code tests needed — this is documentation-only. Manual review of TESTING.md
 ### Notes
 
 - Decide whether the non-existent path should be permanent in the config (simpler) or only added during Test G (more explicit). Permanent is recommended since it exercises the warning path automatically.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `example/app4/.fdemon/config.toml` | Fixed typo `"../non-existant"` -> `"../nonexistent"`; updated header comment to document the intentional missing path |
+| `example/TESTING.md` | Test C: corrected `../../shared_lib` -> `../shared_lib`, added `../nonexistent` 4th path entry with explanatory note, updated steps and expected result; Test G: removed "temporarily add" manual-edit instruction, replaced with reference to permanent entry; Directory Structure: updated app4 config.toml comment to show all 4 paths; fixed shared_lib comment from `../../` to `../` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Permanent non-existent path**: Kept `../nonexistent` as a permanent entry in the config (not a manual-edit test artifact), matching the task recommendation. This means Test C now covers both valid path resolution and the warning-on-missing-path behavior in one run, and Test G requires no config editing.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no output, no changes to Rust code)
+- `cargo check --workspace` - Passed (compiled cleanly in 1.30s)
+
+### Risks/Limitations
+
+1. **Documentation-only change**: No Rust code was modified, so there is no risk of regression. The only risk is human error in the doc text, which was verified by reading back both files after editing.
