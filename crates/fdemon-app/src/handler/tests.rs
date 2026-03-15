@@ -6742,6 +6742,7 @@ fn attach_custom_source_handle(
             name: name.to_string(),
             shutdown_tx: std::sync::Arc::new(tx),
             task_handle: None,
+            start_before_app: false,
         });
     rx
 }
@@ -6771,6 +6772,8 @@ fn test_hot_restart_skips_duplicate_custom_sources() {
         format: fdemon_core::types::OutputFormat::default(),
         working_dir: None,
         env: std::collections::HashMap::new(),
+        start_before_app: false,
+        ready_check: None,
     }];
 
     // Simulate that the first AppStart already spawned the custom source —
@@ -7402,6 +7405,7 @@ fn make_custom_source_started(
         name: name.to_string(),
         shutdown_tx: std::sync::Arc::new(shutdown_tx),
         task_handle: task_handle.clone(),
+        start_before_app: false,
     };
     (msg, shutdown_rx, task_handle)
 }
@@ -7426,6 +7430,7 @@ fn test_custom_source_started_stores_handle() {
                 name: "GoLog".to_string(),
                 shutdown_tx: std::sync::Arc::new(shutdown_tx),
                 task_handle,
+                start_before_app: false,
             },
         );
 
@@ -7467,6 +7472,7 @@ fn test_custom_source_started_multiple_sources_stored() {
                     name: name.to_string(),
                     shutdown_tx: std::sync::Arc::new(shutdown_tx),
                     task_handle,
+                    start_before_app: false,
                 },
             );
         }
@@ -7567,6 +7573,7 @@ fn test_custom_source_started_for_closed_session_sends_shutdown() {
             name: "orphaned".to_string(),
             shutdown_tx: std::sync::Arc::new(shutdown_tx),
             task_handle,
+            start_before_app: false,
         },
     );
 
@@ -7670,6 +7677,231 @@ fn test_custom_source_events_use_native_log_handler() {
     );
 }
 
+// ── double-spawn guard tests (pre-app-custom-sources Phase 1, Task 07) ────────
+
+#[test]
+fn test_custom_source_handle_has_start_before_app_field() {
+    // Acceptance criterion 1: CustomSourceHandle has start_before_app field.
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    let pre_app_handle = crate::session::CustomSourceHandle {
+        name: "server".to_string(),
+        shutdown_tx: std::sync::Arc::new(shutdown_tx),
+        task_handle: None,
+        start_before_app: true,
+    };
+    assert!(
+        pre_app_handle.start_before_app,
+        "pre-app handle should have start_before_app = true"
+    );
+
+    let (shutdown_tx2, _rx2) = tokio::sync::watch::channel(false);
+    let post_app_handle = crate::session::CustomSourceHandle {
+        name: "logger".to_string(),
+        shutdown_tx: std::sync::Arc::new(shutdown_tx2),
+        task_handle: None,
+        start_before_app: false,
+    };
+    assert!(
+        !post_app_handle.start_before_app,
+        "post-app handle should have start_before_app = false"
+    );
+}
+
+#[test]
+fn test_custom_source_started_stores_start_before_app_true() {
+    // Acceptance criterion 3: pre-app sources are tagged with start_before_app = true.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        update(
+            &mut state,
+            Message::CustomSourceStarted {
+                session_id,
+                name: "pre-app-source".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle,
+                start_before_app: true,
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.custom_source_handles.len(), 1);
+        assert!(
+            handle.custom_source_handles[0].start_before_app,
+            "stored handle should have start_before_app = true for a pre-app source"
+        );
+    });
+}
+
+#[test]
+fn test_custom_source_started_stores_start_before_app_false() {
+    // Acceptance criterion 4: post-app sources are tagged with start_before_app = false.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("android-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(None));
+
+        update(
+            &mut state,
+            Message::CustomSourceStarted {
+                session_id,
+                name: "post-app-source".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle,
+                start_before_app: false,
+            },
+        );
+
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(handle.custom_source_handles.len(), 1);
+        assert!(
+            !handle.custom_source_handles[0].start_before_app,
+            "stored handle should have start_before_app = false for a post-app source"
+        );
+    });
+}
+
+#[test]
+fn test_guard_fires_on_hot_restart_with_pre_app_sources_only_running() {
+    // Acceptance criterion 7: hot restart must not re-spawn pre-app sources.
+    // When only pre-app sources are running and no post-app sources are
+    // configured, the guard should fire and return None on repeated AppStart.
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability::default();
+    state.settings.native_logs.enabled = true;
+    // Only a pre-app source configured — no post-app sources.
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "server".to_string(),
+        command: "echo".to_string(),
+        args: vec![],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+        start_before_app: true,
+        ready_check: None,
+    }];
+
+    // Simulate that the pre-app source is already running (start_before_app = true).
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .custom_source_handles
+            .push(crate::session::CustomSourceHandle {
+                name: "server".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle: None,
+                start_before_app: true,
+            });
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Guard should fire: pre-app source is tracked, no post-app sources to start.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        action.is_none(),
+        "Expected None when only pre-app sources are configured and already running, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_guard_allows_post_app_sources_when_only_pre_app_running() {
+    // Acceptance criterion 8: post-app sources must still spawn correctly when
+    // pre-app sources are already tracked in custom_source_handles.
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability::default();
+    state.settings.native_logs.enabled = true;
+    // Configure one pre-app source and one post-app source.
+    state.settings.native_logs.custom_sources = vec![
+        crate::config::CustomSourceConfig {
+            name: "server".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::default(),
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            ready_check: None,
+        },
+        crate::config::CustomSourceConfig {
+            name: "logger".to_string(),
+            command: "echo".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::default(),
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
+        },
+    ];
+
+    // Simulate that only the pre-app source is already running.
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .custom_source_handles
+            .push(crate::session::CustomSourceHandle {
+                name: "server".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle: None,
+                start_before_app: true,
+            });
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Guard must NOT fire: the post-app source "logger" has not been started yet.
+    // The action should be emitted so spawn_custom_sources() can start "logger".
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        matches!(
+            action,
+            Some(crate::handler::UpdateAction::StartNativeLogCapture { .. })
+        ),
+        "Expected Some(StartNativeLogCapture) when post-app source 'logger' not yet running, got {:?}",
+        action
+    );
+}
+
 // ── pending_watcher_errors cap tests ──────────────────────────────────────────
 
 #[test]
@@ -7751,5 +7983,190 @@ fn test_pending_watcher_errors_oldest_errors_kept_when_cap_reached() {
     assert_eq!(
         state.pending_watcher_errors[0], "error 0",
         "oldest error (index 0) should be retained"
+    );
+}
+
+// ─────────────────────────────────────────────────────────
+// Pre-App Custom Source Message Variant Tests
+// (pre-app-custom-sources Phase 1, Task 03)
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_pre_app_message_variants_construct() {
+    let device = test_device("emulator-1", "Test Emulator");
+
+    let _msg = Message::PreAppSourcesReady {
+        session_id: 1,
+        device: device.clone(),
+        config: None,
+    };
+    let _msg = Message::PreAppSourceTimedOut {
+        session_id: 1,
+        source_name: "server".to_string(),
+    };
+    let _msg = Message::PreAppSourceProgress {
+        session_id: 1,
+        message: "Starting server...".to_string(),
+    };
+}
+
+#[test]
+fn test_pre_app_sources_ready_triggers_spawn_session() {
+    // Real handler: PreAppSourcesReady returns SpawnSession for an existing session.
+    let device = test_device("emulator-1", "Test Emulator");
+    let mut state = AppState::new();
+
+    // Create a session so the handler finds it
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(
+        &mut state,
+        Message::PreAppSourcesReady {
+            session_id,
+            device: device.clone(),
+            config: None,
+        },
+    );
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::SpawnSession { session_id: sid, .. }) if sid == session_id
+        ),
+        "PreAppSourcesReady should return SpawnSession, got {:?}",
+        result.action
+    );
+    assert!(
+        result.message.is_none(),
+        "should return no follow-up message"
+    );
+}
+
+#[test]
+fn test_pre_app_sources_ready_noop_for_missing_session() {
+    // Real handler: PreAppSourcesReady for a non-existent session is a no-op (no panic).
+    let device = test_device("emulator-1", "Test Emulator");
+    let mut state = AppState::new();
+
+    // session_id 99999 does not exist
+    let result = update(
+        &mut state,
+        Message::PreAppSourcesReady {
+            session_id: 99999,
+            device,
+            config: None,
+        },
+    );
+    assert!(
+        result.action.is_none(),
+        "should be a no-op for missing session"
+    );
+    assert!(
+        result.message.is_none(),
+        "should return no follow-up message"
+    );
+}
+
+#[test]
+fn test_pre_app_source_timed_out_adds_warning_log() {
+    // Real handler: PreAppSourceTimedOut logs a warning entry to the session.
+    let device = test_device("emulator-1", "Test Emulator");
+    let mut state = AppState::new();
+
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(
+        &mut state,
+        Message::PreAppSourceTimedOut {
+            session_id,
+            source_name: "my-server".to_string(),
+        },
+    );
+    assert!(result.action.is_none(), "should return no action");
+    assert!(
+        result.message.is_none(),
+        "should return no follow-up message"
+    );
+
+    // The session should have a warning log entry about the timeout
+    let handle = state.session_manager.get(session_id).unwrap();
+    let logs = &handle.session.logs;
+    assert!(
+        logs.iter().any(|e| {
+            e.level == fdemon_core::LogLevel::Warning
+                && e.message.contains("my-server")
+                && e.message.contains("timed out")
+        }),
+        "expected a timeout warning log, got: {:?}",
+        logs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pre_app_source_timed_out_noop_for_missing_session() {
+    // Real handler: PreAppSourceTimedOut for a non-existent session is a no-op (no panic).
+    let mut state = AppState::new();
+
+    let result = update(
+        &mut state,
+        Message::PreAppSourceTimedOut {
+            session_id: 99999,
+            source_name: "my-server".to_string(),
+        },
+    );
+    assert!(
+        result.action.is_none(),
+        "should be a no-op for missing session"
+    );
+}
+
+#[test]
+fn test_pre_app_source_progress_adds_info_log() {
+    // Real handler: PreAppSourceProgress adds an info log entry to the session.
+    let device = test_device("emulator-1", "Test Emulator");
+    let mut state = AppState::new();
+
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(
+        &mut state,
+        Message::PreAppSourceProgress {
+            session_id,
+            message: "Starting server 'my-server'...".to_string(),
+        },
+    );
+    assert!(result.action.is_none(), "should return no action");
+    assert!(
+        result.message.is_none(),
+        "should return no follow-up message"
+    );
+
+    // The session should have an info log entry with the progress message
+    let handle = state.session_manager.get(session_id).unwrap();
+    let logs = &handle.session.logs;
+    assert!(
+        logs.iter().any(|e| {
+            e.level == fdemon_core::LogLevel::Info
+                && e.message.contains("Starting server 'my-server'...")
+        }),
+        "expected a progress info log, got: {:?}",
+        logs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pre_app_source_progress_noop_for_missing_session() {
+    // Real handler: PreAppSourceProgress for a non-existent session is a no-op (no panic).
+    let mut state = AppState::new();
+
+    let result = update(
+        &mut state,
+        Message::PreAppSourceProgress {
+            session_id: 99999,
+            message: "Waiting for server to be ready...".to_string(),
+        },
+    );
+    assert!(
+        result.action.is_none(),
+        "should be a no-op for missing session"
     );
 }

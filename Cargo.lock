@@ -661,6 +661,7 @@ dependencies = [
  "toml",
  "tracing",
  "trait-variant",
+ "url",
 ]
 
 [[package]]

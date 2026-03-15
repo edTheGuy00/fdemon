@@ -419,6 +419,35 @@ pub enum UpdateAction {
         /// Flutter project directory — used as the default working directory
         /// for custom log source processes when `working_dir` is not specified.
         project_path: std::path::PathBuf,
+        /// Names of custom sources that are already running for this session.
+        ///
+        /// Captured at action creation time from `SessionHandle::custom_source_handles`.
+        /// Passed to `spawn_custom_sources()` so it can skip sources that were
+        /// already started as pre-app sources, preventing double-spawning.
+        running_source_names: Vec<String>,
+    },
+
+    /// Spawn pre-app custom sources and run their readiness checks before
+    /// launching the Flutter session.
+    ///
+    /// Dispatched by `handle_launch()` when the config has custom sources with
+    /// `start_before_app = true`. On completion (all sources ready or timed out),
+    /// sends `Message::PreAppSourcesReady` which triggers `SpawnSession`.
+    ///
+    /// (pre-app-custom-sources Phase 1, Task 03)
+    SpawnPreAppSources {
+        /// Session ID in `SessionManager` (already created before this action is dispatched).
+        session_id: SessionId,
+        /// The device to run on (passed through to `PreAppSourcesReady` → `SpawnSession`).
+        device: Device,
+        /// Optional launch configuration (passed through to `PreAppSourcesReady` → `SpawnSession`).
+        config: Option<Box<LaunchConfig>>,
+        /// Native log settings snapshot — provides `custom_sources` (filtered for
+        /// `start_before_app`), `exclude_tags`, and `include_tags`.
+        settings: crate::config::NativeLogsSettings,
+        /// Flutter project directory — used as the default `working_dir` when
+        /// constructing daemon-layer configs for each custom source.
+        project_path: std::path::PathBuf,
     },
 }
 

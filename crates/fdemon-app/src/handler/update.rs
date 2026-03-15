@@ -2048,6 +2048,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             name,
             shutdown_tx,
             task_handle,
+            start_before_app,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
@@ -2062,6 +2063,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         name: name.clone(),
                         shutdown_tx,
                         task_handle: task_join_handle,
+                        start_before_app,
                     });
                 tracing::debug!(
                     "Custom log source '{}' handle stored for session {}",
@@ -2096,6 +2098,68 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 name,
                 session_id
             );
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Pre-App Custom Source Lifecycle Messages
+        // (pre-app-custom-sources Phase 1, Task 03)
+        // ─────────────────────────────────────────────────────────
+
+        // All pre-app sources ready (or timed out) — gate release to spawn Flutter.
+        Message::PreAppSourcesReady {
+            session_id,
+            device,
+            config,
+        } => {
+            // Gate has lifted — launch Flutter now.
+            // The session already exists in SessionManager (created by handle_launch).
+            if state.session_manager.get(session_id).is_some() {
+                UpdateResult::action(UpdateAction::SpawnSession {
+                    session_id,
+                    device,
+                    config,
+                })
+            } else {
+                // Session was closed during the readiness wait — no-op.
+                tracing::warn!(
+                    "PreAppSourcesReady for session {} but session no longer exists",
+                    session_id
+                );
+                UpdateResult::none()
+            }
+        }
+
+        // A specific pre-app source timed out — log a warning to the session.
+        Message::PreAppSourceTimedOut {
+            session_id,
+            source_name,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(fdemon_core::LogEntry::new(
+                    LogLevel::Warning,
+                    LogSource::Daemon,
+                    format!(
+                        "Pre-app source '{}' readiness check timed out. Proceeding with launch.",
+                        source_name
+                    ),
+                ));
+            }
+            UpdateResult::none()
+        }
+
+        // Progress update from a pre-app source startup — add to session log buffer.
+        Message::PreAppSourceProgress {
+            session_id,
+            message,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(fdemon_core::LogEntry::new(
+                    LogLevel::Info,
+                    LogSource::Daemon,
+                    message,
+                ));
+            }
             UpdateResult::none()
         }
 

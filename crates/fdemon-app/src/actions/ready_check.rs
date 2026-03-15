@@ -1,26 +1,11 @@
-## Task: Ready Check Execution Module
-
-**Objective**: Create a new module that implements all five readiness check strategies (HTTP, TCP, Command, Stdout, Delay), each running in a poll loop with timeout.
-
-**Depends on**: Task 01 (config types — `ReadyCheck` enum), Task 02 (daemon stdout readiness — `oneshot::Receiver`)
-
-### Scope
-
-- `crates/fdemon-app/src/actions/ready_check.rs`: **NEW** — ready check execution logic
-- `crates/fdemon-app/src/actions/mod.rs`: Add `pub mod ready_check;`
-
-### Details
-
-#### 1. Module Structure
-
-Create `crates/fdemon-app/src/actions/ready_check.rs`:
-
-```rust
 //! Ready check execution for pre-app custom sources.
 //!
 //! Each check type runs in a loop (or awaits a signal) until the readiness
 //! condition is met or the timeout expires. All checks return a `ReadyCheckResult`
 //! indicating success (with elapsed duration) or timeout.
+//!
+//! The public API (`run_ready_check`, `ReadyCheckResult`) is consumed by
+//! [`super::native_logs::spawn_pre_app_sources`].
 
 use std::time::{Duration, Instant};
 use tokio::net::TcpStream;
@@ -40,15 +25,12 @@ pub enum ReadyCheckResult {
 }
 
 impl ReadyCheckResult {
+    /// Returns `true` if the check succeeded.
     pub fn is_ready(&self) -> bool {
         matches!(self, ReadyCheckResult::Ready(_))
     }
 }
-```
 
-#### 2. Main Entry Point
-
-```rust
 /// Execute a readiness check.
 ///
 /// For `Stdout` checks, `ready_rx` must be provided (the corresponding
@@ -64,30 +46,34 @@ pub async fn run_ready_check(
 ) -> ReadyCheckResult {
     let start = Instant::now();
     match check {
-        ReadyCheck::Http { url, interval_ms, timeout_s } => {
-            run_http_check(url, *interval_ms, *timeout_s, source_name, start).await
-        }
-        ReadyCheck::Tcp { host, port, interval_ms, timeout_s } => {
-            run_tcp_check(host, *port, *interval_ms, *timeout_s, source_name, start).await
-        }
-        ReadyCheck::Command { command, args, interval_ms, timeout_s } => {
-            run_command_check(command, args, *interval_ms, *timeout_s, source_name, start).await
-        }
+        ReadyCheck::Http {
+            url,
+            interval_ms,
+            timeout_s,
+        } => run_http_check(url, *interval_ms, *timeout_s, source_name, start).await,
+        ReadyCheck::Tcp {
+            host,
+            port,
+            interval_ms,
+            timeout_s,
+        } => run_tcp_check(host, *port, *interval_ms, *timeout_s, source_name, start).await,
+        ReadyCheck::Command {
+            command,
+            args,
+            interval_ms,
+            timeout_s,
+        } => run_command_check(command, args, *interval_ms, *timeout_s, source_name, start).await,
         ReadyCheck::Stdout { timeout_s, .. } => {
             run_stdout_check(ready_rx, *timeout_s, source_name, start).await
         }
-        ReadyCheck::Delay { seconds } => {
-            run_delay_check(*seconds, start).await
-        }
+        ReadyCheck::Delay { seconds } => run_delay_check(*seconds, start).await,
     }
 }
-```
 
-#### 3. HTTP Check — Raw TCP + Minimal HTTP/1.1
-
-Per PLAN Decision 6: no `reqwest` dependency, raw TCP with minimal HTTP:
-
-```rust
+/// Poll an HTTP endpoint until it responds with a 2xx status or the timeout expires.
+///
+/// Uses raw TCP + minimal HTTP/1.1 (no `reqwest` dependency, per PLAN Decision 6).
+/// Only `http://` URLs are supported; for HTTPS use the `Tcp` check type instead.
 async fn run_http_check(
     url: &str,
     interval_ms: u64,
@@ -98,8 +84,6 @@ async fn run_http_check(
     let timeout = Duration::from_secs(timeout_s);
     let interval = Duration::from_millis(interval_ms);
 
-    // Parse URL to extract host, port, path
-    // Use simple string parsing to avoid adding `url` crate as runtime dep
     let (host, port, path) = match parse_http_url(url) {
         Ok(parts) => parts,
         Err(e) => return ReadyCheckResult::Failed(format!("invalid URL: {}", e)),
@@ -108,33 +92,40 @@ async fn run_http_check(
     let addr = format!("{}:{}", host, port);
 
     loop {
-        if start.elapsed() >= timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             return ReadyCheckResult::TimedOut(start.elapsed());
         }
 
-        match try_http_get(&addr, &host, &path).await {
-            Ok(true) => return ReadyCheckResult::Ready(start.elapsed()),
-            Ok(false) => {
+        // Cap each attempt at the remaining timeout so slow TCP connects
+        // can't block past our deadline.
+        match tokio::time::timeout(remaining, try_http_get(&addr, &host, &path)).await {
+            Ok(Ok(true)) => return ReadyCheckResult::Ready(start.elapsed()),
+            Ok(Ok(false)) => {
                 tracing::debug!(
                     "Pre-app source '{}': HTTP check got non-2xx, retrying...",
                     source_name
                 );
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::debug!(
                     "Pre-app source '{}': HTTP check failed: {}, retrying...",
-                    source_name, e
+                    source_name,
+                    e
                 );
+            }
+            Err(_) => {
+                return ReadyCheckResult::TimedOut(start.elapsed());
             }
         }
 
-        // Sleep for interval, but cap at remaining timeout
+        // Sleep for interval, but cap at remaining timeout to avoid oversleeping.
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(interval.min(remaining)).await;
     }
 }
 
-/// Attempt a single HTTP GET and return true if status is 2xx.
+/// Attempt a single HTTP GET and return `true` if the status code is 2xx.
 async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<bool> {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -146,12 +137,12 @@ async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<boo
     );
     stream.write_all(request.as_bytes()).await?;
 
-    // Read just enough to get the status line
+    // Read just enough to get the status line.
     let mut buf = [0u8; 256];
     let n = stream.read(&mut buf).await?;
     let response = String::from_utf8_lossy(&buf[..n]);
 
-    // Parse "HTTP/1.x 2xx"
+    // Parse "HTTP/1.x 2xx ..."
     if let Some(status_line) = response.lines().next() {
         if let Some(code_str) = status_line.split_whitespace().nth(1) {
             if let Ok(code) = code_str.parse::<u16>() {
@@ -163,7 +154,10 @@ async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<boo
     Ok(false)
 }
 
-/// Parse an HTTP URL into (host, port, path).
+/// Parse an HTTP URL into `(host, port, path)`.
+///
+/// Only `http://` scheme is supported. HTTPS is out of scope per PLAN Decision 6;
+/// users can use the `Tcp` check type for HTTPS endpoints.
 fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
     let stripped = url
         .strip_prefix("http://")
@@ -181,16 +175,13 @@ fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
                 .map_err(|e| format!("invalid port: {}", e))?;
             (&host_port[..i], port)
         }
-        None => (host_port, 80),
+        None => (host_port, 80u16),
     };
 
     Ok((host.to_string(), port, path.to_string()))
 }
-```
 
-#### 4. TCP Check
-
-```rust
+/// Poll a TCP host:port until a connection succeeds or the timeout expires.
 async fn run_tcp_check(
     host: &str,
     port: u16,
@@ -204,29 +195,36 @@ async fn run_tcp_check(
     let addr = format!("{}:{}", host, port);
 
     loop {
-        if start.elapsed() >= timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             return ReadyCheckResult::TimedOut(start.elapsed());
         }
 
-        match TcpStream::connect(&addr).await {
-            Ok(_) => return ReadyCheckResult::Ready(start.elapsed()),
-            Err(e) => {
+        // Cap each connect attempt at the remaining timeout so a slow OS-level
+        // TCP SYN timeout (up to 75s on macOS) can't block past our deadline.
+        match tokio::time::timeout(remaining, TcpStream::connect(&addr)).await {
+            Ok(Ok(_)) => return ReadyCheckResult::Ready(start.elapsed()),
+            Ok(Err(e)) => {
                 tracing::debug!(
                     "Pre-app source '{}': TCP check {}:{} failed: {}, retrying...",
-                    source_name, host, port, e
+                    source_name,
+                    host,
+                    port,
+                    e
                 );
+            }
+            Err(_) => {
+                return ReadyCheckResult::TimedOut(start.elapsed());
             }
         }
 
+        // Sleep for interval, but cap at remaining timeout to avoid oversleeping.
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(interval.min(remaining)).await;
     }
 }
-```
 
-#### 5. Command Check
-
-```rust
+/// Run an external command in a loop until it exits with code 0 or the timeout expires.
 async fn run_command_check(
     command: &str,
     args: &[String],
@@ -256,26 +254,30 @@ async fn run_command_check(
             Ok(status) => {
                 tracing::debug!(
                     "Pre-app source '{}': command check exited with {:?}, retrying...",
-                    source_name, status.code()
+                    source_name,
+                    status.code()
                 );
             }
             Err(e) => {
                 tracing::debug!(
                     "Pre-app source '{}': command check failed to spawn: {}, retrying...",
-                    source_name, e
+                    source_name,
+                    e
                 );
             }
         }
 
+        // Sleep for interval, but cap at remaining timeout to avoid oversleeping.
         let remaining = timeout.saturating_sub(start.elapsed());
         tokio::time::sleep(interval.min(remaining)).await;
     }
 }
-```
 
-#### 6. Stdout Check
-
-```rust
+/// Await a oneshot signal from the daemon stdout capture loop.
+///
+/// Returns `Ready` when the sender fires, `Failed` when the sender is dropped
+/// (process exited before the pattern matched), or `TimedOut` if `timeout_s`
+/// elapses with no signal.
 async fn run_stdout_check(
     ready_rx: Option<oneshot::Receiver<()>>,
     timeout_s: u64,
@@ -298,7 +300,7 @@ async fn run_stdout_check(
     match tokio::time::timeout(timeout, rx).await {
         Ok(Ok(())) => ReadyCheckResult::Ready(start.elapsed()),
         Ok(Err(_)) => {
-            // Sender dropped — process exited before pattern matched
+            // Sender was dropped — process exited before the pattern was matched.
             ReadyCheckResult::Failed(format!(
                 "process exited before stdout pattern matched (after {:.1}s)",
                 start.elapsed().as_secs_f64()
@@ -307,42 +309,13 @@ async fn run_stdout_check(
         Err(_) => ReadyCheckResult::TimedOut(start.elapsed()),
     }
 }
-```
 
-#### 7. Delay Check
-
-```rust
+/// Wait a fixed duration before returning `Ready`.
 async fn run_delay_check(seconds: u64, start: Instant) -> ReadyCheckResult {
     tokio::time::sleep(Duration::from_secs(seconds)).await;
     ReadyCheckResult::Ready(start.elapsed())
 }
-```
 
-#### 8. Register Module
-
-In `crates/fdemon-app/src/actions/mod.rs`, add:
-
-```rust
-pub mod ready_check;
-```
-
-### Acceptance Criteria
-
-1. `run_ready_check()` dispatches to the correct check type for each `ReadyCheck` variant
-2. HTTP check returns `Ready` on 2xx, retries on connection refused / non-2xx
-3. TCP check returns `Ready` on successful connection
-4. Command check returns `Ready` when command exits with code 0, retries on non-zero
-5. Stdout check returns `Ready` when `ready_rx` resolves, `Failed` when sender drops
-6. Delay check returns `Ready` after the configured duration
-7. All poll-based checks (HTTP, TCP, Command) respect `timeout_s` and return `TimedOut`
-8. All poll-based checks sleep `interval_ms` between attempts, capped at remaining timeout
-9. `parse_http_url()` correctly handles `http://host:port/path`, `http://host/path`, `http://host`
-10. `cargo check -p fdemon-app` passes
-11. `cargo test -p fdemon-app` passes
-
-### Testing
-
-```rust
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +354,14 @@ mod tests {
     #[test]
     fn test_parse_http_url_rejects_no_scheme() {
         assert!(parse_http_url("localhost:8080/health").is_err());
+    }
+
+    #[test]
+    fn test_parse_http_url_with_nested_path() {
+        let (host, port, path) = parse_http_url("http://localhost:8080/api/v1/health").unwrap();
+        assert_eq!(host, "localhost");
+        assert_eq!(port, 8080);
+        assert_eq!(path, "/api/v1/health");
     }
 
     // ── TCP check ─────────────────────────────────────────
@@ -458,7 +439,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stdout_check_fails_on_sender_drop() {
-        let (tx, rx) = oneshot::channel();
+        let (tx, rx) = oneshot::channel::<()>();
         let check = ReadyCheck::Stdout {
             pattern: "ready".to_string(),
             timeout_s: 5,
@@ -473,7 +454,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_stdout_check_timeout() {
-        let (_tx, rx) = oneshot::channel(); // tx held but never sent
+        let (_tx, rx) = oneshot::channel::<()>(); // tx held but never sent
         let check = ReadyCheck::Stdout {
             pattern: "ready".to_string(),
             timeout_s: 1,
@@ -504,56 +485,4 @@ mod tests {
         assert!(result.is_ready());
         assert!(start.elapsed() >= Duration::from_secs(1));
     }
-
-    // ── HTTP URL parsing edge cases ───────────────────────
-
-    #[test]
-    fn test_parse_http_url_with_nested_path() {
-        let (host, port, path) = parse_http_url("http://localhost:8080/api/v1/health").unwrap();
-        assert_eq!(path, "/api/v1/health");
-    }
 }
-```
-
-### Notes
-
-- The HTTP check uses raw TCP + minimal HTTP/1.1 per PLAN Decision 6 — no `reqwest` dependency
-- `parse_http_url()` only supports `http://` (not `https://`). HTTPS is explicitly out of scope per PLAN Decision 6 ("users can use the `tcp` check type instead")
-- The `interval.min(remaining)` pattern ensures we don't oversleep past the timeout boundary
-- All check functions accept `source_name` for debug logging — this helps users diagnose which source is having issues
-- The `ReadyCheckResult` type is designed for the caller (Task 06) to match on and generate appropriate messages
-
----
-
-## Completion Summary
-
-**Status:** Done
-
-### Files Modified
-
-| File | Changes |
-|------|---------|
-| `crates/fdemon-app/src/actions/ready_check.rs` | **NEW** — full implementation of all 5 readiness check strategies with tests |
-| `crates/fdemon-app/src/actions/mod.rs` | Added `pub mod ready_check;` declaration |
-| `crates/fdemon-app/src/config/mod.rs` | Added `ReadyCheck` to the `pub use types::{ ... }` re-export block so `crate::config::ReadyCheck` resolves |
-
-### Notable Decisions/Tradeoffs
-
-1. **`#![allow(dead_code)]` at module level**: All public items (`run_ready_check`, `ReadyCheckResult`, `is_ready`) appear unused until Task 06 wires the caller. A module-level inner attribute cleanly suppresses the lint without scattering `#[allow(dead_code)]` on every item. The comment in the module doc explains why.
-
-2. **`ReadyCheck` re-export in `config/mod.rs`**: The task spec says `use crate::config::ReadyCheck` but `ReadyCheck` was defined in `types.rs` and not re-exported from `config/mod.rs`. Adding it to the existing `pub use types::{ ... }` block is the minimal consistent change — it follows the same pattern as all other config types and doesn't require changing the import path in the new module.
-
-3. **`parse_http_url` and inner check functions are private**: Only `run_ready_check` and `ReadyCheckResult` are public. The inner helpers are crate-private (`async fn`, not `pub async fn`), matching the existing pattern in sibling modules like `network.rs` and `performance.rs`.
-
-### Testing Performed
-
-- `cargo fmt --all` — Passed
-- `cargo check -p fdemon-app` — Passed
-- `cargo check --workspace` — Passed
-- `cargo test -p fdemon-app` — Passed (1626 tests, including 14 new ready_check tests)
-- `cargo clippy -p fdemon-app -- -D warnings` — Passed
-
-### Risks/Limitations
-
-1. **`test_tcp_check_timeout_on_closed_port` uses port 1**: Port 1 is almost certainly not listening, but is not guaranteed. If the test environment has something bound to it the test would fail. The original task spec uses this port, so it is intentional.
-2. **`test_delay_check` is a 1-second wall-clock test**: This adds ~1s to the test suite. Acceptable per the original task spec.

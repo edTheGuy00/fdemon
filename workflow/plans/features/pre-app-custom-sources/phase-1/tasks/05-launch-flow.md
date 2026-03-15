@@ -240,4 +240,29 @@ fn test_pre_app_timed_out_adds_warning() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Modified `handle_launch()` to conditionally return `SpawnPreAppSources` when `native_logs.enabled && has_pre_app_sources()`; added 3 tests for pre-app gating logic |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced 3 stub match arms for `PreAppSourcesReady`, `PreAppSourceTimedOut`, `PreAppSourceProgress` with real implementations |
+| `crates/fdemon-app/src/handler/tests.rs` | Replaced 3 stub tests with 7 real behaviour tests covering ready/noop, timeout log, progress log, and missing-session no-op paths |
+
+### Notable Decisions/Tradeoffs
+
+1. **`add_log()` over `queue_log()`**: Progress and timeout messages are low-volume (one per pre-app source per launch), so `add_log()` is appropriate. `queue_log()` is reserved for high-volume native log streams.
+2. **Session phase not changed**: The task noted `AppPhase::Initializing` as optional. Omitted to keep the change minimal — the session's existing default phase and the progress log entries provide adequate UI feedback.
+3. **`SpawnPreAppSources` uses `state.project_path.clone()`**: The project path on `AppState` is the correct source for the default working directory per the task spec.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1632 passed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Session phase during wait**: The session sits in its default `AppPhase` while pre-app sources start up. If the UI shows "Idle" during this window, it may be slightly confusing — but this is a pre-existing state that also occurs during the normal `SpawnSession` async gap before `SessionStarted` arrives. No new regression introduced.

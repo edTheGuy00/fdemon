@@ -141,4 +141,33 @@ fn test_pre_app_message_variants_construct() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added 3 variants: `PreAppSourcesReady`, `PreAppSourceTimedOut`, `PreAppSourceProgress` in a new section after `CustomSourceStopped` |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `UpdateAction::SpawnPreAppSources` variant with full field documentation, placed after `StartNativeLogCapture` |
+| `crates/fdemon-app/src/handler/update.rs` | Added stub match arms for all 3 new `Message` variants (no-op, returning `UpdateResult::none()`) |
+| `crates/fdemon-app/src/actions/mod.rs` | Added stub dispatch arm for `UpdateAction::SpawnPreAppSources` (logs debug, no async spawn) |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 tests: construction test + one stub-behaviour test per new message variant |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in `message.rs`**: New variants are placed after `CustomSourceStopped` in their own section, consistent with the file's pattern of grouping related lifecycle messages together. This makes them easy to find when Task 05 implements real logic.
+
+2. **Stub pattern in `update.rs`**: Used single-expression `=> UpdateResult::none()` arms with `_`-prefixed bindings to suppress unused-variable warnings. This matches the pattern used for other stub arms elsewhere in the file and keeps clippy clean without `#[allow]` attributes.
+
+3. **Stub pattern in `actions/mod.rs`**: The `SpawnPreAppSources` arm uses a `tracing::debug!` call (matching the task specification) and binds only `session_id` (used in the debug message); remaining fields are `_`-bound to avoid unused warnings. This is consistent with the existing stub pattern for not-yet-wired debug actions.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (clean formatting)
+- `cargo check -p fdemon-app` - Passed (no compilation errors)
+- `cargo test -p fdemon-app` - Passed (1615 tests total: 1611 unit + 1 integration; 0 failures; 4 new pre_app tests confirmed running)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Stub handlers**: All three message variants and the action variant are no-ops. Tasks 05 and 06 must replace them with real logic. The stubs compile and route correctly, satisfying the acceptance criteria for this task.

@@ -25,6 +25,7 @@ This document provides a complete reference for all configuration options availa
   - [UI Settings](#ui-settings)
   - [DevTools Settings](#devtools-settings)
   - [Native Logs Settings](#native-logs-settings)
+    - [Pre-App Custom Sources](#pre-app-custom-sources)
   - [Editor Settings](#editor-settings)
 - [Launch Configuration Reference](#launch-configuration-reference)
   - [Configuration Properties](#configuration-properties)
@@ -400,6 +401,110 @@ command = "adb"
 args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
 format = "logcat-threadtime"
 ```
+
+#### Pre-App Custom Sources
+
+Custom sources can be configured to start before the Flutter app launches. This is useful for backends, databases, or other services that must be running before your Flutter app connects to them.
+
+Two new fields control this behavior:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `start_before_app` | `bool` | `false` | When `true`, the source starts before the Flutter app. Its readiness is checked (if configured) before the app launches. |
+| `ready_check` | `table` | (none) | Configures how fdemon verifies the source is ready. Requires `start_before_app = true`. |
+
+**`ready_check` field reference:**
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `ready_check.type` | `string` | (required) | Check type: `http`, `tcp`, `command`, `stdout`, or `delay` |
+| `ready_check.url` | `string` | — | **HTTP**: URL to GET (expects a 2xx response) |
+| `ready_check.host` | `string` | — | **TCP**: hostname to connect to |
+| `ready_check.port` | `integer` | — | **TCP**: port number to connect to |
+| `ready_check.command` | `string` | — | **Command**: executable to run |
+| `ready_check.args` | `array<string>` | `[]` | **Command**: arguments to pass |
+| `ready_check.pattern` | `string` | — | **Stdout**: regex pattern to match against stdout lines |
+| `ready_check.seconds` | `integer` | `5` | **Delay**: seconds to wait |
+| `ready_check.interval_ms` | `integer` | `500` | **HTTP/TCP/Command**: milliseconds between poll attempts |
+| `ready_check.timeout_s` | `integer` | `30` | **HTTP/TCP/Command/Stdout**: seconds before giving up and proceeding |
+
+**Validation rules:**
+- `ready_check` requires `start_before_app = true`
+- `start_before_app = true` without a `ready_check` is valid: the source starts before the Flutter app but fdemon does not wait for readiness (fire-and-forget)
+
+**Timeout behavior:**
+- If a readiness check times out, Flutter launches anyway with a warning
+- The custom source process continues running after the timeout
+
+**Examples:**
+
+```toml
+# REST API backend — HTTP health check
+[[native_logs.custom_sources]]
+name = "server"
+command = "cargo"
+args = ["run", "-p", "server"]
+format = "raw"
+working_dir = "/path/to/project"
+start_before_app = true
+ready_check = { type = "http", url = "http://localhost:8080/health", interval_ms = 500, timeout_s = 30 }
+
+# Node.js API — TCP port check (no health endpoint)
+[[native_logs.custom_sources]]
+name = "api"
+command = "npm"
+args = ["run", "dev"]
+format = "json"
+working_dir = "/path/to/node-project"
+start_before_app = true
+ready_check = { type = "tcp", host = "localhost", port = 3000 }
+
+# gRPC server — command-based health check using grpcurl
+[[native_logs.custom_sources]]
+name = "grpc-server"
+command = "cargo"
+args = ["run", "-p", "server"]
+format = "raw"
+start_before_app = true
+ready_check = { type = "command", command = "grpcurl", args = ["-plaintext", "localhost:50051", "grpc.health.v1.Health/Check"], timeout_s = 60 }
+
+# PostgreSQL via Docker — pg_isready check
+[[native_logs.custom_sources]]
+name = "db"
+command = "docker"
+args = ["compose", "up", "postgres"]
+format = "raw"
+start_before_app = true
+ready_check = { type = "command", command = "pg_isready", args = ["-h", "localhost", "-p", "5432"], interval_ms = 1000, timeout_s = 30 }
+
+# Process that prints "ready" to stdout — stdout pattern match
+[[native_logs.custom_sources]]
+name = "worker"
+command = "python"
+args = ["worker.py"]
+format = "raw"
+start_before_app = true
+ready_check = { type = "stdout", pattern = "Worker ready|Listening on" }
+
+# Simple delay-based readiness
+[[native_logs.custom_sources]]
+name = "slow-service"
+command = "java"
+args = ["-jar", "service.jar"]
+format = "raw"
+start_before_app = true
+ready_check = { type = "delay", seconds = 5 }
+
+# Fire-and-forget — starts before the app but fdemon does not wait
+[[native_logs.custom_sources]]
+name = "cache-warmer"
+command = "bash"
+args = ["warm-cache.sh"]
+format = "raw"
+start_before_app = true
+```
+
+> **Note:** The source's stdout is visible in the fdemon log view while the readiness check is in progress, so you can watch startup output in real time.
 
 ### Editor Settings
 

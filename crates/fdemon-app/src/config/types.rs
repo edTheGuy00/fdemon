@@ -552,6 +552,128 @@ pub struct TagConfig {
     pub min_level: Option<String>,
 }
 
+/// Readiness check configuration for pre-app custom sources.
+///
+/// Determines how fdemon verifies that a custom source process is ready
+/// before launching the Flutter app. Only valid when `start_before_app = true`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ReadyCheck {
+    /// Poll an HTTP endpoint until it returns a 2xx status.
+    Http {
+        /// Full URL to GET (e.g., `http://localhost:8080/health`).
+        url: String,
+        /// Milliseconds between poll attempts.
+        #[serde(default = "default_ready_check_interval_ms")]
+        interval_ms: u64,
+        /// Seconds before giving up and proceeding with Flutter launch.
+        #[serde(default = "default_ready_check_timeout_s")]
+        timeout_s: u64,
+    },
+    /// Poll a TCP host:port until a connection succeeds.
+    Tcp {
+        /// Hostname to connect to (e.g., `localhost`).
+        host: String,
+        /// Port number to connect to.
+        port: u16,
+        /// Milliseconds between poll attempts.
+        #[serde(default = "default_ready_check_interval_ms")]
+        interval_ms: u64,
+        /// Seconds before giving up and proceeding with Flutter launch.
+        #[serde(default = "default_ready_check_timeout_s")]
+        timeout_s: u64,
+    },
+    /// Run an external command in a loop until it exits with code 0.
+    Command {
+        /// Executable to run (e.g., `grpcurl`, `pg_isready`).
+        command: String,
+        /// Arguments to pass to the command.
+        #[serde(default)]
+        args: Vec<String>,
+        /// Milliseconds between poll attempts.
+        #[serde(default = "default_ready_check_interval_ms")]
+        interval_ms: u64,
+        /// Seconds before giving up and proceeding with Flutter launch.
+        #[serde(default = "default_ready_check_timeout_s")]
+        timeout_s: u64,
+    },
+    /// Watch stdout for a regex pattern match.
+    Stdout {
+        /// Regex pattern to match against stdout lines.
+        pattern: String,
+        /// Seconds before giving up and proceeding with Flutter launch.
+        #[serde(default = "default_ready_check_timeout_s")]
+        timeout_s: u64,
+    },
+    /// Wait a fixed duration before proceeding.
+    Delay {
+        /// Seconds to wait.
+        #[serde(default = "default_ready_check_delay_s")]
+        seconds: u64,
+    },
+}
+
+fn default_ready_check_interval_ms() -> u64 {
+    500
+}
+fn default_ready_check_timeout_s() -> u64 {
+    30
+}
+fn default_ready_check_delay_s() -> u64 {
+    5
+}
+
+impl ReadyCheck {
+    /// Validate this readiness check configuration.
+    ///
+    /// # Errors
+    ///
+    /// - `Http`: URL is malformed or has no host
+    /// - `Tcp`: port is 0
+    /// - `Command`: command string is empty or whitespace
+    /// - `Stdout`: pattern is not valid regex
+    /// - `Delay`: seconds is 0
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            ReadyCheck::Http { url, .. } => {
+                let parsed = url::Url::parse(url)
+                    .map_err(|e| format!("invalid ready_check url '{}': {}", url, e))?;
+                if parsed.host().is_none() {
+                    return Err(format!("ready_check url '{}' has no host", url));
+                }
+                Ok(())
+            }
+            ReadyCheck::Tcp { port, .. } => {
+                if *port == 0 {
+                    return Err("ready_check tcp port must not be 0".to_string());
+                }
+                Ok(())
+            }
+            ReadyCheck::Command { command, .. } => {
+                if command.trim().is_empty() {
+                    return Err("ready_check command must not be empty".to_string());
+                }
+                Ok(())
+            }
+            ReadyCheck::Stdout { pattern, .. } => {
+                regex::Regex::new(pattern).map_err(|e| {
+                    format!(
+                        "ready_check stdout pattern '{}' is invalid regex: {}",
+                        pattern, e
+                    )
+                })?;
+                Ok(())
+            }
+            ReadyCheck::Delay { seconds } => {
+                if *seconds == 0 {
+                    return Err("ready_check delay seconds must be > 0".to_string());
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Configuration for a custom log source process.
 ///
 /// Defines an external command whose output is captured and parsed as native
@@ -586,6 +708,19 @@ pub struct CustomSourceConfig {
     /// In TOML: `env = { LOG_LEVEL = "debug" }`.
     #[serde(default)]
     pub env: HashMap<String, String>,
+
+    /// Start this source before the Flutter app launches.
+    ///
+    /// When `true`, the source is spawned during the pre-app phase and its
+    /// readiness check (if any) must pass before Flutter launches.
+    #[serde(default)]
+    pub start_before_app: bool,
+
+    /// Optional readiness check. Only valid when `start_before_app = true`.
+    ///
+    /// If set, Flutter launch is gated until the check passes or times out.
+    #[serde(default)]
+    pub ready_check: Option<ReadyCheck>,
 }
 
 /// Well-known platform tag names that would be confusing to reuse as custom source names.
@@ -632,6 +767,19 @@ impl CustomSourceConfig {
                 "custom_source name matches a known platform tag; \
                  this will work but may cause confusion in the tag filter"
             );
+        }
+        // ready_check requires start_before_app = true
+        if self.ready_check.is_some() && !self.start_before_app {
+            return Err(format!(
+                "custom_source '{}': ready_check requires start_before_app = true",
+                self.name
+            ));
+        }
+        // Validate ready_check if present
+        if let Some(ref check) = self.ready_check {
+            check
+                .validate()
+                .map_err(|e| format!("custom_source '{}': {}", self.name, e))?;
         }
         Ok(())
     }
@@ -734,6 +882,21 @@ impl NativeLogsSettings {
             .find(|(k, _)| k.eq_ignore_ascii_case(tag))
             .and_then(|(_, tc)| tc.min_level.as_deref())
             .unwrap_or(&self.min_level)
+    }
+
+    /// Returns `true` if any custom source has `start_before_app = true`.
+    pub fn has_pre_app_sources(&self) -> bool {
+        self.custom_sources.iter().any(|s| s.start_before_app)
+    }
+
+    /// Returns an iterator over custom sources with `start_before_app = true`.
+    pub fn pre_app_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
+        self.custom_sources.iter().filter(|s| s.start_before_app)
+    }
+
+    /// Returns an iterator over custom sources with `start_before_app = false` (post-app).
+    pub fn post_app_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
+        self.custom_sources.iter().filter(|s| !s.start_before_app)
     }
 
     /// Validate `NativeLogsSettings`, returning an error string if invalid.
@@ -1980,6 +2143,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
                 CustomSourceConfig {
                     name: "my-server".to_string(),
@@ -1988,6 +2153,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
             ],
             ..NativeLogsSettings::default()
@@ -2007,6 +2174,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
                 CustomSourceConfig {
                     name: "mylog".to_string(),
@@ -2015,6 +2184,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
             ],
             ..NativeLogsSettings::default()
@@ -2039,6 +2210,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
                 CustomSourceConfig {
                     name: "MyLog".to_string(),
@@ -2047,6 +2220,8 @@ min_level = "error"
                     format: OutputFormat::Raw,
                     working_dir: None,
                     env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
                 },
             ],
             ..NativeLogsSettings::default()
@@ -2069,6 +2244,8 @@ min_level = "error"
                 format: OutputFormat::Raw,
                 working_dir: None,
                 env: HashMap::new(),
+                start_before_app: false,
+                ready_check: None,
             }],
             ..NativeLogsSettings::default()
         };
@@ -2182,6 +2359,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Json,
             working_dir: Some("/tmp".to_string()),
             env,
+            start_before_app: false,
+            ready_check: None,
         };
         let serialized = toml::to_string(&original).unwrap();
         let deserialized: CustomSourceConfig = toml::from_str(&serialized).unwrap();
@@ -2202,6 +2381,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Raw,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         assert!(cfg.validate().is_err());
         let err = cfg.validate().unwrap_err();
@@ -2217,6 +2398,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Raw,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         assert!(cfg.validate().is_err());
     }
@@ -2230,6 +2413,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Raw,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(err.contains("command must not be empty"), "got: {err}");
@@ -2248,6 +2433,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::LogcatThreadtime,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         assert!(cfg.validate().is_ok());
     }
@@ -2264,6 +2451,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Syslog,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         let err = cfg.validate().unwrap_err();
         assert!(
@@ -2284,6 +2473,8 @@ args = ["-f", "/tmp/sidecar.log"]
             format: OutputFormat::Syslog,
             working_dir: None,
             env: HashMap::new(),
+            start_before_app: false,
+            ready_check: None,
         };
         assert!(cfg.validate().is_ok());
     }
@@ -2389,6 +2580,8 @@ env = { LOG_LEVEL = "debug", TRACE = "1" }
                 format: OutputFormat::Raw,
                 working_dir: None,
                 env: HashMap::new(),
+                start_before_app: false,
+                ready_check: None,
             }],
             ..NativeLogsSettings::default()
         };
@@ -2465,5 +2658,392 @@ env = { VERBOSE = "1", PATH_PREFIX = "/opt" }
         assert_eq!(cfg.env.get("VERBOSE"), Some(&"1".to_string()));
         assert_eq!(cfg.env.get("PATH_PREFIX"), Some(&"/opt".to_string()));
         assert_eq!(cfg.env.len(), 2, "env should have exactly 2 entries");
+    }
+
+    // ─── ReadyCheck deserialization ───────────────────────────────────────────
+
+    #[test]
+    fn test_ready_check_http_deserialize() {
+        let toml = r#"
+name = "server"
+command = "cargo"
+args = ["run"]
+start_before_app = true
+ready_check = { type = "http", url = "http://localhost:8080/health" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(config.start_before_app);
+        assert!(matches!(config.ready_check, Some(ReadyCheck::Http { .. })));
+    }
+
+    #[test]
+    fn test_ready_check_http_defaults() {
+        let toml = r#"
+name = "server"
+command = "cargo"
+args = ["run"]
+start_before_app = true
+ready_check = { type = "http", url = "http://localhost:8080/health" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Http {
+            interval_ms,
+            timeout_s,
+            ..
+        }) = config.ready_check
+        {
+            assert_eq!(interval_ms, 500);
+            assert_eq!(timeout_s, 30);
+        } else {
+            panic!("expected ReadyCheck::Http");
+        }
+    }
+
+    #[test]
+    fn test_ready_check_tcp_deserialize() {
+        let toml = r#"
+name = "db"
+command = "pg_isready"
+start_before_app = true
+ready_check = { type = "tcp", host = "localhost", port = 5432 }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Tcp {
+            host,
+            port,
+            interval_ms,
+            timeout_s,
+        }) = config.ready_check
+        {
+            assert_eq!(host, "localhost");
+            assert_eq!(port, 5432);
+            assert_eq!(interval_ms, 500);
+            assert_eq!(timeout_s, 30);
+        } else {
+            panic!("expected ReadyCheck::Tcp");
+        }
+    }
+
+    #[test]
+    fn test_ready_check_command_deserialize() {
+        let toml = r#"
+name = "grpc"
+command = "grpc-server"
+start_before_app = true
+ready_check = { type = "command", command = "grpcurl", args = ["-plaintext", "localhost:50051", "list"] }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Command {
+            command,
+            args,
+            interval_ms,
+            timeout_s,
+        }) = config.ready_check
+        {
+            assert_eq!(command, "grpcurl");
+            assert_eq!(args, vec!["-plaintext", "localhost:50051", "list"]);
+            assert_eq!(interval_ms, 500);
+            assert_eq!(timeout_s, 30);
+        } else {
+            panic!("expected ReadyCheck::Command");
+        }
+    }
+
+    #[test]
+    fn test_ready_check_stdout_deserialize() {
+        let toml = r#"
+name = "worker"
+command = "python"
+start_before_app = true
+ready_check = { type = "stdout", pattern = "Server started on port \\d+" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Stdout { pattern, timeout_s }) = config.ready_check {
+            assert_eq!(pattern, r"Server started on port \d+");
+            assert_eq!(timeout_s, 30);
+        } else {
+            panic!("expected ReadyCheck::Stdout");
+        }
+    }
+
+    #[test]
+    fn test_ready_check_delay_deserialize() {
+        let toml = r#"
+name = "slow-service"
+command = "start-service"
+start_before_app = true
+ready_check = { type = "delay", seconds = 10 }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Delay { seconds }) = config.ready_check {
+            assert_eq!(seconds, 10);
+        } else {
+            panic!("expected ReadyCheck::Delay");
+        }
+    }
+
+    #[test]
+    fn test_ready_check_delay_default_seconds() {
+        let toml = r#"
+name = "slow-service"
+command = "start-service"
+start_before_app = true
+ready_check = { type = "delay" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        if let Some(ReadyCheck::Delay { seconds }) = config.ready_check {
+            assert_eq!(seconds, 5);
+        } else {
+            panic!("expected ReadyCheck::Delay");
+        }
+    }
+
+    // ─── Backward compatibility ───────────────────────────────────────────────
+
+    #[test]
+    fn test_backward_compat_no_new_fields() {
+        let toml = r#"
+name = "watcher"
+command = "tail"
+args = ["-f", "/tmp/app.log"]
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(!config.start_before_app);
+        assert!(config.ready_check.is_none());
+    }
+
+    // ─── CustomSourceConfig::validate new checks ──────────────────────────────
+
+    #[test]
+    fn test_validate_ready_check_requires_start_before_app() {
+        let toml = r#"
+name = "server"
+command = "cargo"
+ready_check = { type = "http", url = "http://localhost:8080/health" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_start_before_app_without_ready_check_ok() {
+        let toml = r#"
+name = "worker"
+command = "python"
+args = ["worker.py"]
+start_before_app = true
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_start_before_app_with_http_ready_check_ok() {
+        let toml = r#"
+name = "server"
+command = "cargo"
+start_before_app = true
+ready_check = { type = "http", url = "http://localhost:8080/health" }
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(config.validate().is_ok());
+    }
+
+    // ─── ReadyCheck::validate error cases ────────────────────────────────────
+
+    #[test]
+    fn test_ready_check_http_validate_invalid_url() {
+        let check = ReadyCheck::Http {
+            url: "not-a-url".to_string(),
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_http_validate_url_no_host() {
+        let check = ReadyCheck::Http {
+            url: "file:///path/to/file".to_string(),
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_http_validate_valid_url() {
+        let check = ReadyCheck::Http {
+            url: "http://localhost:8080/health".to_string(),
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_ok());
+    }
+
+    #[test]
+    fn test_ready_check_tcp_validate_port_zero() {
+        let check = ReadyCheck::Tcp {
+            host: "localhost".to_string(),
+            port: 0,
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_tcp_validate_valid_port() {
+        let check = ReadyCheck::Tcp {
+            host: "localhost".to_string(),
+            port: 5432,
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_ok());
+    }
+
+    #[test]
+    fn test_ready_check_command_validate_empty_command() {
+        let check = ReadyCheck::Command {
+            command: "  ".to_string(),
+            args: vec![],
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_command_validate_valid() {
+        let check = ReadyCheck::Command {
+            command: "pg_isready".to_string(),
+            args: vec![],
+            interval_ms: 500,
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_ok());
+    }
+
+    #[test]
+    fn test_ready_check_stdout_validate_invalid_regex() {
+        let check = ReadyCheck::Stdout {
+            pattern: "[invalid regex".to_string(),
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_stdout_validate_valid_regex() {
+        let check = ReadyCheck::Stdout {
+            pattern: r"Server started on port \d+".to_string(),
+            timeout_s: 30,
+        };
+        assert!(check.validate().is_ok());
+    }
+
+    #[test]
+    fn test_ready_check_delay_validate_zero_seconds() {
+        let check = ReadyCheck::Delay { seconds: 0 };
+        assert!(check.validate().is_err());
+    }
+
+    #[test]
+    fn test_ready_check_delay_validate_valid() {
+        let check = ReadyCheck::Delay { seconds: 5 };
+        assert!(check.validate().is_ok());
+    }
+
+    // ─── NativeLogsSettings helper methods ───────────────────────────────────
+
+    #[test]
+    fn test_has_pre_app_sources_false_when_none() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: "watcher".to_string(),
+                command: "tail".to_string(),
+                args: vec![],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+                start_before_app: false,
+                ready_check: None,
+            }],
+            ..NativeLogsSettings::default()
+        };
+        assert!(!settings.has_pre_app_sources());
+    }
+
+    #[test]
+    fn test_has_pre_app_sources_false_when_empty() {
+        let settings = NativeLogsSettings::default();
+        assert!(!settings.has_pre_app_sources());
+    }
+
+    #[test]
+    fn test_has_pre_app_sources_true_when_present() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "post-app".to_string(),
+                    command: "tail".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "pre-app".to_string(),
+                    command: "server".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: true,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.has_pre_app_sources());
+    }
+
+    #[test]
+    fn test_pre_app_sources_iterator() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "pre".to_string(),
+                    command: "server".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: true,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "post".to_string(),
+                    command: "tail".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let pre: Vec<_> = settings.pre_app_sources().collect();
+        assert_eq!(pre.len(), 1);
+        assert_eq!(pre[0].name, "pre");
+
+        let post: Vec<_> = settings.post_app_sources().collect();
+        assert_eq!(post.len(), 1);
+        assert_eq!(post[0].name, "post");
     }
 }

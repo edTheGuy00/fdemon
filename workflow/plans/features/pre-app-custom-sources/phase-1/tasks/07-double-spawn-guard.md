@@ -293,4 +293,29 @@ fn test_spawn_custom_sources_skips_already_running() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Replaced the simple `!custom_source_handles.is_empty()` guard with a fine-grained check that computes `has_unstarted_post_app` and only returns `None` when all post-app sources are already running. |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_guard_fires_on_hot_restart_with_pre_app_sources_only_running` (criterion 7) and `test_guard_allows_post_app_sources_when_only_pre_app_running` (criterion 8). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard approach**: Tasks 01-06 already implemented criteria 1-6 fully (the `start_before_app` field on `CustomSourceHandle`, the message variant, the handler in `update.rs`, and the skip logic in `spawn_custom_sources()`). The only missing piece was the guard in `session.rs`. Changed the guard from the blunt `native_log_shutdown_tx.is_some() || !custom_source_handles.is_empty()` to a two-condition check that computes whether any post-app sources from config are still unstarted. This preserves the original hot-restart protection while allowing `AppStarted` to proceed when pre-app sources are tracked but post-app sources have not yet been spawned.
+
+2. **`running_source_names` already collected**: Code after the guard was already collecting `running_source_names` and passing them to `StartNativeLogCapture` (added by Task 06). With the guard fix, this code now executes when pre-app sources are present, ensuring `spawn_custom_sources()` receives the names of already-running sources so it can skip them.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1644 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Guard complexity**: The new guard is more complex than the original. The `HashSet` construction on every `AppStart` event is cheap (typically O(n) with small n), but it adds a small allocation. This is acceptable given `AppStart` fires rarely (only on app launch/hot-restart).
+2. **Test coverage of criterion 7**: The test for criterion 7 uses a Linux device (no platform capture). A scenario with an Android session + platform capture already running + pre-app sources could be added, but the logic is identical and covered by the condition structure.

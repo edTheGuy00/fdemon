@@ -22,6 +22,13 @@ pub struct CustomSourceHandle {
     pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     /// The background task handle — aborted as a fallback on session close.
     pub task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Whether this source was started before the Flutter app (pre-app source).
+    ///
+    /// Pre-app sources are spawned by `spawn_pre_app_sources()` before the Flutter
+    /// session launches. They must not be re-spawned when `AppStarted` fires and
+    /// triggers the normal `spawn_custom_sources()` path.
+    /// Post-app sources (`start_before_app = false`) are spawned after `AppStarted`.
+    pub start_before_app: bool,
 }
 
 /// Handle for controlling a session's Flutter process

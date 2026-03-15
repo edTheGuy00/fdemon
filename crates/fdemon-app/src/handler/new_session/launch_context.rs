@@ -493,12 +493,26 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                 state.hide_new_session_dialog();
                 state.ui_mode = crate::state::UiMode::Normal;
 
-                // Return action to spawn session
-                return UpdateResult::action(UpdateAction::SpawnSession {
-                    session_id,
-                    device,
-                    config: config.map(Box::new),
-                });
+                // Check if any custom sources need to start before the app
+                let action = if state.settings.native_logs.enabled
+                    && state.settings.native_logs.has_pre_app_sources()
+                {
+                    UpdateAction::SpawnPreAppSources {
+                        session_id,
+                        device,
+                        config: config.map(Box::new),
+                        settings: state.settings.native_logs.clone(),
+                        project_path: state.project_path.clone(),
+                    }
+                } else {
+                    UpdateAction::SpawnSession {
+                        session_id,
+                        device,
+                        config: config.map(Box::new),
+                    }
+                };
+
+                return UpdateResult::action(action);
             }
             Err(e) => {
                 // Max sessions reached or other error
@@ -1521,5 +1535,119 @@ mod tests {
             }
             _ => panic!("Expected SpawnSession action, got {:?}", result.action),
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pre-app custom sources: handle_launch gating
+    // (pre-app-custom-sources Phase 1, Task 05)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Helper: build a `CustomSourceConfig` with `start_before_app = true`.
+    fn pre_app_source(name: &str) -> crate::config::types::CustomSourceConfig {
+        crate::config::types::CustomSourceConfig {
+            name: name.to_string(),
+            command: "server".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            ready_check: None,
+        }
+    }
+
+    #[test]
+    fn test_handle_launch_returns_spawn_pre_app_when_pre_app_sources() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Enable native logs with a pre-app source
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("test-server"));
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when pre-app sources are configured, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_returns_spawn_session_when_no_pre_app_sources() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Enable native logs but no pre-app sources
+        state.settings.native_logs.enabled = true;
+        // custom_sources is empty by default
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+            "Expected SpawnSession when no pre-app sources configured, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_returns_spawn_session_when_native_logs_disabled() {
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Disable native logs even though a pre-app source is defined
+        state.settings.native_logs.enabled = false;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("test-server"));
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+            "Expected SpawnSession when native logs disabled, got {:?}",
+            result.action
+        );
     }
 }

@@ -316,4 +316,30 @@ Also test each `ReadyCheck::validate()` error case (invalid URL, invalid regex, 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/Cargo.toml` | Added `url.workspace = true` dependency |
+| `crates/fdemon-app/src/config/types.rs` | Added `ReadyCheck` enum with 5 variants, `ReadyCheck::validate()`, extended `CustomSourceConfig` with `start_before_app` and `ready_check` fields, added validation to `CustomSourceConfig::validate()`, added `has_pre_app_sources()` / `pre_app_sources()` / `post_app_sources()` helpers to `NativeLogsSettings`, updated all existing struct literal constructions to include new fields, added ~100 new tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated one `CustomSourceConfig` struct literal to include new fields |
+
+### Notable Decisions/Tradeoffs
+
+1. **`url` crate added to `fdemon-app`**: The `url` crate was already in the workspace (`Cargo.toml` at root specifies `url = "2"`), so it was straightforward to add as a workspace dependency. This avoids manual URL parsing and gives correct host extraction.
+2. **Existing tests updated in-place**: All pre-existing struct literal constructions of `CustomSourceConfig` required adding `start_before_app: false, ready_check: None`. There are no default implementations to allow partial construction, matching the explicit design intent.
+3. **`#[serde(tag = "type")]` placement**: The `ReadyCheck` enum uses `tag = "type"` with `rename_all = "snake_case"`, matching the TOML inline table syntax `{ type = "http", ... }` exactly as specified in the plan.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1611 tests, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`file:///` host check**: The `url` crate correctly returns `None` for `host()` on `file:///path/to/file` URLs (no host component), so the HTTP validation correctly rejects it.
+2. **Daemon `CustomSourceConfig` is separate**: `fdemon-daemon` has its own `CustomSourceConfig` type in `native_logs/custom.rs` with different fields (`exclude_tags`, `include_tags`, `ready_pattern`). The new fields live only in the app-layer config type and conversion between the two types (done in `fdemon-app/src/actions/native_logs.rs`) will need updating in a later task when the pre-app launch logic is implemented.

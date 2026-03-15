@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use fdemon_core::OutputFormat;
 use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 
 use super::formats::parse_line;
 use super::{NativeLogCapture, NativeLogEvent, NativeLogHandle, EVENT_CHANNEL_CAPACITY};
@@ -52,6 +52,11 @@ pub struct CustomSourceConfig {
     pub exclude_tags: Vec<String>,
     /// If non-empty, only events with these tags are forwarded (whitelist mode).
     pub include_tags: Vec<String>,
+    /// Optional regex pattern to match against stdout lines for readiness signaling.
+    /// When set, each stdout line is checked against this pattern. On first match,
+    /// the `ready_tx` sender (passed to [`CustomLogCapture::spawn_with_readiness`])
+    /// is fired and pattern matching stops.
+    pub ready_pattern: Option<String>,
 }
 
 /// Custom log capture backend.
@@ -67,17 +72,27 @@ impl CustomLogCapture {
     pub fn new(config: CustomSourceConfig) -> Self {
         Self { config }
     }
-}
 
-impl NativeLogCapture for CustomLogCapture {
-    fn spawn(&self) -> Option<NativeLogHandle> {
+    /// Spawn with an optional readiness signal sender.
+    ///
+    /// If `ready_tx` is provided alongside a `ready_pattern` in the config,
+    /// the capture loop will fire `ready_tx` when the pattern first matches
+    /// a stdout line.
+    ///
+    /// If the process exits before the pattern matches, `ready_tx` is dropped,
+    /// causing the receiver to get a `RecvError` — the app layer interprets
+    /// this as "ready check failed".
+    pub fn spawn_with_readiness(
+        &self,
+        ready_tx: Option<oneshot::Sender<()>>,
+    ) -> Option<NativeLogHandle> {
         let (event_tx, event_rx) = mpsc::channel::<NativeLogEvent>(EVENT_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
         let config = self.config.clone();
 
         let task_handle = tokio::spawn(async move {
-            run_custom_capture(config, event_tx, shutdown_rx).await;
+            run_custom_capture(config, event_tx, shutdown_rx, ready_tx).await;
         });
 
         Some(NativeLogHandle {
@@ -85,6 +100,12 @@ impl NativeLogCapture for CustomLogCapture {
             shutdown_tx,
             task_handle,
         })
+    }
+}
+
+impl NativeLogCapture for CustomLogCapture {
+    fn spawn(&self) -> Option<NativeLogHandle> {
+        self.spawn_with_readiness(None)
     }
 }
 
@@ -100,11 +121,36 @@ pub fn create_custom_log_capture(config: CustomSourceConfig) -> Box<dyn NativeLo
 /// Background capture loop: spawns the process, reads stdout line-by-line,
 /// parses each line through the configured format, applies tag filtering, and
 /// emits events.
+///
+/// If `ready_tx` is `Some` and `config.ready_pattern` is set, each line is
+/// checked against the compiled pattern. On first match, `ready_tx` is fired
+/// and pattern matching stops. If the process exits before a match, `ready_tx`
+/// is dropped, signaling failure to the receiver.
 async fn run_custom_capture(
     config: CustomSourceConfig,
     event_tx: mpsc::Sender<NativeLogEvent>,
     mut shutdown_rx: watch::Receiver<bool>,
+    mut ready_tx: Option<oneshot::Sender<()>>,
 ) {
+    // Compile ready pattern if provided. An invalid pattern logs a warning and
+    // drops ready_tx immediately (receiver will get RecvError, treated as failure).
+    let mut ready_regex = config.ready_pattern.as_ref().and_then(|p| {
+        match regex::Regex::new(p) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                tracing::warn!(
+                    "Custom source '{}': invalid ready pattern '{}': {}",
+                    config.name,
+                    p,
+                    e
+                );
+                // Dropping ready_tx signals failure to the receiver.
+                drop(ready_tx.take());
+                None
+            }
+        }
+    });
+
     let mut cmd = Command::new(&config.command);
     cmd.args(&config.args);
     cmd.stdout(std::process::Stdio::piped());
@@ -167,6 +213,22 @@ async fn run_custom_capture(
             line = reader.next_line() => {
                 match line {
                     Ok(Some(line)) => {
+                        // Check stdout readiness pattern BEFORE log parsing.
+                        // Both ready_regex and ready_tx must be Some for a check to occur.
+                        if let (Some(re), Some(_)) = (&ready_regex, &ready_tx) {
+                            if re.is_match(&line) {
+                                if let Some(tx) = ready_tx.take() {
+                                    let _ = tx.send(());
+                                }
+                                // Clear regex — no further matching needed after first match.
+                                ready_regex = None;
+                                tracing::debug!(
+                                    "Custom source '{}': stdout ready pattern matched",
+                                    config.name
+                                );
+                            }
+                        }
+
                         if let Some(event) = parse_line(&config.format, &line, &config.name) {
                             // Apply tag filtering.
                             if !super::should_include_tag(
@@ -221,6 +283,7 @@ mod tests {
             env: HashMap::new(),
             exclude_tags: vec![],
             include_tags: vec![],
+            ready_pattern: None,
         }
     }
 
@@ -343,6 +406,7 @@ mod tests {
             env,
             exclude_tags: vec![],
             include_tags: vec![],
+            ready_pattern: None,
         };
 
         let capture = CustomLogCapture::new(config);
@@ -375,6 +439,7 @@ mod tests {
             env: HashMap::new(),
             exclude_tags: vec!["filtered".to_string()],
             include_tags: vec![],
+            ready_pattern: None,
         };
 
         let capture = CustomLogCapture::new(config);
@@ -416,6 +481,7 @@ mod tests {
             env: HashMap::new(),
             exclude_tags: vec![],
             include_tags: vec!["allowed".to_string()],
+            ready_pattern: None,
         };
 
         let capture = CustomLogCapture::new(config);
@@ -447,6 +513,7 @@ mod tests {
             env: HashMap::new(),
             exclude_tags: vec![],
             include_tags: vec![],
+            ready_pattern: None,
         };
 
         let capture = CustomLogCapture::new(config);
@@ -500,6 +567,7 @@ mod tests {
             env: HashMap::new(),
             exclude_tags: vec![],
             include_tags: vec![],
+            ready_pattern: None,
         };
 
         let capture = CustomLogCapture::new(config);
@@ -539,6 +607,173 @@ mod tests {
         assert!(
             result.is_ok(),
             "task should complete after concurrent shutdown signal"
+        );
+    }
+
+    // ── Stdout readiness signaling ─────────────────────────────────────────
+
+    /// When the ready_pattern matches a stdout line, ready_tx is fired.
+    #[tokio::test]
+    async fn test_stdout_ready_pattern_fires_on_match() {
+        let config = CustomSourceConfig {
+            name: "ready-test".to_string(),
+            command: "printf".to_string(),
+            args: vec!["starting\\nServer ready on port 8080\\nhandling requests\\n".to_string()],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            ready_pattern: Some("Server ready".to_string()),
+        };
+
+        let capture = CustomLogCapture::new(config);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let _handle = capture.spawn_with_readiness(Some(ready_tx));
+
+        // ready_rx should resolve (not timeout)
+        let result = timeout(Duration::from_secs(2), ready_rx).await;
+        assert!(result.is_ok(), "ready signal should fire on pattern match");
+        assert!(
+            result.unwrap().is_ok(),
+            "ready_rx should receive Ok(()) on pattern match"
+        );
+    }
+
+    /// When the process exits before the pattern matches, ready_tx is dropped
+    /// and the receiver gets a RecvError.
+    #[tokio::test]
+    async fn test_stdout_ready_pattern_no_match_drops_tx() {
+        let config = CustomSourceConfig {
+            name: "no-match-test".to_string(),
+            command: "echo".to_string(),
+            args: vec!["no match here".to_string()],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            ready_pattern: Some("will not match".to_string()),
+        };
+
+        let capture = CustomLogCapture::new(config);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let _handle = capture.spawn_with_readiness(Some(ready_tx));
+
+        // Process exits quickly without matching — ready_rx should error.
+        let result = timeout(Duration::from_secs(2), ready_rx).await;
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "ready_rx should get RecvError when process exits without matching"
+        );
+    }
+
+    /// When no ready_pattern is set, ready_tx is dropped when the process exits.
+    #[tokio::test]
+    async fn test_stdout_ready_pattern_none_no_signal() {
+        let config = CustomSourceConfig {
+            name: "no-pattern".to_string(),
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            ready_pattern: None,
+        };
+
+        let capture = CustomLogCapture::new(config);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let _handle = capture.spawn_with_readiness(Some(ready_tx));
+
+        // No pattern to match — ready_tx dropped when process exits.
+        let result = timeout(Duration::from_secs(2), ready_rx).await;
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "ready_rx should get RecvError when no pattern is set"
+        );
+    }
+
+    /// Log events continue flowing normally during and after pattern matching.
+    #[tokio::test]
+    async fn test_stdout_ready_logs_still_flow_after_match() {
+        let config = CustomSourceConfig {
+            name: "logs-after-ready".to_string(),
+            command: "printf".to_string(),
+            args: vec!["ready\\nlog after ready\\n".to_string()],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            ready_pattern: Some("ready".to_string()),
+        };
+
+        let capture = CustomLogCapture::new(config);
+        let (ready_tx, _ready_rx) = tokio::sync::oneshot::channel();
+        let handle = capture.spawn_with_readiness(Some(ready_tx)).unwrap();
+
+        let mut event_rx = handle.event_rx;
+        let mut events = Vec::new();
+        loop {
+            match timeout(Duration::from_millis(500), event_rx.recv()).await {
+                Ok(Some(event)) => events.push(event),
+                _ => break,
+            }
+        }
+
+        // Both lines should appear as log events (pattern matching doesn't consume lines).
+        assert!(
+            events.len() >= 2,
+            "both lines should be forwarded as log events, got: {}",
+            events.len()
+        );
+    }
+
+    /// spawn_with_readiness(None) behaves identically to spawn().
+    #[tokio::test]
+    async fn test_spawn_with_readiness_none_behaves_like_spawn() {
+        let config = make_config("echo", vec!["hello"], OutputFormat::Raw);
+        let capture = CustomLogCapture::new(config);
+        let handle = capture
+            .spawn_with_readiness(None)
+            .expect("handle should be Some");
+
+        let mut event_rx = handle.event_rx;
+        let event = timeout(Duration::from_secs(2), event_rx.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+
+        assert_eq!(event.message, "hello");
+    }
+
+    /// Invalid regex in ready_pattern drops ready_tx immediately (before process runs).
+    #[tokio::test]
+    async fn test_stdout_ready_invalid_regex_drops_tx() {
+        let config = CustomSourceConfig {
+            name: "invalid-regex-test".to_string(),
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            format: OutputFormat::Raw,
+            working_dir: None,
+            env: HashMap::new(),
+            exclude_tags: vec![],
+            include_tags: vec![],
+            // Intentionally invalid regex pattern.
+            ready_pattern: Some("[invalid regex".to_string()),
+        };
+
+        let capture = CustomLogCapture::new(config);
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+        let _handle = capture.spawn_with_readiness(Some(ready_tx));
+
+        // Invalid regex causes ready_tx to be dropped — receiver should error.
+        let result = timeout(Duration::from_secs(2), ready_rx).await;
+        assert!(
+            matches!(result, Ok(Err(_))),
+            "ready_rx should get RecvError when regex is invalid"
         );
     }
 }

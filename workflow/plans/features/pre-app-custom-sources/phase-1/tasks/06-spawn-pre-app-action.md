@@ -364,4 +364,35 @@ For the spawn orchestration, consider a test with a mock `echo` command and a TC
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `spawn_pre_app_sources()`, `describe_ready_check()`, and 5 tests; updated imports to include `ReadyCheck`, `CustomLogCapture`, `ReadyCheckResult` |
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced stub `SpawnPreAppSources` dispatch with real call to `native_logs::spawn_pre_app_sources()` |
+| `crates/fdemon-app/src/actions/ready_check.rs` | Removed `#![allow(dead_code)]` (module is now actively used); updated module doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **`JoinSet` instead of `futures::future::join_all`**: `futures` is not in `fdemon-app`'s dependencies (only `futures-util` is in the workspace, used by `fdemon-daemon`). Used `tokio::task::JoinSet` to run readiness checks concurrently without adding a new dependency. The semantics are equivalent for this use case.
+
+2. **`CustomLogCapture::new()` instead of factory function**: The task spec required calling `spawn_with_readiness()`, which is only on the concrete `CustomLogCapture` type (not `Box<dyn NativeLogCapture>`). Constructing `CustomLogCapture` directly is correct — the factory `create_custom_log_capture()` is still used by `spawn_custom_sources()` where readiness signaling is not needed.
+
+3. **`TimedOut(Duration)` field actually used**: Removing `#![allow(dead_code)]` from `ready_check.rs` exposed a `dead_code` warning because the `Duration` payload inside `TimedOut` was never read. Fixed by logging the elapsed time at `warn!` level in the `TimedOut` match arm — this is useful operational information (not just suppressing the lint).
+
+4. **Sources without `ready_check` don't block the gate**: Implemented per spec — fire-and-forget sources are spawned but their forwarding tasks run independently. Only sources with a `ready_check` contribute to `sources_with_checks` and block `PreAppSourcesReady`. If zero sources have a `ready_check`, `PreAppSourcesReady` fires after all spawns complete synchronously.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1637 tests, +5 new `describe_ready_check` tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Forwarding task races `CustomSourceStarted`**: The forwarding task sends `CustomSourceStarted` at start. If the engine shuts down before receiving it, the task exits cleanly. This is identical to the existing `spawn_custom_sources()` pattern so the risk is already understood.
+
+2. **`ready_rx` capture in readiness future**: The `oneshot::Receiver` is moved into the `JoinSet` future (via `spawn`), not the forwarding task. This is correct: both tasks need access to the same `native_handle`, so `event_rx` goes to the forwarding task and `ready_rx` goes to the readiness future. The ownership is properly split before either task is spawned.

@@ -62,14 +62,14 @@ Wave 6                  ▼
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-config-types](tasks/01-config-types.md) | Not Started | - | `fdemon-app/config/types.rs` |
-| 2 | [02-daemon-stdout-readiness](tasks/02-daemon-stdout-readiness.md) | Not Started | - | `fdemon-daemon/native_logs/custom.rs` |
-| 3 | [03-message-action-types](tasks/03-message-action-types.md) | Not Started | 1 | `fdemon-app/message.rs`, `fdemon-app/handler/mod.rs` |
-| 4 | [04-ready-check-execution](tasks/04-ready-check-execution.md) | Not Started | 1, 2 | `fdemon-app/actions/ready_check.rs` (**NEW**) |
-| 5 | [05-launch-flow](tasks/05-launch-flow.md) | Not Started | 1, 3 | `fdemon-app/handler/new_session/launch_context.rs`, `fdemon-app/handler/update.rs` |
-| 6 | [06-spawn-pre-app-action](tasks/06-spawn-pre-app-action.md) | Not Started | 3, 4, 5 | `fdemon-app/actions/native_logs.rs`, `fdemon-app/actions/mod.rs` |
-| 7 | [07-double-spawn-guard](tasks/07-double-spawn-guard.md) | Not Started | 6 | `fdemon-app/session/handle.rs`, `fdemon-app/actions/native_logs.rs`, `fdemon-app/handler/session.rs` |
-| 8 | [08-documentation](tasks/08-documentation.md) | Not Started | 7 | `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md` |
+| 1 | [01-config-types](tasks/01-config-types.md) | Done | - | `fdemon-app/config/types.rs` |
+| 2 | [02-daemon-stdout-readiness](tasks/02-daemon-stdout-readiness.md) | Done | - | `fdemon-daemon/native_logs/custom.rs` |
+| 3 | [03-message-action-types](tasks/03-message-action-types.md) | Done | 1 | `fdemon-app/message.rs`, `fdemon-app/handler/mod.rs` |
+| 4 | [04-ready-check-execution](tasks/04-ready-check-execution.md) | Done | 1, 2 | `fdemon-app/actions/ready_check.rs` (**NEW**) |
+| 5 | [05-launch-flow](tasks/05-launch-flow.md) | Done | 1, 3 | `fdemon-app/handler/new_session/launch_context.rs`, `fdemon-app/handler/update.rs` |
+| 6 | [06-spawn-pre-app-action](tasks/06-spawn-pre-app-action.md) | Done | 3, 4, 5 | `fdemon-app/actions/native_logs.rs`, `fdemon-app/actions/mod.rs` |
+| 7 | [07-double-spawn-guard](tasks/07-double-spawn-guard.md) | Done | 6 | `fdemon-app/session/handle.rs`, `fdemon-app/actions/native_logs.rs`, `fdemon-app/handler/session.rs` |
+| 8 | [08-documentation](tasks/08-documentation.md) | Done | 7 | `docs/CONFIGURATION.md`, `docs/ARCHITECTURE.md` |
 
 ## Success Criteria
 

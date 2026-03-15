@@ -101,4 +101,28 @@ Add to the "Key Patterns" section:
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Added `#### Pre-App Custom Sources` subsection under `[[native_logs.custom_sources]]` with field reference tables, validation rules, timeout behavior, and 7 TOML examples covering all 5 check types plus fire-and-forget. Updated Table of Contents. |
+| `docs/ARCHITECTURE.md` | Added `#### Pre-App Custom Source Flow` subsection under Custom Log Sources with ASCII flow diagram and readiness check type table. Added `### Pre-App Source Gating` to Key Patterns section. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement in CONFIGURATION.md**: Added the new subsection directly after the existing `[[native_logs.custom_sources]]` examples block (before Editor Settings), so all custom source documentation is in one place. Used `####` heading to fit the existing `###` heading hierarchy.
+
+2. **Key Patterns section wording**: Described the architectural insight (pure handler returning action, fire-and-forget vs gated variants) concisely in prose rather than repeating the diagram already in the subsystem section.
+
+### Testing Performed
+
+- Read-through of both documents to verify accuracy against implementation tasks 01-07
+- Verified all 5 check types are documented with examples (`http`, `tcp`, `command`, `stdout`, `delay`)
+- Verified TOML examples match the PLAN.md reference examples (lines 296-374)
+- Confirmed field defaults match the task spec (`seconds = 5`, `interval_ms = 500`, `timeout_s = 30`)
+
+### Risks/Limitations
+
+1. **No automated TOML validation**: The task notes that TOML examples could be validated with `toml::from_str` but this is a documentation-only task with no build verification step. The examples were cross-checked manually against PLAN.md.

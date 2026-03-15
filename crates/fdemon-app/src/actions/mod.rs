@@ -22,6 +22,7 @@ pub(super) mod inspector;
 pub(super) mod native_logs;
 pub(super) mod network;
 pub(super) mod performance;
+pub mod ready_check;
 pub(super) mod vm_service;
 
 /// Convenience type alias for session task tracking
@@ -596,6 +597,7 @@ pub fn handle_action(
             app_id,
             settings,
             project_path,
+            running_source_names,
         } => {
             native_logs::spawn_native_log_capture(
                 session_id,
@@ -606,6 +608,27 @@ pub fn handle_action(
                 &settings,
                 project_path,
                 msg_tx.clone(),
+                running_source_names,
+            );
+        }
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Pre-App Custom Sources (pre-app-custom-sources Phase 1, Task 06)
+        // ─────────────────────────────────────────────────────────────────────
+        UpdateAction::SpawnPreAppSources {
+            session_id,
+            device,
+            config,
+            settings,
+            project_path,
+        } => {
+            native_logs::spawn_pre_app_sources(
+                session_id,
+                device,
+                config,
+                &settings,
+                &project_path,
+                &msg_tx,
             );
         }
 

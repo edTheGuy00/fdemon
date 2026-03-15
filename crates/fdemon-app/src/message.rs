@@ -1173,6 +1173,13 @@ pub enum Message {
         /// storing it on `SessionHandle`, leaving `None` for any subsequent
         /// (unexpected) clone.
         task_handle: SharedTaskHandle,
+        /// Whether this source was started before the Flutter app.
+        ///
+        /// Set to `true` by `spawn_pre_app_sources()`, `false` by
+        /// `spawn_custom_sources()`. The TEA handler stores this on
+        /// `CustomSourceHandle` so that `spawn_custom_sources()` can skip
+        /// re-spawning sources that are already running.
+        start_before_app: bool,
     },
 
     /// A custom log source process exited or was stopped.
@@ -1185,6 +1192,40 @@ pub enum Message {
         /// Name of the custom source that stopped (matches the name in
         /// `CustomSourceHandle` for lookup and removal).
         name: String,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // Pre-App Custom Source Lifecycle Messages
+    // (pre-app-custom-sources Phase 1, Task 03)
+    // ─────────────────────────────────────────────────────────
+    /// All pre-app custom sources are ready (or individually timed out).
+    ///
+    /// Triggers the Flutter session spawn that was gated on readiness.
+    /// Sent by the pre-app source coordinator task when every source with
+    /// `start_before_app = true` has either become ready or timed out.
+    PreAppSourcesReady {
+        session_id: SessionId,
+        device: Device,
+        config: Option<Box<LaunchConfig>>,
+    },
+
+    /// A specific pre-app source's readiness check timed out.
+    ///
+    /// Informational — logged as a warning. Does not block other sources.
+    /// The pre-app coordinator continues and eventually sends
+    /// `PreAppSourcesReady` once all sources are settled.
+    PreAppSourceTimedOut {
+        session_id: SessionId,
+        source_name: String,
+    },
+
+    /// Progress update during pre-app source startup.
+    ///
+    /// Displayed in the session's log buffer for user feedback
+    /// (e.g., "Starting server 'my-server'...", "Server 'my-server' ready (3.2s)").
+    PreAppSourceProgress {
+        session_id: SessionId,
+        message: String,
     },
 
     // ─────────────────────────────────────────────────────────

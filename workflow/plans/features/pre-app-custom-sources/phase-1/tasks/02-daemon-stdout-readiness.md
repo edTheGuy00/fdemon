@@ -298,4 +298,39 @@ async fn test_stdout_ready_logs_still_flow_after_match() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/custom.rs` | Added `ready_pattern: Option<String>` to `CustomSourceConfig`; added `spawn_with_readiness()` method to `CustomLogCapture`; delegated `NativeLogCapture::spawn()` to `spawn_with_readiness(None)`; extended `run_custom_capture()` with `ready_tx` parameter and regex pattern matching logic; updated `make_config()` helper and all 5 direct `CustomSourceConfig` struct constructors in the test module; added 6 new readiness-signaling tests |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `ready_pattern: None` to the `DaemonCustomSourceConfig` constructor that translates app-layer config to daemon-layer config |
+
+### Notable Decisions/Tradeoffs
+
+1. **`ready_pattern` on config struct, `ready_tx` as parameter**: The `oneshot::Sender` is not `Clone` so it cannot live on a `Clone` struct. The config carries only the pattern string; the sender is passed separately to `spawn_with_readiness()`. This matches the task design exactly.
+2. **Pattern check before `parse_line()`**: The readiness check runs on the raw stdout line before format parsing. This means the pattern matches the process's actual output regardless of `OutputFormat`, which is correct per the task spec.
+3. **`ready_regex = None` after first match**: After firing `ready_tx`, the `Option<Regex>` is set to `None`, making the hot path a single `if let (Some(re), Some(_))` check that short-circuits to a no-op once matched — zero cost after the first match.
+4. **Invalid regex drops `ready_tx` early**: An invalid regex pattern emits a `tracing::warn!` and drops `ready_tx` before the process is even spawned. The receiver gets `RecvError` immediately, which the app layer will interpret as a ready check failure.
+5. **`fdemon-app` `DaemonCustomSourceConfig` constructor**: The existing translation in `native_logs.rs` needed `ready_pattern: None` added. Future tasks (Task 06) that handle pre-app sources with readiness checks will set this field appropriately.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon` - Passed (580 passed, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+
+All 17 tests in `native_logs::custom::tests` pass, including 6 new readiness-signaling tests:
+- `test_stdout_ready_pattern_fires_on_match` - Passes
+- `test_stdout_ready_pattern_no_match_drops_tx` - Passes
+- `test_stdout_ready_pattern_none_no_signal` - Passes
+- `test_stdout_ready_logs_still_flow_after_match` - Passes
+- `test_spawn_with_readiness_none_behaves_like_spawn` - Passes
+- `test_stdout_ready_invalid_regex_drops_tx` - Passes
+
+### Risks/Limitations
+
+1. **App-layer `ready_pattern` wiring**: The daemon-layer infrastructure is now in place, but the app-layer currently always passes `ready_pattern: None` when constructing `DaemonCustomSourceConfig`. The actual pattern wiring (reading the `ReadyCheck::Stdout` variant and setting `ready_pattern`) will be done in a later task (Task 06 per the task notes).
