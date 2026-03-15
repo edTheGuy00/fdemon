@@ -7034,6 +7034,140 @@ fn test_hot_restart_skips_duplicate_custom_sources() {
     );
 }
 
+#[test]
+fn test_guard_accounts_for_shared_post_app_sources() {
+    // Regression guard: when a shared post-app source is already running globally
+    // (stored on AppState.shared_source_handles), `maybe_start_native_log_capture`
+    // must treat it as "running" and return None on hot-restart, avoiding a
+    // spurious StartNativeLogCapture dispatch.
+    //
+    // Uses an Android session with native_log_shutdown_tx set (platform capture
+    // already running) to exercise Guard Branch A:
+    //   `native_log_shutdown_tx.is_some() && !has_unstarted_post_app`
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Enable adb so native_logs_available("android") returns true.
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = true;
+
+    // Configure a shared post-app source only (no per-session custom sources).
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "my-shared-logger".to_string(),
+        command: "tail".to_string(),
+        args: vec!["-f".to_string(), "/tmp/log".to_string()],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+        start_before_app: false,
+        shared: true,
+        ready_check: None,
+    }];
+
+    // Register the shared source as already running on AppState.
+    // Shared sources are stored here, not on per-session custom_source_handles.
+    {
+        use crate::session::SharedSourceHandle;
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.shared_source_handles.push(SharedSourceHandle {
+            name: "my-shared-logger".to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+            start_before_app: false,
+        });
+    }
+
+    // Simulate platform capture already running (native_log_shutdown_tx is Some).
+    // This allows Guard Branch A to fire.
+    let _shutdown_rx = attach_native_log_shutdown(&mut state, session_id);
+
+    // Sanity: per-session custom_source_handles must be empty (shared sources
+    // aren't stored there), and native_log_shutdown_tx must be Some.
+    {
+        let h = state.session_manager.get(session_id).unwrap();
+        assert!(
+            h.custom_source_handles.is_empty(),
+            "custom_source_handles must be empty for shared-source scenario"
+        );
+        assert!(
+            h.native_log_shutdown_tx.is_some(),
+            "native_log_shutdown_tx must be Some for Guard Branch A to fire"
+        );
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Guard Branch A must fire: platform capture running + shared post-app source
+    // is already running → return None.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        action.is_none(),
+        "Expected None (guard fired) when shared post-app source is already running, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_guard_emits_action_when_shared_post_app_source_not_yet_running() {
+    // Complementary test: when a shared post-app source is configured but NOT yet
+    // present in state.shared_source_handles (i.e., it genuinely needs to be
+    // started), maybe_start_native_log_capture must still return Some.
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    // Use a Linux device so needs_platform_capture = false.
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability::default();
+    state.settings.native_logs.enabled = true;
+
+    // Configure a shared post-app source.
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "my-shared-logger".to_string(),
+        command: "tail".to_string(),
+        args: vec!["-f".to_string(), "/tmp/log".to_string()],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+        start_before_app: false,
+        shared: true,
+        ready_check: None,
+    }];
+
+    // shared_source_handles is empty — source not yet running.
+    assert!(state.shared_source_handles.is_empty());
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Guard must NOT fire: the source is not yet running → return Some.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        action.is_some(),
+        "Expected Some(StartNativeLogCapture) when shared post-app source is not yet running"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Native Tag Filter Handler Tests (Phase 2, Task 07)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -8708,7 +8842,7 @@ fn test_shared_source_stopped_removes_handle_and_warns() {
         );
 
         // Both sessions must have received a warning log.
-        state.session_manager.flush_all_pending_logs();
+        // Note: no manual flush needed — the handler calls flush_batched_logs() itself.
         let logs_a = &state.session_manager.get(sid_a).unwrap().session.logs;
         let logs_b = &state.session_manager.get(sid_b).unwrap().session.logs;
 
@@ -8848,6 +8982,74 @@ fn test_shared_source_survives_session_close() {
             "shared_source_handles must survive session close"
         );
         assert_eq!(state.shared_source_handles[0].name, "persistent-src");
+    });
+}
+
+#[test]
+fn test_shared_source_started_duplicate_is_rejected() {
+    // A second SharedSourceStarted carrying the same name must be rejected by the
+    // dedup guard: the handle count must stay at 1, the duplicate's shutdown
+    // channel must receive `true`, and the duplicate's task must be aborted.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let mut state = AppState::new();
+
+        // First SharedSourceStarted — should succeed and register the handle.
+        let task1: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let (msg1, _shutdown_rx1, _slot1) = make_shared_source_started("my-source", Some(task1));
+        let result1 = update(&mut state, msg1);
+        assert!(
+            result1.action.is_none(),
+            "first message should return no action"
+        );
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "first SharedSourceStarted must register the handle"
+        );
+
+        // Second SharedSourceStarted with the SAME name — must be rejected.
+        let (shutdown_tx2, shutdown_rx2) = tokio::sync::watch::channel(false);
+        let task2: tokio::task::JoinHandle<()> =
+            tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_secs(60)).await });
+        let task_slot2: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(task2)));
+        let msg2 = Message::SharedSourceStarted {
+            name: "my-source".to_string(),
+            shutdown_tx: std::sync::Arc::new(shutdown_tx2),
+            task_handle: task_slot2.clone(),
+            start_before_app: true,
+        };
+        let result2 = update(&mut state, msg2);
+
+        // Dedup guard must have fired: no action, handle count unchanged.
+        assert!(
+            result2.action.is_none(),
+            "duplicate message should return no action"
+        );
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "duplicate SharedSourceStarted must NOT push a second handle"
+        );
+        assert_eq!(
+            state.shared_source_handles[0].name, "my-source",
+            "the surviving handle must be the first one"
+        );
+
+        // The duplicate's shutdown channel must have received `true`.
+        assert_eq!(
+            *shutdown_rx2.borrow(),
+            true,
+            "dedup guard must signal the duplicate to shut down"
+        );
+
+        // The duplicate's task slot must now be empty (task was aborted and taken).
+        let slot_after = task_slot2.lock().unwrap();
+        assert!(
+            slot_after.is_none(),
+            "dedup guard must take (and abort) the duplicate task from the slot"
+        );
     });
 }
 

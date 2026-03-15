@@ -917,17 +917,20 @@ impl NativeLogsSettings {
     }
 
     /// Returns `true` if any custom source has `shared = true`.
-    pub fn has_shared_sources(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn has_shared_sources(&self) -> bool {
         self.custom_sources.iter().any(|s| s.shared)
     }
 
     /// Returns an iterator over shared custom sources.
-    pub fn shared_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
+    #[cfg(test)]
+    pub(crate) fn shared_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
         self.custom_sources.iter().filter(|s| s.shared)
     }
 
     /// Returns `true` if any custom source has `start_before_app = true` AND `shared = true`.
-    pub fn has_shared_pre_app_sources(&self) -> bool {
+    #[cfg(test)]
+    pub(crate) fn has_shared_pre_app_sources(&self) -> bool {
         self.custom_sources
             .iter()
             .any(|s| s.start_before_app && s.shared)

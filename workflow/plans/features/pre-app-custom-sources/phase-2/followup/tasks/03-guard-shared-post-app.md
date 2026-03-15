@@ -121,4 +121,30 @@ Also add a complementary test that verifies the function **does** return `Some` 
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Changed `running_names` from `let` to `let mut` and added a loop to insert shared post-app source names from `state.shared_source_handles` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_guard_accounts_for_shared_post_app_sources` and `test_guard_emits_action_when_shared_post_app_source_not_yet_running` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test uses Android + `native_log_shutdown_tx`**: The guard Branch A (`native_log_shutdown_tx.is_some() && !has_unstarted_post_app`) requires platform capture to be already running. The test uses an Android session with `adb: true` and `attach_native_log_shutdown` to set up this precondition, matching the task scaffold's note about `native_log_shutdown_tx = Some`.
+
+2. **Complementary test uses Linux**: The second test (verifying `Some` is still returned when the source isn't yet running) uses a Linux device where `has_custom_sources = true` drives `should_start`, avoiding any platform-capture dependency. This keeps it simple and platform-independent.
+
+3. **Filter on `!start_before_app`**: Shared sources are inserted into `running_names` only if `!start_before_app`, consistent with the task specification. This is the clearer-intent approach over inserting all shared source names.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1697 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Branch B not exercised by new tests**: For pure "shared post-app source only" Linux sessions (no platform capture, no per-session handles), neither guard branch fires even after this fix — because Branch B requires `!handle.custom_source_handles.is_empty()`. The downstream `spawn_custom_sources` dedup guard continues to prevent duplicate processes in that case. The fix correctly addresses Branch A (Android/iOS/macOS) as described in the task.

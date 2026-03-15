@@ -14,6 +14,7 @@ use super::session::Session;
 /// for signalling graceful stop, and the task handle for aborting as
 /// a fallback. Stored in a Vec on `SessionHandle` because multiple custom
 /// sources can run concurrently per session.
+#[derive(Debug)]
 pub struct CustomSourceHandle {
     /// Human-readable source name — used as the log tag in the tag filter overlay.
     pub name: String,

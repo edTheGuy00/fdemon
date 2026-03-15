@@ -2331,6 +2331,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             task_handle,
             start_before_app,
         } => {
+            // ── Dedup guard: close TOCTOU window ──────────────────────────
+            // The spawn-side check (running_shared_names snapshot) reduces but
+            // cannot eliminate duplicate spawns.  Since update() is single-
+            // threaded, this handler-side check is the authoritative gate.
+            if state.is_shared_source_running(&name) {
+                tracing::warn!(
+                    "Duplicate SharedSourceStarted for '{}' — shutting down extra process",
+                    name
+                );
+                let _ = shutdown_tx.send(true);
+                if let Some(task) = task_handle.lock().ok().and_then(|mut s| s.take()) {
+                    task.abort();
+                }
+                return UpdateResult::none();
+            }
+
             // Extract the JoinHandle from the Arc<Mutex<Option<>>> transfer slot.
             // The Option is taken so any subsequent (unexpected) clone of the message
             // sees None, preventing a double-store.
@@ -2365,6 +2381,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     format!("Shared source '{}' has stopped", name),
                 );
                 handle.session.queue_log(entry);
+                handle.session.flush_batched_logs();
             }
 
             tracing::warn!("Shared source '{}' stopped", name);

@@ -88,4 +88,25 @@ The `pub(crate)` change should compile cleanly since no external crate calls the
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Replaced inaccurate statement at line 1181: shared sources now correctly described as supporting both `start_before_app = true` and `start_before_app = false` |
+| `crates/fdemon-app/src/config/types.rs` | Demoted `has_shared_sources()`, `shared_sources()`, and `has_shared_pre_app_sources()` from `pub` to `pub(crate)` and added `#[cfg(test)]` since all callers are in the test module |
+| `crates/fdemon-app/src/session/handle.rs` | Added `#[derive(Debug)]` to `CustomSourceHandle` for parity with `SharedSourceHandle` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[cfg(test)]` in addition to `pub(crate)`**: Simply changing `pub` to `pub(crate)` triggered a `-D dead_code` error under `cargo clippy --workspace -- -D warnings` because the methods are only called from `#[cfg(test)]` blocks. Adding `#[cfg(test)]` to the method definitions themselves resolves this cleanly and makes the test-only intent explicit. The task notes anticipated external callers might exist; none were found — all three methods are purely test helpers.
+
+2. **`has_shared_pre_app_sources()` also demoted**: The task asked to check this method and demote if appropriate. It had no production callers (only test module usage), so it was demoted alongside the other two.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (no warnings)
+- `cargo test --workspace` - Passed (all test suites green, consistent with pre-change counts)
+- `cargo clippy --workspace -- -D warnings` - Passed

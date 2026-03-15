@@ -138,4 +138,28 @@ Adapt the helper usage and shutdown_rx assertion to match the actual test infras
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added dedup guard before JoinHandle extraction in `SharedSourceStarted` match arm (~line 2334): checks `is_shared_source_running`, sends shutdown signal, aborts task, returns early |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_shared_source_started_duplicate_is_rejected` test verifying handle count stays at 1, shutdown_rx receives `true`, and task slot is emptied |
+
+### Notable Decisions/Tradeoffs
+
+1. **Guard placement before `.take()`**: The dedup guard is inserted before `task_handle.lock()...take()` as required — preserving the task in the slot so the rejection path can abort it via the same `take()` call inside the guard.
+2. **`let _ = shutdown_tx.send(true)`**: The result is intentionally discarded (receiver may already be dropped in edge cases) — consistent with the existing pattern throughout the codebase.
+3. **Pre-existing dead_code warning**: One pre-existing `#[warn(dead_code)]` warning on `has_shared_sources`, `shared_sources`, and `has_shared_pre_app_sources` in `config/types.rs` was present before this change and is not related to the task.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed (pre-existing dead_code warning only)
+- `cargo test -p fdemon-app` - Passed (1695 tests: 1695 passed, 0 failed, 4 ignored)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Pre-existing dead_code warning**: The `has_shared_sources` / `shared_sources` / `has_shared_pre_app_sources` methods in `config/types.rs` generate a dead_code lint warning but are excluded from the clippy `-D warnings` gate because the warning comes from `rustc`, not clippy. This was present before this change.

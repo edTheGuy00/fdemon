@@ -68,4 +68,26 @@ The existing test at `tests.rs:8670` is the primary verification. After removing
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Changed `handle.session.queue_log(entry)` to call `flush_batched_logs()` unconditionally after queuing, ensuring the warning log is immediately visible |
+| `crates/fdemon-app/src/handler/tests.rs` | Removed the `state.session_manager.flush_all_pending_logs()` call before assertions; replaced with a comment explaining the handler flushes eagerly |
+
+### Notable Decisions/Tradeoffs
+
+1. **Unconditional flush vs conditional `if queue_log() { flush }`**: The task description suggested using the conditional pattern matching `NativeLog`/`SharedSourceLog`, but that pattern relies on the `LogBatcher`'s 16ms time threshold being exceeded. In tests that run in microseconds, this threshold is never met (only 1 entry is queued, never reaching BATCH_MAX_SIZE=100). The conditional `if` would leave the entry buffered and the test would still fail. For `SharedSourceStopped` — a critical shutdown event — immediate flush is always correct, so `flush_batched_logs()` is called unconditionally after `queue_log()`. This satisfies all acceptance criteria: the test passes without manual flush, and the warning is immediately visible.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1695 + 1 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pattern divergence from NativeLog/SharedSourceLog**: The `SharedSourceStopped` handler now uses unconditional flush rather than the conditional `if queue_log()` pattern at the other two sites. This is intentional — `SharedSourceStopped` is a low-frequency critical event (at most one warning per stopped source), while `NativeLog`/`SharedSourceLog` are high-volume paths where batching matters. The unconditional flush is a no-op when the batcher is already empty, so there is no performance concern.

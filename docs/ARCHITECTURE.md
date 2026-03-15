@@ -1178,7 +1178,7 @@ Per-Session Custom Sources (shared = false, default):
 └─────────────────────────────────────────────┘
 ```
 
-Shared sources are started as part of the pre-app source flow (they require `start_before_app = true`) and are shut down during `AppState::shutdown_shared_sources()` when fdemon exits — after all per-session sources have been stopped.
+Shared sources can be started either as pre-app sources (`start_before_app = true`) or as post-app sources (`start_before_app = false`). They are shut down during `AppState::shutdown_shared_sources()` when fdemon exits — after all per-session sources have been stopped.
 
 #### Pre-App Custom Source Flow
 

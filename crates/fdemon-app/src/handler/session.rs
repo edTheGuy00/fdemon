@@ -316,11 +316,21 @@ pub fn maybe_start_native_log_capture(
             //    tracked AND all post-app sources are running → nothing left to do.
             //    Without this guard, hot-restart would spawn duplicate processes.
             {
-                let running_names: std::collections::HashSet<&str> = handle
+                let mut running_names: std::collections::HashSet<&str> = handle
                     .custom_source_handles
                     .iter()
                     .map(|h| h.name.as_str())
                     .collect();
+
+                // Include shared post-app sources that are already running globally.
+                // These are stored on AppState, not on the per-session handle, so they
+                // would otherwise always appear "unstarted", causing spurious
+                // StartNativeLogCapture dispatches on hot-restart.
+                for shared_handle in &state.shared_source_handles {
+                    if !shared_handle.start_before_app {
+                        running_names.insert(shared_handle.name.as_str());
+                    }
+                }
                 let has_unstarted_post_app = state
                     .settings
                     .native_logs
