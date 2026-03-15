@@ -725,6 +725,14 @@ pub struct CustomSourceConfig {
     #[serde(default)]
     pub start_before_app: bool,
 
+    /// Whether this source is shared across all sessions (spawned once).
+    ///
+    /// When `true`, the source is spawned on first session launch and persists
+    /// until fdemon quits. Logs are broadcast to all active sessions.
+    /// When `false` (default), the source is per-session.
+    #[serde(default)]
+    pub shared: bool,
+
     /// Optional readiness check. Only valid when `start_before_app = true`.
     ///
     /// If set, Flutter launch is gated until the check passes or times out.
@@ -906,6 +914,23 @@ impl NativeLogsSettings {
     /// Returns an iterator over custom sources with `start_before_app = false` (post-app).
     pub fn post_app_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
         self.custom_sources.iter().filter(|s| !s.start_before_app)
+    }
+
+    /// Returns `true` if any custom source has `shared = true`.
+    pub fn has_shared_sources(&self) -> bool {
+        self.custom_sources.iter().any(|s| s.shared)
+    }
+
+    /// Returns an iterator over shared custom sources.
+    pub fn shared_sources(&self) -> impl Iterator<Item = &CustomSourceConfig> {
+        self.custom_sources.iter().filter(|s| s.shared)
+    }
+
+    /// Returns `true` if any custom source has `start_before_app = true` AND `shared = true`.
+    pub fn has_shared_pre_app_sources(&self) -> bool {
+        self.custom_sources
+            .iter()
+            .any(|s| s.start_before_app && s.shared)
     }
 
     /// Validate `NativeLogsSettings`, returning an error string if invalid.
@@ -2153,6 +2178,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
                 CustomSourceConfig {
@@ -2163,6 +2189,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
             ],
@@ -2184,6 +2211,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
                 CustomSourceConfig {
@@ -2194,6 +2222,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
             ],
@@ -2220,6 +2249,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
                 CustomSourceConfig {
@@ -2230,6 +2260,7 @@ min_level = "error"
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
             ],
@@ -2254,6 +2285,7 @@ min_level = "error"
                 working_dir: None,
                 env: HashMap::new(),
                 start_before_app: false,
+                shared: false,
                 ready_check: None,
             }],
             ..NativeLogsSettings::default()
@@ -2369,6 +2401,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: Some("/tmp".to_string()),
             env,
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         let serialized = toml::to_string(&original).unwrap();
@@ -2391,6 +2424,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         assert!(cfg.validate().is_err());
@@ -2408,6 +2442,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         assert!(cfg.validate().is_err());
@@ -2423,6 +2458,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         let err = cfg.validate().unwrap_err();
@@ -2443,6 +2479,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         assert!(cfg.validate().is_ok());
@@ -2461,6 +2498,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         let err = cfg.validate().unwrap_err();
@@ -2483,6 +2521,7 @@ args = ["-f", "/tmp/sidecar.log"]
             working_dir: None,
             env: HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         };
         assert!(cfg.validate().is_ok());
@@ -2590,6 +2629,7 @@ env = { LOG_LEVEL = "debug", TRACE = "1" }
                 working_dir: None,
                 env: HashMap::new(),
                 start_before_app: false,
+                shared: false,
                 ready_check: None,
             }],
             ..NativeLogsSettings::default()
@@ -2977,6 +3017,7 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
                 working_dir: None,
                 env: HashMap::new(),
                 start_before_app: false,
+                shared: false,
                 ready_check: None,
             }],
             ..NativeLogsSettings::default()
@@ -3002,6 +3043,7 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
                 CustomSourceConfig {
@@ -3012,6 +3054,7 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: true,
+                    shared: false,
                     ready_check: None,
                 },
             ],
@@ -3032,6 +3075,7 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: true,
+                    shared: false,
                     ready_check: None,
                 },
                 CustomSourceConfig {
@@ -3042,6 +3086,7 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
                     working_dir: None,
                     env: HashMap::new(),
                     start_before_app: false,
+                    shared: false,
                     ready_check: None,
                 },
             ],
@@ -3054,5 +3099,237 @@ ready_check = { type = "http", url = "http://localhost:8080/health" }
         let post: Vec<_> = settings.post_app_sources().collect();
         assert_eq!(post.len(), 1);
         assert_eq!(post[0].name, "post");
+    }
+
+    // ─── shared field tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_shared_field_defaults_to_false() {
+        let toml = r#"
+name = "my-source"
+command = "adb"
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(
+            !config.shared,
+            "shared should default to false when omitted"
+        );
+    }
+
+    #[test]
+    fn test_shared_field_parses_true() {
+        let toml = r#"
+name = "my-source"
+command = "adb"
+shared = true
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(config.shared, "shared should be true when set to true");
+    }
+
+    #[test]
+    fn test_shared_field_parses_false_explicit() {
+        let toml = r#"
+name = "my-source"
+command = "adb"
+shared = false
+"#;
+        let config: CustomSourceConfig = toml::from_str(toml).unwrap();
+        assert!(
+            !config.shared,
+            "shared should be false when set explicitly to false"
+        );
+    }
+
+    #[test]
+    fn test_has_shared_sources_false_when_none_shared() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "source-a".to_string(),
+                    command: "cmd".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: false,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "source-b".to_string(),
+                    command: "cmd2".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: true,
+                    shared: false,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(!settings.has_shared_sources());
+    }
+
+    #[test]
+    fn test_has_shared_sources_false_when_empty() {
+        let settings = NativeLogsSettings::default();
+        assert!(!settings.has_shared_sources());
+    }
+
+    #[test]
+    fn test_has_shared_sources_true_when_one_shared() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "per-session".to_string(),
+                    command: "cmd".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: false,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "shared-source".to_string(),
+                    command: "cmd2".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: true,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.has_shared_sources());
+    }
+
+    #[test]
+    fn test_shared_sources_iterator() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "per-session".to_string(),
+                    command: "cmd".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: false,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "shared-one".to_string(),
+                    command: "cmd2".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: true,
+                    shared: true,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "shared-two".to_string(),
+                    command: "cmd3".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: true,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        let shared: Vec<_> = settings.shared_sources().collect();
+        assert_eq!(shared.len(), 2);
+        assert_eq!(shared[0].name, "shared-one");
+        assert_eq!(shared[1].name, "shared-two");
+    }
+
+    #[test]
+    fn test_has_shared_pre_app_sources_false_when_empty() {
+        let settings = NativeLogsSettings::default();
+        assert!(!settings.has_shared_pre_app_sources());
+    }
+
+    #[test]
+    fn test_has_shared_pre_app_sources_false_when_shared_but_not_pre_app() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: "shared-post-app".to_string(),
+                command: "cmd".to_string(),
+                args: vec![],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+                start_before_app: false,
+                shared: true,
+                ready_check: None,
+            }],
+            ..NativeLogsSettings::default()
+        };
+        assert!(!settings.has_shared_pre_app_sources());
+    }
+
+    #[test]
+    fn test_has_shared_pre_app_sources_false_when_pre_app_but_not_shared() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![CustomSourceConfig {
+                name: "per-session-pre-app".to_string(),
+                command: "cmd".to_string(),
+                args: vec![],
+                format: OutputFormat::Raw,
+                working_dir: None,
+                env: HashMap::new(),
+                start_before_app: true,
+                shared: false,
+                ready_check: None,
+            }],
+            ..NativeLogsSettings::default()
+        };
+        assert!(!settings.has_shared_pre_app_sources());
+    }
+
+    #[test]
+    fn test_has_shared_pre_app_sources_true_when_shared_and_pre_app() {
+        let settings = NativeLogsSettings {
+            custom_sources: vec![
+                CustomSourceConfig {
+                    name: "per-session-post-app".to_string(),
+                    command: "cmd".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: false,
+                    shared: false,
+                    ready_check: None,
+                },
+                CustomSourceConfig {
+                    name: "shared-pre-app".to_string(),
+                    command: "server".to_string(),
+                    args: vec![],
+                    format: OutputFormat::Raw,
+                    working_dir: None,
+                    env: HashMap::new(),
+                    start_before_app: true,
+                    shared: true,
+                    ready_check: None,
+                },
+            ],
+            ..NativeLogsSettings::default()
+        };
+        assert!(settings.has_shared_pre_app_sources());
     }
 }

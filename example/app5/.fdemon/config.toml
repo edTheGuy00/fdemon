@@ -24,6 +24,7 @@ enabled = true
 # Backend server — launched before the Flutter app, with HTTP health check
 [[native_logs.custom_sources]]
 name = "backend"
+shared = true
 command = "python3"
 args = ["server/server.py"]
 format = "raw"

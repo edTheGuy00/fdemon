@@ -493,16 +493,24 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                 state.hide_new_session_dialog();
                 state.ui_mode = crate::state::UiMode::Normal;
 
-                // Check if any custom sources need to start before the app
-                let action = if state.settings.native_logs.enabled
-                    && state.settings.native_logs.has_pre_app_sources()
-                {
+                // Check if any custom sources need to start before the app.
+                // A shared source that is already running does not need to be
+                // spawned again — skip the gate for those.
+                let needs_pre_app_spawn = state.settings.native_logs.enabled
+                    && state
+                        .settings
+                        .native_logs
+                        .pre_app_sources()
+                        .any(|s| !s.shared || !state.is_shared_source_running(&s.name));
+
+                let action = if needs_pre_app_spawn {
                     UpdateAction::SpawnPreAppSources {
                         session_id,
                         device,
                         config: config.map(Box::new),
                         settings: state.settings.native_logs.clone(),
                         project_path: state.project_path.clone(),
+                        running_shared_names: state.running_shared_source_names(),
                     }
                 } else {
                     UpdateAction::SpawnSession {
@@ -1552,6 +1560,7 @@ mod tests {
             working_dir: None,
             env: std::collections::HashMap::new(),
             start_before_app: true,
+            shared: false,
             ready_check: None,
         }
     }
@@ -1647,6 +1656,151 @@ mod tests {
         assert!(
             matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
             "Expected SpawnSession when native logs disabled, got {:?}",
+            result.action
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Pre-app gate skip: already-running shared sources
+    // (pre-app-custom-sources Phase 2, Task 07)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Helper: build a shared `CustomSourceConfig` with `start_before_app = true`.
+    fn shared_pre_app_source(name: &str) -> crate::config::types::CustomSourceConfig {
+        crate::config::types::CustomSourceConfig {
+            name: name.to_string(),
+            command: "server".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            shared: true,
+            ready_check: None,
+        }
+    }
+
+    /// Helper: push a `SharedSourceHandle` onto `state.shared_source_handles`
+    /// to simulate an already-running shared source.
+    fn mark_shared_source_running(state: &mut AppState, name: &str) {
+        use crate::session::SharedSourceHandle;
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.shared_source_handles.push(SharedSourceHandle {
+            name: name.to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+            start_before_app: true,
+        });
+    }
+
+    #[test]
+    fn test_launch_skips_gate_when_all_shared_pre_app_running() {
+        // Second session scenario: the only pre-app source is shared and
+        // already running. The gate should be skipped → SpawnSession.
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+
+        // Simulate the shared source already running
+        mark_shared_source_running(&mut state, "logcat");
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+            "Expected SpawnSession when all shared pre-app sources are already running, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_launch_gates_when_non_shared_pre_app_present() {
+        // Non-shared pre-app sources always require the gate regardless of
+        // whether any shared sources are running.
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.settings.native_logs.enabled = true;
+        // Add one shared (running) and one non-shared pre-app source
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("my-server"));
+
+        mark_shared_source_running(&mut state, "logcat");
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when a non-shared pre-app source is present, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_launch_gates_when_shared_pre_app_not_yet_running() {
+        // First session scenario: the shared source has never been started yet.
+        // The gate must fire.
+        let mut state = AppState::default();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+
+        // Do NOT mark the source as running
+
+        // Select a device
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when shared pre-app source is not yet running, got {:?}",
             result.action
         );
     }

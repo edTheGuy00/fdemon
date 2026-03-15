@@ -72,3 +72,37 @@ Tests should cover the following scenarios using the existing test harness patte
 - Follow the existing test patterns in `handler/tests.rs` for creating `AppState`, `SessionManager`, and `Device` fixtures
 - Use `tokio::sync::watch::channel(false)` for mock shutdown senders
 - Use `Arc<Mutex<Option<JoinHandle>>>` with a no-op spawned task for mock task handles
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 new gap-filling tests at end of shared source section |
+
+### Notable Decisions/Tradeoffs
+
+1. **Gap analysis before adding**: Audited all 10 task test cases against existing tests in `handler/tests.rs`, `launch_context.rs`, and `state.rs`. Found that 7 of 10 were already implemented under different (but equivalent) names by previous tasks (04, 07, 08). Only 3 genuine gaps remained in `handler/tests.rs`.
+
+2. **Tests added (gaps)**:
+   - `test_shared_source_started_stores_on_app_state` — verifies `state.shared_source_handles` gains one entry AND that no `SessionHandle.custom_source_handles` entry is created
+   - `test_shared_source_survives_session_close` — removes session via `session_manager.remove_session()` + `shutdown_native_logs()` and asserts the shared handle persists on `AppState`
+   - `test_non_shared_source_still_per_session` — sends `CustomSourceStarted` (non-shared) and asserts handle lands on `SessionHandle.custom_source_handles` while `state.shared_source_handles` stays empty
+
+3. **No duplication**: Tests 2, 3, 5, 10 were covered by existing handler tests with equivalent assertions. Tests 6, 7 were covered in `launch_context.rs` tests. Test 9 was covered in `state.rs` tests. Avoided adding duplicates per task instructions.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- test_shared_source_started_stores_on_app_state test_shared_source_survives_session_close test_non_shared_source_still_per_session` - Passed (3 tests)
+- `cargo test -p fdemon-app` - Passed (1694 unit tests, 0 failures)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Test count discrepancy**: The task says "All 10 test cases pass" but 7 already existed under different names from prior tasks. The 3 gaps added here fill the missing coverage. The acceptance criteria for behavior coverage is fully met.

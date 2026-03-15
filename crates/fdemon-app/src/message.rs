@@ -1277,4 +1277,48 @@ pub enum Message {
 
     /// Toggle the visibility of the currently selected tag in the filter overlay.
     TagFilterToggleSelected,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Shared Custom Source Messages
+    // (pre-app-custom-sources Phase 2, Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Log event from a shared custom source (not bound to a specific session).
+    ///
+    /// The TEA handler broadcasts this to all active sessions, applying per-session
+    /// tag filtering. Contrast with `NativeLog` which targets a single session.
+    SharedSourceLog {
+        /// The native log event (tag = source name, level, message).
+        event: NativeLogEvent,
+    },
+
+    /// A shared custom source process has been spawned successfully.
+    ///
+    /// The TEA handler stores the handle on `AppState.shared_source_handles`
+    /// (not per-session). Sent by the forwarding task in `spawn_pre_app_sources`
+    /// or `spawn_custom_sources` for sources with `shared = true`.
+    SharedSourceStarted {
+        /// Source name (matches config `name` field).
+        name: String,
+        /// Shutdown sender for graceful stop.
+        /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Task handle for abort fallback.
+        ///
+        /// Wrapped in `Arc<Mutex<Option<>>>` so the spawning task can deposit
+        /// the handle after `tokio::spawn`. The handler takes it out of the
+        /// `Option` when storing it on `AppState`, leaving `None` for any
+        /// subsequent (unexpected) clone.
+        task_handle: SharedTaskHandle,
+        /// Whether this source was started before the Flutter app.
+        start_before_app: bool,
+    },
+
+    /// A shared custom source process has exited.
+    ///
+    /// The TEA handler removes the handle from `AppState.shared_source_handles`
+    /// and logs a warning to all active sessions.
+    SharedSourceStopped {
+        /// Source name.
+        name: String,
+    },
 }

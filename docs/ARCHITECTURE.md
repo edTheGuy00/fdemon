@@ -1139,6 +1139,47 @@ Two `Message` variants manage custom source lifecycle:
 | `CustomSourceStarted { session_id, name, shutdown_tx, task_handle }` | After `CustomLogCapture::spawn()` succeeds | TEA handler stores `shutdown_tx` and `task_handle` in `SessionHandle::custom_source_handles` |
 | `CustomSourceStopped { session_id, name }` | When the source's event channel closes (process exited) | TEA handler removes the named handle from `custom_source_handles` |
 
+#### Shared Custom Sources (`shared = true`)
+
+Custom sources with `shared = true` are spawned once for the entire project and broadcast their logs to every active session. The TEA handler stores shared handles in `AppState.shared_source_handles` (keyed by name) rather than in per-session state.
+
+```
+Shared Custom Sources (shared = true):
+
+┌─────────────────────────────────────────────┐
+│ AppState.shared_source_handles              │
+│   - "backend" (shutdown_tx, task_handle)    │
+└───────────────────┬─────────────────────────┘
+                    │ Message::SharedSourceLog
+                    ▼
+┌─────────────────────────────────────────────┐
+│ TEA Handler: broadcast to all sessions      │
+│   session_manager.iter_mut()                │
+│     → per-session tag filter                │
+│     → queue_log()                           │
+└─────────────────────────────────────────────┘
+```
+
+Contrast with per-session sources, where each session manages its own process lifecycle:
+
+```
+Per-Session Custom Sources (shared = false, default):
+
+┌─────────────────────────────────────────────┐
+│ SessionHandle.custom_source_handles         │
+│   - "worker" (shutdown_tx, task_handle)     │
+└───────────────────┬─────────────────────────┘
+                    │ Message::NativeLog { session_id }
+                    ▼
+┌─────────────────────────────────────────────┐
+│ TEA Handler: route to specific session      │
+│   session_manager.get_mut(session_id)       │
+│     → tag filter → queue_log()              │
+└─────────────────────────────────────────────┘
+```
+
+Shared sources are started as part of the pre-app source flow (they require `start_before_app = true`) and are shut down during `AppState::shutdown_shared_sources()` when fdemon exits — after all per-session sources have been stopped.
+
 #### Pre-App Custom Source Flow
 
 Custom sources with `start_before_app = true` gate the Flutter app launch behind a readiness check. The flow diverges from normal session launch at `handle_launch()`:

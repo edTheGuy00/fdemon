@@ -90,3 +90,29 @@ Per-Session Custom Sources (shared = false, default):
 
 - Keep the documentation concise — one paragraph explaining the distinction, one example config, one flow diagram
 - The CONFIGURATION.md section for custom sources was already updated in Phase 1 — extend it, don't rewrite
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Added `shared` row to the custom source properties table; added "Shared vs Per-Session Sources" subsection with one-paragraph explanation and example config |
+| `docs/ARCHITECTURE.md` | Added "Shared Custom Sources" subsection under Custom Log Sources with both the shared and per-session flow diagrams and a note on shutdown ordering |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of ARCHITECTURE.md content**: Inserted the new subsection between "Custom Source Lifecycle Messages" and "Pre-App Custom Source Flow" so that all custom source variants are grouped together in reading order before the pre-app flow that applies to them.
+2. **Shutdown note grounded in code**: Added a sentence about `AppState::shutdown_shared_sources()` shutdown ordering — verified against `engine.rs` line 548 to ensure accuracy.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed (documentation-only change, no compilation impact)
+
+### Risks/Limitations
+
+1. **None**: All acceptance criteria met; no broken markdown links introduced (no new internal anchors added that could be mis-targeted).

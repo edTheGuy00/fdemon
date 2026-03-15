@@ -58,6 +58,7 @@ pub(super) fn spawn_native_log_capture(
     project_path: std::path::PathBuf,
     msg_tx: mpsc::Sender<Message>,
     running_source_names: Vec<String>,
+    running_shared_names: Vec<String>,
 ) {
     if !settings.enabled {
         tracing::debug!(
@@ -80,6 +81,7 @@ pub(super) fn spawn_native_log_capture(
         &project_path,
         &msg_tx,
         &running_source_names,
+        &running_shared_names,
     );
 
     // Only Android, macOS, and iOS need a separate capture process.
@@ -258,10 +260,12 @@ pub(super) fn spawn_native_log_capture(
 /// Iterates over `settings.custom_sources` and, for each valid entry:
 /// 1. Builds a daemon-layer `CustomSourceConfig` from the app-layer config.
 /// 2. Spawns the custom capture backend.
-/// 3. Sends `Message::CustomSourceStarted` so the TEA handler can store
-///    the handles on `SessionHandle::custom_source_handles`.
-/// 4. Spawns a forwarding task that sends `Message::NativeLog` for each
-///    captured event and `Message::CustomSourceStopped` when the process exits.
+/// 3. For non-shared sources: sends `Message::CustomSourceStarted` so the TEA
+///    handler can store the handles on `SessionHandle::custom_source_handles`.
+///    For shared sources: sends `Message::SharedSourceStarted` so the handles
+///    are stored on `AppState::shared_source_handles` and broadcast to all sessions.
+/// 4. Spawns a forwarding task that sends `Message::NativeLog` / `Message::SharedSourceLog`
+///    for each captured event and the corresponding `*Stopped` variant when the process exits.
 ///
 /// Sources with `start_before_app = true` are skipped — they were already started
 /// by `spawn_pre_app_sources()` before the Flutter session launched.
@@ -269,6 +273,10 @@ pub(super) fn spawn_native_log_capture(
 /// Sources whose name appears in `running_source_names` are also skipped — this
 /// prevents double-spawning if `AppStarted` fires while pre-app sources are
 /// already tracked on the session handle.
+///
+/// Shared sources whose name appears in `running_shared_names` are skipped — this
+/// prevents a shared source being spawned twice when multiple sessions start
+/// concurrently or when the same session restarts.
 ///
 /// Invalid configurations are skipped with a warning (via [`crate::config::CustomSourceConfig::validate`]).
 /// This function is synchronous; each capture is spawned as a Tokio task internally.
@@ -278,6 +286,7 @@ fn spawn_custom_sources(
     project_path: &std::path::Path,
     msg_tx: &mpsc::Sender<Message>,
     running_source_names: &[String],
+    running_shared_names: &[String],
 ) {
     for source_config in &settings.custom_sources {
         // Skip pre-app sources — they were already started before Flutter launched
@@ -290,7 +299,18 @@ fn spawn_custom_sources(
             continue;
         }
 
-        // Skip already-running sources (idempotency guard).
+        // Skip shared sources that are already running globally — prevents
+        // double-spawning a shared source when multiple sessions start or when
+        // a session hot-restarts and triggers another AppStarted event.
+        if source_config.shared && running_shared_names.contains(&source_config.name) {
+            tracing::debug!(
+                "Skipping shared source '{}' in spawn_custom_sources (already running)",
+                source_config.name
+            );
+            continue;
+        }
+
+        // Skip already-running per-session sources (idempotency guard).
         // This catches the case where a post-app source somehow got started
         // earlier and prevents duplicate processes.
         if running_source_names
@@ -356,59 +376,110 @@ fn spawn_custom_sources(
         let task_handle_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
             Arc::new(Mutex::new(Some(native_handle.task_handle)));
         let source_name = source_config.name.clone();
+        let is_shared = source_config.shared;
         let msg_tx_clone = msg_tx.clone();
-
-        // Notify TEA that this custom source started (stores handles on SessionHandle).
-        // Post-app sources have start_before_app = false.
-        let startup_msg = Message::CustomSourceStarted {
-            session_id,
-            name: source_name.clone(),
-            shutdown_tx: shutdown_tx.clone(),
-            task_handle: task_handle_slot,
-            start_before_app: false,
-        };
-
-        // Spawn a task to send the startup message and then forward events.
         let mut event_rx = native_handle.event_rx;
-        tokio::spawn(async move {
-            // Send the lifecycle message first.
-            if msg_tx_clone.send(startup_msg).await.is_err() {
-                // Engine channel closed — nothing to do.
-                return;
-            }
 
-            tracing::debug!(
-                "Custom log source '{}' started for session {}",
-                source_name,
-                session_id
-            );
-
-            // Forward events through Message::NativeLog (same path as platform capture).
-            while let Some(event) = event_rx.recv().await {
+        if is_shared {
+            // ── Shared post-app source: lifecycle messages go to AppState ──
+            //
+            // `SharedSourceStarted` stores the handle on `AppState.shared_source_handles`.
+            // `SharedSourceLog` is broadcast to all active sessions by the TEA handler.
+            // `SharedSourceStopped` removes the handle and warns all sessions.
+            tokio::spawn(async move {
                 if msg_tx_clone
-                    .send(Message::NativeLog { session_id, event })
+                    .send(Message::SharedSourceStarted {
+                        name: source_name.clone(),
+                        shutdown_tx,
+                        task_handle: task_handle_slot,
+                        start_before_app: false,
+                    })
                     .await
                     .is_err()
                 {
-                    // Engine channel closed.
-                    break;
+                    // Engine channel closed — nothing to do.
+                    return;
                 }
-            }
 
-            // Notify TEA that the custom source has stopped.
-            let _ = msg_tx_clone
-                .send(Message::CustomSourceStopped {
-                    session_id,
-                    name: source_name.clone(),
-                })
-                .await;
+                tracing::debug!(
+                    "Shared post-app source '{}' started (session {} triggered)",
+                    source_name,
+                    session_id
+                );
 
-            tracing::debug!(
-                "Custom log source '{}' stopped for session {}",
-                source_name,
-                session_id
-            );
-        });
+                while let Some(event) = event_rx.recv().await {
+                    if msg_tx_clone
+                        .send(Message::SharedSourceLog { event })
+                        .await
+                        .is_err()
+                    {
+                        // Engine channel closed.
+                        break;
+                    }
+                }
+
+                let _ = msg_tx_clone
+                    .send(Message::SharedSourceStopped {
+                        name: source_name.clone(),
+                    })
+                    .await;
+
+                tracing::debug!("Shared post-app source '{}' stopped", source_name);
+            });
+        } else {
+            // ── Per-session post-app source: lifecycle messages target this session ──
+            //
+            // Notify TEA that this custom source started (stores handles on SessionHandle).
+            // Post-app sources have start_before_app = false.
+            let startup_msg = Message::CustomSourceStarted {
+                session_id,
+                name: source_name.clone(),
+                shutdown_tx: shutdown_tx.clone(),
+                task_handle: task_handle_slot,
+                start_before_app: false,
+            };
+
+            // Spawn a task to send the startup message and then forward events.
+            tokio::spawn(async move {
+                // Send the lifecycle message first.
+                if msg_tx_clone.send(startup_msg).await.is_err() {
+                    // Engine channel closed — nothing to do.
+                    return;
+                }
+
+                tracing::debug!(
+                    "Custom log source '{}' started for session {}",
+                    source_name,
+                    session_id
+                );
+
+                // Forward events through Message::NativeLog (same path as platform capture).
+                while let Some(event) = event_rx.recv().await {
+                    if msg_tx_clone
+                        .send(Message::NativeLog { session_id, event })
+                        .await
+                        .is_err()
+                    {
+                        // Engine channel closed.
+                        break;
+                    }
+                }
+
+                // Notify TEA that the custom source has stopped.
+                let _ = msg_tx_clone
+                    .send(Message::CustomSourceStopped {
+                        session_id,
+                        name: source_name.clone(),
+                    })
+                    .await;
+
+                tracing::debug!(
+                    "Custom log source '{}' stopped for session {}",
+                    source_name,
+                    session_id
+                );
+            });
+        }
     }
 }
 
@@ -417,8 +488,12 @@ fn spawn_custom_sources(
 /// For each source with `start_before_app = true`:
 /// 1. Spawns the `CustomLogCapture` process immediately (logs flow to the session
 ///    in real time via the forwarding task).
-/// 2. Sends `CustomSourceStarted` so handles are tracked on `SessionHandle`.
+/// 2. Sends `CustomSourceStarted` (non-shared) or `SharedSourceStarted` (shared)
+///    so handles are tracked on `SessionHandle` or `AppState.shared_source_handles`.
 /// 3. Collects a readiness future for sources that have a `ready_check`.
+///
+/// Already-running shared sources (names in `running_shared_names`) are skipped
+/// so a shared process is never spawned twice across sessions.
 ///
 /// After all sources are spawned, waits concurrently for all readiness checks
 /// to complete (each with its own timeout). Sends progress messages throughout.
@@ -426,7 +501,8 @@ fn spawn_custom_sources(
 ///
 /// Sources without a `ready_check` are fire-and-forget: they are spawned but
 /// do not block `PreAppSourcesReady`. If there are no pre-app sources at all,
-/// `PreAppSourcesReady` is sent immediately.
+/// or all pre-app sources are shared and already running, `PreAppSourcesReady`
+/// is sent immediately.
 pub(super) fn spawn_pre_app_sources(
     session_id: SessionId,
     device: fdemon_daemon::Device,
@@ -434,16 +510,31 @@ pub(super) fn spawn_pre_app_sources(
     settings: &NativeLogsSettings,
     project_path: &std::path::Path,
     msg_tx: &mpsc::Sender<Message>,
+    running_shared_names: &[String],
 ) {
+    // Filter to pre-app sources, skipping shared sources that are already running.
     let pre_app_sources: Vec<_> = settings
         .custom_sources
         .iter()
-        .filter(|s| s.start_before_app)
+        .filter(|s| {
+            if !s.start_before_app {
+                return false;
+            }
+            if s.shared && running_shared_names.contains(&s.name) {
+                tracing::debug!(
+                    "Skipping shared pre-app source '{}' (already running)",
+                    s.name
+                );
+                return false;
+            }
+            true
+        })
         .cloned()
         .collect();
 
     if pre_app_sources.is_empty() {
-        // No pre-app sources — send ready immediately.
+        // No pre-app sources to spawn (none configured, or all shared sources
+        // are already running) — send ready immediately.
         let tx = msg_tx.clone();
         tokio::spawn(async move {
             let _ = tx
@@ -541,6 +632,12 @@ async fn run_pre_app_sources_coordinator(
 /// Sends a `PreAppSourceProgress` message before spawning. Pushes a readiness
 /// future into `join_set` and increments `sources_with_checks` for any source
 /// that has a `ready_check` configured.
+///
+/// Message routing depends on `source_config.shared`:
+/// - `shared = false`: sends `CustomSourceStarted` / `NativeLog` / `CustomSourceStopped`
+///   (per-session, handles stored on `SessionHandle`)
+/// - `shared = true`: sends `SharedSourceStarted` / `SharedSourceLog` / `SharedSourceStopped`
+///   (global, handles stored on `AppState.shared_source_handles`, broadcast to all sessions)
 async fn spawn_one_pre_app_source(
     source_config: &CustomSourceConfig,
     session_id: SessionId,
@@ -617,63 +714,110 @@ async fn spawn_one_pre_app_source(
         }
     };
 
-    // Wrap handles to satisfy Clone on Message::CustomSourceStarted.
+    // Wrap handles to satisfy Clone on Message variants.
     let shutdown_tx = Arc::new(native_handle.shutdown_tx);
     let task_handle_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
         Arc::new(Mutex::new(Some(native_handle.task_handle)));
     let source_name = source_config.name.clone();
+    let is_shared = source_config.shared;
     let fwd_tx = msg_tx.clone();
     let mut event_rx = native_handle.event_rx;
 
-    // Spawn forwarding task (same pattern as spawn_custom_sources).
-    tokio::spawn(async move {
-        // Send lifecycle message first so handles are stored on SessionHandle.
-        // Pre-app sources have start_before_app = true so spawn_custom_sources()
-        // can identify and skip them when AppStarted fires.
-        if fwd_tx
-            .send(Message::CustomSourceStarted {
-                session_id,
-                name: source_name.clone(),
-                shutdown_tx,
-                task_handle: task_handle_slot,
-                start_before_app: true,
-            })
-            .await
-            .is_err()
-        {
-            return;
-        }
-
-        tracing::debug!(
-            "Pre-app source '{}' started for session {}",
-            source_name,
-            session_id
-        );
-
-        // Forward events through Message::NativeLog.
-        while let Some(event) = event_rx.recv().await {
+    if is_shared {
+        // ── Shared source: lifecycle messages go to AppState (not per-session) ──
+        //
+        // `SharedSourceStarted` stores the handle on `AppState.shared_source_handles`.
+        // `SharedSourceLog` is broadcast to all active sessions by the TEA handler.
+        // `SharedSourceStopped` removes the handle from `AppState` and warns all sessions.
+        tokio::spawn(async move {
             if fwd_tx
-                .send(Message::NativeLog { session_id, event })
+                .send(Message::SharedSourceStarted {
+                    name: source_name.clone(),
+                    shutdown_tx,
+                    task_handle: task_handle_slot,
+                    start_before_app: true,
+                })
                 .await
                 .is_err()
             {
-                break;
+                return;
             }
-        }
 
-        let _ = fwd_tx
-            .send(Message::CustomSourceStopped {
-                session_id,
-                name: source_name.clone(),
-            })
-            .await;
+            tracing::debug!("Shared pre-app source '{}' started", source_name);
 
-        tracing::debug!(
-            "Pre-app source '{}' stopped for session {}",
-            source_name,
-            session_id
-        );
-    });
+            while let Some(event) = event_rx.recv().await {
+                if fwd_tx
+                    .send(Message::SharedSourceLog { event })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+
+            let _ = fwd_tx
+                .send(Message::SharedSourceStopped {
+                    name: source_name.clone(),
+                })
+                .await;
+
+            tracing::debug!("Shared pre-app source '{}' stopped", source_name);
+        });
+    } else {
+        // ── Per-session source: lifecycle messages target a specific session ──
+        //
+        // `CustomSourceStarted` stores the handle on `SessionHandle.custom_source_handles`.
+        // `NativeLog` is routed to the owning session by the TEA handler.
+        // `CustomSourceStopped` removes the handle from the session.
+        tokio::spawn(async move {
+            // Send lifecycle message first so handles are stored on SessionHandle.
+            // Pre-app sources have start_before_app = true so spawn_custom_sources()
+            // can identify and skip them when AppStarted fires.
+            if fwd_tx
+                .send(Message::CustomSourceStarted {
+                    session_id,
+                    name: source_name.clone(),
+                    shutdown_tx,
+                    task_handle: task_handle_slot,
+                    start_before_app: true,
+                })
+                .await
+                .is_err()
+            {
+                return;
+            }
+
+            tracing::debug!(
+                "Pre-app source '{}' started for session {}",
+                source_name,
+                session_id
+            );
+
+            // Forward events through Message::NativeLog.
+            while let Some(event) = event_rx.recv().await {
+                if fwd_tx
+                    .send(Message::NativeLog { session_id, event })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+
+            let _ = fwd_tx
+                .send(Message::CustomSourceStopped {
+                    session_id,
+                    name: source_name.clone(),
+                })
+                .await;
+
+            tracing::debug!(
+                "Pre-app source '{}' stopped for session {}",
+                source_name,
+                session_id
+            );
+        });
+    }
 
     // If this source has a ready_check, push a concurrent readiness future.
     if let Some(ref check) = source_config.ready_check {
@@ -1051,6 +1195,7 @@ mod tests {
             working_dir: None,
             env: std::collections::HashMap::new(),
             start_before_app,
+            shared: false,
             ready_check: None,
         }
     }
@@ -1070,7 +1215,7 @@ mod tests {
 
         // running_source_names is empty — only the pre-app guard should trigger
         // for "pre-app-source".
-        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &[]);
+        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &[], &[]);
 
         // Drop the sender so the channel closes after the spawned tasks finish.
         drop(msg_tx);
@@ -1111,7 +1256,7 @@ mod tests {
 
         // "watcher" is already running — it should be skipped.
         let running = vec!["watcher".to_string()];
-        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &running);
+        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &running, &[]);
 
         drop(msg_tx);
 
@@ -1130,6 +1275,412 @@ mod tests {
         assert!(
             !started_names.contains(&"watcher".to_string()),
             "already-running source 'watcher' must not be re-spawned"
+        );
+    }
+
+    // ── spawn_pre_app_sources shared-source tests (Task 05) ───────────────────
+
+    /// Helper: build a valid CustomSourceConfig with the given name,
+    /// start_before_app, and shared flags.
+    fn make_pre_app_source(name: &str, shared: bool) -> crate::config::CustomSourceConfig {
+        crate::config::CustomSourceConfig {
+            name: name.to_string(),
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            format: fdemon_core::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            shared,
+            ready_check: None,
+        }
+    }
+
+    /// Helper: collect all messages from a channel until closed or timeout.
+    async fn collect_messages(
+        mut rx: tokio::sync::mpsc::Receiver<Message>,
+        timeout_secs: u64,
+    ) -> Vec<Message> {
+        let mut messages = Vec::new();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(msg)) => messages.push(msg),
+                Ok(None) | Err(_) => break,
+            }
+        }
+        messages
+    }
+
+    fn make_test_device() -> fdemon_daemon::Device {
+        fdemon_daemon::Device {
+            id: "test-device".to_string(),
+            name: "Test Device".to_string(),
+            platform: "linux".to_string(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pre_app_skips_running_shared_sources() {
+        // Acceptance criterion 1: already-running shared sources are skipped.
+        // Both sources are shared and both are listed in running_shared_names.
+        // Should send PreAppSourcesReady immediately (no sources to spawn).
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(16);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+        let device = make_test_device();
+
+        let settings = settings_with_sources(vec![
+            make_pre_app_source("db", true),
+            make_pre_app_source("cache", true),
+        ]);
+
+        // Both are already running.
+        let running_shared = vec!["db".to_string(), "cache".to_string()];
+
+        spawn_pre_app_sources(
+            session_id,
+            device,
+            None,
+            &settings,
+            project_path,
+            &msg_tx,
+            &running_shared,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // Should receive PreAppSourcesReady immediately (no new sources to spawn).
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::PreAppSourcesReady { .. })),
+            "Expected PreAppSourcesReady when all shared sources are already running"
+        );
+
+        // No SharedSourceStarted should be sent (sources were skipped).
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::SharedSourceStarted { .. })),
+            "SharedSourceStarted must not be sent for already-running shared sources"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pre_app_shared_sends_shared_source_started() {
+        // Acceptance criterion 2: new shared sources send SharedSourceStarted.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+        let device = make_test_device();
+
+        let settings = settings_with_sources(vec![make_pre_app_source("db", true)]);
+
+        // Not yet running.
+        let running_shared: Vec<String> = Vec::new();
+
+        spawn_pre_app_sources(
+            session_id,
+            device,
+            None,
+            &settings,
+            project_path,
+            &msg_tx,
+            &running_shared,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::SharedSourceStarted { name, .. } if name == "db")),
+            "Expected SharedSourceStarted for new shared source 'db'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pre_app_non_shared_unchanged() {
+        // Acceptance criterion 3: non-shared sources still send CustomSourceStarted.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+        let device = make_test_device();
+
+        let settings = settings_with_sources(vec![make_pre_app_source("backend", false)]);
+
+        let running_shared: Vec<String> = Vec::new();
+
+        spawn_pre_app_sources(
+            session_id,
+            device,
+            None,
+            &settings,
+            project_path,
+            &msg_tx,
+            &running_shared,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, .. } if name == "backend"
+            )),
+            "Expected CustomSourceStarted for non-shared pre-app source 'backend'"
+        );
+
+        // SharedSourceStarted must NOT be sent for non-shared sources.
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::SharedSourceStarted { .. })),
+            "SharedSourceStarted must not be sent for non-shared sources"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_pre_app_partial_skip_sends_ready() {
+        // Acceptance criterion 5: PreAppSourcesReady is sent even when some shared
+        // sources are skipped and others are newly spawned.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+        let device = make_test_device();
+
+        let settings = settings_with_sources(vec![
+            make_pre_app_source("db", true),    // already running — skip
+            make_pre_app_source("cache", true), // new — spawn
+        ]);
+
+        let running_shared = vec!["db".to_string()];
+
+        spawn_pre_app_sources(
+            session_id,
+            device,
+            None,
+            &settings,
+            project_path,
+            &msg_tx,
+            &running_shared,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // "cache" should be spawned (new shared source).
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::SharedSourceStarted { name, .. } if name == "cache"
+            )),
+            "Expected SharedSourceStarted for new shared source 'cache'"
+        );
+
+        // "db" should not be spawned (already running).
+        assert!(
+            !messages.iter().any(|m| matches!(
+                m,
+                Message::SharedSourceStarted { name, .. } if name == "db"
+            )),
+            "SharedSourceStarted must not be sent for already-running source 'db'"
+        );
+
+        // PreAppSourcesReady should be sent after all non-skipped sources are done.
+        assert!(
+            messages
+                .iter()
+                .any(|m| matches!(m, Message::PreAppSourcesReady { .. })),
+            "Expected PreAppSourcesReady after spawning"
+        );
+    }
+
+    // ── spawn_custom_sources shared-source tests (Task 06) ────────────────────
+
+    /// Helper: build a post-app CustomSourceConfig with the given name and shared flag.
+    fn make_post_app_source(name: &str, shared: bool) -> crate::config::CustomSourceConfig {
+        crate::config::CustomSourceConfig {
+            name: name.to_string(),
+            command: "echo".to_string(),
+            args: vec!["hello".to_string()],
+            format: fdemon_core::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: false,
+            shared,
+            ready_check: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_spawn_custom_sources_skips_running_shared() {
+        // Acceptance criterion 1: already-running shared sources are skipped.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(16);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+
+        let settings = settings_with_sources(vec![
+            make_post_app_source("metrics", true),
+            make_post_app_source("backend", false),
+        ]);
+
+        // "metrics" is already running as a shared source.
+        let running_shared = vec!["metrics".to_string()];
+
+        spawn_custom_sources(
+            session_id,
+            &settings,
+            project_path,
+            &msg_tx,
+            &[],
+            &running_shared,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // SharedSourceStarted must NOT be sent for "metrics" (already running).
+        assert!(
+            !messages.iter().any(|m| matches!(
+                m,
+                Message::SharedSourceStarted { name, .. } if name == "metrics"
+            )),
+            "SharedSourceStarted must not be sent for already-running shared source 'metrics'"
+        );
+
+        // The non-shared "backend" should still be spawned normally.
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, .. } if name == "backend"
+            )),
+            "CustomSourceStarted must be sent for non-shared post-app source 'backend'"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_custom_sources_shared_post_app_sends_shared_variants() {
+        // Acceptance criterion 2: new shared post-app sources send SharedSourceStarted.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+
+        let settings = settings_with_sources(vec![make_post_app_source("telemetry", true)]);
+
+        // Not yet running.
+        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &[], &[]);
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // SharedSourceStarted with start_before_app = false.
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::SharedSourceStarted { name, start_before_app, .. }
+                    if name == "telemetry" && !start_before_app
+            )),
+            "Expected SharedSourceStarted(start_before_app=false) for new shared post-app source"
+        );
+
+        // Must NOT send CustomSourceStarted for a shared source.
+        assert!(
+            !messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, .. } if name == "telemetry"
+            )),
+            "CustomSourceStarted must not be sent for a shared source"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_custom_sources_non_shared_post_app_unchanged() {
+        // Acceptance criterion 3: non-shared post-app sources behavior is unchanged.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(64);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+
+        let settings = settings_with_sources(vec![make_post_app_source("watcher", false)]);
+
+        spawn_custom_sources(session_id, &settings, project_path, &msg_tx, &[], &[]);
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // CustomSourceStarted with start_before_app = false.
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, start_before_app, .. }
+                    if name == "watcher" && !start_before_app
+            )),
+            "Expected CustomSourceStarted(start_before_app=false) for non-shared post-app source"
+        );
+
+        // Must NOT send SharedSourceStarted.
+        assert!(
+            !messages
+                .iter()
+                .any(|m| matches!(m, Message::SharedSourceStarted { .. })),
+            "SharedSourceStarted must not be sent for non-shared sources"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_custom_sources_running_source_names_still_works() {
+        // Acceptance criterion 4: running_source_names skip list (for pre-app sources)
+        // still works independently of running_shared_names.
+        let (msg_tx, msg_rx) = tokio::sync::mpsc::channel::<Message>(16);
+        let session_id: SessionId = 1;
+        let project_path = std::path::Path::new("/tmp");
+
+        let settings = settings_with_sources(vec![
+            make_post_app_source("alpha", false),
+            make_post_app_source("beta", false),
+        ]);
+
+        // "alpha" is in running_source_names (per-session idempotency guard).
+        let running_source_names = vec!["alpha".to_string()];
+        let running_shared_names: Vec<String> = vec![];
+
+        spawn_custom_sources(
+            session_id,
+            &settings,
+            project_path,
+            &msg_tx,
+            &running_source_names,
+            &running_shared_names,
+        );
+
+        drop(msg_tx);
+        let messages = collect_messages(msg_rx, 5).await;
+
+        // "alpha" must be skipped.
+        assert!(
+            !messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, .. } if name == "alpha"
+            )),
+            "Already-running per-session source 'alpha' must not be re-spawned"
+        );
+
+        // "beta" must be spawned.
+        assert!(
+            messages.iter().any(|m| matches!(
+                m,
+                Message::CustomSourceStarted { name, .. } if name == "beta"
+            )),
+            "Non-running per-session source 'beta' must be spawned"
         );
     }
 }

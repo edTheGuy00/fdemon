@@ -2345,6 +2345,7 @@ mod auto_launch_tests {
             working_dir: None,
             env: std::collections::HashMap::new(),
             start_before_app: true,
+            shared: false,
             ready_check: None,
         }
     }
@@ -2404,6 +2405,147 @@ mod auto_launch_tests {
         assert!(
             matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
             "Expected SpawnSession when no pre-app sources configured, got {:?}",
+            result.action
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Pre-app gate skip: already-running shared sources (auto-launch path)
+    // (pre-app-custom-sources Phase 2, Task 07)
+    // ─────────────────────────────────────────────────────────
+
+    /// Helper: build a shared `CustomSourceConfig` with `start_before_app = true`.
+    fn shared_pre_app_source(name: &str) -> crate::config::types::CustomSourceConfig {
+        crate::config::types::CustomSourceConfig {
+            name: name.to_string(),
+            command: "server".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            shared: true,
+            ready_check: None,
+        }
+    }
+
+    /// Helper: push a `SharedSourceHandle` onto `state.shared_source_handles`
+    /// to simulate an already-running shared source.
+    fn mark_shared_source_running(state: &mut AppState, name: &str) {
+        use crate::session::SharedSourceHandle;
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.shared_source_handles.push(SharedSourceHandle {
+            name: name.to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+            start_before_app: true,
+        });
+    }
+
+    #[test]
+    fn test_auto_launch_skips_gate_when_all_shared_pre_app_running() {
+        // Second session scenario: the only pre-app source is shared and
+        // already running. The gate should be skipped → SpawnSession.
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+
+        // Simulate the shared source already running
+        mark_shared_source_running(&mut state, "logcat");
+
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+            "Expected SpawnSession when all shared pre-app sources are already running, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_auto_launch_gates_when_non_shared_pre_app_present() {
+        // Non-shared pre-app sources always require the gate regardless of
+        // whether any shared sources are running.
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("my-server"));
+
+        mark_shared_source_running(&mut state, "logcat");
+
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when non-shared pre-app source is present, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_auto_launch_gates_when_shared_pre_app_not_yet_running() {
+        // First session scenario: the shared source has never been started.
+        // The gate must fire.
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(shared_pre_app_source("logcat"));
+
+        // Do NOT mark the source as running
+
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when shared pre-app source not yet running, got {:?}",
             result.action
         );
     }
@@ -6851,6 +6993,7 @@ fn test_hot_restart_skips_duplicate_custom_sources() {
         working_dir: None,
         env: std::collections::HashMap::new(),
         start_before_app: false,
+        shared: false,
         ready_check: None,
     }];
 
@@ -7874,6 +8017,7 @@ fn test_guard_fires_on_hot_restart_with_pre_app_sources_only_running() {
         working_dir: None,
         env: std::collections::HashMap::new(),
         start_before_app: true,
+        shared: false,
         ready_check: None,
     }];
 
@@ -7931,6 +8075,7 @@ fn test_guard_allows_post_app_sources_when_only_pre_app_running() {
             working_dir: None,
             env: std::collections::HashMap::new(),
             start_before_app: true,
+            shared: false,
             ready_check: None,
         },
         crate::config::CustomSourceConfig {
@@ -7941,6 +8086,7 @@ fn test_guard_allows_post_app_sources_when_only_pre_app_running() {
             working_dir: None,
             env: std::collections::HashMap::new(),
             start_before_app: false,
+            shared: false,
             ready_check: None,
         },
     ];
@@ -8247,4 +8393,503 @@ fn test_pre_app_source_progress_noop_for_missing_session() {
         result.action.is_none(),
         "should be a no-op for missing session"
     );
+}
+
+// ── Shared Custom Source handler tests (Phase 2, Task 04) ──────────────────
+
+/// Helper: build a `SharedSourceStarted` message carrying a fresh watch channel
+/// and (optionally) a real tokio task. Returns the message along with the watch
+/// receiver so tests can verify shutdown signals, and the task-slot Arc so tests
+/// can pre-populate it before calling `update`.
+fn make_shared_source_started(
+    name: &str,
+    task: Option<tokio::task::JoinHandle<()>>,
+) -> (
+    Message,
+    tokio::sync::watch::Receiver<bool>,
+    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+) {
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    let task_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(task));
+    let msg = Message::SharedSourceStarted {
+        name: name.to_string(),
+        shutdown_tx: std::sync::Arc::new(shutdown_tx),
+        task_handle: task_slot.clone(),
+        start_before_app: false,
+    };
+    (msg, shutdown_rx, task_slot)
+}
+
+/// Helper: send a `SharedSourceLog` event with a given tag, level, and message.
+fn send_shared_source_log(
+    state: &mut AppState,
+    tag: &str,
+    level: fdemon_core::LogLevel,
+    message: &str,
+) {
+    use fdemon_daemon::NativeLogEvent;
+    let event = NativeLogEvent {
+        tag: tag.to_string(),
+        level,
+        message: message.to_string(),
+        timestamp: None,
+    };
+    update(state, Message::SharedSourceLog { event });
+    state.session_manager.flush_all_pending_logs();
+}
+
+#[test]
+fn test_shared_source_log_broadcasts_to_all_sessions() {
+    // SharedSourceLog must append a log entry to every active session.
+    let device_a = android_device("dev-a");
+    let device_b = android_device("dev-b");
+    let mut state = AppState::new();
+    let sid_a = state.session_manager.create_session(&device_a).unwrap();
+    let sid_b = state.session_manager.create_session(&device_b).unwrap();
+
+    send_shared_source_log(
+        &mut state,
+        "my-source",
+        fdemon_core::LogLevel::Info,
+        "hello from shared",
+    );
+
+    let logs_a = &state.session_manager.get(sid_a).unwrap().session.logs;
+    let logs_b = &state.session_manager.get(sid_b).unwrap().session.logs;
+
+    assert_eq!(logs_a.len(), 1, "session A should have received the log");
+    assert_eq!(logs_b.len(), 1, "session B should have received the log");
+    assert!(
+        logs_a[0].message.contains("hello from shared"),
+        "session A log content mismatch"
+    );
+    assert!(
+        logs_b[0].message.contains("hello from shared"),
+        "session B log content mismatch"
+    );
+}
+
+#[test]
+fn test_shared_source_log_with_no_sessions_is_noop() {
+    // SharedSourceLog with zero sessions must not panic and must be a no-op.
+    let mut state = AppState::new();
+
+    // No sessions created.
+    send_shared_source_log(
+        &mut state,
+        "my-source",
+        fdemon_core::LogLevel::Info,
+        "nobody home",
+    );
+    // Test passes if no panic occurs.
+}
+
+#[test]
+fn test_shared_source_log_applies_tag_filter() {
+    // SharedSourceLog must honour the per-tag min-level setting. Events below
+    // the configured floor must not be appended to any session's log buffer.
+    use crate::config::{NativeLogsSettings, TagConfig};
+
+    let device = android_device("dev-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Global floor = "info"; per-tag floor for "GoLog" = "warning".
+    state.settings.native_logs = NativeLogsSettings {
+        min_level: "info".to_string(),
+        ..Default::default()
+    };
+    state.settings.native_logs.tags.insert(
+        "GoLog".to_string(),
+        TagConfig {
+            min_level: Some("warning".to_string()),
+        },
+    );
+
+    // Debug event for "GoLog" → below per-tag warning floor → filtered.
+    send_shared_source_log(&mut state, "GoLog", fdemon_core::LogLevel::Debug, "debug");
+    let count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(count, 0, "debug event for GoLog must be filtered");
+
+    // Warning event for "GoLog" → at per-tag floor → allowed.
+    send_shared_source_log(&mut state, "GoLog", fdemon_core::LogLevel::Warning, "warn");
+    let count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(count, 1, "warning event for GoLog must pass");
+
+    // Debug event for "OtherTag" → below global "info" floor → filtered.
+    send_shared_source_log(
+        &mut state,
+        "OtherTag",
+        fdemon_core::LogLevel::Debug,
+        "debug other",
+    );
+    let count = state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .session
+        .logs
+        .len();
+    assert_eq!(
+        count, 1,
+        "debug event for OtherTag must be filtered (below global info floor)"
+    );
+}
+
+#[test]
+fn test_shared_source_log_tag_observed_on_all_sessions() {
+    // Tags from a SharedSourceLog must be observed on every session so they
+    // appear in the T-overlay, even when the event is below the level floor.
+    use crate::config::{NativeLogsSettings, TagConfig};
+
+    let device_a = android_device("dev-a");
+    let device_b = android_device("dev-b");
+    let mut state = AppState::new();
+    let sid_a = state.session_manager.create_session(&device_a).unwrap();
+    let sid_b = state.session_manager.create_session(&device_b).unwrap();
+
+    // Set a per-tag floor high enough to filter the event.
+    state.settings.native_logs = NativeLogsSettings::default();
+    state.settings.native_logs.tags.insert(
+        "my-source".to_string(),
+        TagConfig {
+            min_level: Some("error".to_string()),
+        },
+    );
+
+    // Send a debug event — it will be filtered, but the tag must still be observed.
+    send_shared_source_log(
+        &mut state,
+        "my-source",
+        fdemon_core::LogLevel::Debug,
+        "filtered",
+    );
+
+    // No log entries should have been appended.
+    assert_eq!(
+        state.session_manager.get(sid_a).unwrap().session.logs.len(),
+        0,
+        "no log should be appended when event is below floor"
+    );
+
+    // But the tag must be tracked in both sessions' native_tag_state.
+    let tags_a = state
+        .session_manager
+        .get(sid_a)
+        .unwrap()
+        .native_tag_state
+        .sorted_tags();
+    let tags_b = state
+        .session_manager
+        .get(sid_b)
+        .unwrap()
+        .native_tag_state
+        .sorted_tags();
+
+    assert!(
+        tags_a.iter().any(|(t, _)| t.as_str() == "my-source"),
+        "tag must be observed on session A even when event was filtered"
+    );
+    assert!(
+        tags_b.iter().any(|(t, _)| t.as_str() == "my-source"),
+        "tag must be observed on session B even when event was filtered"
+    );
+}
+
+#[test]
+fn test_shared_source_started_stores_handle() {
+    // SharedSourceStarted must push a SharedSourceHandle onto state.shared_source_handles.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let mut state = AppState::new();
+
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let (msg, _rx, _slot) = make_shared_source_started("my-shared-source", Some(task));
+
+        let result = update(&mut state, msg);
+
+        assert!(result.action.is_none(), "should return no action");
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "one handle should be stored"
+        );
+        assert_eq!(
+            state.shared_source_handles[0].name, "my-shared-source",
+            "stored handle must have the correct name"
+        );
+        assert!(
+            state.shared_source_handles[0].task_handle.is_some(),
+            "task_handle must be Some after SharedSourceStarted"
+        );
+    });
+}
+
+#[test]
+fn test_shared_source_started_multiple_handles_stored() {
+    // Each SharedSourceStarted must push a new entry; multiple sources accumulate.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let mut state = AppState::new();
+
+        for name in &["source-x", "source-y", "source-z"] {
+            let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+            let (msg, _rx, _slot) = make_shared_source_started(name, Some(task));
+            update(&mut state, msg);
+        }
+
+        assert_eq!(
+            state.shared_source_handles.len(),
+            3,
+            "all three shared source handles should be stored"
+        );
+        let names: Vec<&str> = state
+            .shared_source_handles
+            .iter()
+            .map(|h| h.name.as_str())
+            .collect();
+        assert!(names.contains(&"source-x"));
+        assert!(names.contains(&"source-y"));
+        assert!(names.contains(&"source-z"));
+    });
+}
+
+#[test]
+fn test_shared_source_stopped_removes_handle_and_warns() {
+    // SharedSourceStopped must remove the matching handle and append a warning
+    // log entry to every active session.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device_a = android_device("dev-a");
+        let device_b = android_device("dev-b");
+        let mut state = AppState::new();
+        let sid_a = state.session_manager.create_session(&device_a).unwrap();
+        let sid_b = state.session_manager.create_session(&device_b).unwrap();
+
+        // Register two shared source handles.
+        for name in &["keep-me", "remove-me"] {
+            let (msg, _rx, _slot) = make_shared_source_started(name, None);
+            update(&mut state, msg);
+        }
+        assert_eq!(state.shared_source_handles.len(), 2);
+
+        // Stop one of them.
+        let result = update(
+            &mut state,
+            Message::SharedSourceStopped {
+                name: "remove-me".to_string(),
+            },
+        );
+
+        assert!(result.action.is_none(), "should return no action");
+
+        // Only the surviving handle should remain.
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "one handle must remain after SharedSourceStopped"
+        );
+        assert_eq!(
+            state.shared_source_handles[0].name, "keep-me",
+            "surviving handle must be 'keep-me'"
+        );
+
+        // Both sessions must have received a warning log.
+        state.session_manager.flush_all_pending_logs();
+        let logs_a = &state.session_manager.get(sid_a).unwrap().session.logs;
+        let logs_b = &state.session_manager.get(sid_b).unwrap().session.logs;
+
+        assert!(
+            logs_a.iter().any(|e| {
+                e.level == fdemon_core::LogLevel::Warning
+                    && e.message.contains("remove-me")
+                    && e.message.contains("stopped")
+            }),
+            "session A must have a warning log mentioning 'remove-me', got: {:?}",
+            logs_a.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+        assert!(
+            logs_b.iter().any(|e| {
+                e.level == fdemon_core::LogLevel::Warning
+                    && e.message.contains("remove-me")
+                    && e.message.contains("stopped")
+            }),
+            "session B must have a warning log mentioning 'remove-me', got: {:?}",
+            logs_b.iter().map(|e| &e.message).collect::<Vec<_>>()
+        );
+    });
+}
+
+#[test]
+fn test_shared_source_stopped_no_sessions_is_noop() {
+    // SharedSourceStopped with zero sessions must not panic.
+    let mut state = AppState::new();
+
+    // Register a handle, then stop it without any sessions present.
+    let (msg, _rx, _slot) = make_shared_source_started("solo-source", None);
+    update(&mut state, msg);
+    assert_eq!(state.shared_source_handles.len(), 1);
+
+    update(
+        &mut state,
+        Message::SharedSourceStopped {
+            name: "solo-source".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.shared_source_handles.len(),
+        0,
+        "handle must be removed even when no sessions exist"
+    );
+    // Test passes if no panic occurs.
+}
+
+#[test]
+fn test_shared_source_stopped_unknown_name_is_noop() {
+    // SharedSourceStopped for a name that was never registered must not panic
+    // and must leave existing handles intact.
+    let mut state = AppState::new();
+
+    let (msg, _rx, _slot) = make_shared_source_started("real-source", None);
+    update(&mut state, msg);
+    assert_eq!(state.shared_source_handles.len(), 1);
+
+    update(
+        &mut state,
+        Message::SharedSourceStopped {
+            name: "ghost-source".to_string(),
+        },
+    );
+
+    assert_eq!(
+        state.shared_source_handles.len(),
+        1,
+        "existing handle must not be removed when name does not match"
+    );
+}
+
+// ── Gap-filling tests for task 09 (pre-app-custom-sources Phase 2) ─────────
+
+#[test]
+fn test_shared_source_started_stores_on_app_state() {
+    // SharedSourceStarted must push onto state.shared_source_handles (AppState
+    // level), and must NOT add anything to any SessionHandle's custom_source_handles.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("dev-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let (msg, _rx, _slot) = make_shared_source_started("shared-src", Some(task));
+        update(&mut state, msg);
+
+        // Handle is stored at the AppState level.
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "shared_source_handles should have one entry"
+        );
+        assert_eq!(state.shared_source_handles[0].name, "shared-src");
+
+        // No per-session custom_source_handle must have been created.
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert!(
+            handle.custom_source_handles.is_empty(),
+            "SessionHandle.custom_source_handles must remain empty for a shared source"
+        );
+    });
+}
+
+#[test]
+fn test_shared_source_survives_session_close() {
+    // SharedSourceHandle lives on AppState, not on SessionHandle.
+    // Removing a session must leave state.shared_source_handles intact.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("dev-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Register a shared source handle.
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let (msg, _rx, _slot) = make_shared_source_started("persistent-src", Some(task));
+        update(&mut state, msg);
+        assert_eq!(state.shared_source_handles.len(), 1);
+
+        // Simulate session close: shut down native logs and remove from manager.
+        if let Some(mut handle) = state.session_manager.remove_session(session_id) {
+            handle.shutdown_native_logs();
+        }
+        assert_eq!(
+            state.session_manager.len(),
+            0,
+            "session should have been removed"
+        );
+
+        // The shared source handle must still be present on AppState.
+        assert_eq!(
+            state.shared_source_handles.len(),
+            1,
+            "shared_source_handles must survive session close"
+        );
+        assert_eq!(state.shared_source_handles[0].name, "persistent-src");
+    });
+}
+
+#[test]
+fn test_non_shared_source_still_per_session() {
+    // A non-shared CustomSourceStarted must store its handle on the SessionHandle
+    // (custom_source_handles), NOT on AppState.shared_source_handles.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = android_device("dev-1");
+        let mut state = AppState::new();
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+        let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::CustomSourceStarted {
+                session_id,
+                name: "per-session-src".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle,
+                start_before_app: false,
+            },
+        );
+
+        // Handle is on the SessionHandle.
+        let handle = state.session_manager.get(session_id).unwrap();
+        assert_eq!(
+            handle.custom_source_handles.len(),
+            1,
+            "SessionHandle.custom_source_handles should have one entry for a non-shared source"
+        );
+        assert_eq!(handle.custom_source_handles[0].name, "per-session-src");
+
+        // AppState.shared_source_handles must remain empty.
+        assert!(
+            state.shared_source_handles.is_empty(),
+            "shared_source_handles must be empty — non-shared sources are per-session only"
+        );
+    });
 }

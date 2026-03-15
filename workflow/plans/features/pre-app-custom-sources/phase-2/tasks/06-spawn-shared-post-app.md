@@ -76,3 +76,43 @@ async fn test_spawn_custom_sources_shared_post_app_sends_shared_variants() { ...
 
 - The two skip lists (`running_source_names` for pre-app, `running_shared_names` for shared) are independent — a shared pre-app source will be caught by either check
 - This task modifies the same functions as task 05 but for the post-app code path
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `running_shared_names: Vec<String>` field to `UpdateAction::StartNativeLogCapture` |
+| `crates/fdemon-app/src/handler/session.rs` | Populated `running_shared_names` from `state.running_shared_source_names()` in `maybe_start_native_log_capture` |
+| `crates/fdemon-app/src/actions/mod.rs` | Destructured and forwarded `running_shared_names` from `StartNativeLogCapture` to `spawn_native_log_capture` |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `running_shared_names` parameter to `spawn_native_log_capture` and `spawn_custom_sources`; added skip logic for already-running shared sources; added shared/non-shared routing (shared sends `SharedSource*`, non-shared sends `CustomSource*`); updated existing test call sites to pass empty slice; added 4 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Shared skip guard placement**: The shared-source skip check (`running_shared_names.contains`) is placed after the `start_before_app` check but before the `running_source_names` check. This order is intentional: `start_before_app` is the broadest early exit, then shared-source dedup, then per-session dedup.
+
+2. **`start_before_app: false` on `SharedSourceStarted`**: Post-app shared sources set `start_before_app: false` on the `SharedSourceStarted` message, consistent with their lifecycle position and matching how `spawn_pre_app_sources` sets `start_before_app: true` for pre-app shared sources.
+
+3. **Independent skip lists preserved**: `running_source_names` (per-session idempotency) and `running_shared_names` (global shared-source dedup) remain independent, as specified in the task notes.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1685 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo fmt -p fdemon-app` - Passed (minor whitespace normalization applied)
+
+New tests added:
+- `test_spawn_custom_sources_skips_running_shared` - verifies already-running shared sources are skipped
+- `test_spawn_custom_sources_shared_post_app_sends_shared_variants` - verifies new shared sources send `SharedSourceStarted`
+- `test_spawn_custom_sources_non_shared_post_app_unchanged` - verifies non-shared sources still use `CustomSourceStarted`
+- `test_spawn_custom_sources_running_source_names_still_works` - verifies per-session skip list still operates independently
+
+### Risks/Limitations
+
+1. **No integration test**: The full end-to-end path (AppStarted → StartNativeLogCapture → spawn_custom_sources → SharedSourceStarted → TEA handler) is exercised only through unit tests. Integration coverage exists from the pre-existing TEA handler tests for `SharedSourceStarted`.

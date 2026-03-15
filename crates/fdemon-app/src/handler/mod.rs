@@ -425,6 +425,13 @@ pub enum UpdateAction {
         /// Passed to `spawn_custom_sources()` so it can skip sources that were
         /// already started as pre-app sources, preventing double-spawning.
         running_source_names: Vec<String>,
+        /// Names of shared custom sources that are already running globally.
+        ///
+        /// Captured at action creation time from `state.running_shared_source_names()`.
+        /// Passed to `spawn_custom_sources()` so it skips shared sources that were
+        /// already spawned by a previous session's pre-app phase, preventing
+        /// duplicate shared-source processes.
+        running_shared_names: Vec<String>,
     },
 
     /// Spawn pre-app custom sources and run their readiness checks before
@@ -448,6 +455,13 @@ pub enum UpdateAction {
         /// Flutter project directory — used as the default `working_dir` when
         /// constructing daemon-layer configs for each custom source.
         project_path: std::path::PathBuf,
+        /// Names of shared custom sources that are already running on `AppState`.
+        ///
+        /// Populated by the hydration step in `process.rs` from
+        /// `state.running_shared_source_names()` before `handle_action` is called.
+        /// Sources in this list are skipped by `spawn_pre_app_sources` so a shared
+        /// source is never spawned twice.
+        running_shared_names: Vec<String>,
     },
 }
 

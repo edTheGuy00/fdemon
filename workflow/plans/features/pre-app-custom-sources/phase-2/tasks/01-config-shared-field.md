@@ -82,3 +82,35 @@ fn test_has_shared_pre_app_sources() { ... }
 
 - The `shared` field has no validation interdependency — it's purely additive
 - This is a data-only change; no behavioral changes yet
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `shared: bool` field to `CustomSourceConfig` struct; added `has_shared_sources()`, `shared_sources()`, `has_shared_pre_app_sources()` helpers on `NativeLogsSettings`; added `shared: false` to all 20 existing test struct literals; added 11 new tests |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Added `shared: false` to `pre_app_source` test helper struct literal |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `shared: false` to 5 test struct literals |
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `shared: false` to `make_source_config` test helper struct literal |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field ordering**: `shared` was placed between `start_before_app` and `ready_check` per the task spec, matching the conceptual grouping of lifecycle-related boolean flags.
+2. **No Default impl added**: `CustomSourceConfig` does not derive `Default` (by design — `name` and `command` have no sensible defaults). All struct literals were updated explicitly rather than relying on spread syntax.
+3. **Pre-existing clippy errors**: The repo has 75 pre-existing clippy errors across pre-existing changed files on this branch; no new errors were introduced in my changed files (`types.rs` has zero clippy errors).
+
+### Testing Performed
+
+- `cargo check -p fdemon-app --tests` - Passed
+- `cargo test -p fdemon-app` - Passed (1668 tests, 0 failed)
+- `cargo fmt -p fdemon-app` - Applied (no formatting changes needed)
+- New tests added: 11 tests covering `shared` field deserialization (default false, explicit true, explicit false), `has_shared_sources` (empty, none shared, one shared), `shared_sources` iterator, and `has_shared_pre_app_sources` (empty, shared-not-pre-app, pre-app-not-shared, both true)
+
+### Risks/Limitations
+
+1. **Pre-existing clippy errors**: The quality gate `cargo clippy -- -D warnings` fails due to 75 pre-existing errors on this branch, none related to this task. The task spec only requires `cargo check` and `cargo test` for verification.

@@ -598,6 +598,7 @@ pub fn handle_action(
             settings,
             project_path,
             running_source_names,
+            running_shared_names,
         } => {
             native_logs::spawn_native_log_capture(
                 session_id,
@@ -609,6 +610,7 @@ pub fn handle_action(
                 project_path,
                 msg_tx.clone(),
                 running_source_names,
+                running_shared_names,
             );
         }
 
@@ -621,6 +623,7 @@ pub fn handle_action(
             config,
             settings,
             project_path,
+            running_shared_names,
         } => {
             native_logs::spawn_pre_app_sources(
                 session_id,
@@ -629,6 +632,7 @@ pub fn handle_action(
                 &settings,
                 &project_path,
                 &msg_tx,
+                &running_shared_names,
             );
         }
 

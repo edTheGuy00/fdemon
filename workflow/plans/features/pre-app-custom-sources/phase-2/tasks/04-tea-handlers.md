@@ -123,3 +123,36 @@ fn test_shared_source_log_with_no_sessions_is_noop() { ... }
 
 - The `SharedSourceLog` handler clones `event.tag` and `event.message` per session. This is acceptable — log events are small strings and session count is capped at 9
 - Use the same `resolve_min_level_for_tag` helper as the existing `NativeLog` handler to avoid duplication
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Replaced three placeholder match arms with full implementations for `SharedSourceLog`, `SharedSourceStarted`, and `SharedSourceStopped` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 8 new tests for all three handlers plus 2 test helpers (`make_shared_source_started`, `send_shared_source_log`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`resolve_min_level_for_tag` does not exist**: The task pseudocode referenced a helper that was never created. The actual pattern used throughout the codebase is `LogLevel::from_level_str(state.settings.native_logs.effective_min_level(&event.tag))`. The implementation follows this existing pattern directly to stay consistent with the `NativeLog` handler.
+
+2. **Pre-existing compile error was a false alarm**: The stash-test revealed a transient error due to incomplete uncommitted work from prior task implementors. With my files restored, `cargo check -p fdemon-app` passes cleanly — the error was in files already modified by earlier tasks in this branch and those files are consistent with each other.
+
+3. **Tag observation placed before level filtering**: Consistent with the `NativeLog` handler, `observe_tag` is called before the level check so tags appear in the T-overlay even for filtered events.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1677 tests)
+- `cargo test -p fdemon-app shared_source` - Passed (21 tests, 8 new)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo fmt --all` - Passed
+
+### Risks/Limitations
+
+1. **No shared source deduplication across sessions**: If a shared source tag is hidden in session A but visible in session B, only session B gets the log entry. This is the intended per-session tag filtering behavior, matching how `NativeLog` works.

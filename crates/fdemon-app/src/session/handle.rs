@@ -31,6 +31,23 @@ pub struct CustomSourceHandle {
     pub start_before_app: bool,
 }
 
+/// Handle for a running shared custom log source process.
+///
+/// Structurally identical to `CustomSourceHandle` but stored at the `AppState`
+/// level instead of per-session. Shared sources are spawned once and persist
+/// until fdemon quits.
+#[derive(Debug)]
+pub struct SharedSourceHandle {
+    /// Human-readable source name — used as the log tag.
+    pub name: String,
+    /// Shutdown sender — send `true` to signal the capture task to stop.
+    pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    /// The background task handle — aborted as a fallback on shutdown.
+    pub task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Whether this source was started before the Flutter app.
+    pub start_before_app: bool,
+}
+
 /// Handle for controlling a session's Flutter process
 pub struct SessionHandle {
     /// The session state

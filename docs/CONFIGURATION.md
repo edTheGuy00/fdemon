@@ -368,6 +368,7 @@ Define arbitrary log source processes. Each custom source spawns a command and p
 | `format` | `string` | `"raw"` | Output format parser. Options: `"raw"`, `"json"`, `"logcat-threadtime"`, `"syslog"`. |
 | `working_dir` | `string` | (project dir) | Working directory for the command. Defaults to the Flutter project root when omitted. |
 | `env` | `table` | `{}` | Environment variables to set for the spawned process. |
+| `shared` | `bool` | `false` | Spawn once, shared across all sessions. Logs broadcast to all active sessions. |
 
 #### Format Options
 
@@ -400,6 +401,22 @@ name = "go-backend"
 command = "adb"
 args = ["logcat", "GoLog:D", "*:S", "-v", "threadtime"]
 format = "logcat-threadtime"
+```
+
+#### Shared vs Per-Session Sources
+
+By default, each Flutter session gets its own instance of every custom source process (per-session). With `shared = true`, a single process is spawned for the entire project and its logs are broadcast to all active sessions. Use `shared = true` for backend servers, databases, and other services that bind to a specific port — running them once avoids port conflicts and reduces resource usage. Shared sources persist until fdemon quits; they are not tied to any individual session lifecycle.
+
+```toml
+# Shared backend server — spawned once, all sessions see its logs
+[[native_logs.custom_sources]]
+name = "backend"
+command = "python3"
+args = ["server/server.py"]
+format = "raw"
+start_before_app = true
+shared = true
+ready_check = { type = "http", url = "http://127.0.0.1:8085/health" }
 ```
 
 #### Pre-App Custom Sources

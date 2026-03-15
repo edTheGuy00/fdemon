@@ -542,6 +542,11 @@ impl Engine {
             handle.shutdown_native_logs();
         }
 
+        // Shut down shared custom sources (project-level, not per-session).
+        // Order matters: per-session sources first, then shared sources (a shared
+        // source might be serving multiple sessions), then the global shutdown signal.
+        self.state.shutdown_shared_sources();
+
         // Signal all background tasks to stop
         let _ = self.shutdown_tx.send(true);
 

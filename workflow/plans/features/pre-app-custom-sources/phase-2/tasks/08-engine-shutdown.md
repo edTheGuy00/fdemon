@@ -52,3 +52,28 @@ The order matters: per-session sources first, then shared sources (a shared sour
 
 - The ordering (per-session → shared → global signal) ensures shared sources receive their individual shutdown signal before the blanket `shutdown_tx` fires
 - `shutdown_shared_sources()` is synchronous (fire-and-forget signal + abort) — no `.await` needed
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/engine.rs` | Added `self.state.shutdown_shared_sources()` call in `Engine::shutdown()` after per-session native log shutdown and before `shutdown_tx.send(true)`, with explanatory comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Comment clarity**: Added a multi-line comment explaining the ordering constraint (per-session → shared → global signal) to match the rationale documented in the task. This mirrors the existing comment style already present in the shutdown method.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1685 tests, 0 failed, 4 ignored)
+
+### Risks/Limitations
+
+1. **None**: This is a single synchronous call insertion at a well-defined point in the shutdown sequence. The method `shutdown_shared_sources()` was already implemented and tested in task 02, so this task is purely wiring it into the engine lifecycle.

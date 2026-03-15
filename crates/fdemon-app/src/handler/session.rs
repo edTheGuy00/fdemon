@@ -391,6 +391,11 @@ pub fn maybe_start_native_log_capture(
                 .map(|h| h.name.clone())
                 .collect();
 
+            // Collect names of shared sources already running globally so
+            // spawn_custom_sources() can skip them (prevents spawning a shared
+            // source twice when multiple sessions come up simultaneously).
+            let running_shared_names = state.running_shared_source_names();
+
             tracing::debug!("Emitting StartNativeLogCapture for session {}", session_id);
             return Some(UpdateAction::StartNativeLogCapture {
                 session_id,
@@ -401,6 +406,7 @@ pub fn maybe_start_native_log_capture(
                 settings: state.settings.native_logs.clone(),
                 project_path: state.project_path.clone(),
                 running_source_names,
+                running_shared_names,
             });
         }
     }

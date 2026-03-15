@@ -14,6 +14,7 @@ use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
 
+use super::session::SharedSourceHandle;
 use super::session_manager::SessionManager;
 
 /// Current UI mode/screen
@@ -973,6 +974,12 @@ pub struct AppState {
     /// Flushed into the first session on `SessionStarted`.
     /// Capped at [`MAX_PENDING_WATCHER_ERRORS`] to prevent unbounded growth.
     pub pending_watcher_errors: Vec<String>,
+
+    /// Running shared custom source handles (project-level, not per-session).
+    ///
+    /// One entry per configured custom source with `shared = true` that has been
+    /// successfully spawned. Cleaned up only on engine shutdown.
+    pub shared_source_handles: Vec<SharedSourceHandle>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1028,6 +1035,7 @@ impl AppState {
             tag_filter_visible: false,
             tag_filter_ui: TagFilterUiState::default(),
             pending_watcher_errors: Vec::new(),
+            shared_source_handles: Vec::new(),
         }
     }
 
@@ -1228,6 +1236,35 @@ impl AppState {
         self.ios_simulators_cache = Some(simulators);
         self.android_avds_cache = Some(avds);
         self.bootable_last_updated = Some(std::time::Instant::now());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Shared Source Handle Helpers (Pre-App Custom Sources Phase 2)
+    // ─────────────────────────────────────────────────────────
+
+    /// Shut down all shared custom sources.
+    ///
+    /// Sends shutdown signal and aborts tasks. Called during engine shutdown.
+    pub fn shutdown_shared_sources(&mut self) {
+        for mut handle in self.shared_source_handles.drain(..) {
+            let _ = handle.shutdown_tx.send(true);
+            if let Some(task) = handle.task_handle.take() {
+                task.abort();
+            }
+        }
+    }
+
+    /// Returns the names of currently running shared sources.
+    pub fn running_shared_source_names(&self) -> Vec<String> {
+        self.shared_source_handles
+            .iter()
+            .map(|h| h.name.clone())
+            .collect()
+    }
+
+    /// Returns true if a shared source with the given name is already running.
+    pub fn is_shared_source_running(&self, name: &str) -> bool {
+        self.shared_source_handles.iter().any(|h| h.name == name)
     }
 }
 
@@ -1933,5 +1970,118 @@ mod tests {
         assert!(state.settings_view_state.dart_defines_modal.is_none());
         assert!(state.settings_view_state.editing_config_idx.is_none());
         assert!(!state.settings_view_state.has_modal_open());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Shared Source Handle Tests (Pre-App Custom Sources Phase 2)
+    // ─────────────────────────────────────────────────────────
+
+    /// Build a `SharedSourceHandle` backed by a real `watch` channel for
+    /// testing.  The task handle is left as `None` because we don't need a
+    /// real Tokio task to verify the state-management helpers.
+    fn make_shared_source_handle(name: &str) -> SharedSourceHandle {
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        SharedSourceHandle {
+            name: name.to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+            start_before_app: false,
+        }
+    }
+
+    #[test]
+    fn test_shared_source_handles_initialized_empty() {
+        let state = AppState::new();
+        assert!(
+            state.shared_source_handles.is_empty(),
+            "shared_source_handles should be empty on construction"
+        );
+    }
+
+    #[test]
+    fn test_is_shared_source_running_returns_false_when_empty() {
+        let state = AppState::new();
+        assert!(!state.is_shared_source_running("logcat"));
+    }
+
+    #[test]
+    fn test_is_shared_source_running_returns_true_when_present() {
+        let mut state = AppState::new();
+        state
+            .shared_source_handles
+            .push(make_shared_source_handle("logcat"));
+        assert!(state.is_shared_source_running("logcat"));
+        assert!(!state.is_shared_source_running("other_source"));
+    }
+
+    #[test]
+    fn test_running_shared_source_names_empty() {
+        let state = AppState::new();
+        assert!(state.running_shared_source_names().is_empty());
+    }
+
+    #[test]
+    fn test_running_shared_source_names_returns_all_names() {
+        let mut state = AppState::new();
+        state
+            .shared_source_handles
+            .push(make_shared_source_handle("logcat"));
+        state
+            .shared_source_handles
+            .push(make_shared_source_handle("syslog"));
+
+        let names = state.running_shared_source_names();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"logcat".to_string()));
+        assert!(names.contains(&"syslog".to_string()));
+    }
+
+    #[test]
+    fn test_shutdown_shared_sources_drains_handles() {
+        let mut state = AppState::new();
+        state
+            .shared_source_handles
+            .push(make_shared_source_handle("logcat"));
+        state
+            .shared_source_handles
+            .push(make_shared_source_handle("syslog"));
+
+        assert_eq!(state.shared_source_handles.len(), 2);
+
+        state.shutdown_shared_sources();
+
+        assert!(
+            state.shared_source_handles.is_empty(),
+            "shutdown_shared_sources() must drain all handles"
+        );
+    }
+
+    #[test]
+    fn test_shutdown_shared_sources_sends_shutdown_signal() {
+        let mut state = AppState::new();
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let handle = SharedSourceHandle {
+            name: "logcat".to_string(),
+            shutdown_tx: std::sync::Arc::new(tx),
+            task_handle: None,
+            start_before_app: true,
+        };
+        state.shared_source_handles.push(handle);
+
+        state.shutdown_shared_sources();
+
+        // The shutdown channel should now carry `true`.
+        assert!(
+            *rx.borrow(),
+            "shutdown signal should be true after shutdown_shared_sources()"
+        );
+    }
+
+    #[test]
+    fn test_shutdown_shared_sources_no_op_when_empty() {
+        let mut state = AppState::new();
+        // Should not panic when there are no handles.
+        state.shutdown_shared_sources();
+        assert!(state.shared_source_handles.is_empty());
     }
 }
