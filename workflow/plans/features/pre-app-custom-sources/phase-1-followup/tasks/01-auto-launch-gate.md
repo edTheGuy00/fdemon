@@ -90,3 +90,33 @@ Also add the inverse test confirming that auto-launch WITHOUT pre-app sources st
 - Mirror the exact condition from `launch_context.rs:496-513` — do not add extra logic
 - The `SpawnPreAppSources` variant requires `settings` and `project_path` fields that `SpawnSession` does not — both are available on `state`
 - The existing auto-launch tests at lines 2040-2219 all assert `SpawnSession` — they should still pass because none configure pre-app sources
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Replaced unconditional `SpawnSession` in `AutoLaunchResult` success handler with the same conditional gate from `handle_launch()`: dispatches `SpawnPreAppSources` when `native_logs.enabled && native_logs.has_pre_app_sources()`, otherwise `SpawnSession` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_auto_launch_with_pre_app_sources_returns_spawn_pre_app` and `test_auto_launch_without_pre_app_sources_returns_spawn_session` inside the `auto_launch_tests` module, with a local `pre_app_source` helper mirroring the one in `launch_context.rs` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact condition mirror**: Used `state.settings.native_logs.enabled && state.settings.native_logs.has_pre_app_sources()` verbatim from `launch_context.rs:497-498` with no additional logic, as the task specified.
+2. **Local test helper**: Duplicated the `pre_app_source` helper inside `auto_launch_tests` rather than hoisting it to a shared location, matching the existing pattern where `launch_context.rs` defines its own copy.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (2 pre-existing unrelated warnings)
+- `cargo test -p fdemon-app` - Passed (1646 tests pass, 0 failed, 4 ignored)
+- `cargo test -p fdemon-app test_auto_launch_with_pre_app_sources` - Passed (1 test)
+- `cargo test -p fdemon-app test_auto_launch_without_pre_app_sources` - Passed (1 test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no new warnings)
+
+### Risks/Limitations
+
+1. **None identified**: The change is a direct port of existing logic already exercised in `launch_context.rs` tests; no new code paths or data structures were introduced.

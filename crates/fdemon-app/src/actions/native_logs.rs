@@ -13,11 +13,12 @@
 //! Pre-app source spawning is handled by [`spawn_pre_app_sources`], called
 //! from `actions/mod.rs` when a `SpawnPreAppSources` action is dispatched.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use tokio::sync::mpsc;
 
-use crate::config::{NativeLogsSettings, ReadyCheck};
+use crate::config::{CustomSourceConfig, NativeLogsSettings, ReadyCheck};
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::native_logs::{
@@ -460,254 +461,283 @@ pub(super) fn spawn_pre_app_sources(
     let project_path = project_path.to_path_buf();
     let msg_tx_clone = msg_tx.clone();
 
+    tokio::spawn(run_pre_app_sources_coordinator(
+        pre_app_sources,
+        session_id,
+        project_path,
+        settings_clone,
+        msg_tx_clone,
+        device,
+        config,
+    ));
+}
+
+/// Coordinator task: spawns all pre-app sources, waits for readiness checks,
+/// then releases the Flutter launch gate.
+async fn run_pre_app_sources_coordinator(
+    pre_app_sources: Vec<CustomSourceConfig>,
+    session_id: SessionId,
+    project_path: std::path::PathBuf,
+    settings: NativeLogsSettings,
+    msg_tx: mpsc::Sender<Message>,
+    device: fdemon_daemon::Device,
+    config: Option<Box<crate::config::LaunchConfig>>,
+) {
+    let mut join_set: tokio::task::JoinSet<(String, ReadyCheckResult)> =
+        tokio::task::JoinSet::new();
+    let mut sources_with_checks: usize = 0;
+
+    for source_config in &pre_app_sources {
+        spawn_one_pre_app_source(
+            source_config,
+            session_id,
+            &project_path,
+            &settings,
+            &msg_tx,
+            &mut join_set,
+            &mut sources_with_checks,
+        )
+        .await;
+    }
+
+    // Wait for all readiness checks to complete concurrently.
+    // Each check has its own timeout so we don't need an outer timeout.
+    let mut results: Vec<(String, ReadyCheckResult)> = Vec::new();
+    while let Some(join_result) = join_set.join_next().await {
+        match join_result {
+            Ok(pair) => results.push(pair),
+            Err(e) => tracing::warn!("Pre-app source readiness task panicked: {}", e),
+        }
+    }
+
+    // Log summary if any checks were run.
+    if sources_with_checks > 0 {
+        let ready_count = results.iter().filter(|(_, r)| r.is_ready()).count();
+        let _ = msg_tx
+            .send(Message::PreAppSourceProgress {
+                session_id,
+                message: format!(
+                    "Pre-app sources: {}/{} ready. Launching Flutter...",
+                    ready_count, sources_with_checks
+                ),
+            })
+            .await;
+    }
+
+    // Release the gate — Flutter session spawn proceeds.
+    let _ = msg_tx
+        .send(Message::PreAppSourcesReady {
+            session_id,
+            device,
+            config,
+        })
+        .await;
+}
+
+/// Spawns a single pre-app custom source, its forwarding task, and optionally
+/// registers its readiness check future into the JoinSet.
+///
+/// Validates the source config first — invalid configs are skipped with a warning.
+/// Sends a `PreAppSourceProgress` message before spawning. Pushes a readiness
+/// future into `join_set` and increments `sources_with_checks` for any source
+/// that has a `ready_check` configured.
+async fn spawn_one_pre_app_source(
+    source_config: &CustomSourceConfig,
+    session_id: SessionId,
+    project_path: &Path,
+    settings: &NativeLogsSettings,
+    msg_tx: &mpsc::Sender<Message>,
+    join_set: &mut tokio::task::JoinSet<(String, ReadyCheckResult)>,
+    sources_with_checks: &mut usize,
+) {
+    // Validate config — skip and warn on invalid entries.
+    if let Err(e) = source_config.validate() {
+        tracing::warn!(
+            "Skipping invalid pre-app source for session {}: {}",
+            session_id,
+            e
+        );
+        return;
+    }
+
+    // Send progress: starting this source.
+    let _ = msg_tx
+        .send(Message::PreAppSourceProgress {
+            session_id,
+            message: format!("Starting pre-app source '{}'...", source_config.name),
+        })
+        .await;
+
+    // Build daemon-layer config. Default working_dir to the Flutter project
+    // directory so relative paths in command/args resolve correctly.
+    let working_dir = source_config
+        .working_dir
+        .clone()
+        .or_else(|| project_path.to_str().map(|s| s.to_string()));
+
+    let mut daemon_config = DaemonCustomSourceConfig {
+        name: source_config.name.clone(),
+        command: source_config.command.clone(),
+        args: source_config.args.clone(),
+        format: source_config.format,
+        working_dir,
+        env: source_config.env.clone(),
+        exclude_tags: settings.exclude_tags.clone(),
+        include_tags: settings.include_tags.clone(),
+        ready_pattern: None,
+    };
+
+    // If this source uses a Stdout readiness check, set the ready_pattern
+    // on the daemon config so the capture loop knows to signal when it matches.
+    let ready_rx = if let Some(ReadyCheck::Stdout { ref pattern, .. }) = source_config.ready_check {
+        daemon_config.ready_pattern = Some(pattern.clone());
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        Some((tx, rx))
+    } else {
+        None
+    };
+
+    let (ready_tx_opt, ready_rx_opt) = match ready_rx {
+        Some((tx, rx)) => (Some(tx), Some(rx)),
+        None => (None, None),
+    };
+
+    // Construct CustomLogCapture directly (not via factory) to access
+    // spawn_with_readiness().
+    let custom_capture = CustomLogCapture::new(daemon_config);
+    let native_handle = match custom_capture.spawn_with_readiness(ready_tx_opt) {
+        Some(h) => h,
+        None => {
+            tracing::warn!(
+                "Failed to get handle for pre-app source '{}' (session {})",
+                source_config.name,
+                session_id
+            );
+            return;
+        }
+    };
+
+    // Wrap handles to satisfy Clone on Message::CustomSourceStarted.
+    let shutdown_tx = Arc::new(native_handle.shutdown_tx);
+    let task_handle_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(Some(native_handle.task_handle)));
+    let source_name = source_config.name.clone();
+    let fwd_tx = msg_tx.clone();
+    let mut event_rx = native_handle.event_rx;
+
+    // Spawn forwarding task (same pattern as spawn_custom_sources).
     tokio::spawn(async move {
-        // Collect readiness futures. We use JoinSet to run all checks concurrently.
-        let mut join_set: tokio::task::JoinSet<(String, ReadyCheckResult)> =
-            tokio::task::JoinSet::new();
-        let mut sources_with_checks: usize = 0;
+        // Send lifecycle message first so handles are stored on SessionHandle.
+        // Pre-app sources have start_before_app = true so spawn_custom_sources()
+        // can identify and skip them when AppStarted fires.
+        if fwd_tx
+            .send(Message::CustomSourceStarted {
+                session_id,
+                name: source_name.clone(),
+                shutdown_tx,
+                task_handle: task_handle_slot,
+                start_before_app: true,
+            })
+            .await
+            .is_err()
+        {
+            return;
+        }
 
-        for source_config in &pre_app_sources {
-            // Validate config — skip and warn on invalid entries.
-            if let Err(e) = source_config.validate() {
-                tracing::warn!(
-                    "Skipping invalid pre-app source for session {}: {}",
-                    session_id,
-                    e
-                );
-                continue;
+        tracing::debug!(
+            "Pre-app source '{}' started for session {}",
+            source_name,
+            session_id
+        );
+
+        // Forward events through Message::NativeLog.
+        while let Some(event) = event_rx.recv().await {
+            if fwd_tx
+                .send(Message::NativeLog { session_id, event })
+                .await
+                .is_err()
+            {
+                break;
             }
+        }
 
-            // Send progress: starting this source.
-            let _ = msg_tx_clone
+        let _ = fwd_tx
+            .send(Message::CustomSourceStopped {
+                session_id,
+                name: source_name.clone(),
+            })
+            .await;
+
+        tracing::debug!(
+            "Pre-app source '{}' stopped for session {}",
+            source_name,
+            session_id
+        );
+    });
+
+    // If this source has a ready_check, push a concurrent readiness future.
+    if let Some(ref check) = source_config.ready_check {
+        let check = check.clone();
+        let name = source_config.name.clone();
+        let progress_tx = msg_tx.clone();
+
+        *sources_with_checks += 1;
+
+        join_set.spawn(async move {
+            // Send progress: waiting for readiness.
+            let check_desc = check.to_string();
+            let _ = progress_tx
                 .send(Message::PreAppSourceProgress {
                     session_id,
-                    message: format!("Starting pre-app source '{}'...", source_config.name),
+                    message: format!("Waiting for '{}' readiness ({})...", name, check_desc),
                 })
                 .await;
 
-            // Build daemon-layer config. Default working_dir to the Flutter project
-            // directory so relative paths in command/args resolve correctly.
-            let working_dir = source_config
-                .working_dir
-                .clone()
-                .or_else(|| project_path.to_str().map(|s| s.to_string()));
+            let result = super::ready_check::run_ready_check(&check, &name, ready_rx_opt).await;
 
-            let mut daemon_config = DaemonCustomSourceConfig {
-                name: source_config.name.clone(),
-                command: source_config.command.clone(),
-                args: source_config.args.clone(),
-                format: source_config.format,
-                working_dir,
-                env: source_config.env.clone(),
-                exclude_tags: settings_clone.exclude_tags.clone(),
-                include_tags: settings_clone.include_tags.clone(),
-                ready_pattern: None,
-            };
-
-            // If this source uses a Stdout readiness check, set the ready_pattern
-            // on the daemon config so the capture loop knows to signal when it matches.
-            let ready_rx =
-                if let Some(ReadyCheck::Stdout { ref pattern, .. }) = source_config.ready_check {
-                    daemon_config.ready_pattern = Some(pattern.clone());
-                    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-                    Some((tx, rx))
-                } else {
-                    None
-                };
-
-            let (ready_tx_opt, ready_rx_opt) = match ready_rx {
-                Some((tx, rx)) => (Some(tx), Some(rx)),
-                None => (None, None),
-            };
-
-            // Construct CustomLogCapture directly (not via factory) to access
-            // spawn_with_readiness().
-            let custom_capture = CustomLogCapture::new(daemon_config);
-            let native_handle = match custom_capture.spawn_with_readiness(ready_tx_opt) {
-                Some(h) => h,
-                None => {
-                    tracing::warn!(
-                        "Failed to get handle for pre-app source '{}' (session {})",
-                        source_config.name,
-                        session_id
-                    );
-                    continue;
-                }
-            };
-
-            // Wrap handles to satisfy Clone on Message::CustomSourceStarted.
-            let shutdown_tx = Arc::new(native_handle.shutdown_tx);
-            let task_handle_slot: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
-                Arc::new(Mutex::new(Some(native_handle.task_handle)));
-            let source_name = source_config.name.clone();
-            let fwd_tx = msg_tx_clone.clone();
-            let mut event_rx = native_handle.event_rx;
-
-            // Spawn forwarding task (same pattern as spawn_custom_sources).
-            tokio::spawn(async move {
-                // Send lifecycle message first so handles are stored on SessionHandle.
-                // Pre-app sources have start_before_app = true so spawn_custom_sources()
-                // can identify and skip them when AppStarted fires.
-                if fwd_tx
-                    .send(Message::CustomSourceStarted {
-                        session_id,
-                        name: source_name.clone(),
-                        shutdown_tx,
-                        task_handle: task_handle_slot,
-                        start_before_app: true,
-                    })
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-
-                tracing::debug!(
-                    "Pre-app source '{}' started for session {}",
-                    source_name,
-                    session_id
-                );
-
-                // Forward events through Message::NativeLog.
-                while let Some(event) = event_rx.recv().await {
-                    if fwd_tx
-                        .send(Message::NativeLog { session_id, event })
-                        .await
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-
-                let _ = fwd_tx
-                    .send(Message::CustomSourceStopped {
-                        session_id,
-                        name: source_name.clone(),
-                    })
-                    .await;
-
-                tracing::debug!(
-                    "Pre-app source '{}' stopped for session {}",
-                    source_name,
-                    session_id
-                );
-            });
-
-            // If this source has a ready_check, push a concurrent readiness future.
-            if let Some(ref check) = source_config.ready_check {
-                let check = check.clone();
-                let name = source_config.name.clone();
-                let progress_tx = msg_tx_clone.clone();
-
-                sources_with_checks += 1;
-
-                join_set.spawn(async move {
-                    // Send progress: waiting for readiness.
-                    let check_desc = describe_ready_check(&check);
+            // Send per-source result messages.
+            match &result {
+                ReadyCheckResult::Ready(elapsed) => {
                     let _ = progress_tx
                         .send(Message::PreAppSourceProgress {
                             session_id,
                             message: format!(
-                                "Waiting for '{}' readiness ({})...",
-                                name, check_desc
+                                "Pre-app source '{}' ready ({:.1}s)",
+                                name,
+                                elapsed.as_secs_f64()
                             ),
                         })
                         .await;
-
-                    let result =
-                        super::ready_check::run_ready_check(&check, &name, ready_rx_opt).await;
-
-                    // Send per-source result messages.
-                    match &result {
-                        ReadyCheckResult::Ready(elapsed) => {
-                            let _ = progress_tx
-                                .send(Message::PreAppSourceProgress {
-                                    session_id,
-                                    message: format!(
-                                        "Pre-app source '{}' ready ({:.1}s)",
-                                        name,
-                                        elapsed.as_secs_f64()
-                                    ),
-                                })
-                                .await;
-                        }
-                        ReadyCheckResult::TimedOut(elapsed) => {
-                            tracing::warn!(
-                                "Pre-app source '{}' readiness check timed out after {:.1}s (session {})",
-                                name,
-                                elapsed.as_secs_f64(),
-                                session_id
-                            );
-                            let _ = progress_tx
-                                .send(Message::PreAppSourceTimedOut {
-                                    session_id,
-                                    source_name: name.clone(),
-                                })
-                                .await;
-                        }
-                        ReadyCheckResult::Failed(reason) => {
-                            let _ = progress_tx
-                                .send(Message::PreAppSourceProgress {
-                                    session_id,
-                                    message: format!(
-                                        "Pre-app source '{}' readiness check failed: {}",
-                                        name, reason
-                                    ),
-                                })
-                                .await;
-                        }
-                    }
-
-                    (name, result)
-                });
-            }
-        }
-
-        // Wait for all readiness checks to complete concurrently.
-        // Each check has its own timeout so we don't need an outer timeout.
-        let mut results: Vec<(String, ReadyCheckResult)> = Vec::new();
-        while let Some(join_result) = join_set.join_next().await {
-            match join_result {
-                Ok(pair) => results.push(pair),
-                Err(e) => {
-                    tracing::warn!("Pre-app source readiness task panicked: {}", e);
+                }
+                ReadyCheckResult::TimedOut(elapsed) => {
+                    tracing::warn!(
+                        "Pre-app source '{}' readiness check timed out after {:.1}s (session {})",
+                        name,
+                        elapsed.as_secs_f64(),
+                        session_id
+                    );
+                    let _ = progress_tx
+                        .send(Message::PreAppSourceTimedOut {
+                            session_id,
+                            source_name: name.clone(),
+                        })
+                        .await;
+                }
+                ReadyCheckResult::Failed(reason) => {
+                    let _ = progress_tx
+                        .send(Message::PreAppSourceProgress {
+                            session_id,
+                            message: format!(
+                                "Pre-app source '{}' readiness check failed: {}",
+                                name, reason
+                            ),
+                        })
+                        .await;
                 }
             }
-        }
 
-        // Log summary if any checks were run.
-        if sources_with_checks > 0 {
-            let ready_count = results.iter().filter(|(_, r)| r.is_ready()).count();
-            let _ = msg_tx_clone
-                .send(Message::PreAppSourceProgress {
-                    session_id,
-                    message: format!(
-                        "Pre-app sources: {}/{} ready. Launching Flutter...",
-                        ready_count, sources_with_checks
-                    ),
-                })
-                .await;
-        }
-
-        // Release the gate — Flutter session spawn proceeds.
-        let _ = msg_tx_clone
-            .send(Message::PreAppSourcesReady {
-                session_id,
-                device,
-                config,
-            })
-            .await;
-    });
-}
-
-/// Human-readable description of a ready check for progress messages.
-fn describe_ready_check(check: &ReadyCheck) -> String {
-    match check {
-        ReadyCheck::Http { url, .. } => format!("http: {}", url),
-        ReadyCheck::Tcp { host, port, .. } => format!("tcp: {}:{}", host, port),
-        ReadyCheck::Command { command, .. } => format!("command: {}", command),
-        ReadyCheck::Stdout { pattern, .. } => format!("stdout: /{}/", pattern),
-        ReadyCheck::Delay { seconds } => format!("delay: {}s", seconds),
+            (name, result)
+        });
     }
 }
 
@@ -948,56 +978,53 @@ mod tests {
         assert_eq!(derive_ios_process_name(&None), "Runner");
     }
 
-    // ── describe_ready_check tests ─────────────────────────────────────────
+    // ── ReadyCheck::Display tests ──────────────────────────────────────────
 
     #[test]
-    fn test_describe_ready_check_http() {
+    fn test_ready_check_display_http() {
         let check = ReadyCheck::Http {
             url: "http://localhost:8080/health".to_string(),
             interval_ms: 500,
             timeout_s: 30,
         };
-        assert_eq!(
-            describe_ready_check(&check),
-            "http: http://localhost:8080/health"
-        );
+        assert_eq!(check.to_string(), "http: http://localhost:8080/health");
     }
 
     #[test]
-    fn test_describe_ready_check_tcp() {
+    fn test_ready_check_display_tcp() {
         let check = ReadyCheck::Tcp {
             host: "localhost".to_string(),
             port: 3000,
             interval_ms: 500,
             timeout_s: 30,
         };
-        assert_eq!(describe_ready_check(&check), "tcp: localhost:3000");
+        assert_eq!(check.to_string(), "tcp: localhost:3000");
     }
 
     #[test]
-    fn test_describe_ready_check_command() {
+    fn test_ready_check_display_command() {
         let check = ReadyCheck::Command {
             command: "pg_isready".to_string(),
             args: vec![],
             interval_ms: 500,
             timeout_s: 30,
         };
-        assert_eq!(describe_ready_check(&check), "command: pg_isready");
+        assert_eq!(check.to_string(), "command: pg_isready");
     }
 
     #[test]
-    fn test_describe_ready_check_stdout() {
+    fn test_ready_check_display_stdout() {
         let check = ReadyCheck::Stdout {
             pattern: "Server started".to_string(),
             timeout_s: 30,
         };
-        assert_eq!(describe_ready_check(&check), "stdout: /Server started/");
+        assert_eq!(check.to_string(), "stdout: /Server started/");
     }
 
     #[test]
-    fn test_describe_ready_check_delay() {
+    fn test_ready_check_display_delay() {
         let check = ReadyCheck::Delay { seconds: 5 };
-        assert_eq!(describe_ready_check(&check), "delay: 5s");
+        assert_eq!(check.to_string(), "delay: 5s");
     }
 
     // ── spawn_custom_sources skip-logic tests (Task 07) ───────────────────────

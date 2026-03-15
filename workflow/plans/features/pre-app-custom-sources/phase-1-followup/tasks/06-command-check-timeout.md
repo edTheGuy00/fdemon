@@ -88,3 +88,29 @@ loop {
 
 - This is both a consistency fix and a correctness fix — the current code has a real (if unlikely) deadlock risk if a command hangs indefinitely
 - The subprocess timeout wrapper means `Err(_)` from `tokio::time::timeout` must be handled as `TimedOut`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/ready_check.rs` | Replaced `start.elapsed() >= timeout` guard with `remaining.is_zero()` pattern; wrapped subprocess `.status()` call in `tokio::time::timeout(remaining, ...)`; added `tracing::debug!` in retry arm to keep `source_name` used (avoiding clippy unused-variable error) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Debug logging in retry arm**: The task's example pattern used a comment `/* non-zero exit or spawn error — retry */` instead of logging. However, removing the `tracing::debug!` calls that previously existed left `source_name` unused, causing a clippy `-D warnings` failure. Added a single `tracing::debug!` in the combined retry arm (matching the sibling `run_tcp_check` style) to resolve the warning while preserving observability.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy -p fdemon-app --lib -- -D warnings` - Passed
+- `cargo test -p fdemon-app ready_check` - Passed (44 tests)
+
+### Risks/Limitations
+
+1. **None**: This is a mechanical consistency fix. The timeout behaviour is now identical to `run_http_check` and `run_tcp_check`.

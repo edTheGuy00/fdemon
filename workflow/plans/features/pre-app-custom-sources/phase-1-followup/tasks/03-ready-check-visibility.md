@@ -41,3 +41,29 @@ pub(super) mod ready_check;
 ### Notes
 
 - This is a one-line change with zero call-site impact — `native_logs.rs` accesses `ready_check` via `super::ready_check`, which is within `pub(super)` scope
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Changed `pub mod ready_check` to `pub(super) mod ready_check` on line 25 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal change**: Only the visibility modifier was changed; no other code was touched. The existing `super::ready_check` access pattern in `native_logs.rs` is unaffected since `pub(super)` makes the module visible to the parent (`actions`) and all its children.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace` - Passed (fdemon-app, fdemon-tui, flutter-demon all checked clean)
+- `cargo test -p fdemon-app` - Passed (1,644 unit tests passed, 0 failed)
+
+### Risks/Limitations
+
+1. **None**: The change is purely a visibility restriction that brings `ready_check` in line with its sibling modules. No external consumers reference this module directly.

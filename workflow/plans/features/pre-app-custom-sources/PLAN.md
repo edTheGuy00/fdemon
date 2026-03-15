@@ -252,6 +252,128 @@ When pre-app sources are being started:
 
 ---
 
+### Phase 2: Shared Custom Sources (`shared = true`)
+
+**Goal**: Allow custom sources to be shared across sessions — spawned once, logs broadcast to all active sessions, shut down only on app quit. Prevents port conflicts and redundant processes when multiple Flutter sessions connect to the same backend.
+
+#### Background
+
+Phase 1 custom sources are per-session: each new Flutter session spawns its own copy of every configured custom source. This is correct for device-specific sources (logcat per device) but wrong for shared backend servers that multiple Flutter instances connect to. Launching 3 sessions results in 3 Python backend servers all fighting for port 8085.
+
+The fix introduces `shared = true` on `CustomSourceConfig`. Shared sources are spawned once at the project level (on first session that needs them) and their logs are broadcast to all active sessions. They are shut down only on fdemon quit, not when individual sessions close.
+
+#### Design Decisions
+
+**Decision 1: Config Field Name — `shared`**
+
+```toml
+[[native_logs.custom_sources]]
+name = "backend"
+command = "python3"
+args = ["server/server.py"]
+start_before_app = true
+shared = true    # ← only one instance, logs visible in all sessions
+ready_check = { type = "http", url = "http://127.0.0.1:8085/health" }
+```
+
+`shared` is concise, intuitive, and mirrors Docker Compose's mental model. Alternatives considered: `single_instance` (verbose), `global` (implies system-wide scope), `per_project` (accurate but unusual). `shared = true` reads naturally: "this source is shared across sessions."
+
+Default: `false` (backwards-compatible). `shared = true` is valid with or without `start_before_app`.
+
+**Decision 2: Shared Source Handle Storage — `AppState` Level**
+
+Shared source handles live on `AppState` in a new `shared_source_handles: Vec<SharedSourceHandle>` field, NOT on any `SessionHandle`. This follows the existing pattern of `device_cache`, `dap_status`, and other cross-session state that lives at the `AppState` level.
+
+`SharedSourceHandle` is structurally identical to `CustomSourceHandle` but stored globally. It carries: `name`, `shutdown_tx`, `task_handle`, `start_before_app`.
+
+**Decision 3: Log Routing — Broadcast to All Active Sessions**
+
+Shared sources send logs via a new `Message::SharedSourceLog { event }` variant (no `session_id`). The TEA handler broadcasts the event to all active sessions in `session_manager`, applying per-session tag filtering. This avoids binding to a specific session at spawn time and ensures new sessions immediately see shared source logs.
+
+Alternative considered: Send `NativeLog` with a sentinel session ID. Rejected because it leaks a "fake session" concept into the handler and breaks the existing `session_manager.get_mut(session_id)` lookup.
+
+**Decision 4: Spawn Timing — On First Session That Needs Them**
+
+Shared sources with `start_before_app = true` are spawned on the first session's launch (before the Flutter process). Subsequent sessions skip spawning (sources already running) and skip the ready check wait (already healthy).
+
+Shared sources with `start_before_app = false` are spawned on the first `AppStarted` event, same as per-session post-app sources.
+
+**Decision 5: Shutdown — Only on fdemon Quit**
+
+Shared sources are NOT shut down when individual sessions close. `SessionHandle::shutdown_native_logs()` only affects per-session sources. Shared sources are shut down in `Engine::shutdown()` alongside the existing session cleanup.
+
+**Decision 6: Pre-App Gating for Subsequent Sessions**
+
+When a second session launches with `start_before_app` shared sources already running:
+- The launch flow checks `state.shared_source_handles` — if the shared source is already tracked and its `shutdown_tx` is not closed, skip spawning
+- Skip the ready check entirely — the source is already healthy
+- Emit `PreAppSourcesReady` immediately for the shared sources (only wait for any non-shared pre-app sources)
+
+#### Steps
+
+1. **Add `shared` Field to `CustomSourceConfig`**
+   - Add `shared: bool` (default: false) to `CustomSourceConfig` in `config/types.rs`
+   - Add `has_shared_sources()` helper on `NativeLogsSettings`
+   - Validation: `shared = true` with `ready_check` requires `start_before_app = true` (same existing rule)
+   - Update `docs/CONFIGURATION.md`
+
+2. **Add `SharedSourceHandle` and `AppState` Storage**
+   - Define `SharedSourceHandle` in `session/handle.rs` (or a new `shared_sources.rs` module)
+   - Add `shared_source_handles: Vec<SharedSourceHandle>` to `AppState`
+   - Add `shutdown_shared_sources()` method for cleanup
+
+3. **Add `SharedSourceLog` Message Variant**
+   - New `Message::SharedSourceLog { event: NativeLogEvent }` variant
+   - New `Message::SharedSourceStarted { name, shutdown_tx, task_handle, start_before_app }` variant
+   - New `Message::SharedSourceStopped { name }` variant
+
+4. **Modify `spawn_pre_app_sources` to Handle Shared Sources**
+   - Accept shared source state (names already running) as parameter
+   - Skip shared sources that are already tracked in `state.shared_source_handles`
+   - For new shared sources: spawn normally but send `SharedSourceStarted` instead of `CustomSourceStarted`
+   - Shared source forwarding tasks send `SharedSourceLog` instead of `NativeLog`
+
+5. **Modify `spawn_custom_sources` to Handle Shared Sources**
+   - Skip `shared = true` sources that are already in `state.shared_source_handles`
+   - For new shared post-app sources: same pattern as step 4
+
+6. **Handle `SharedSourceLog` in TEA Handler**
+   - Broadcast to all active sessions: iterate `session_manager.iter_mut()`, apply per-session tag filter, queue log on each
+   - Observe tag on each session's `native_tag_state`
+
+7. **Handle `SharedSourceStarted`/`SharedSourceStopped` in TEA Handler**
+   - Push/remove from `state.shared_source_handles`
+   - On `SharedSourceStopped`: log a warning to all sessions
+
+8. **Modify Pre-App Gating for Shared Sources**
+   - In `handle_launch()` and `AutoLaunchResult`: check `state.shared_source_handles` for already-running shared pre-app sources
+   - Only wait for readiness of non-running sources
+   - Pass running shared source names to `spawn_pre_app_sources` to skip
+
+9. **Modify `shutdown_native_logs()` to Skip Shared Sources**
+   - `SessionHandle::shutdown_native_logs()` must not kill shared sources
+   - Since shared sources live on `AppState` (not `SessionHandle`), this is automatic — no change needed to per-session shutdown
+
+10. **Add Shared Source Cleanup to `Engine::shutdown()`**
+    - In `Engine::shutdown()`: iterate `state.shared_source_handles`, send shutdown signal, abort tasks
+    - This runs alongside the existing per-session `shutdown_native_logs()` calls
+
+11. **Testing**
+    - Test: shared source spawned once across two sessions
+    - Test: shared source logs broadcast to all active sessions
+    - Test: shared source survives individual session close
+    - Test: shared source cleaned up on engine shutdown
+    - Test: second session skips ready check for already-running shared source
+    - Test: non-shared sources still per-session (regression)
+
+12. **Documentation**
+    - Update `docs/CONFIGURATION.md` with `shared` field reference and examples
+    - Update `docs/ARCHITECTURE.md` with shared source data flow
+
+**Milestone**: Users can configure shared backend servers that spawn once and serve all Flutter sessions. No more port conflicts or redundant processes when running multi-device sessions.
+
+---
+
 ## Edge Cases & Risks
 
 ### Ready Check Never Succeeds
@@ -288,7 +410,19 @@ When pre-app sources are being started:
 
 ### Concurrent Session Launches
 - **Risk:** User launches two sessions — each has pre-app sources. If they share the same backend (e.g., same port), only one should start it.
-- **Mitigation:** Out of scope for v1. Custom sources are per-session. If users share a backend across sessions, they should start it manually or configure it on only one session. Future enhancement: shared/global custom sources.
+- **Mitigation:** Out of scope for Phase 1. Custom sources are per-session. Phase 2 adds `shared = true` to handle this case properly.
+
+### Shared Source Crash (Phase 2)
+- **Risk:** A shared source crashes while multiple sessions are active. All sessions lose their shared backend.
+- **Mitigation:** `SharedSourceStopped` logs a warning to all sessions. The user can see the source's stderr to diagnose. Auto-restart is deferred to a future enhancement.
+
+### Race: Two Sessions Launch Simultaneously with Shared Pre-App Sources (Phase 2)
+- **Risk:** Two `SpawnPreAppSources` actions fire in rapid succession; both try to spawn the same shared source.
+- **Mitigation:** The TEA loop is single-threaded — messages are processed sequentially. The first `SharedSourceStarted` registers the handle on `AppState` before the second `spawn_pre_app_sources` runs. The second launch sees the source already tracked and skips spawning.
+
+### Shared Source With No Active Sessions (Phase 2)
+- **Risk:** All sessions are closed but fdemon is still running. Shared source keeps running with no session to display its logs.
+- **Mitigation:** This is by design — the shared source persists until fdemon quits. Logs from the source are silently dropped (no active sessions in `session_manager.iter_mut()`). When a new session starts, it immediately begins receiving logs again.
 
 ---
 
@@ -392,7 +526,7 @@ format = "raw"
 
 ## Success Criteria
 
-### Complete When:
+### Phase 1 Complete When:
 - [ ] `start_before_app = true` causes custom source to spawn before Flutter app launch
 - [ ] `ready_check` with `type = "http"` polls a URL and gates Flutter launch on 2xx response
 - [ ] `ready_check` with `type = "tcp"` polls a host:port and gates Flutter launch on successful connection
@@ -413,11 +547,20 @@ format = "raw"
 - [ ] `docs/CONFIGURATION.md` updated with `start_before_app` and `ready_check` reference
 - [ ] `docs/ARCHITECTURE.md` updated with pre-app source flow
 
+### Phase 2 Complete When:
+- [ ] `shared = true` causes custom source to spawn once across all sessions
+- [ ] Shared source logs are broadcast to all active sessions
+- [ ] Shared source survives individual session close (only shut down on fdemon quit)
+- [ ] Second session launch skips ready check for already-running shared sources
+- [ ] Non-shared sources remain per-session (no regression)
+- [ ] `Engine::shutdown()` cleans up shared sources
+- [ ] `docs/CONFIGURATION.md` updated with `shared` field reference
+- [ ] All new code has unit tests
+- [ ] `cargo fmt && cargo check && cargo test && cargo clippy -- -D warnings` passes
+
 ---
 
 ## Future Enhancements
-
-- **Shared/global custom sources**: Sources that persist across sessions and aren't tied to a single device. Useful when multiple Flutter sessions share one backend.
 - **HTTPS health checks**: Add TLS support for health check endpoints (via `rustls` or `native-tls`). Low priority since localhost checks are almost always HTTP.
 - **Restart-on-crash for pre-app sources**: Auto-restart a pre-app source if it exits unexpectedly, with backoff. Currently, the process stays dead and the user sees a warning.
 - **Readiness check composition**: AND/OR logic for multiple readiness conditions (e.g., "HTTP health check AND stdout pattern"). Currently each source has at most one check.

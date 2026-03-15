@@ -126,8 +126,13 @@ async fn run_http_check(
 }
 
 /// Attempt a single HTTP GET and return `true` if the status code is 2xx.
+///
+/// Uses `BufReader::read_line()` so that the full status line is read regardless
+/// of how many TCP segments the response arrives in.  The caller wraps this
+/// function in a `tokio::time::timeout`, so there is no need for an additional
+/// timeout here.
 async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<bool> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
     let mut stream = TcpStream::connect(addr).await?;
 
@@ -137,17 +142,14 @@ async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<boo
     );
     stream.write_all(request.as_bytes()).await?;
 
-    // Read just enough to get the status line.
-    let mut buf = [0u8; 256];
-    let n = stream.read(&mut buf).await?;
-    let response = String::from_utf8_lossy(&buf[..n]);
+    let mut reader = BufReader::new(stream);
+    let mut status_line = String::new();
+    reader.read_line(&mut status_line).await?;
 
     // Parse "HTTP/1.x 2xx ..."
-    if let Some(status_line) = response.lines().next() {
-        if let Some(code_str) = status_line.split_whitespace().nth(1) {
-            if let Ok(code) = code_str.parse::<u16>() {
-                return Ok((200..300).contains(&code));
-            }
+    if let Some(code_str) = status_line.split_whitespace().nth(1) {
+        if let Ok(code) = code_str.parse::<u16>() {
+            return Ok((200..300).contains(&code));
         }
     }
 
@@ -158,7 +160,11 @@ async fn try_http_get(addr: &str, host: &str, path: &str) -> std::io::Result<boo
 ///
 /// Only `http://` scheme is supported. HTTPS is out of scope per PLAN Decision 6;
 /// users can use the `Tcp` check type for HTTPS endpoints.
-fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
+///
+/// This function is `pub(crate)` so that `config::types::ReadyCheck::validate()`
+/// can use the same parser that runs at execution time, ensuring validation and
+/// execution agree on what constitutes a valid URL.
+pub(crate) fn parse_http_url(url: &str) -> Result<(String, u16, String), String> {
     let stripped = url
         .strip_prefix("http://")
         .ok_or_else(|| "URL must start with http://".to_string())?;
@@ -237,33 +243,34 @@ async fn run_command_check(
     let interval = Duration::from_millis(interval_ms);
 
     loop {
-        if start.elapsed() >= timeout {
+        let remaining = timeout.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
             return ReadyCheckResult::TimedOut(start.elapsed());
         }
 
-        match tokio::process::Command::new(command)
-            .args(args)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .await
+        // Cap each subprocess invocation at the remaining timeout so a hung
+        // command can't block past our deadline.
+        match tokio::time::timeout(
+            remaining,
+            tokio::process::Command::new(command)
+                .args(args)
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status(),
+        )
+        .await
         {
-            Ok(status) if status.success() => {
+            Ok(Ok(status)) if status.success() => {
                 return ReadyCheckResult::Ready(start.elapsed());
             }
-            Ok(status) => {
+            Ok(Ok(_)) | Ok(Err(_)) => {
                 tracing::debug!(
-                    "Pre-app source '{}': command check exited with {:?}, retrying...",
-                    source_name,
-                    status.code()
+                    "Pre-app source '{}': command check not ready, retrying...",
+                    source_name
                 );
             }
-            Err(e) => {
-                tracing::debug!(
-                    "Pre-app source '{}': command check failed to spawn: {}, retrying...",
-                    source_name,
-                    e
-                );
+            Err(_) => {
+                return ReadyCheckResult::TimedOut(start.elapsed());
             }
         }
 
@@ -364,13 +371,90 @@ mod tests {
         assert_eq!(path, "/api/v1/health");
     }
 
+    // ── HTTP check ────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_http_check_success() {
+        use tokio::io::AsyncWriteExt;
+
+        // Bind a listener that speaks a minimal HTTP/1.1 200 response.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            if let Ok((mut sock, _)) = listener.accept().await {
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            }
+        });
+
+        let check = ReadyCheck::Http {
+            url: format!("http://127.0.0.1:{}/health", port),
+            interval_ms: 100,
+            timeout_s: 5,
+        };
+        let result = run_ready_check(&check, "test", None).await;
+        assert!(result.is_ready());
+    }
+
+    #[tokio::test]
+    async fn test_http_check_non_200_retries() {
+        use tokio::io::AsyncWriteExt;
+
+        // Listener that always returns 503; check should time out rather than
+        // immediately succeed.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            loop {
+                if let Ok((mut sock, _)) = listener.accept().await {
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
+                        .await;
+                }
+            }
+        });
+
+        let check = ReadyCheck::Http {
+            url: format!("http://127.0.0.1:{}/health", port),
+            interval_ms: 100,
+            timeout_s: 1,
+        };
+        let result = run_ready_check(&check, "test", None).await;
+        assert!(matches!(result, ReadyCheckResult::TimedOut(_)));
+    }
+
+    #[tokio::test]
+    async fn test_http_check_connection_refused() {
+        // Bind to get a free port, drop the listener so nothing is listening.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let check = ReadyCheck::Http {
+            url: format!("http://127.0.0.1:{}/health", port),
+            interval_ms: 100,
+            timeout_s: 1,
+        };
+        let result = run_ready_check(&check, "test", None).await;
+        assert!(matches!(result, ReadyCheckResult::TimedOut(_)));
+    }
+
     // ── TCP check ─────────────────────────────────────────
 
     #[tokio::test]
     async fn test_tcp_check_timeout_on_closed_port() {
+        // Bind to port 0 to get an OS-assigned port, then drop the listener
+        // so the port is guaranteed to be closed.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
         let check = ReadyCheck::Tcp {
             host: "127.0.0.1".to_string(),
-            port: 1, // Port 1 is almost certainly not listening
+            port,
             interval_ms: 100,
             timeout_s: 1,
         };

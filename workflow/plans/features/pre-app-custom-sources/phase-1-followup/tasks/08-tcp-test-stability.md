@@ -64,3 +64,28 @@ async fn test_tcp_check_timeout_on_closed_port() {
 
 - There is a theoretical TOCTOU race (another process could bind the port between `drop(listener)` and the TCP connect attempt), but this is extremely unlikely in practice and far more reliable than hardcoding port 1
 - `std::net::TcpListener` (not tokio) is fine here since we immediately drop it — no async needed
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/ready_check.rs` | Replaced hardcoded `port: 1` with dynamically allocated port via `std::net::TcpListener::bind("127.0.0.1:0")` and immediate `drop` |
+
+### Notable Decisions/Tradeoffs
+
+1. **std::net vs tokio::net for the listener**: Used `std::net::TcpListener` (synchronous) rather than `tokio::net::TcpListener` because the listener is immediately dropped — no async I/O is performed on it, so the sync variant is simpler and avoids needing `.await`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app test_tcp_check_timeout_on_closed_port` - Passed (1 test)
+- `cargo test -p fdemon-app actions::ready_check` - Passed (15 tests)
+
+### Risks/Limitations
+
+1. **TOCTOU race**: Another process could theoretically bind the freed port before the TCP connect attempt reaches it, causing the test to see a successful connection instead of a timeout. This is negligible in practice and acceptable per task notes.

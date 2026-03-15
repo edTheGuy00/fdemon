@@ -56,3 +56,35 @@ Use `parse_http_url` for validation too, since it is the parser that matters at 
 - Check whether `url` is used anywhere else in `fdemon-app` before removing the dependency
 - The `parse_http_url` function needs to become `pub(crate)` (currently private) — it only needs crate-internal visibility
 - If `ready_check` visibility has been changed to `pub(super)` (task 03), the import path `crate::actions::ready_check::parse_http_url` will work because `pub(crate)` on the function itself provides crate-wide access regardless of module visibility
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/ready_check.rs` | Changed `parse_http_url` from `fn` (private) to `pub(crate) fn` with added doc comment explaining the reason |
+| `crates/fdemon-app/src/config/types.rs` | Replaced `url::Url::parse()` + host check with `crate::actions::ready_check::parse_http_url()` call |
+| `crates/fdemon-app/Cargo.toml` | Removed `url.workspace = true` dependency |
+
+### Notable Decisions/Tradeoffs
+
+1. **Kept `pub(crate)` rather than `pub`**: The function only needs to be visible within the crate. `pub(crate)` gives access to `config::types` via the absolute path `crate::actions::ready_check::parse_http_url` while keeping the function internal. The `ready_check` module remains `pub(super)` as set by task 03.
+
+2. **Test `test_ready_check_http_validate_url_no_host`**: With the old parser, `"file:///path/to/file"` would parse successfully but fail the host check. With `parse_http_url`, it fails the `http://` prefix check. Both result in `Err(...)` so the test (which only checks `is_err()`) continues to pass without modification.
+
+3. **Confirmed `url` crate was only used in one place**: Grepped all of `crates/fdemon-app/src` and confirmed `url::` appeared only on line 639 of `config/types.rs`. Safe to remove.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1649 unit tests, 1 doc-test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Narrower validation**: `parse_http_url` only accepts `http://` URLs. The old `url::Url::parse` would accept `https://`, `ftp://`, etc. and only reject on missing host. The new code rejects non-http schemes earlier with a clearer error ("URL must start with http://"). This is the correct behavior given the HTTP check only supports plain HTTP.

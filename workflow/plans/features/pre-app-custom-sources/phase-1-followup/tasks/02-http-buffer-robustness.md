@@ -63,3 +63,30 @@ The existing `test_http_check_success`, `test_http_check_non_200_retries`, and `
 - `BufReader::read_line()` reads until `\n` or EOF — HTTP/1.x status lines are terminated with `\r\n`, so this correctly captures the full line
 - The outer `tokio::time::timeout(remaining, try_http_get(...))` in `run_http_check` (line 102) already protects against indefinite blocking, so no additional timeout is needed inside `try_http_get`
 - Import changes: replace `AsyncReadExt` with `AsyncBufReadExt`, add `BufReader`
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/ready_check.rs` | Replaced raw `stream.read(&mut buf)` with `BufReader::read_line()`; updated imports from `AsyncReadExt` to `AsyncBufReadExt` + `BufReader`; added doc comment noting outer timeout provides protection; added three new HTTP check tests: `test_http_check_success`, `test_http_check_non_200_retries`, `test_http_check_connection_refused` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added missing HTTP tests**: The task notes referenced three HTTP check tests that did not yet exist in the file. They were added alongside the implementation change so there is concrete coverage of `try_http_get` via `run_ready_check`. Each test spins up a real `tokio::net::TcpListener` to exercise the actual TCP path.
+2. **No internal timeout added**: The outer `tokio::time::timeout(remaining, try_http_get(...))` in `run_http_check` already bounds `read_line` if a server sends data without a newline, so no additional timeout was introduced inside `try_http_get`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app ready_check` - Passed (44 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-app && cargo check -p fdemon-app` - Passed
+
+### Risks/Limitations
+
+1. **EOF with no newline**: `read_line` reads until `\n` or EOF. If a server closes the connection before sending `\r\n`, the accumulated partial line is still parsed — this is safe because `split_whitespace().nth(1)` returns `None` on a truncated line, causing `try_http_get` to return `Ok(false)` and trigger a retry, which is the correct behaviour.

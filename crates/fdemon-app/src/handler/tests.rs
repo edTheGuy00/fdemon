@@ -2331,6 +2331,84 @@ mod auto_launch_tests {
     }
 
     // ─────────────────────────────────────────────────────────
+    // Pre-app custom source gating for AutoLaunchResult
+    // (pre-app-custom-sources Phase 1, followup Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    /// Helper: build a `CustomSourceConfig` with `start_before_app = true`.
+    fn pre_app_source(name: &str) -> crate::config::types::CustomSourceConfig {
+        crate::config::types::CustomSourceConfig {
+            name: name.to_string(),
+            command: "server".to_string(),
+            args: vec![],
+            format: fdemon_core::types::OutputFormat::Raw,
+            working_dir: None,
+            env: std::collections::HashMap::new(),
+            start_before_app: true,
+            ready_check: None,
+        }
+    }
+
+    #[test]
+    fn test_auto_launch_with_pre_app_sources_returns_spawn_pre_app() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+
+        // Enable native logs with a pre-app source
+        state.settings.native_logs.enabled = true;
+        state
+            .settings
+            .native_logs
+            .custom_sources
+            .push(pre_app_source("test-server"));
+
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
+            "Expected SpawnPreAppSources when pre-app sources are configured, got {:?}",
+            result.action
+        );
+    }
+
+    #[test]
+    fn test_auto_launch_without_pre_app_sources_returns_spawn_session() {
+        let mut state = AppState::new();
+        state.project_path = PathBuf::from("/tmp/test");
+
+        // Enable native logs but no pre-app sources (custom_sources is empty)
+        state.settings.native_logs.enabled = true;
+
+        let device = test_device("test-device", "Test Device");
+
+        let result = update(
+            &mut state,
+            Message::AutoLaunchResult {
+                result: Ok(AutoLaunchSuccess {
+                    device: device.clone(),
+                    config: None,
+                }),
+            },
+        );
+
+        assert!(
+            matches!(result.action, Some(UpdateAction::SpawnSession { .. })),
+            "Expected SpawnSession when no pre-app sources configured, got {:?}",
+            result.action
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────
     // Fuzzy Modal Handler Tests
     // ─────────────────────────────────────────────────────────
 

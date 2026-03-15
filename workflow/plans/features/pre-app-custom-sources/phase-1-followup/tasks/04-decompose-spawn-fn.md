@@ -57,3 +57,32 @@ Followed by the coordinator await logic (Section D) and gate release (Section E)
 - The `ready_rx` oneshot channel is created and consumed within the same loop iteration, so it moves cleanly into the helper
 - The helper will need to be `async` since it calls `CustomLogCapture::new().spawn_with_readiness()`
 - `join_set` and `sources_with_checks` are passed as `&mut` since the helper pushes futures and increments the counter
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/native_logs.rs` | Added `use std::path::Path` and `use crate::config::CustomSourceConfig` imports; extracted per-source loop body into `async fn spawn_one_pre_app_source`; extracted spawned async block into `async fn run_pre_app_sources_coordinator`; `spawn_pre_app_sources` body reduced to 37 lines |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two extractions instead of one**: The task specified extracting the per-source loop body into `spawn_one_pre_app_source`. After that extraction the `spawn_pre_app_sources` body was still ~80 lines because the `tokio::spawn(async move { ... })` block (containing the coordinator logic) remained. A second extraction into `run_pre_app_sources_coordinator` was needed to meet the under-50-line criterion. Both helpers are private (`async fn` without `pub`).
+
+2. **`run_pre_app_sources_coordinator` takes owned values**: The coordinator is spawned as a free `async fn` via `tokio::spawn(run_pre_app_sources_coordinator(...))`, so it takes owned `Vec<CustomSourceConfig>`, `PathBuf`, `NativeLogsSettings` etc. rather than references. This matches the move-semantics of the original `tokio::spawn(async move { ... })` block.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1646 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-app -- --check` - Passed (after applying fmt)
+
+### Risks/Limitations
+
+1. **No risk**: Pure refactor — no logic moved across async boundaries, no behavior change. The `run_pre_app_sources_coordinator` function is exactly the moved body of the previous `tokio::spawn(async move {...})` block.

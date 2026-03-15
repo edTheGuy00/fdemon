@@ -636,11 +636,8 @@ impl ReadyCheck {
     pub fn validate(&self) -> Result<(), String> {
         match self {
             ReadyCheck::Http { url, .. } => {
-                let parsed = url::Url::parse(url)
+                crate::actions::ready_check::parse_http_url(url)
                     .map_err(|e| format!("invalid ready_check url '{}': {}", url, e))?;
-                if parsed.host().is_none() {
-                    return Err(format!("ready_check url '{}' has no host", url));
-                }
                 Ok(())
             }
             ReadyCheck::Tcp { port, .. } => {
@@ -670,6 +667,18 @@ impl ReadyCheck {
                 }
                 Ok(())
             }
+        }
+    }
+}
+
+impl std::fmt::Display for ReadyCheck {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ReadyCheck::Http { url, .. } => write!(f, "http: {}", url),
+            ReadyCheck::Tcp { host, port, .. } => write!(f, "tcp: {}:{}", host, port),
+            ReadyCheck::Command { command, .. } => write!(f, "command: {}", command),
+            ReadyCheck::Stdout { pattern, .. } => write!(f, "stdout: /{}/", pattern),
+            ReadyCheck::Delay { seconds } => write!(f, "delay: {}s", seconds),
         }
     }
 }

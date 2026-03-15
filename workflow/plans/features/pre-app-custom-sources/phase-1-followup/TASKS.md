@@ -32,24 +32,24 @@ Wave 2 (parallel — no deps, independent minor fixes)
 
 | # | Task | Status | Depends On | Severity | Modules |
 |---|------|--------|------------|----------|---------|
-| 1 | [01-auto-launch-gate](tasks/01-auto-launch-gate.md) | Not Started | - | Critical | `handler/update.rs`, `handler/tests.rs` |
-| 2 | [02-http-buffer-robustness](tasks/02-http-buffer-robustness.md) | Not Started | - | Major | `actions/ready_check.rs` |
-| 3 | [03-ready-check-visibility](tasks/03-ready-check-visibility.md) | Not Started | - | Major | `actions/mod.rs` |
-| 4 | [04-decompose-spawn-fn](tasks/04-decompose-spawn-fn.md) | Not Started | - | Minor | `actions/native_logs.rs` |
-| 5 | [05-display-impl-readycheck](tasks/05-display-impl-readycheck.md) | Not Started | - | Minor | `config/types.rs`, `actions/native_logs.rs` |
-| 6 | [06-command-check-timeout](tasks/06-command-check-timeout.md) | Not Started | - | Minor | `actions/ready_check.rs` |
-| 7 | [07-url-parser-consistency](tasks/07-url-parser-consistency.md) | Not Started | - | Minor | `actions/ready_check.rs`, `config/types.rs`, `Cargo.toml` |
-| 8 | [08-tcp-test-stability](tasks/08-tcp-test-stability.md) | Not Started | - | Minor | `actions/ready_check.rs` |
+| 1 | [01-auto-launch-gate](tasks/01-auto-launch-gate.md) | Done | - | Critical | `handler/update.rs`, `handler/tests.rs` |
+| 2 | [02-http-buffer-robustness](tasks/02-http-buffer-robustness.md) | Done | - | Major | `actions/ready_check.rs` |
+| 3 | [03-ready-check-visibility](tasks/03-ready-check-visibility.md) | Done | - | Major | `actions/mod.rs` |
+| 4 | [04-decompose-spawn-fn](tasks/04-decompose-spawn-fn.md) | Done | - | Minor | `actions/native_logs.rs` |
+| 5 | [05-display-impl-readycheck](tasks/05-display-impl-readycheck.md) | Done | - | Minor | `config/types.rs`, `actions/native_logs.rs` |
+| 6 | [06-command-check-timeout](tasks/06-command-check-timeout.md) | Done | - | Minor | `actions/ready_check.rs` |
+| 7 | [07-url-parser-consistency](tasks/07-url-parser-consistency.md) | Done | - | Minor | `actions/ready_check.rs`, `config/types.rs`, `Cargo.toml` |
+| 8 | [08-tcp-test-stability](tasks/08-tcp-test-stability.md) | Done | - | Minor | `actions/ready_check.rs` |
 
 ## Success Criteria
 
 Phase 1 followup is complete when:
 
-- [ ] Auto-launch path with `start_before_app` sources emits `SpawnPreAppSources` (not `SpawnSession`)
-- [ ] HTTP ready check reads the full status line regardless of TCP segmentation
-- [ ] `ready_check` module uses `pub(super)` visibility matching sibling conventions
-- [ ] Minor code quality issues addressed (function length, Display impl, timeout consistency, parser consistency, test stability)
-- [ ] `cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings`
+- [x] Auto-launch path with `start_before_app` sources emits `SpawnPreAppSources` (not `SpawnSession`)
+- [x] HTTP ready check reads the full status line regardless of TCP segmentation
+- [x] `ready_check` module uses `pub(super)` visibility matching sibling conventions
+- [x] Minor code quality issues addressed (function length, Display impl, timeout consistency, parser consistency, test stability)
+- [x] `cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings`
 
 ## Notes
 

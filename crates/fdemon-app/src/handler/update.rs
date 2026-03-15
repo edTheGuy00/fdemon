@@ -909,11 +909,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                                 Some(&device.id),
                             );
 
-                            UpdateResult::action(UpdateAction::SpawnSession {
-                                session_id,
-                                device,
-                                config: config.map(Box::new),
-                            })
+                            // Check if any custom sources need to start before the app
+                            let action = if state.settings.native_logs.enabled
+                                && state.settings.native_logs.has_pre_app_sources()
+                            {
+                                UpdateAction::SpawnPreAppSources {
+                                    session_id,
+                                    device,
+                                    config: config.map(Box::new),
+                                    settings: state.settings.native_logs.clone(),
+                                    project_path: state.project_path.clone(),
+                                }
+                            } else {
+                                UpdateAction::SpawnSession {
+                                    session_id,
+                                    device,
+                                    config: config.map(Box::new),
+                                }
+                            };
+                            UpdateResult::action(action)
                         }
                         Err(e) => {
                             // Clear loading before showing error dialog

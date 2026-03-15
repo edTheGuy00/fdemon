@@ -22,7 +22,7 @@ pub(super) mod inspector;
 pub(super) mod native_logs;
 pub(super) mod network;
 pub(super) mod performance;
-pub mod ready_check;
+pub(super) mod ready_check;
 pub(super) mod vm_service;
 
 /// Convenience type alias for session task tracking
