@@ -457,8 +457,8 @@ pub enum UpdateAction {
         project_path: std::path::PathBuf,
         /// Names of shared custom sources that are already running on `AppState`.
         ///
-        /// Populated by the hydration step in `process.rs` from
-        /// `state.running_shared_source_names()` before `handle_action` is called.
+        /// Snapshot of shared custom source names already running at the time
+        /// this action was constructed, taken from `state.running_shared_source_names()`.
         /// Sources in this list are skipped by `spawn_pre_app_sources` so a shared
         /// source is never spawned twice.
         running_shared_names: Vec<String>,

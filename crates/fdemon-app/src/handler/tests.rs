@@ -8260,6 +8260,136 @@ fn test_guard_allows_post_app_sources_when_only_pre_app_running() {
     );
 }
 
+#[test]
+fn test_android_pre_app_only_allows_platform_capture_start() {
+    // Android session with:
+    // - Pre-app custom source running (in custom_source_handles)
+    // - No post-app sources configured
+    // - native_log_shutdown_tx = None (platform capture NOT started)
+    // Branch B must NOT fire → function returns Some(StartNativeLogCapture).
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = android_device("android-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Enable adb so native_logs_available("android") returns true.
+    state.tool_availability = ToolAvailability {
+        adb: true,
+        ..Default::default()
+    };
+    state.settings.native_logs.enabled = true;
+
+    // Only a pre-app custom source — no post-app sources.
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "server".to_string(),
+        command: "python3".to_string(),
+        args: vec!["server.py".to_string()],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+        start_before_app: true,
+        shared: false,
+        ready_check: None,
+    }];
+
+    // Simulate pre-app source already running (stored in custom_source_handles).
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .custom_source_handles
+            .push(crate::session::CustomSourceHandle {
+                name: "server".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle: None,
+                start_before_app: true,
+            });
+        // native_log_shutdown_tx is None — platform capture not started.
+        assert!(handle.native_log_shutdown_tx.is_none());
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "android-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Branch B must NOT fire for Android — platform capture is still needed.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        matches!(
+            action,
+            Some(crate::handler::UpdateAction::StartNativeLogCapture { .. })
+        ),
+        "Android with pre-app-only sources must still start platform capture, got {:?}",
+        action
+    );
+}
+
+#[test]
+fn test_linux_pre_app_only_guard_still_fires() {
+    // Linux session with:
+    // - Pre-app custom source running
+    // - No post-app sources
+    // - native_log_shutdown_tx = None (Linux never sets it)
+    // Branch B should fire → returns None (Linux doesn't need platform capture).
+    use fdemon_core::{AppStart, DaemonMessage};
+    use fdemon_daemon::ToolAvailability;
+
+    let device = linux_device("linux-1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    state.tool_availability = ToolAvailability::default();
+    state.settings.native_logs.enabled = true;
+    // Only a pre-app custom source — no post-app sources.
+    state.settings.native_logs.custom_sources = vec![crate::config::CustomSourceConfig {
+        name: "server".to_string(),
+        command: "python3".to_string(),
+        args: vec!["server.py".to_string()],
+        format: fdemon_core::types::OutputFormat::default(),
+        working_dir: None,
+        env: std::collections::HashMap::new(),
+        start_before_app: true,
+        shared: false,
+        ready_check: None,
+    }];
+
+    // Simulate pre-app source already running.
+    let (shutdown_tx, _rx) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle
+            .custom_source_handles
+            .push(crate::session::CustomSourceHandle {
+                name: "server".to_string(),
+                shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                task_handle: None,
+                start_before_app: true,
+            });
+    }
+
+    let app_start_msg = DaemonMessage::AppStart(AppStart {
+        app_id: "test-app".to_string(),
+        device_id: "linux-1".to_string(),
+        directory: "/tmp/app".to_string(),
+        launch_mode: None,
+        supports_restart: true,
+    });
+
+    // Branch B should fire for Linux — all sources running, nothing left to do.
+    let action = super::session::maybe_start_native_log_capture(&state, session_id, &app_start_msg);
+    assert!(
+        action.is_none(),
+        "Linux with all sources running should return None, got {:?}",
+        action
+    );
+}
+
 // ── pending_watcher_errors cap tests ──────────────────────────────────────────
 
 #[test]

@@ -72,4 +72,26 @@ cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo cl
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Replaced stale doc comment on `running_shared_names` field — removed false reference to "hydration step in `process.rs`"; now accurately describes construction-time snapshot |
+| `example/app5/server/server.py` | Removed unused `import sys` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Minimal scope**: Only the two lines identified in the task were changed. No other edits were made to surrounding code or comments.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all existing tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: Both changes are purely cosmetic (doc comment + unused import removal) with no behavioural impact.

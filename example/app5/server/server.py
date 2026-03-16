@@ -8,7 +8,6 @@ then launch the Flutter app.
 """
 
 import json
-import sys
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
 

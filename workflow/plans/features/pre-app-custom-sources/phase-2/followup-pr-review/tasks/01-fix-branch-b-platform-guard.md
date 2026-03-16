@@ -182,4 +182,28 @@ Adapt helper usage and state setup to match the test infrastructure in `tests.rs
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/session.rs` | Hoisted `needs_platform_capture` above the guard block; added `&& !needs_platform_capture` to Branch B condition; removed duplicate computation at original location; updated comments to label Branch A/B and explain the fix |
+| `crates/fdemon-app/src/handler/tests.rs` | Added two new tests: `test_android_pre_app_only_allows_platform_capture_start` and `test_linux_pre_app_only_guard_still_fires` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (hoist) over Option B (inline)**: The task recommended hoisting `needs_platform_capture` to avoid duplicating the platform-detection expression. This keeps a single source of truth for that computation and makes the Branch B comment self-explanatory.
+
+2. **Comment clarity**: Added Branch A/B labels to the guard comments and a clear explanation of why `!needs_platform_capture` is required in Branch B, making the logic easier to audit in future reviews.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1699 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **macOS-only paths**: The `needs_platform_capture` expression uses `cfg!(target_os = "macos")` for macOS/iOS branches, so on Linux CI the new Android test exercises the Android arm of the condition while macOS/iOS remain platform-gated. This is the same constraint that existed before the fix and is acceptable.

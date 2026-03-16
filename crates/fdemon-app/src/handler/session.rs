@@ -298,6 +298,14 @@ pub fn maybe_start_native_log_capture(
         if let Some(handle) = state.session_manager.get(session_id) {
             let platform = &handle.session.platform;
 
+            // Only Android, macOS, and iOS need a separate platform capture process.
+            // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
+            // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
+            // Computed early — needed by guard Branch B.
+            let needs_platform_capture = platform == "android"
+                || (cfg!(target_os = "macos") && platform == "macos")
+                || (cfg!(target_os = "macos") && platform == "ios");
+
             // Guard: don't start a second capture if everything is already running
             // (prevents double-start on repeated AppStart, e.g. hot-restart).
             //
@@ -315,6 +323,9 @@ pub fn maybe_start_native_log_capture(
             //    `native_log_shutdown_tx` is never set): if any custom sources are
             //    tracked AND all post-app sources are running → nothing left to do.
             //    Without this guard, hot-restart would spawn duplicate processes.
+            //    Must NOT fire for platform-capture sessions (Android/macOS/iOS)
+            //    where `native_log_shutdown_tx` being None means capture hasn't
+            //    started yet — not that it's unneeded.
             {
                 let mut running_names: std::collections::HashSet<&str> = handle
                     .custom_source_handles
@@ -339,7 +350,7 @@ pub fn maybe_start_native_log_capture(
                     .filter(|s| !s.start_before_app)
                     .any(|s| !running_names.contains(s.name.as_str()));
 
-                // Platform capture running + all post-app sources running → stop.
+                // Branch A: platform capture running + all post-app sources running → stop.
                 if handle.native_log_shutdown_tx.is_some() && !has_unstarted_post_app {
                     tracing::debug!(
                         "Native log capture already fully running for session {}",
@@ -347,9 +358,15 @@ pub fn maybe_start_native_log_capture(
                     );
                     return None;
                 }
-                // Custom-sources-only session: some sources tracked + all post-app
-                // sources running → stop (hot-restart guard).
-                if !handle.custom_source_handles.is_empty() && !has_unstarted_post_app {
+                // Branch B: custom-sources-only session (Linux/Windows/Web): some
+                // sources tracked + all post-app sources running → stop (hot-restart
+                // guard). The `!needs_platform_capture` condition prevents this branch
+                // from firing on Android/macOS/iOS, where `native_log_shutdown_tx`
+                // being None means platform capture hasn't started yet.
+                if !handle.custom_source_handles.is_empty()
+                    && !has_unstarted_post_app
+                    && !needs_platform_capture
+                {
                     tracing::debug!(
                         "All custom sources already running for session {} — skipping",
                         session_id
@@ -357,13 +374,6 @@ pub fn maybe_start_native_log_capture(
                     return None;
                 }
             }
-
-            // Only Android, macOS, and iOS need a separate platform capture process.
-            // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
-            // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
-            let needs_platform_capture = platform == "android"
-                || (cfg!(target_os = "macos") && platform == "macos")
-                || (cfg!(target_os = "macos") && platform == "ios");
 
             let has_platform_tools = state.tool_availability.native_logs_available(platform);
 
