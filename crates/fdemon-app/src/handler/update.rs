@@ -909,11 +909,32 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                                 Some(&device.id),
                             );
 
-                            UpdateResult::action(UpdateAction::SpawnSession {
-                                session_id,
-                                device,
-                                config: config.map(Box::new),
-                            })
+                            // Check if any custom sources need to start before the app.
+                            // A shared source that is already running does not need to
+                            // be spawned again — skip the gate for those.
+                            let needs_pre_app_spawn =
+                                state.settings.native_logs.enabled
+                                    && state.settings.native_logs.pre_app_sources().any(|s| {
+                                        !s.shared || !state.is_shared_source_running(&s.name)
+                                    });
+
+                            let action = if needs_pre_app_spawn {
+                                UpdateAction::SpawnPreAppSources {
+                                    session_id,
+                                    device,
+                                    config: config.map(Box::new),
+                                    settings: state.settings.native_logs.clone(),
+                                    project_path: state.project_path.clone(),
+                                    running_shared_names: state.running_shared_source_names(),
+                                }
+                            } else {
+                                UpdateAction::SpawnSession {
+                                    session_id,
+                                    device,
+                                    config: config.map(Box::new),
+                                }
+                            };
+                            UpdateResult::action(action)
                         }
                         Err(e) => {
                             // Clear loading before showing error dialog
@@ -2048,6 +2069,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             name,
             shutdown_tx,
             task_handle,
+            start_before_app,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Extract the JoinHandle from the Arc<Mutex<Option<>>> slot.
@@ -2062,6 +2084,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                         name: name.clone(),
                         shutdown_tx,
                         task_handle: task_join_handle,
+                        start_before_app,
                     });
                 tracing::debug!(
                     "Custom log source '{}' handle stored for session {}",
@@ -2096,6 +2119,68 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 name,
                 session_id
             );
+            UpdateResult::none()
+        }
+
+        // ─────────────────────────────────────────────────────────
+        // Pre-App Custom Source Lifecycle Messages
+        // (pre-app-custom-sources Phase 1, Task 03)
+        // ─────────────────────────────────────────────────────────
+
+        // All pre-app sources ready (or timed out) — gate release to spawn Flutter.
+        Message::PreAppSourcesReady {
+            session_id,
+            device,
+            config,
+        } => {
+            // Gate has lifted — launch Flutter now.
+            // The session already exists in SessionManager (created by handle_launch).
+            if state.session_manager.get(session_id).is_some() {
+                UpdateResult::action(UpdateAction::SpawnSession {
+                    session_id,
+                    device,
+                    config,
+                })
+            } else {
+                // Session was closed during the readiness wait — no-op.
+                tracing::warn!(
+                    "PreAppSourcesReady for session {} but session no longer exists",
+                    session_id
+                );
+                UpdateResult::none()
+            }
+        }
+
+        // A specific pre-app source timed out — log a warning to the session.
+        Message::PreAppSourceTimedOut {
+            session_id,
+            source_name,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(fdemon_core::LogEntry::new(
+                    LogLevel::Warning,
+                    LogSource::Daemon,
+                    format!(
+                        "Pre-app source '{}' readiness check timed out. Proceeding with launch.",
+                        source_name
+                    ),
+                ));
+            }
+            UpdateResult::none()
+        }
+
+        // Progress update from a pre-app source startup — add to session log buffer.
+        Message::PreAppSourceProgress {
+            session_id,
+            message,
+        } => {
+            if let Some(handle) = state.session_manager.get_mut(session_id) {
+                handle.session.add_log(fdemon_core::LogEntry::new(
+                    LogLevel::Info,
+                    LogSource::Daemon,
+                    message,
+                ));
+            }
             UpdateResult::none()
         }
 
@@ -2185,6 +2270,121 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     }
                 }
             }
+            UpdateResult::none()
+        }
+
+        // ── Shared Custom Source Messages (pre-app-custom-sources Phase 2, Task 04) ──
+
+        // A log event from a shared source — broadcast to ALL active sessions.
+        //
+        // Applies the same per-tag min-level filter and per-session tag visibility
+        // as the per-session `NativeLog` handler, but iterates over every session
+        // rather than targeting a single one. Tags are observed on all sessions so
+        // they appear in the T-overlay regardless of which session is active.
+        Message::SharedSourceLog { event } => {
+            // Resolve per-tag (or global) minimum level before mutably borrowing
+            // the session manager. `effective_min_level` returns a `&str` into
+            // `settings`, so we convert to an owned `Option<LogLevel>` first.
+            let min_level_filter = LogLevel::from_level_str(
+                state.settings.native_logs.effective_min_level(&event.tag),
+            );
+
+            for handle in state.session_manager.iter_mut() {
+                // Always observe the tag so it appears in the T-overlay even when
+                // the event is below the minimum level threshold.
+                handle.native_tag_state.observe_tag(&event.tag);
+
+                // Filter by effective per-tag (or global) minimum level.
+                if let Some(min_level) = min_level_filter {
+                    if event.level.severity() < min_level.severity() {
+                        continue;
+                    }
+                }
+
+                // Skip if the user has hidden this tag for this session.
+                if !handle.native_tag_state.is_tag_visible(&event.tag) {
+                    continue;
+                }
+
+                let entry = fdemon_core::LogEntry::new(
+                    event.level,
+                    LogSource::Native {
+                        tag: event.tag.clone(),
+                    },
+                    event.message.clone(),
+                );
+                if handle.session.queue_log(entry) {
+                    handle.session.flush_batched_logs();
+                }
+            }
+            UpdateResult::none()
+        }
+
+        // A shared source has started — store its handle at the AppState level.
+        //
+        // Shared sources are not bound to any session; they run for the lifetime
+        // of fdemon. The handle is stored in `state.shared_source_handles` so the
+        // engine can shut them down on quit.
+        Message::SharedSourceStarted {
+            name,
+            shutdown_tx,
+            task_handle,
+            start_before_app,
+        } => {
+            // ── Dedup guard: close TOCTOU window ──────────────────────────
+            // The spawn-side check (running_shared_names snapshot) reduces but
+            // cannot eliminate duplicate spawns.  Since update() is single-
+            // threaded, this handler-side check is the authoritative gate.
+            if state.is_shared_source_running(&name) {
+                tracing::warn!(
+                    "Duplicate SharedSourceStarted for '{}' — shutting down extra process",
+                    name
+                );
+                let _ = shutdown_tx.send(true);
+                if let Some(task) = task_handle.lock().ok().and_then(|mut s| s.take()) {
+                    task.abort();
+                }
+                return UpdateResult::none();
+            }
+
+            // Extract the JoinHandle from the Arc<Mutex<Option<>>> transfer slot.
+            // The Option is taken so any subsequent (unexpected) clone of the message
+            // sees None, preventing a double-store.
+            let extracted = task_handle.lock().ok().and_then(|mut slot| slot.take());
+
+            state
+                .shared_source_handles
+                .push(crate::session::SharedSourceHandle {
+                    name: name.clone(),
+                    shutdown_tx,
+                    task_handle: extracted,
+                    start_before_app,
+                });
+
+            tracing::info!("Shared source '{}' started", name);
+            UpdateResult::none()
+        }
+
+        // A shared source has exited — remove its handle and warn all sessions.
+        //
+        // Shared sources are expected to run for the lifetime of fdemon, so an
+        // unexpected exit warrants a visible warning in every active session log.
+        Message::SharedSourceStopped { name } => {
+            state.shared_source_handles.retain(|h| h.name != name);
+
+            // Log a warning to every active session so the user is notified in
+            // whichever session is currently visible.
+            for handle in state.session_manager.iter_mut() {
+                let entry = fdemon_core::LogEntry::new(
+                    LogLevel::Warning,
+                    LogSource::Daemon,
+                    format!("Shared source '{}' has stopped", name),
+                );
+                handle.session.queue_log(entry);
+                handle.session.flush_batched_logs();
+            }
+
+            tracing::warn!("Shared source '{}' stopped", name);
             UpdateResult::none()
         }
     }

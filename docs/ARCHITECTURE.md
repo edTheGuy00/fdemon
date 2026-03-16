@@ -717,6 +717,10 @@ stdout ─────────┴──▶ DaemonMessage::Response
                     RequestTracker.complete(id)
 ```
 
+### Pre-App Source Gating
+
+`handle_launch()` conditionally returns `SpawnPreAppSources` when one or more custom sources have `start_before_app = true`. Readiness checks run concurrently with independent timeouts. The Flutter launch gate lifts on `Message::PreAppSourcesReady` (all checks passed or timed out). Sources without a `ready_check` are spawned and immediately considered ready (fire-and-forget). This pattern keeps `handle_launch()` pure (returns an action, spawns nothing directly) and routes all side effects through the normal `UpdateAction` pipeline.
+
 ---
 
 ## DevTools Subsystem
@@ -1134,6 +1138,76 @@ Two `Message` variants manage custom source lifecycle:
 |---------|-----------|---------|
 | `CustomSourceStarted { session_id, name, shutdown_tx, task_handle }` | After `CustomLogCapture::spawn()` succeeds | TEA handler stores `shutdown_tx` and `task_handle` in `SessionHandle::custom_source_handles` |
 | `CustomSourceStopped { session_id, name }` | When the source's event channel closes (process exited) | TEA handler removes the named handle from `custom_source_handles` |
+
+#### Shared Custom Sources (`shared = true`)
+
+Custom sources with `shared = true` are spawned once for the entire project and broadcast their logs to every active session. The TEA handler stores shared handles in `AppState.shared_source_handles` (keyed by name) rather than in per-session state.
+
+```
+Shared Custom Sources (shared = true):
+
+┌─────────────────────────────────────────────┐
+│ AppState.shared_source_handles              │
+│   - "backend" (shutdown_tx, task_handle)    │
+└───────────────────┬─────────────────────────┘
+                    │ Message::SharedSourceLog
+                    ▼
+┌─────────────────────────────────────────────┐
+│ TEA Handler: broadcast to all sessions      │
+│   session_manager.iter_mut()                │
+│     → per-session tag filter                │
+│     → queue_log()                           │
+└─────────────────────────────────────────────┘
+```
+
+Contrast with per-session sources, where each session manages its own process lifecycle:
+
+```
+Per-Session Custom Sources (shared = false, default):
+
+┌─────────────────────────────────────────────┐
+│ SessionHandle.custom_source_handles         │
+│   - "worker" (shutdown_tx, task_handle)     │
+└───────────────────┬─────────────────────────┘
+                    │ Message::NativeLog { session_id }
+                    ▼
+┌─────────────────────────────────────────────┐
+│ TEA Handler: route to specific session      │
+│   session_manager.get_mut(session_id)       │
+│     → tag filter → queue_log()              │
+└─────────────────────────────────────────────┘
+```
+
+Shared sources can be started either as pre-app sources (`start_before_app = true`) or as post-app sources (`start_before_app = false`). They are shut down during `AppState::shutdown_shared_sources()` when fdemon exits — after all per-session sources have been stopped.
+
+#### Pre-App Custom Source Flow
+
+Custom sources with `start_before_app = true` gate the Flutter app launch behind a readiness check. The flow diverges from normal session launch at `handle_launch()`:
+
+```
+handle_launch()
+  → IF has pre-app sources:
+      UpdateAction::SpawnPreAppSources
+        → spawn pre-app CustomLogCapture processes
+        → run readiness checks concurrently (HTTP, TCP, command, stdout, delay)
+        → on ready: Message::PreAppSourcesReady
+          → UpdateAction::SpawnSession (normal flow continues)
+        → on timeout: proceed with warning
+  → ELSE:
+      UpdateAction::SpawnSession (unchanged)
+```
+
+**Readiness check types:**
+
+| Type | Mechanism | Ready when |
+|------|-----------|------------|
+| `http` | Polls a URL via GET | 2xx HTTP response received |
+| `tcp` | Attempts TCP connection to host:port | Connection succeeds |
+| `command` | Runs an external command | Exit code 0 |
+| `stdout` | Watches the process's stdout | Line matches a regex pattern |
+| `delay` | Waits a fixed duration | Duration elapses |
+
+All checks run concurrently. Each has an independent `timeout_s` (default: 30 s). On timeout, the Flutter launch gate lifts anyway with a warning in the log view — the custom source process continues running.
 
 ---
 

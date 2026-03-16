@@ -1,0 +1,32 @@
+# Flutter Demon Configuration — Pre-App Custom Source Example
+#
+# Demonstrates start_before_app + ready_check:
+# The Python backend server takes ~5s to start. fdemon spawns it first,
+# polls GET /health every 500ms, and only launches Flutter once it gets 200.
+
+[behavior]
+confirm_quit = true
+
+[watcher]
+paths = ["lib"]
+debounce_ms = 500
+auto_reload = true
+extensions = ["dart"]
+
+[ui]
+log_buffer_size = 5000
+show_timestamps = true
+compact_logs = false
+
+[native_logs]
+enabled = true
+
+# Backend server — launched before the Flutter app, with HTTP health check
+[[native_logs.custom_sources]]
+name = "backend"
+shared = true
+command = "python3"
+args = ["server/server.py"]
+format = "raw"
+start_before_app = true
+ready_check = { type = "http", url = "http://127.0.0.1:8085/health", interval_ms = 500, timeout_s = 15 }

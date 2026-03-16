@@ -535,6 +535,18 @@ impl Engine {
             watcher.stop();
         }
 
+        // Gracefully shut down native logs and custom sources for all sessions.
+        // This sends the shutdown signal and aborts tasks so child processes
+        // receive SIGKILL via kill_on_drop before the tokio runtime winds down.
+        for handle in self.state.session_manager.iter_mut() {
+            handle.shutdown_native_logs();
+        }
+
+        // Shut down shared custom sources (project-level, not per-session).
+        // Order matters: per-session sources first, then shared sources (a shared
+        // source might be serving multiple sessions), then the global shutdown signal.
+        self.state.shutdown_shared_sources();
+
         // Signal all background tasks to stop
         let _ = self.shutdown_tx.send(true);
 

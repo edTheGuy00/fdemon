@@ -298,31 +298,82 @@ pub fn maybe_start_native_log_capture(
         if let Some(handle) = state.session_manager.get(session_id) {
             let platform = &handle.session.platform;
 
-            // Guard: don't start a second capture if one is already running
-            // (prevents double-start on repeated AppStart, e.g. hot-restart).
-            //
-            // Two conditions indicate capture is active:
-            // - `native_log_shutdown_tx.is_some()`: platform capture task is running
-            //   (Android logcat / macOS log stream / iOS simulator).
-            // - `!custom_source_handles.is_empty()`: custom source processes are
-            //   running.  For custom-sources-only sessions (Linux/Windows/Web) the
-            //   platform path is skipped and `native_log_shutdown_tx` is never set,
-            //   so without this second check the guard would be bypassed on every
-            //   hot-restart, spawning duplicate processes.
-            if handle.native_log_shutdown_tx.is_some() || !handle.custom_source_handles.is_empty() {
-                tracing::debug!(
-                    "Native log capture already running for session {}",
-                    session_id
-                );
-                return None;
-            }
-
             // Only Android, macOS, and iOS need a separate platform capture process.
             // Linux / Windows / Web already receive native logs via flutter's stdout pipe.
             // iOS capture requires a macOS host (xcrun simctl / idevicesyslog).
+            // Computed early — needed by guard Branch B.
             let needs_platform_capture = platform == "android"
                 || (cfg!(target_os = "macos") && platform == "macos")
                 || (cfg!(target_os = "macos") && platform == "ios");
+
+            // Guard: don't start a second capture if everything is already running
+            // (prevents double-start on repeated AppStart, e.g. hot-restart).
+            //
+            // We must allow fall-through when pre-app custom sources are tracked in
+            // `custom_source_handles` but post-app custom sources have not yet been
+            // spawned. The fine-grained check:
+            //
+            // 1. Compute the set of post-app sources from config that are not yet
+            //    running (i.e., their name is absent from `custom_source_handles`).
+            //
+            // 2. Guard on platform capture: if `native_log_shutdown_tx.is_some()`
+            //    AND all post-app sources are running → nothing left to do.
+            //
+            // 3. Guard on custom-sources-only sessions (Linux/Windows/Web, where
+            //    `native_log_shutdown_tx` is never set): if any custom sources are
+            //    tracked AND all post-app sources are running → nothing left to do.
+            //    Without this guard, hot-restart would spawn duplicate processes.
+            //    Must NOT fire for platform-capture sessions (Android/macOS/iOS)
+            //    where `native_log_shutdown_tx` being None means capture hasn't
+            //    started yet — not that it's unneeded.
+            {
+                let mut running_names: std::collections::HashSet<&str> = handle
+                    .custom_source_handles
+                    .iter()
+                    .map(|h| h.name.as_str())
+                    .collect();
+
+                // Include shared post-app sources that are already running globally.
+                // These are stored on AppState, not on the per-session handle, so they
+                // would otherwise always appear "unstarted", causing spurious
+                // StartNativeLogCapture dispatches on hot-restart.
+                for shared_handle in &state.shared_source_handles {
+                    if !shared_handle.start_before_app {
+                        running_names.insert(shared_handle.name.as_str());
+                    }
+                }
+                let has_unstarted_post_app = state
+                    .settings
+                    .native_logs
+                    .custom_sources
+                    .iter()
+                    .filter(|s| !s.start_before_app)
+                    .any(|s| !running_names.contains(s.name.as_str()));
+
+                // Branch A: platform capture running + all post-app sources running → stop.
+                if handle.native_log_shutdown_tx.is_some() && !has_unstarted_post_app {
+                    tracing::debug!(
+                        "Native log capture already fully running for session {}",
+                        session_id
+                    );
+                    return None;
+                }
+                // Branch B: custom-sources-only session (Linux/Windows/Web): some
+                // sources tracked + all post-app sources running → stop (hot-restart
+                // guard). The `!needs_platform_capture` condition prevents this branch
+                // from firing on Android/macOS/iOS, where `native_log_shutdown_tx`
+                // being None means platform capture hasn't started yet.
+                if !handle.custom_source_handles.is_empty()
+                    && !has_unstarted_post_app
+                    && !needs_platform_capture
+                {
+                    tracing::debug!(
+                        "All custom sources already running for session {} — skipping",
+                        session_id
+                    );
+                    return None;
+                }
+            }
 
             let has_platform_tools = state.tool_availability.native_logs_available(platform);
 
@@ -352,6 +403,19 @@ pub fn maybe_start_native_log_capture(
                 return None;
             }
 
+            // Collect names of custom sources already running so spawn_custom_sources()
+            // can skip them (prevents double-spawning pre-app sources on AppStarted).
+            let running_source_names: Vec<String> = handle
+                .custom_source_handles
+                .iter()
+                .map(|h| h.name.clone())
+                .collect();
+
+            // Collect names of shared sources already running globally so
+            // spawn_custom_sources() can skip them (prevents spawning a shared
+            // source twice when multiple sessions come up simultaneously).
+            let running_shared_names = state.running_shared_source_names();
+
             tracing::debug!("Emitting StartNativeLogCapture for session {}", session_id);
             return Some(UpdateAction::StartNativeLogCapture {
                 session_id,
@@ -361,6 +425,8 @@ pub fn maybe_start_native_log_capture(
                 app_id: Some(app_start.app_id.clone()),
                 settings: state.settings.native_logs.clone(),
                 project_path: state.project_path.clone(),
+                running_source_names,
+                running_shared_names,
             });
         }
     }

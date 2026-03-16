@@ -14,6 +14,7 @@ use super::session::Session;
 /// for signalling graceful stop, and the task handle for aborting as
 /// a fallback. Stored in a Vec on `SessionHandle` because multiple custom
 /// sources can run concurrently per session.
+#[derive(Debug)]
 pub struct CustomSourceHandle {
     /// Human-readable source name — used as the log tag in the tag filter overlay.
     pub name: String,
@@ -22,6 +23,30 @@ pub struct CustomSourceHandle {
     pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     /// The background task handle — aborted as a fallback on session close.
     pub task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Whether this source was started before the Flutter app (pre-app source).
+    ///
+    /// Pre-app sources are spawned by `spawn_pre_app_sources()` before the Flutter
+    /// session launches. They must not be re-spawned when `AppStarted` fires and
+    /// triggers the normal `spawn_custom_sources()` path.
+    /// Post-app sources (`start_before_app = false`) are spawned after `AppStarted`.
+    pub start_before_app: bool,
+}
+
+/// Handle for a running shared custom log source process.
+///
+/// Structurally identical to `CustomSourceHandle` but stored at the `AppState`
+/// level instead of per-session. Shared sources are spawned once and persist
+/// until fdemon quits.
+#[derive(Debug)]
+pub struct SharedSourceHandle {
+    /// Human-readable source name — used as the log tag.
+    pub name: String,
+    /// Shutdown sender — send `true` to signal the capture task to stop.
+    pub shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+    /// The background task handle — aborted as a fallback on shutdown.
+    pub task_handle: Option<tokio::task::JoinHandle<()>>,
+    /// Whether this source was started before the Flutter app.
+    pub start_before_app: bool,
 }
 
 /// Handle for controlling a session's Flutter process

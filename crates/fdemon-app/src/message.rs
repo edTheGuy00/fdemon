@@ -1173,6 +1173,13 @@ pub enum Message {
         /// storing it on `SessionHandle`, leaving `None` for any subsequent
         /// (unexpected) clone.
         task_handle: SharedTaskHandle,
+        /// Whether this source was started before the Flutter app.
+        ///
+        /// Set to `true` by `spawn_pre_app_sources()`, `false` by
+        /// `spawn_custom_sources()`. The TEA handler stores this on
+        /// `CustomSourceHandle` so that `spawn_custom_sources()` can skip
+        /// re-spawning sources that are already running.
+        start_before_app: bool,
     },
 
     /// A custom log source process exited or was stopped.
@@ -1185,6 +1192,40 @@ pub enum Message {
         /// Name of the custom source that stopped (matches the name in
         /// `CustomSourceHandle` for lookup and removal).
         name: String,
+    },
+
+    // ─────────────────────────────────────────────────────────
+    // Pre-App Custom Source Lifecycle Messages
+    // (pre-app-custom-sources Phase 1, Task 03)
+    // ─────────────────────────────────────────────────────────
+    /// All pre-app custom sources are ready (or individually timed out).
+    ///
+    /// Triggers the Flutter session spawn that was gated on readiness.
+    /// Sent by the pre-app source coordinator task when every source with
+    /// `start_before_app = true` has either become ready or timed out.
+    PreAppSourcesReady {
+        session_id: SessionId,
+        device: Device,
+        config: Option<Box<LaunchConfig>>,
+    },
+
+    /// A specific pre-app source's readiness check timed out.
+    ///
+    /// Informational — logged as a warning. Does not block other sources.
+    /// The pre-app coordinator continues and eventually sends
+    /// `PreAppSourcesReady` once all sources are settled.
+    PreAppSourceTimedOut {
+        session_id: SessionId,
+        source_name: String,
+    },
+
+    /// Progress update during pre-app source startup.
+    ///
+    /// Displayed in the session's log buffer for user feedback
+    /// (e.g., "Starting server 'my-server'...", "Server 'my-server' ready (3.2s)").
+    PreAppSourceProgress {
+        session_id: SessionId,
+        message: String,
     },
 
     // ─────────────────────────────────────────────────────────
@@ -1236,4 +1277,48 @@ pub enum Message {
 
     /// Toggle the visibility of the currently selected tag in the filter overlay.
     TagFilterToggleSelected,
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Shared Custom Source Messages
+    // (pre-app-custom-sources Phase 2, Task 03)
+    // ─────────────────────────────────────────────────────────────────────────
+    /// Log event from a shared custom source (not bound to a specific session).
+    ///
+    /// The TEA handler broadcasts this to all active sessions, applying per-session
+    /// tag filtering. Contrast with `NativeLog` which targets a single session.
+    SharedSourceLog {
+        /// The native log event (tag = source name, level, message).
+        event: NativeLogEvent,
+    },
+
+    /// A shared custom source process has been spawned successfully.
+    ///
+    /// The TEA handler stores the handle on `AppState.shared_source_handles`
+    /// (not per-session). Sent by the forwarding task in `spawn_pre_app_sources`
+    /// or `spawn_custom_sources` for sources with `shared = true`.
+    SharedSourceStarted {
+        /// Source name (matches config `name` field).
+        name: String,
+        /// Shutdown sender for graceful stop.
+        /// Wrapped in `Arc` to satisfy the `Clone` bound on `Message`.
+        shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Task handle for abort fallback.
+        ///
+        /// Wrapped in `Arc<Mutex<Option<>>>` so the spawning task can deposit
+        /// the handle after `tokio::spawn`. The handler takes it out of the
+        /// `Option` when storing it on `AppState`, leaving `None` for any
+        /// subsequent (unexpected) clone.
+        task_handle: SharedTaskHandle,
+        /// Whether this source was started before the Flutter app.
+        start_before_app: bool,
+    },
+
+    /// A shared custom source process has exited.
+    ///
+    /// The TEA handler removes the handle from `AppState.shared_source_handles`
+    /// and logs a warning to all active sessions.
+    SharedSourceStopped {
+        /// Source name.
+        name: String,
+    },
 }
