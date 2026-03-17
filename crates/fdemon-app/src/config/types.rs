@@ -130,6 +130,26 @@ pub struct Settings {
 
     #[serde(default)]
     pub native_logs: NativeLogsSettings,
+
+    #[serde(default)]
+    pub flutter: FlutterSettings,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flutter SDK Settings
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Settings for Flutter SDK configuration.
+///
+/// Corresponds to the `[flutter]` section in config.toml.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+pub struct FlutterSettings {
+    /// Explicit SDK path override. When set, this takes highest priority
+    /// in the detection chain, bypassing all version manager detection.
+    ///
+    /// Example: `/Users/me/flutter` or `C:\flutter`
+    #[serde(default)]
+    pub sdk_path: Option<PathBuf>,
 }
 
 /// Behavior settings
@@ -3334,5 +3354,64 @@ shared = false
             ..NativeLogsSettings::default()
         };
         assert!(settings.has_shared_pre_app_sources());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // FlutterSettings Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_flutter_settings_default() {
+        let settings = FlutterSettings::default();
+        assert!(settings.sdk_path.is_none());
+    }
+
+    #[test]
+    fn test_settings_without_flutter_section() {
+        let toml_str = r#"
+[behavior]
+auto_start = true
+
+[ui]
+show_timestamps = false
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.flutter.sdk_path.is_none());
+    }
+
+    #[test]
+    fn test_settings_with_flutter_sdk_path() {
+        let toml_str = r#"
+[flutter]
+sdk_path = "/Users/me/flutter"
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert_eq!(
+            settings.flutter.sdk_path,
+            Some(PathBuf::from("/Users/me/flutter"))
+        );
+    }
+
+    #[test]
+    fn test_settings_with_empty_flutter_section() {
+        let toml_str = r#"
+[flutter]
+"#;
+        let settings: Settings = toml::from_str(toml_str).unwrap();
+        assert!(settings.flutter.sdk_path.is_none());
+    }
+
+    #[test]
+    fn test_settings_roundtrip_serialization() {
+        let mut settings = Settings::default();
+        settings.flutter.sdk_path = Some(PathBuf::from("/opt/flutter"));
+
+        let serialized = toml::to_string(&settings).unwrap();
+        let deserialized: Settings = toml::from_str(&serialized).unwrap();
+
+        assert_eq!(
+            deserialized.flutter.sdk_path,
+            Some(PathBuf::from("/opt/flutter"))
+        );
     }
 }

@@ -52,13 +52,13 @@ Replace `Command::new("flutter")` with a robust, multi-strategy SDK discovery sy
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-core-types](tasks/01-core-types.md) | Not Started | - | `fdemon-daemon: flutter_sdk/types.rs, mod.rs, Cargo.toml, lib.rs` `fdemon-core: error.rs` |
-| 2 | [02-version-manager-parsers](tasks/02-version-manager-parsers.md) | Not Started | 01 | `fdemon-daemon: flutter_sdk/version_managers.rs` |
-| 3 | [03-channel-version-extraction](tasks/03-channel-version-extraction.md) | Not Started | 01 | `fdemon-daemon: flutter_sdk/channel.rs` |
-| 4 | [04-sdk-locator](tasks/04-sdk-locator.md) | Not Started | 02, 03 | `fdemon-daemon: flutter_sdk/locator.rs` |
-| 5 | [05-flutter-settings](tasks/05-flutter-settings.md) | Not Started | - | `fdemon-app: config/types.rs, config/settings.rs` |
-| 6 | [06-update-call-sites](tasks/06-update-call-sites.md) | Not Started | 01 | `fdemon-daemon: process.rs, devices.rs, emulators.rs, lib.rs` |
-| 7 | [07-engine-state-integration](tasks/07-engine-state-integration.md) | Not Started | 04, 05, 06 | `fdemon-app: state.rs, engine.rs, message.rs, handler/update.rs, handler/mod.rs` `fdemon-daemon: tool_availability.rs` |
+| 1 | [01-core-types](tasks/01-core-types.md) | Done | - | `fdemon-daemon: flutter_sdk/types.rs, mod.rs, Cargo.toml, lib.rs` `fdemon-core: error.rs` |
+| 2 | [02-version-manager-parsers](tasks/02-version-manager-parsers.md) | Done | 01 | `fdemon-daemon: flutter_sdk/version_managers.rs` |
+| 3 | [03-channel-version-extraction](tasks/03-channel-version-extraction.md) | Done | 01 | `fdemon-daemon: flutter_sdk/channel.rs` |
+| 4 | [04-sdk-locator](tasks/04-sdk-locator.md) | Done | 02, 03 | `fdemon-daemon: flutter_sdk/locator.rs` |
+| 5 | [05-flutter-settings](tasks/05-flutter-settings.md) | Done | - | `fdemon-app: config/types.rs, config/settings.rs` |
+| 6 | [06-update-call-sites](tasks/06-update-call-sites.md) | Done | 01 | `fdemon-daemon: process.rs, devices.rs, emulators.rs, lib.rs` |
+| 7 | [07-engine-state-integration](tasks/07-engine-state-integration.md) | Done | 04, 05, 06 | `fdemon-app: state.rs, engine.rs, message.rs, handler/update.rs, handler/mod.rs` `fdemon-daemon: tool_availability.rs` |
 
 ## Success Criteria
 

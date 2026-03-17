@@ -15,12 +15,12 @@ use crate::config::{
     LoadedConfigs,
 };
 use crate::message::{AutoLaunchSuccess, Message};
-use fdemon_daemon::{devices, emulators, Device, ToolAvailability};
+use fdemon_daemon::{devices, emulators, Device, FlutterExecutable, ToolAvailability};
 
 /// Spawn device discovery in background (foreground mode - shows errors to user)
-pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
+pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>, flutter: FlutterExecutable) {
     tokio::spawn(async move {
-        match devices::discover_devices().await {
+        match devices::discover_devices(&flutter).await {
             Ok(result) => {
                 let _ = msg_tx
                     .send(Message::DevicesDiscovered {
@@ -42,9 +42,12 @@ pub fn spawn_device_discovery(msg_tx: mpsc::Sender<Message>) {
 
 /// Spawn device discovery in background (background mode - errors logged only)
 /// Used when refreshing device cache while user already has cached devices to select from
-pub fn spawn_device_discovery_background(msg_tx: mpsc::Sender<Message>) {
+pub fn spawn_device_discovery_background(
+    msg_tx: mpsc::Sender<Message>,
+    flutter: FlutterExecutable,
+) {
     tokio::spawn(async move {
-        match devices::discover_devices().await {
+        match devices::discover_devices(&flutter).await {
             Ok(result) => {
                 let _ = msg_tx
                     .send(Message::DevicesDiscovered {
@@ -65,9 +68,9 @@ pub fn spawn_device_discovery_background(msg_tx: mpsc::Sender<Message>) {
 }
 
 /// Spawn emulator discovery in background
-pub fn spawn_emulator_discovery(msg_tx: mpsc::Sender<Message>) {
+pub fn spawn_emulator_discovery(msg_tx: mpsc::Sender<Message>, flutter: FlutterExecutable) {
     tokio::spawn(async move {
-        match emulators::discover_emulators().await {
+        match emulators::discover_emulators(&flutter).await {
             Ok(result) => {
                 let _ = msg_tx
                     .send(Message::EmulatorsDiscovered {
@@ -87,9 +90,13 @@ pub fn spawn_emulator_discovery(msg_tx: mpsc::Sender<Message>) {
 }
 
 /// Spawn emulator launch in background
-pub fn spawn_emulator_launch(msg_tx: mpsc::Sender<Message>, emulator_id: String) {
+pub fn spawn_emulator_launch(
+    msg_tx: mpsc::Sender<Message>,
+    emulator_id: String,
+    flutter: FlutterExecutable,
+) {
     tokio::spawn(async move {
-        match emulators::launch_emulator(&emulator_id).await {
+        match emulators::launch_emulator(&flutter, &emulator_id).await {
             Ok(result) => {
                 let _ = msg_tx.send(Message::EmulatorLaunched { result }).await;
             }
@@ -135,6 +142,7 @@ pub fn spawn_auto_launch(
     msg_tx: mpsc::Sender<Message>,
     configs: LoadedConfigs,
     project_path: PathBuf,
+    flutter: FlutterExecutable,
 ) {
     tokio::spawn(async move {
         // Step 1: Update progress
@@ -145,7 +153,7 @@ pub fn spawn_auto_launch(
             .await;
 
         // Step 2: Discover devices
-        let discovery_result = devices::discover_devices().await;
+        let discovery_result = devices::discover_devices(&flutter).await;
 
         let devices = match discovery_result {
             Ok(result) => {

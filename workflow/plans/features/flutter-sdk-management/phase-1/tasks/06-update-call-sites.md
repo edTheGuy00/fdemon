@@ -270,4 +270,37 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Created new module with `FlutterExecutable` enum and `command()`/`path()` methods (since task 01 was in a different worktree) |
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod flutter_sdk;` and `pub use flutter_sdk::FlutterExecutable;` re-export |
+| `crates/fdemon-daemon/src/process.rs` | Updated `spawn_internal()` and all three public `spawn*` methods to accept `&FlutterExecutable` as first parameter; moved `Command` import into `#[cfg(test)]` module |
+| `crates/fdemon-daemon/src/devices.rs` | Updated `run_flutter_devices()`, `discover_devices()`, and `discover_devices_with_timeout()` to accept `&FlutterExecutable`; updated integration test |
+| `crates/fdemon-daemon/src/emulators.rs` | Updated `run_flutter_emulators()`, `run_flutter_emulator_launch()`, `discover_emulators()`, `discover_emulators_with_timeout()`, `launch_emulator()`, `launch_emulator_cold()`, and `launch_emulator_with_options()` to accept `&FlutterExecutable`; updated integration tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Created `flutter_sdk` in daemon crate**: Task 01 was completed in a different worktree (agent-a8e74dad) that has not been merged yet. This worktree needed `FlutterExecutable` to exist, so the module was created here. The implementation matches task 01's output exactly.
+
+2. **Simplified `flutter_sdk/mod.rs`**: The current worktree's `fdemon-core` does not have the `FlutterSdkInvalid` error variant needed by `validate_sdk_path()` (that was also part of task 01). Since task 06 only requires `FlutterExecutable`, the module only includes the type definition and `command()`/`path()` methods, without `validate_sdk_path()` or `read_version_file()`. These can be added when the worktrees are merged.
+
+3. **Preserved `FlutterNotFound` error mapping**: The `io::ErrorKind::NotFound` to `Error::FlutterNotFound` mapping is preserved in all three call sites as required.
+
+4. **`launch_ios_simulator` unchanged**: This function uses `Command::new("open")` (not Flutter) so it correctly keeps the `tokio::process::Command` import in `emulators.rs`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (583 tests, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+- `cargo fmt -p fdemon-daemon -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Worktree merge conflict**: When the task-01 worktree (agent-a8e74dad) is merged, there will be a conflict in `flutter_sdk/mod.rs`. The merged version should be a superset of what is here, adding `validate_sdk_path()`, `read_version_file()`, `FlutterSdk`, `SdkSource`, and the corresponding `fdemon-core` error types.
+
+2. **fdemon-app will not compile**: As expected and documented in the task, `fdemon-app` calls the old signatures without `&FlutterExecutable`. This is intentional — task 07 will wire the app layer.

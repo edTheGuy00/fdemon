@@ -1,11 +1,11 @@
 //! Device discovery using flutter devices command
 
+use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::time::Duration;
-use tokio::process::Command;
 use tokio::time::timeout;
 
 /// Default timeout for flutter devices command
@@ -138,19 +138,20 @@ pub struct DeviceDiscoveryResult {
 /// Discover connected devices using flutter devices --machine
 ///
 /// This runs the flutter command and parses the JSON output.
-pub async fn discover_devices() -> Result<DeviceDiscoveryResult> {
-    discover_devices_with_timeout(DEVICES_TIMEOUT).await
+pub async fn discover_devices(flutter: &FlutterExecutable) -> Result<DeviceDiscoveryResult> {
+    discover_devices_with_timeout(flutter, DEVICES_TIMEOUT).await
 }
 
 /// Discover devices with a custom timeout
 pub async fn discover_devices_with_timeout(
+    flutter: &FlutterExecutable,
     timeout_duration: Duration,
 ) -> Result<DeviceDiscoveryResult> {
     let start = std::time::Instant::now();
 
     info!("Discovering Flutter devices...");
 
-    let output = timeout(timeout_duration, run_flutter_devices())
+    let output = timeout(timeout_duration, run_flutter_devices(flutter))
         .await
         .map_err(|_| Error::process("Device discovery timed out"))??;
 
@@ -176,8 +177,9 @@ pub async fn discover_devices_with_timeout(
 }
 
 /// Run flutter devices command
-async fn run_flutter_devices() -> Result<FlutterOutput> {
-    let output = Command::new("flutter")
+async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutput> {
+    let output = flutter
+        .command()
         .args(["devices", "--machine"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -634,7 +636,9 @@ Some trailing message"#;
     #[tokio::test]
     #[ignore] // Requires Flutter SDK
     async fn test_discover_devices_integration() {
-        let result = discover_devices().await;
+        use std::path::PathBuf;
+        let flutter = FlutterExecutable::Direct(PathBuf::from("flutter"));
+        let result = discover_devices(&flutter).await;
 
         // This test requires Flutter SDK to be installed
         match result {

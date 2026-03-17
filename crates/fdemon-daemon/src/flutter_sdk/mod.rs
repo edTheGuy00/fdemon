@@ -1,0 +1,46 @@
+//! # Flutter SDK Discovery
+//!
+//! Multi-strategy SDK detection supporting FVM, Puro, asdf, mise,
+//! proto, flutter_wrapper, and system PATH installations.
+//!
+//! ## Public API
+//!
+//! ### Core Types
+//! - [`FlutterSdk`] - A resolved Flutter SDK with metadata
+//! - [`SdkSource`] - How the SDK was discovered
+//! - [`FlutterExecutable`] - How to invoke the flutter binary
+//!
+//! ### Validation
+//! - [`validate_sdk_path()`] - Validate a directory contains a complete SDK
+//! - [`read_version_file()`] - Read the Flutter version from a VERSION file
+//!
+//! ### Channel & Version Detection
+//! - [`FlutterChannel`] - Known Flutter release channels
+//! - [`FlutterVersion`] - Parsed Flutter version components
+//! - [`detect_channel()`] - Detect channel from SDK git state
+//! - [`read_dart_version()`] - Read bundled Dart SDK version
+//!
+//! ### Top-Level Locator
+//! - [`find_flutter_sdk()`] - Walk the 10-strategy detection chain and return the first valid SDK
+//!
+//! ### Version Manager Detection
+//! - [`detect_fvm_modern()`] - FVM `.fvmrc` config
+//! - [`detect_fvm_legacy()`] - FVM `.fvm/fvm_config.json` + symlink
+//! - [`detect_puro()`] - Puro `.puro.json` config
+//! - [`detect_asdf()`] - asdf `.tool-versions`
+//! - [`detect_mise()`] - mise `.mise.toml`
+//! - [`detect_proto()`] - proto `.prototools`
+//! - [`detect_flutter_wrapper()`] - flutter_wrapper `flutterw` + `.flutter/`
+
+mod channel;
+mod locator;
+mod types;
+pub mod version_managers;
+
+pub use channel::{detect_channel, read_dart_version, FlutterChannel, FlutterVersion};
+pub use locator::find_flutter_sdk;
+pub use types::{read_version_file, validate_sdk_path, FlutterExecutable, FlutterSdk, SdkSource};
+pub use version_managers::{
+    detect_asdf, detect_flutter_wrapper, detect_fvm_legacy, detect_fvm_modern, detect_mise,
+    detect_proto, detect_puro,
+};

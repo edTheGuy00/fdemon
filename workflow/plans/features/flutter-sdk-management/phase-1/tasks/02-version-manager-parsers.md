@@ -319,4 +319,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/error.rs` | Added `FlutterSdkInvalid` variant, `flutter_sdk_invalid()` constructor, included in `is_fatal()` |
+| `crates/fdemon-daemon/Cargo.toml` | Added `toml.workspace = true`, `dirs.workspace = true`, `serial_test.workspace = true` (dev) |
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod flutter_sdk` |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | NEW — module declaration with `mod types`, `pub mod version_managers`, all re-exports |
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | NEW — `SdkSource`, `FlutterExecutable`, `FlutterSdk`, `validate_sdk_path()`, `read_version_file()` (from task 01) |
+| `crates/fdemon-daemon/src/flutter_sdk/version_managers.rs` | NEW — all 7 detection functions, `find_config_upward()`, `resolve_fvm_cache()`, 40 tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Task 01 dependency included**: This worktree did not have the `flutter_sdk` module (task 01 was in a different worktree). I created `types.rs` and added the `FlutterSdkInvalid` error variant to `fdemon-core` as those are required dependencies for the version_managers module.
+
+2. **`#[serial]` for env var tests**: Tests that call `std::env::set_var` are marked `#[serial]` using the `serial_test` crate (already in workspace dependencies) to prevent race conditions when tests run in parallel. The `ASDF_DATA_DIR`, `FVM_CACHE_PATH`, `PURO_ROOT`, `MISE_DATA_DIR`, and `PROTO_HOME` env var tests all use serial execution.
+
+3. **Graceful degradation**: All parsers return `Ok(None)` on malformed config files with a `warn!` log, not `Err`. This allows the detection chain to continue to the next strategy.
+
+4. **`find_config_upward` visibility**: Marked `pub(crate)` rather than fully private to allow potential use by future sibling modules in `flutter_sdk/`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon -- version_managers` - Passed (40 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo fmt -p fdemon-daemon -p fdemon-core` - Applied (no diff)
+
+### Risks/Limitations
+
+1. **Thread-unsafe env vars in non-serial tests**: The three `test_detect_*_parses_*` tests that don't set env vars but do call detectors that read env vars could theoretically still be affected if a `#[serial]` test hasn't cleaned up. In practice this is mitigated by `remove_var` calls in every serial test's cleanup, and the non-env-var tests fall through to `dirs::home_dir()` which is stable.

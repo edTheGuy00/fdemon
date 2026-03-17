@@ -12,7 +12,7 @@ use crate::confirm_dialog::ConfirmDialogState;
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
-use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_daemon::{AndroidAvd, Device, FlutterSdk, IosSimulator, ToolAvailability};
 
 use super::session::SharedSourceHandle;
 use super::session_manager::SessionManager;
@@ -980,6 +980,14 @@ pub struct AppState {
     /// One entry per configured custom source with `shared = true` that has been
     /// successfully spawned. Cleaned up only on engine shutdown.
     pub shared_source_handles: Vec<SharedSourceHandle>,
+
+    /// Resolved Flutter SDK from the detection chain.
+    ///
+    /// Populated at startup by `Engine::new()` via `find_flutter_sdk()`.
+    /// `None` if no SDK was found at startup (fdemon still starts, but
+    /// session spawning and device discovery are unavailable until an SDK
+    /// is configured via `.fdemon/config.toml` `[flutter] sdk_path`).
+    pub resolved_sdk: Option<FlutterSdk>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1036,7 +1044,21 @@ impl AppState {
             tag_filter_ui: TagFilterUiState::default(),
             pending_watcher_errors: Vec::new(),
             shared_source_handles: Vec::new(),
+            resolved_sdk: None,
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Flutter SDK Helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// Return a clone of the `FlutterExecutable` from the resolved SDK, if any.
+    ///
+    /// Returns `None` when no SDK has been resolved yet (e.g., Flutter not
+    /// installed or `sdk_path` not configured). Callers that need the SDK to
+    /// dispatch an action should handle `None` by returning an error message.
+    pub fn flutter_executable(&self) -> Option<fdemon_daemon::FlutterExecutable> {
+        self.resolved_sdk.as_ref().map(|sdk| sdk.executable.clone())
     }
 
     // ─────────────────────────────────────────────────────────

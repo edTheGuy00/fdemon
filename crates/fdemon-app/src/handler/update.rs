@@ -432,7 +432,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         Message::DiscoverEmulators => {
             tracing::info!("Discovering emulators...");
-            UpdateResult::action(UpdateAction::DiscoverEmulators)
+            let Some(flutter) = state.flutter_executable() else {
+                tracing::warn!("DiscoverEmulators: no Flutter SDK — cannot discover emulators");
+                return UpdateResult::none();
+            };
+            UpdateResult::action(UpdateAction::DiscoverEmulators { flutter })
         }
 
         Message::EmulatorsDiscovered { emulators } => {
@@ -457,7 +461,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
         Message::LaunchEmulator { emulator_id } => {
             tracing::info!("Launching emulator: {}", emulator_id);
-            UpdateResult::action(UpdateAction::LaunchEmulator { emulator_id })
+            let Some(flutter) = state.flutter_executable() else {
+                tracing::warn!("LaunchEmulator: no Flutter SDK — cannot launch emulator");
+                return UpdateResult::none();
+            };
+            UpdateResult::action(UpdateAction::LaunchEmulator {
+                emulator_id,
+                flutter,
+            })
         }
 
         Message::EmulatorLaunched { result } => {
@@ -468,7 +479,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     result.elapsed
                 );
                 // After launching, refresh devices to pick up the new emulator
-                UpdateResult::action(UpdateAction::DiscoverDevices)
+                let Some(flutter) = state.flutter_executable() else {
+                    tracing::warn!("EmulatorLaunched: no Flutter SDK — cannot discover devices");
+                    return UpdateResult::none();
+                };
+                UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
             } else {
                 let error_msg = result
                     .message
@@ -867,9 +882,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 return UpdateResult::none();
             }
 
+            let Some(flutter) = state.flutter_executable() else {
+                tracing::warn!("StartAutoLaunch: no Flutter SDK — cannot auto-launch");
+                return UpdateResult::none();
+            };
+
             // Show loading overlay on top of normal UI
             state.set_loading_phase("Starting...");
-            UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch { configs })
+            UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch { configs, flutter })
         }
 
         Message::AutoLaunchProgress { message } => {
@@ -928,10 +948,17 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                                     running_shared_names: state.running_shared_source_names(),
                                 }
                             } else {
+                                let Some(flutter) = state.flutter_executable() else {
+                                    tracing::warn!(
+                                        "AutoLaunchResult: no Flutter SDK — cannot spawn session"
+                                    );
+                                    return UpdateResult::none();
+                                };
                                 UpdateAction::SpawnSession {
                                     session_id,
                                     device,
                                     config: config.map(Box::new),
+                                    flutter,
                                 }
                             };
                             UpdateResult::action(action)
@@ -1213,7 +1240,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             tracing::info!("Device boot completed: {}", device_id);
 
             // Trigger device discovery to refresh connected devices list
-            UpdateResult::action(UpdateAction::DiscoverDevices)
+            let Some(flutter) = state.flutter_executable() else {
+                tracing::warn!(
+                    "DeviceBootCompleted: no Flutter SDK — cannot discover devices after boot"
+                );
+                return UpdateResult::none();
+            };
+            UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
         }
 
         Message::DeviceBootFailed { device_id, error } => {
@@ -2136,10 +2169,18 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             // Gate has lifted — launch Flutter now.
             // The session already exists in SessionManager (created by handle_launch).
             if state.session_manager.get(session_id).is_some() {
+                let Some(flutter) = state.flutter_executable() else {
+                    tracing::warn!(
+                        "PreAppSourcesReady: no Flutter SDK — cannot spawn session {}",
+                        session_id
+                    );
+                    return UpdateResult::none();
+                };
                 UpdateResult::action(UpdateAction::SpawnSession {
                     session_id,
                     device,
                     config,
+                    flutter,
                 })
             } else {
                 // Session was closed during the readiness wait — no-op.
@@ -2385,6 +2426,23 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
 
             tracing::warn!("Shared source '{}' stopped", name);
+            UpdateResult::none()
+        }
+
+        // ── Flutter SDK ──────────────────────────────────────────────────────
+        Message::SdkResolved { sdk } => {
+            tracing::info!("Flutter SDK updated: {} via {}", sdk.version, sdk.source);
+            state.tool_availability.flutter_sdk = true;
+            state.tool_availability.flutter_sdk_source = Some(sdk.source.to_string());
+            state.resolved_sdk = Some(sdk);
+            UpdateResult::none()
+        }
+
+        Message::SdkResolutionFailed { reason } => {
+            warn!("SDK resolution failed: {reason}");
+            state.tool_availability.flutter_sdk = false;
+            state.tool_availability.flutter_sdk_source = None;
+            state.resolved_sdk = None;
             UpdateResult::none()
         }
     }

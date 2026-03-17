@@ -182,7 +182,15 @@ fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) 
         }
         startup::StartupAction::Ready => {
             // No auto-start — discover devices for the NewSessionDialog
-            spawn::spawn_device_discovery(engine.msg_sender());
+            if let Some(flutter) = engine.state.flutter_executable() {
+                spawn::spawn_device_discovery(engine.msg_sender(), flutter);
+            } else {
+                // SDK not found — clear the loading spinner with an error
+                let _ = engine.msg_sender().try_send(Message::DeviceDiscoveryFailed {
+                    error: "Flutter SDK not found. Configure sdk_path in .fdemon/config.toml or ensure flutter is on your PATH.".into(),
+                    is_background: false,
+                });
+            }
         }
     }
 }

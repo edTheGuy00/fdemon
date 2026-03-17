@@ -235,9 +235,21 @@ fn spawn_stdin_reader_blocking(msg_tx: mpsc::Sender<Message>) {
 
 /// Auto-start in headless mode: discover devices and create session
 async fn headless_auto_start(engine: &mut Engine) {
+    // Require Flutter SDK to be resolved
+    let flutter = match engine.state.flutter_executable() {
+        Some(f) => f,
+        None => {
+            tracing::error!(
+                "No Flutter SDK resolved; cannot discover devices for headless auto-start"
+            );
+            HeadlessEvent::error("No Flutter SDK found".to_string(), true).emit();
+            return;
+        }
+    };
+
     // Discover devices
     info!("Discovering devices for headless auto-start...");
-    match devices::discover_devices().await {
+    match devices::discover_devices(&flutter).await {
         Ok(result) => {
             info!("Found {} device(s)", result.devices.len());
 

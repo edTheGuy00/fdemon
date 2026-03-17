@@ -238,4 +238,37 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-core/src/error.rs` | Added `FlutterSdkInvalid { path, reason }` variant, `flutter_sdk_invalid()` constructor, and `FlutterSdkInvalid` to `is_fatal()` |
+| `crates/fdemon-daemon/Cargo.toml` | Added `toml.workspace = true` and `dirs.workspace = true` dependencies |
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | NEW — `SdkSource`, `FlutterExecutable`, `FlutterSdk`, `validate_sdk_path()`, `read_version_file()`, `Display for SdkSource` |
+| `crates/fdemon-daemon/src/flutter_sdk/channel.rs` | NEW — `FlutterChannel`, `detect_channel()`, `FlutterVersion`, `read_dart_version()` |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | NEW — Module root with re-exports from `types` and `channel` |
+| `crates/fdemon-daemon/src/lib.rs` | Added `pub mod flutter_sdk`, re-exports for all flutter_sdk public items, updated doc comment |
+
+### Notable Decisions/Tradeoffs
+
+1. **Also implemented Task 01 (core types)**: The `flutter_sdk/` module did not exist in the worktree, so `types.rs` and `mod.rs` were created as part of this task to satisfy the dependency. The task 03 channel module is the primary deliverable.
+2. **gitdir relative path support**: The `resolve_git_dir()` helper resolves relative `gitdir:` references against the parent directory of the `.git` file, matching git's own behavior.
+3. **Short hash for detached HEAD**: When HEAD is a commit hash, the display uses the first 7 characters (standard git short hash convention) rather than the full 40-char hash.
+4. **`read_dart_version()` returns None for empty content**: An empty or whitespace-only version file returns `None` rather than an empty string, preventing downstream consumers from treating an empty string as a valid version.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon -- channel` - Passed (27 tests)
+- `cargo test -p fdemon-daemon -- flutter_sdk` - Passed (33 tests: 20 channel + 13 types)
+- `cargo test -p fdemon-daemon` - Passed (613 tests, 0 failures)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (no warnings)
+- `cargo check --workspace` - Passed (all crates compile)
+- `cargo fmt --all` - Applied (no formatting issues)
+
+### Risks/Limitations
+
+1. **Task 01 completion summary not updated**: The task 01 file (`01-core-types.md`) still shows "Not Started" since this agent was only assigned task 03. The task 01 implementation was done here as a prerequisite.
+2. **No `dirs` or `toml` usage in channel.rs**: These were added to `Cargo.toml` per task 01 spec (needed by the future locator/version-manager tasks). They are not used in the channel module itself — clippy `unused` warnings are suppressed because the deps are used in tests indirectly via tempfile.

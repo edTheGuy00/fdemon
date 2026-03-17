@@ -36,6 +36,9 @@ pub enum Error {
     #[error("Flutter SDK not found. Ensure 'flutter' is in your PATH.")]
     FlutterNotFound,
 
+    #[error("Flutter SDK at {path} is invalid: {reason}")]
+    FlutterSdkInvalid { path: PathBuf, reason: String },
+
     #[error("No Flutter project found in: {path}")]
     NoProject { path: PathBuf },
 
@@ -108,6 +111,13 @@ pub enum Error {
 // ─────────────────────────────────────────────────────────────────
 
 impl Error {
+    pub fn flutter_sdk_invalid(path: impl Into<PathBuf>, reason: impl Into<String>) -> Self {
+        Self::FlutterSdkInvalid {
+            path: path.into(),
+            reason: reason.into(),
+        }
+    }
+
     pub fn terminal(message: impl Into<String>) -> Self {
         Self::Terminal {
             message: message.into(),
@@ -190,6 +200,7 @@ impl Error {
         matches!(
             self,
             Error::FlutterNotFound
+                | Error::FlutterSdkInvalid { .. }
                 | Error::NoProject { .. }
                 | Error::NoRunnableProjects { .. }
                 | Error::ProcessSpawn { .. }
@@ -245,6 +256,15 @@ mod tests {
 
         let err = Error::FlutterNotFound;
         assert!(err.to_string().contains("Flutter SDK not found"));
+    }
+
+    #[test]
+    fn test_flutter_sdk_invalid_error() {
+        let err = Error::flutter_sdk_invalid("/path/to/sdk", "missing binary");
+        assert!(err.to_string().contains("/path/to/sdk"));
+        assert!(err.to_string().contains("missing binary"));
+        assert!(err.is_fatal());
+        assert!(!err.is_recoverable());
     }
 
     #[test]

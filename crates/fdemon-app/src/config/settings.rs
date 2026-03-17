@@ -467,6 +467,11 @@ open_pattern = "$EDITOR $FILE:$LINE"
 # exclude_tags = ["flutter"]        # Tags to exclude (default: ["flutter"])
 # include_tags = []                 # If set, ONLY show these tags (overrides exclude)
 # min_level = "info"                # Minimum priority: "verbose", "debug", "info", "warning", "error"
+
+# [flutter]
+# Explicit Flutter SDK path override (highest priority in detection chain).
+# If not set, fdemon auto-detects via version managers and system PATH.
+# sdk_path = "/path/to/flutter"
 "#;
         std::fs::write(&config_path, default_content)
             .map_err(|e| Error::config(format!("Failed to write config.toml: {}", e)))?;
@@ -656,6 +661,11 @@ command = ""
 # Pattern for opening file at line/column
 # Variables: $EDITOR, $FILE, $LINE, $COLUMN
 open_pattern = "$EDITOR $FILE:$LINE"
+
+# [flutter]
+# Explicit Flutter SDK path override (highest priority in detection chain).
+# If not set, fdemon auto-detects via version managers and system PATH.
+# sdk_path = "/path/to/flutter"
 "#
     .to_string()
 }

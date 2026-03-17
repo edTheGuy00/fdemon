@@ -28,6 +28,7 @@ use crate::signals;
 use crate::state::{AppState, DapStatus};
 use crate::watcher::{FileWatcher, WatcherConfig, WatcherEvent};
 use fdemon_core::{AppPhase, LogLevel};
+use fdemon_daemon::flutter_sdk;
 use fdemon_dap::{adapter::DebugEvent as DapDebugEvent, DapServerHandle, DapService};
 
 /// Lightweight snapshot of state for change detection.
@@ -194,8 +195,39 @@ impl Engine {
         // 2. Load settings
         let settings = config::load_settings(&project_path);
 
+        // 2.5. Resolve Flutter SDK (synchronous filesystem detection chain)
+        // SDK resolution failure is NOT fatal: fdemon starts without an SDK
+        // but cannot spawn sessions or discover devices until one is configured.
+        let resolved_sdk = match flutter_sdk::find_flutter_sdk(
+            &project_path,
+            settings.flutter.sdk_path.as_deref(),
+        ) {
+            Ok(sdk) => {
+                info!(
+                    "Flutter SDK resolved via {}: {} at {}",
+                    sdk.source,
+                    sdk.version,
+                    sdk.root.display()
+                );
+                Some(sdk)
+            }
+            Err(e) => {
+                warn!(
+                    "Flutter SDK not found: {}. SDK-dependent features will be unavailable.",
+                    e
+                );
+                None
+            }
+        };
+
         // 3. Create state
-        let state = AppState::with_settings(project_path.clone(), settings.clone());
+        let mut state = AppState::with_settings(project_path.clone(), settings.clone());
+
+        // Populate resolved SDK and ToolAvailability flutter fields from detection result.
+        state.tool_availability.flutter_sdk = resolved_sdk.is_some();
+        state.tool_availability.flutter_sdk_source =
+            resolved_sdk.as_ref().map(|s| s.source.to_string());
+        state.resolved_sdk = resolved_sdk;
 
         // 4. Create message channel
         let (msg_tx, msg_rx) = mpsc::channel::<Message>(256);
@@ -412,17 +444,31 @@ impl Engine {
     ///
     /// This is the external API for session creation. For full action dispatch
     /// (reload, restart, device discovery), use `process_message()` instead.
+    ///
+    /// Returns `false` if no Flutter SDK is available (session cannot be spawned).
     pub fn dispatch_spawn_session(
         &self,
         session_id: SessionId,
         device: fdemon_daemon::Device,
         config: Option<Box<crate::config::LaunchConfig>>,
-    ) {
+    ) -> bool {
+        let flutter = match &self.state.resolved_sdk {
+            Some(sdk) => sdk.executable.clone(),
+            None => {
+                warn!(
+                    "dispatch_spawn_session: no Flutter SDK resolved — cannot spawn session {}",
+                    session_id
+                );
+                return false;
+            }
+        };
+
         crate::actions::handle_action(
             UpdateAction::SpawnSession {
                 session_id,
                 device,
                 config,
+                flutter,
             },
             self.msg_tx.clone(),
             None,
@@ -435,6 +481,7 @@ impl Engine {
             self.vm_handle_for_dap.clone(),
             self.dap_debug_senders.clone(),
         );
+        true
     }
 
     /// Returns a clone of the shared DAP debug sender registry.

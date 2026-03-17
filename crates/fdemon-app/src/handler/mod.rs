@@ -39,7 +39,7 @@ mod tests;
 use crate::config::{LaunchConfig, LoadedConfigs};
 use crate::message::Message;
 use crate::session::SessionId;
-use fdemon_daemon::Device;
+use fdemon_daemon::{Device, FlutterExecutable};
 
 // Re-export main entry point
 pub use update::update;
@@ -57,11 +57,17 @@ pub enum UpdateAction {
     SpawnTask(Task),
 
     /// Discover available devices
-    DiscoverDevices,
+    DiscoverDevices {
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Refresh devices in background (no loading spinner)
     /// Used when cache is fresh but we want to update in background
-    RefreshDevicesBackground,
+    RefreshDevicesBackground {
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Discover devices and auto-launch a session
     /// Used when auto_start=true to run device discovery in background
@@ -69,13 +75,22 @@ pub enum UpdateAction {
     DiscoverDevicesAndAutoLaunch {
         /// Pre-loaded configs for selection logic
         configs: LoadedConfigs,
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
     },
 
     /// Discover available emulators
-    DiscoverEmulators,
+    DiscoverEmulators {
+        /// Flutter executable to use for emulator discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Launch an emulator by ID
-    LaunchEmulator { emulator_id: String },
+    LaunchEmulator {
+        emulator_id: String,
+        /// Flutter executable to use for emulator launch.
+        flutter: FlutterExecutable,
+    },
 
     /// Launch iOS Simulator (macOS shortcut)
     LaunchIOSSimulator,
@@ -88,6 +103,8 @@ pub enum UpdateAction {
         device: Device,
         /// Optional launch configuration
         config: Option<Box<LaunchConfig>>,
+        /// Flutter executable to use for spawning the process.
+        flutter: FlutterExecutable,
     },
 
     /// Reload all running sessions (file watcher auto-reload)

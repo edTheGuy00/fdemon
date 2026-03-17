@@ -72,29 +72,31 @@ pub fn handle_action(
             }
         }
 
-        UpdateAction::DiscoverDevices => {
-            spawn::spawn_device_discovery(msg_tx);
+        UpdateAction::DiscoverDevices { flutter } => {
+            spawn::spawn_device_discovery(msg_tx, flutter);
         }
 
-        UpdateAction::RefreshDevicesBackground => {
+        UpdateAction::RefreshDevicesBackground { flutter } => {
             // Same as DiscoverDevices but errors are logged only (no UI feedback)
             // This runs when we already have cached devices displayed
-            spawn::spawn_device_discovery_background(msg_tx);
+            spawn::spawn_device_discovery_background(msg_tx, flutter);
         }
 
-        UpdateAction::DiscoverDevicesAndAutoLaunch { configs } => {
-            spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf());
+        UpdateAction::DiscoverDevicesAndAutoLaunch { configs, flutter } => {
+            spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf(), flutter);
         }
 
         UpdateAction::SpawnSession {
             session_id,
             device,
             config,
+            flutter,
         } => {
             session::spawn_session(
                 session_id,
                 device,
                 config,
+                flutter,
                 project_path,
                 msg_tx,
                 session_tasks,
@@ -102,12 +104,15 @@ pub fn handle_action(
             );
         }
 
-        UpdateAction::DiscoverEmulators => {
-            spawn::spawn_emulator_discovery(msg_tx);
+        UpdateAction::DiscoverEmulators { flutter } => {
+            spawn::spawn_emulator_discovery(msg_tx, flutter);
         }
 
-        UpdateAction::LaunchEmulator { emulator_id } => {
-            spawn::spawn_emulator_launch(msg_tx, emulator_id);
+        UpdateAction::LaunchEmulator {
+            emulator_id,
+            flutter,
+        } => {
+            spawn::spawn_emulator_launch(msg_tx, emulator_id, flutter);
         }
 
         UpdateAction::LaunchIOSSimulator => {

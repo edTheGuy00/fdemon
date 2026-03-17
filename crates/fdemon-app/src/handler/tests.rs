@@ -2000,6 +2000,7 @@ fn test_start_auto_launch_shows_loading_overlay() {
     use crate::config::LoadedConfigs;
 
     let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
     let configs = LoadedConfigs::default();
 
     let result = update(&mut state, Message::StartAutoLaunch { configs });
@@ -2039,6 +2040,7 @@ fn test_auto_launch_result_success_creates_session() {
     use crate::message::AutoLaunchSuccess;
 
     let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
     // No loading state - auto-launch is silent
 
     let device = test_device("test-device", "Test Device");
@@ -2084,6 +2086,7 @@ mod auto_launch_tests {
     #[test]
     fn test_auto_launch_flow_success() {
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         let project_path = PathBuf::from("/tmp/test");
         state.project_path = project_path.clone();
 
@@ -2138,6 +2141,7 @@ mod auto_launch_tests {
     #[test]
     fn test_auto_launch_with_config() {
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.project_path = PathBuf::from("/tmp/test");
         // No loading state - auto-launch is silent
 
@@ -2385,6 +2389,7 @@ mod auto_launch_tests {
     #[test]
     fn test_auto_launch_without_pre_app_sources_returns_spawn_session() {
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.project_path = PathBuf::from("/tmp/test");
 
         // Enable native logs but no pre-app sources (custom_sources is empty)
@@ -2447,6 +2452,7 @@ mod auto_launch_tests {
         // Second session scenario: the only pre-app source is shared and
         // already running. The gate should be skipped → SpawnSession.
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.project_path = PathBuf::from("/tmp/test");
         state.settings.native_logs.enabled = true;
         state
@@ -2890,12 +2896,16 @@ mod auto_launch_tests {
         use crate::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Connected;
 
         let result = update(&mut state, Message::NewSessionDialogRefreshDevices);
 
         assert!(state.new_session_dialog_state.target_selector.loading);
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]
@@ -3118,6 +3128,7 @@ mod auto_launch_tests {
         use crate::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
 
         let result = update(
@@ -3132,7 +3143,10 @@ mod auto_launch_tests {
             TargetTab::Connected
         );
         assert!(state.new_session_dialog_state.target_selector.loading);
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]
@@ -3173,6 +3187,7 @@ mod auto_launch_tests {
         use crate::new_session_dialog::TargetTab;
 
         let mut state = AppState::new();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
         state.new_session_dialog_state.target_selector.active_tab = TargetTab::Bootable;
 
         // Use deprecated message - should redirect
@@ -3188,7 +3203,10 @@ mod auto_launch_tests {
             state.new_session_dialog_state.target_selector.active_tab,
             TargetTab::Connected
         );
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]
@@ -3437,13 +3455,7 @@ fn test_tool_availability_triggers_bootable_discovery() {
 
     let availability = ToolAvailability {
         xcrun_simctl: true,
-        android_emulator: false,
-        emulator_path: None,
-        adb: false,
-        #[cfg(target_os = "macos")]
-        macos_log: false,
-        #[cfg(target_os = "macos")]
-        idevicesyslog: false,
+        ..Default::default()
     };
 
     let result = update(
@@ -3471,16 +3483,7 @@ fn test_no_tools_available_no_discovery() {
     let mut state = AppState::new();
     state.ui_mode = UiMode::NewSessionDialog;
 
-    let availability = ToolAvailability {
-        xcrun_simctl: false,
-        android_emulator: false,
-        emulator_path: None,
-        adb: false,
-        #[cfg(target_os = "macos")]
-        macos_log: false,
-        #[cfg(target_os = "macos")]
-        idevicesyslog: false,
-    };
+    let availability = ToolAvailability::default();
 
     let result = update(
         &mut state,
@@ -8503,6 +8506,7 @@ fn test_pre_app_sources_ready_triggers_spawn_session() {
     // Real handler: PreAppSourcesReady returns SpawnSession for an existing session.
     let device = test_device("emulator-1", "Test Emulator");
     let mut state = AppState::new();
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
 
     // Create a session so the handler finds it
     let session_id = state.session_manager.create_session(&device).unwrap();

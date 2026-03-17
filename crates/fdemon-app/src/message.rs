@@ -9,7 +9,7 @@ use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
-    IosSimulator, NativeLogEvent, ToolAvailability,
+    FlutterSdk, IosSimulator, NativeLogEvent, ToolAvailability,
 };
 
 /// Shared, abort-able handle to a background task.
@@ -1321,4 +1321,17 @@ pub enum Message {
         /// Source name.
         name: String,
     },
+
+    // ── Flutter SDK ──────────────────────────────────────────────────────────
+    /// Flutter SDK resolution completed successfully (e.g., after re-resolution
+    /// triggered by a config change or explicit user request in Phase 2).
+    ///
+    /// Updates `AppState.resolved_sdk` and `tool_availability.flutter_sdk`.
+    SdkResolved { sdk: FlutterSdk },
+
+    /// Flutter SDK resolution failed (e.g., after the user reconfigures the
+    /// SDK path to an invalid location).
+    ///
+    /// Clears `AppState.resolved_sdk` and `tool_availability.flutter_sdk`.
+    SdkResolutionFailed { reason: String },
 }

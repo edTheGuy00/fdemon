@@ -283,4 +283,38 @@ fn resolve_sdk_root_from_binary(binary_path: &Path) -> Option<PathBuf> {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | NEW — 10-strategy detection chain implementation with 14 unit tests |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Added `mod locator`, re-exported `find_flutter_sdk`, updated module docs |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[serial]` on env-var tests**: All tests that call `std::env::set_var` / `remove_var` are marked `#[serial]` (using the `serial_test` crate already present in `fdemon-daemon`). This prevents flaky failures from parallel test threads racing on shared process-wide env state.
+
+2. **macOS `/var` → `/private/var` symlink in PATH tests**: `fs::canonicalize()` inside `resolve_sdk_root_from_binary` follows all symlinks, so on macOS temp paths like `/var/folders/...` are resolved to `/private/var/folders/...`. Tests that compare the result of `resolve_sdk_root_from_binary` against a path built from `TempDir::path()` now canonicalize both sides.
+
+3. **Puro env extraction from path**: The `detect_puro` function returns the full SDK path (`<root>/envs/<env>/flutter/`). To populate `SdkSource::Puro { env }`, the locator extracts the env name as the grandparent directory component of the returned path (i.e., `path.parent()?.file_name()`). This is consistent with how Puro paths are structured.
+
+4. **FVM source version from VERSION file**: For FVM (both modern and legacy), the `SdkSource::Fvm { version }` field is populated from the `VERSION` file read by `read_version_file()` rather than the version string parsed from `.fvmrc`. These should be identical for a correctly installed FVM environment, and using the file ensures the displayed version matches the actual SDK content.
+
+5. **Pre-existing workspace errors**: Tasks 01-03 modified signatures in `fdemon-daemon/src/devices.rs`, `emulators.rs`, and `process.rs`. This caused `fdemon-app` call sites (to be updated in task 06) to fail workspace-level `cargo check`. Task 04 scopes only to `fdemon-daemon`; `cargo check -p fdemon-daemon` is clean.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon -- locator` — Passed (14/14 tests)
+- `cargo test -p fdemon-daemon -- flutter_sdk` — Passed (99/99 tests)
+- `cargo test -p fdemon-daemon` — Passed (679 passed, 3 ignored pre-existing)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (no warnings)
+- `cargo fmt -p fdemon-daemon` — Passed
+
+### Risks/Limitations
+
+1. **Env var isolation**: Tests use `#[serial]` to avoid parallel races, but `FLUTTER_ROOT` set in the host shell could still interfere if another serial test sets it and a crash leaves it set. This is mitigated by calling `remove_var("FLUTTER_ROOT")` at the start of each test that needs a clean state.
+
+2. **System PATH strategy not fully unit-tested in isolation**: The `try_system_path()` function is not directly unit-tested because it reads the real `PATH` env var. The resolution logic is covered via `resolve_sdk_root_from_binary` and `find_flutter_in_dir` helper tests. An integration test with full PATH manipulation would require `#[serial]` and real binary creation.

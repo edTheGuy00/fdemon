@@ -144,4 +144,28 @@ sdk_path = "/Users/me/flutter"
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `FlutterSettings` struct with `sdk_path: Option<PathBuf>` field; added `pub flutter: FlutterSettings` field to `Settings` struct with `#[serde(default)]`; added 5 unit tests in the existing `tests` module |
+| `crates/fdemon-app/src/config/settings.rs` | Added commented-out `[flutter]` section to both the inline default config template in `init_fdemon_directory()` and the `generate_default_config()` function |
+
+### Notable Decisions/Tradeoffs
+
+1. **`FlutterSettings` placement**: Placed the new struct after `NativeLogsSettings` in `types.rs` with its own section header, consistent with the existing style (`DapSettings`, `NativeLogsSettings`, etc.).
+2. **`Settings` field ordering**: Added `flutter` as the last field in `Settings`, matching the task spec exactly. `#[serde(default)]` ensures backward compatibility with existing config files missing the `[flutter]` section.
+3. **Template placement**: Added the `[flutter]` comment block to both config template locations in `settings.rs` — the inline string used during initial directory creation and the `generate_default_config()` function used for regenerated configs.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1704 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **No validation at config layer**: Per the task notes, path validation (checking if the path is a valid Flutter SDK) is intentionally deferred to the locator layer (task 04). The config layer only stores the raw `PathBuf`.
