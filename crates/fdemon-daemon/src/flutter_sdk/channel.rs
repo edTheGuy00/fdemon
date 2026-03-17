@@ -29,6 +29,9 @@ impl std::fmt::Display for FlutterChannel {
     }
 }
 
+/// Standard git short hash length for display.
+const SHORT_HASH_LEN: usize = 7;
+
 /// Detect the Flutter channel from the SDK's git state.
 ///
 /// Reads `.git/HEAD` to determine the current branch:
@@ -60,8 +63,7 @@ pub fn detect_channel(sdk_root: &Path) -> Option<FlutterChannel> {
 
     // Detached HEAD: raw commit hash (40 hex chars, or abbreviated)
     if !content.is_empty() {
-        // Use first 7 characters as short hash for display
-        let short = &content[..content.len().min(7)];
+        let short = &content[..content.len().min(SHORT_HASH_LEN)];
         return Some(FlutterChannel::Unknown(short.to_string()));
     }
 

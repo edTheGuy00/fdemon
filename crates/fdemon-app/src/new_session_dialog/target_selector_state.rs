@@ -234,7 +234,10 @@ impl TargetSelectorState {
         self.ios_simulators = ios_simulators;
         self.android_avds = android_avds;
         self.bootable_loading = false;
-        self.error = None;
+        // NOTE: do NOT clear self.error here — bootable device discovery uses
+        // xcrun/emulator tools that are independent of the Flutter SDK.
+        // SDK-level errors (e.g. "Flutter SDK not found") must persist until
+        // set_connected_devices() confirms a working SDK by succeeding.
         self.invalidate_cache();
         self.scroll_offset = 0; // Reset scroll when devices change
 
@@ -360,6 +363,33 @@ mod tests {
         let shared: &TargetSelectorState = &state;
         shared.last_known_visible_height.set(12);
         assert_eq!(state.last_known_visible_height.get(), 12);
+    }
+
+    #[test]
+    fn test_set_bootable_devices_does_not_clear_error() {
+        let mut state = TargetSelectorState::default();
+        state.set_error("Flutter SDK not found".to_string());
+        assert!(state.error.is_some());
+
+        state.set_bootable_devices(vec![], vec![]);
+
+        // Error should persist — bootable discovery is independent of SDK
+        assert!(state.error.is_some());
+        assert_eq!(state.error.as_deref(), Some("Flutter SDK not found"));
+        assert!(!state.bootable_loading);
+    }
+
+    #[test]
+    fn test_set_connected_devices_clears_error() {
+        let mut state = TargetSelectorState::default();
+        state.set_error("Flutter SDK not found".to_string());
+        assert!(state.error.is_some());
+
+        state.set_connected_devices(vec![]);
+
+        // Error should be cleared — successful device discovery means SDK is working
+        assert!(state.error.is_none());
+        assert!(!state.loading);
     }
 }
 

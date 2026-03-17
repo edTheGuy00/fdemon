@@ -369,13 +369,17 @@ mod tests {
     }
 
     #[test]
-    fn test_set_bootable_devices_clears_error() {
+    fn test_set_bootable_devices_does_not_clear_error() {
         let mut state = TargetSelectorState::default();
         state.error = Some("Previous error".to_string());
 
         state.set_bootable_devices(vec![], vec![]);
 
-        assert!(state.error.is_none());
+        // Bootable device discovery is independent of the Flutter SDK, so
+        // SDK-level errors must persist until set_connected_devices confirms
+        // a working SDK.
+        assert!(state.error.is_some());
+        assert_eq!(state.error.as_deref(), Some("Previous error"));
     }
 
     #[test]

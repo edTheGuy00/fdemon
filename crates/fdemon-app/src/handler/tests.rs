@@ -3502,6 +3502,64 @@ fn test_target_selector_default_shows_bootable_loading() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Tests for Bug 1: ToolAvailabilityChecked Preserves Flutter SDK Fields (Phase 1, Task 01)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_tool_availability_checked_preserves_flutter_sdk_fields() {
+    use fdemon_daemon::ToolAvailability;
+
+    let mut state = AppState::new();
+    // Pre-populate SDK state (simulating Engine::new() initialization)
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+    state.tool_availability.flutter_sdk = true;
+    state.tool_availability.flutter_sdk_source = Some("FVM (3.19.0)".to_string());
+
+    // Simulate the async check result (flutter_sdk fields are false/None by default)
+    let availability = ToolAvailability {
+        xcrun_simctl: true,
+        ..Default::default()
+    };
+
+    let _result = update(
+        &mut state,
+        Message::ToolAvailabilityChecked { availability },
+    );
+
+    // Flutter SDK fields must survive the replacement
+    assert!(state.tool_availability.flutter_sdk);
+    assert_eq!(
+        state.tool_availability.flutter_sdk_source.as_deref(),
+        Some("FVM (3.19.0)")
+    );
+    // OS tool fields should be updated from the async check result
+    assert!(state.tool_availability.xcrun_simctl);
+}
+
+#[test]
+fn test_tool_availability_checked_no_sdk_keeps_false() {
+    use fdemon_daemon::ToolAvailability;
+
+    let mut state = AppState::new();
+    // No SDK resolved — flutter_sdk starts false, flutter_sdk_source starts None
+    assert!(!state.tool_availability.flutter_sdk);
+
+    let availability = ToolAvailability {
+        xcrun_simctl: true,
+        ..Default::default()
+    };
+
+    let _result = update(
+        &mut state,
+        Message::ToolAvailabilityChecked { availability },
+    );
+
+    // Should remain false since no SDK was resolved
+    assert!(!state.tool_availability.flutter_sdk);
+    assert!(state.tool_availability.flutter_sdk_source.is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Tests for Bug 2: Bootable Device Caching (Phase 1, Task 03)
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -9228,4 +9286,44 @@ fn test_non_shared_source_still_per_session() {
             "shared_source_handles must be empty — non-shared sources are per-session only"
         );
     });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests for Message::SdkResolved and Message::SdkResolutionFailed handlers
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_sdk_resolved_updates_state() {
+    let mut state = AppState::new();
+    assert!(state.resolved_sdk.is_none());
+    assert!(!state.tool_availability.flutter_sdk);
+
+    let sdk = fdemon_daemon::test_utils::fake_flutter_sdk();
+    let result = update(&mut state, Message::SdkResolved { sdk });
+
+    assert!(state.resolved_sdk.is_some());
+    assert!(state.tool_availability.flutter_sdk);
+    assert!(state.tool_availability.flutter_sdk_source.is_some());
+    assert!(result.action.is_none());
+}
+
+#[test]
+fn test_sdk_resolution_failed_clears_state() {
+    let mut state = AppState::new();
+    // Pre-populate SDK state
+    state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+    state.tool_availability.flutter_sdk = true;
+    state.tool_availability.flutter_sdk_source = Some("system PATH".to_string());
+
+    let result = update(
+        &mut state,
+        Message::SdkResolutionFailed {
+            reason: "No SDK found".to_string(),
+        },
+    );
+
+    assert!(state.resolved_sdk.is_none());
+    assert!(!state.tool_availability.flutter_sdk);
+    assert!(state.tool_availability.flutter_sdk_source.is_none());
+    assert!(result.action.is_none());
 }

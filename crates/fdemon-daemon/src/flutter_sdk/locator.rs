@@ -1,7 +1,7 @@
 //! # Flutter SDK Locator
 //!
 //! Top-level detection chain that resolves the Flutter SDK for a given project.
-//! Walks 10 strategies in strict priority order, returning the first valid SDK found.
+//! Walks 11 strategies in strict priority order, returning the first valid SDK found.
 //!
 //! ## Priority Order
 //!
@@ -15,6 +15,7 @@
 //! 8. proto (`.prototools`)
 //! 9. flutter_wrapper (`flutterw` + `.flutter/`)
 //! 10. System PATH (`which flutter` → resolve symlinks → SDK root)
+//! 11. Lenient PATH fallback (binary on PATH but VERSION file missing/unreadable)
 
 use std::{
     fs,
@@ -25,7 +26,9 @@ use fdemon_core::prelude::*;
 
 use super::{
     channel::detect_channel,
-    types::{read_version_file, validate_sdk_path, FlutterSdk, SdkSource},
+    types::{
+        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterSdk, SdkSource,
+    },
     version_managers,
 };
 
@@ -41,21 +44,168 @@ use super::{
 /// # Errors
 /// Returns `Error::FlutterNotFound` if no valid SDK is found after trying all strategies.
 pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Result<FlutterSdk> {
-    // ── Strategy 1: Explicit config ──────────────────────────────────────────
-    debug!("SDK detection: trying explicit config...");
+    // Strategy 1: Explicit config
     if let Some(sdk_root) = try_explicit_config(explicit_path) {
-        debug!(
-            path = %sdk_root.display(),
-            "SDK detection: explicit config found candidate"
-        );
-        match validate_sdk_path(&sdk_root) {
+        if let Some(sdk) =
+            try_resolve_sdk(sdk_root, |_| SdkSource::ExplicitConfig, "explicit config")
+        {
+            return Ok(sdk);
+        }
+    } else {
+        debug!("SDK detection: explicit config — no path provided");
+    }
+
+    // Strategy 2: FLUTTER_ROOT environment variable
+    if let Some(sdk_root) = try_flutter_root_env() {
+        if let Some(sdk) =
+            try_resolve_sdk(sdk_root, |_| SdkSource::EnvironmentVariable, "FLUTTER_ROOT")
+        {
+            return Ok(sdk);
+        }
+    } else {
+        debug!("SDK detection: FLUTTER_ROOT — env var not set");
+    }
+
+    // Strategy 3: FVM modern (.fvmrc)
+    match version_managers::detect_fvm_modern(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) = try_resolve_sdk(
+                sdk_root,
+                |v| SdkSource::Fvm {
+                    version: v.to_string(),
+                },
+                "FVM modern",
+            ) {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: FVM modern — no .fvmrc found"),
+        Err(e) => debug!("SDK detection: FVM modern — error: {e}"),
+    }
+
+    // Strategy 4: FVM legacy (.fvm/)
+    match version_managers::detect_fvm_legacy(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) = try_resolve_sdk(
+                sdk_root,
+                |v| SdkSource::Fvm {
+                    version: v.to_string(),
+                },
+                "FVM legacy",
+            ) {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: FVM legacy — no .fvm/ found"),
+        Err(e) => debug!("SDK detection: FVM legacy — error: {e}"),
+    }
+
+    // Strategy 5: Puro (.puro.json)
+    match version_managers::detect_puro(project_path) {
+        Ok(Some(sdk_root)) => {
+            // Puro SDK path: <puro_root>/envs/<env>/flutter
+            // Extract the env name from the path: grandparent component
+            let env = sdk_root
+                .parent() // flutter/
+                .and_then(|p| p.file_name()) // <env>
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "default".to_string());
+            if let Some(sdk) =
+                try_resolve_sdk(sdk_root, |_| SdkSource::Puro { env: env.clone() }, "Puro")
+            {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: Puro — no .puro.json found"),
+        Err(e) => debug!("SDK detection: Puro — error: {e}"),
+    }
+
+    // Strategy 6: asdf (.tool-versions)
+    match version_managers::detect_asdf(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) = try_resolve_sdk(
+                sdk_root,
+                |v| SdkSource::Asdf {
+                    version: v.to_string(),
+                },
+                "asdf",
+            ) {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: asdf — no .tool-versions found"),
+        Err(e) => debug!("SDK detection: asdf — error: {e}"),
+    }
+
+    // Strategy 7: mise (.mise.toml)
+    match version_managers::detect_mise(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) = try_resolve_sdk(
+                sdk_root,
+                |v| SdkSource::Mise {
+                    version: v.to_string(),
+                },
+                "mise",
+            ) {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: mise — no .mise.toml found"),
+        Err(e) => debug!("SDK detection: mise — error: {e}"),
+    }
+
+    // Strategy 8: proto (.prototools)
+    match version_managers::detect_proto(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) = try_resolve_sdk(
+                sdk_root,
+                |v| SdkSource::Proto {
+                    version: v.to_string(),
+                },
+                "proto",
+            ) {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: proto — no .prototools found"),
+        Err(e) => debug!("SDK detection: proto — error: {e}"),
+    }
+
+    // Strategy 9: flutter_wrapper (flutterw + .flutter/)
+    match version_managers::detect_flutter_wrapper(project_path) {
+        Ok(Some(sdk_root)) => {
+            if let Some(sdk) =
+                try_resolve_sdk(sdk_root, |_| SdkSource::FlutterWrapper, "flutter_wrapper")
+            {
+                return Ok(sdk);
+            }
+        }
+        Ok(None) => debug!("SDK detection: flutter_wrapper — flutterw or .flutter/ not found"),
+        Err(e) => debug!("SDK detection: flutter_wrapper — error: {e}"),
+    }
+
+    // Strategy 10: System PATH
+    if let Some(sdk_root) = try_system_path() {
+        if let Some(sdk) = try_resolve_sdk(sdk_root, |_| SdkSource::SystemPath, "system PATH") {
+            return Ok(sdk);
+        }
+    } else {
+        debug!("SDK detection: system PATH — flutter not found on PATH");
+    }
+
+    // Strategy 11: Lenient PATH fallback — binary on PATH but VERSION file missing/unreadable.
+    // Re-scans PATH using the same logic as strategy 10 but skips the VERSION file requirement.
+    // Uses SdkSource::PathInferred to distinguish from a fully resolved SdkSource::SystemPath.
+    if let Some(sdk_root) = try_system_path() {
+        match validate_sdk_path_lenient(&sdk_root) {
             Ok(executable) => {
-                let version = read_version_file(&sdk_root)?;
+                let version =
+                    read_version_file(&sdk_root).unwrap_or_else(|_| "unknown".to_string());
                 let channel = detect_channel(&sdk_root).map(|c| c.to_string());
                 let sdk = FlutterSdk {
                     root: sdk_root,
                     executable,
-                    source: SdkSource::ExplicitConfig,
+                    source: SdkSource::PathInferred,
                     version,
                     channel,
                 };
@@ -63,413 +213,72 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
                     source = %sdk.source,
                     version = %sdk.version,
                     path = %sdk.root.display(),
-                    "Flutter SDK resolved"
+                    "Flutter SDK resolved (lenient — VERSION file may be missing)"
                 );
                 return Ok(sdk);
             }
-            Err(e) => {
-                debug!("SDK detection: explicit config candidate invalid: {e}");
-            }
+            Err(e) => debug!("SDK detection: lenient PATH fallback — invalid: {e}"),
         }
-    } else {
-        debug!("SDK detection: explicit config — no path provided");
-    }
-
-    // ── Strategy 2: FLUTTER_ROOT environment variable ────────────────────────
-    debug!("SDK detection: trying FLUTTER_ROOT env var...");
-    match try_flutter_root_env() {
-        Some(sdk_root) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: FLUTTER_ROOT found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::EnvironmentVariable,
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: FLUTTER_ROOT candidate invalid: {e}");
-                }
-            }
-        }
-        None => {
-            debug!("SDK detection: FLUTTER_ROOT — env var not set");
-        }
-    }
-
-    // ── Strategy 3: FVM modern (.fvmrc) ──────────────────────────────────────
-    debug!("SDK detection: trying FVM modern...");
-    match version_managers::detect_fvm_modern(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: FVM modern found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Fvm {
-                            version: version.clone(),
-                        },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: FVM modern candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: FVM modern — no .fvmrc found");
-        }
-        Err(e) => {
-            debug!("SDK detection: FVM modern — error: {e}");
-        }
-    }
-
-    // ── Strategy 4: FVM legacy (.fvm/) ───────────────────────────────────────
-    debug!("SDK detection: trying FVM legacy...");
-    match version_managers::detect_fvm_legacy(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: FVM legacy found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Fvm {
-                            version: version.clone(),
-                        },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: FVM legacy candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: FVM legacy — no .fvm/ found");
-        }
-        Err(e) => {
-            debug!("SDK detection: FVM legacy — error: {e}");
-        }
-    }
-
-    // ── Strategy 5: Puro (.puro.json) ────────────────────────────────────────
-    debug!("SDK detection: trying Puro...");
-    match version_managers::detect_puro(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: Puro found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    // Puro SDK path: <puro_root>/envs/<env>/flutter
-                    // Extract the env name from the path: grandparent component
-                    let env = sdk_root
-                        .parent() // flutter/
-                        .and_then(|p| p.file_name()) // <env>
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| "default".to_string());
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Puro { env },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: Puro candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: Puro — no .puro.json found");
-        }
-        Err(e) => {
-            debug!("SDK detection: Puro — error: {e}");
-        }
-    }
-
-    // ── Strategy 6: asdf (.tool-versions) ────────────────────────────────────
-    debug!("SDK detection: trying asdf...");
-    match version_managers::detect_asdf(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: asdf found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    // asdf SDK path: <asdf_root>/installs/flutter/<version>
-                    // Extract version from last path component
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Asdf {
-                            version: version.clone(),
-                        },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: asdf candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: asdf — no .tool-versions found");
-        }
-        Err(e) => {
-            debug!("SDK detection: asdf — error: {e}");
-        }
-    }
-
-    // ── Strategy 7: mise (.mise.toml) ────────────────────────────────────────
-    debug!("SDK detection: trying mise...");
-    match version_managers::detect_mise(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: mise found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Mise {
-                            version: version.clone(),
-                        },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: mise candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: mise — no .mise.toml found");
-        }
-        Err(e) => {
-            debug!("SDK detection: mise — error: {e}");
-        }
-    }
-
-    // ── Strategy 8: proto (.prototools) ──────────────────────────────────────
-    debug!("SDK detection: trying proto...");
-    match version_managers::detect_proto(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: proto found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::Proto {
-                            version: version.clone(),
-                        },
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: proto candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: proto — no .prototools found");
-        }
-        Err(e) => {
-            debug!("SDK detection: proto — error: {e}");
-        }
-    }
-
-    // ── Strategy 9: flutter_wrapper (flutterw + .flutter/) ───────────────────
-    debug!("SDK detection: trying flutter_wrapper...");
-    match version_managers::detect_flutter_wrapper(project_path) {
-        Ok(Some(sdk_root)) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: flutter_wrapper found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::FlutterWrapper,
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: flutter_wrapper candidate invalid: {e}");
-                }
-            }
-        }
-        Ok(None) => {
-            debug!("SDK detection: flutter_wrapper — flutterw or .flutter/ not found");
-        }
-        Err(e) => {
-            debug!("SDK detection: flutter_wrapper — error: {e}");
-        }
-    }
-
-    // ── Strategy 10: System PATH ──────────────────────────────────────────────
-    debug!("SDK detection: trying system PATH...");
-    match try_system_path() {
-        Some(sdk_root) => {
-            debug!(
-                path = %sdk_root.display(),
-                "SDK detection: system PATH found candidate"
-            );
-            match validate_sdk_path(&sdk_root) {
-                Ok(executable) => {
-                    let version = read_version_file(&sdk_root)?;
-                    let channel = detect_channel(&sdk_root).map(|c| c.to_string());
-                    let sdk = FlutterSdk {
-                        root: sdk_root,
-                        executable,
-                        source: SdkSource::SystemPath,
-                        version,
-                        channel,
-                    };
-                    info!(
-                        source = %sdk.source,
-                        version = %sdk.version,
-                        path = %sdk.root.display(),
-                        "Flutter SDK resolved"
-                    );
-                    return Ok(sdk);
-                }
-                Err(e) => {
-                    debug!("SDK detection: system PATH candidate invalid: {e}");
-                }
-            }
-        }
-        None => {
-            debug!("SDK detection: system PATH — flutter not found on PATH");
-        }
-    }
-
-    // ── Fallback: bare `flutter` command ───────────────────────────────────
-    // All strategies failed to resolve a full SDK root, but `flutter` may still
-    // be callable on PATH via a shim (FVM, asdf, etc.) or a non-standard install.
-    // Fall back to `Command::new("flutter")` — the pre-detection-chain behavior.
-    debug!("SDK detection: all strategies exhausted, trying bare `flutter` PATH fallback...");
-    if try_system_path_bare() {
-        let sdk = FlutterSdk {
-            root: PathBuf::from("flutter"), // placeholder — no resolved root
-            executable: super::types::FlutterExecutable::Direct(PathBuf::from("flutter")),
-            source: SdkSource::SystemPath,
-            version: "unknown".to_string(),
-            channel: None,
-        };
-        info!(
-            source = %sdk.source,
-            "Flutter SDK resolved via bare PATH fallback (version unknown)"
-        );
-        return Ok(sdk);
     }
 
     warn!("SDK detection: all strategies exhausted, Flutter SDK not found");
     Err(Error::FlutterNotFound)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core Helper
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Validate a candidate SDK root and build a [`FlutterSdk`] if valid.
+///
+/// Returns `Some(sdk)` on success, `None` if the candidate is invalid or the
+/// VERSION file is unreadable — both cases are logged at `debug!` level and
+/// fall through to the next strategy. Never returns an error.
+///
+/// # Arguments
+/// * `sdk_root` — Candidate SDK directory to validate
+/// * `make_source` — Closure that receives the version string and returns the [`SdkSource`]
+/// * `label` — Human-readable strategy name used in log messages
+fn try_resolve_sdk(
+    sdk_root: PathBuf,
+    make_source: impl FnOnce(&str) -> SdkSource,
+    label: &str,
+) -> Option<FlutterSdk> {
+    debug!(
+        path = %sdk_root.display(),
+        "SDK detection: {label} found candidate"
+    );
+    match validate_sdk_path(&sdk_root) {
+        Ok(executable) => {
+            let version = match read_version_file(&sdk_root) {
+                Ok(v) => v,
+                Err(e) => {
+                    debug!("SDK detection: {label} — VERSION file unreadable: {e}");
+                    return None;
+                }
+            };
+            let channel = detect_channel(&sdk_root).map(|c| c.to_string());
+            let source = make_source(&version);
+            let sdk = FlutterSdk {
+                root: sdk_root,
+                executable,
+                source,
+                version,
+                channel,
+            };
+            info!(
+                source = %sdk.source,
+                version = %sdk.version,
+                path = %sdk.root.display(),
+                "Flutter SDK resolved"
+            );
+            Some(sdk)
+        }
+        Err(e) => {
+            debug!("SDK detection: {label} candidate invalid: {e}");
+            None
+        }
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -540,45 +349,6 @@ pub(crate) fn resolve_sdk_root_from_binary(binary_path: &Path) -> Option<PathBuf
     canonical.parent()?.parent().map(|p| p.to_path_buf())
 }
 
-/// Fallback check: is `flutter` callable somewhere on PATH?
-/// Unlike `try_system_path`, this doesn't try to resolve the SDK root or validate
-/// the directory structure. It just checks that a `flutter` binary/script exists
-/// on PATH, meaning `Command::new("flutter")` would work.
-fn try_system_path_bare() -> bool {
-    let Some(path_var) = std::env::var_os("PATH") else {
-        return false;
-    };
-
-    for dir in std::env::split_paths(&path_var) {
-        #[cfg(target_os = "windows")]
-        {
-            for name in &["flutter.bat", "flutter.exe"] {
-                if dir.join(name).is_file() {
-                    debug!(
-                        dir = %dir.display(),
-                        "SDK detection: bare PATH fallback found flutter"
-                    );
-                    return true;
-                }
-            }
-        }
-
-        #[cfg(not(target_os = "windows"))]
-        {
-            let candidate = dir.join("flutter");
-            if candidate.exists() {
-                debug!(
-                    path = %candidate.display(),
-                    "SDK detection: bare PATH fallback found flutter"
-                );
-                return true;
-            }
-        }
-    }
-
-    false
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────
@@ -614,15 +384,15 @@ mod tests {
         let bad_path = tmp.path().join("nonexistent");
 
         // Bad explicit path should fall through to other strategies.
-        // On a machine with flutter on PATH, the bare fallback may succeed.
+        // On a machine with flutter on PATH, the system PATH strategy may succeed.
         let result = find_flutter_sdk(tmp.path(), Some(&bad_path));
         match &result {
             Ok(sdk) => {
-                // Fell through to PATH fallback — explicit path was skipped
+                // Fell through to another strategy — explicit path was skipped
                 assert_ne!(sdk.source, SdkSource::ExplicitConfig);
             }
             Err(_) => {
-                // No flutter on PATH either — all strategies failed
+                // No flutter found by any strategy — all strategies failed
             }
         }
     }
@@ -632,11 +402,15 @@ mod tests {
     fn test_all_strategies_fail_returns_flutter_not_found() {
         let tmp = TempDir::new().unwrap();
         // Isolate PATH so no flutter binary can be found
+        let original_path = std::env::var_os("PATH");
         std::env::set_var("PATH", tmp.path());
         std::env::remove_var("FLUTTER_ROOT");
         let result = find_flutter_sdk(tmp.path(), None);
-        // Restore PATH (best effort; #[serial] ensures no parallel test interference)
-        std::env::remove_var("PATH");
+        // Restore PATH to its original value
+        match original_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
         assert!(result.is_err());
     }
 
@@ -828,5 +602,73 @@ mod tests {
         let expected = fs::canonicalize(&sdk_root).ok();
         // The binary exists; canonicalize should succeed and return the SDK root
         assert_eq!(result, expected);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    #[serial]
+    fn test_path_fallback_lenient_missing_version_file() {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("my_app");
+        fs::create_dir_all(&project).unwrap();
+
+        // Create a valid SDK structure on PATH but WITHOUT a VERSION file
+        let sdk_dir = tmp.path().join("flutter_sdk");
+        let bin_dir = sdk_dir.join("bin");
+        fs::create_dir_all(&bin_dir).unwrap();
+        let flutter_bin = bin_dir.join("flutter");
+        fs::write(&flutter_bin, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&flutter_bin, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        // No VERSION file created — this is the key scenario
+
+        let original_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin_dir);
+        std::env::remove_var("FLUTTER_ROOT");
+        let result = find_flutter_sdk(&project, None);
+        match original_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+
+        let sdk = result.expect("Should succeed with lenient PATH fallback");
+        assert!(matches!(sdk.source, SdkSource::PathInferred));
+        assert_eq!(sdk.version, "unknown");
+    }
+
+    #[test]
+    #[serial]
+    fn test_unreadable_version_file_falls_through_to_next_strategy() {
+        let tmp = TempDir::new().unwrap();
+        let project = tmp.path().join("my_app");
+        fs::create_dir_all(&project).unwrap();
+
+        // Strategy 3: FVM modern — SDK structure is present but VERSION is a directory
+        // (unreadable as a file), so read_version_file will fail.
+        fs::write(project.join(".fvmrc"), r#"{"flutter":"3.19.0"}"#).unwrap();
+        let fvm_sdk = tmp.path().join("fvm_cache/versions/3.19.0");
+        fs::create_dir_all(fvm_sdk.join("bin/cache/dart-sdk")).unwrap();
+        fs::write(fvm_sdk.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        // Create VERSION as a directory so read_version_file fails
+        fs::create_dir_all(fvm_sdk.join("VERSION")).unwrap();
+
+        // Strategy 6: asdf — valid SDK that should be reached after FVM fails
+        fs::write(project.join(".tool-versions"), "flutter 3.16.0\n").unwrap();
+        let asdf_sdk = tmp.path().join("asdf/installs/flutter/3.16.0");
+        create_mock_sdk(&asdf_sdk, "3.16.0");
+
+        std::env::remove_var("FLUTTER_ROOT");
+        std::env::set_var("FVM_CACHE_PATH", tmp.path().join("fvm_cache/versions"));
+        std::env::set_var("ASDF_DATA_DIR", tmp.path().join("asdf"));
+        let result = find_flutter_sdk(&project, None).unwrap();
+        std::env::remove_var("FVM_CACHE_PATH");
+        std::env::remove_var("ASDF_DATA_DIR");
+
+        // FVM had unreadable VERSION — should fall through to asdf
+        assert!(matches!(result.source, SdkSource::Asdf { .. }));
+        assert_eq!(result.version, "3.16.0");
     }
 }

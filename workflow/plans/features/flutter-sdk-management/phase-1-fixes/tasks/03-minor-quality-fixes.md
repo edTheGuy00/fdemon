@@ -175,4 +175,26 @@ The `Engine::new()` `Ok(sdk)` arm should retain the `Some(sdk)` assignment but d
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/version_managers.rs` | Replaced all 7 `fdemon_core::error::Result<Option<PathBuf>>` return types with bare `Result<Option<PathBuf>>` |
+| `crates/fdemon-daemon/src/flutter_sdk/channel.rs` | Added `const SHORT_HASH_LEN: usize = 7;` at module level and replaced magic number `7` with it |
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Fixed `test_all_strategies_fail_returns_flutter_not_found` to save and restore original PATH instead of removing it |
+| `crates/fdemon-app/src/engine.rs` | Removed duplicate `info!` log from `Engine::new()` `Ok(sdk)` arm; kept `warn!` in `Err(e)` arm |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_sdk_resolved_updates_state` and `test_sdk_resolution_failed_clears_state` tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`SHORT_HASH_LEN` placement**: Placed at module level (before `detect_channel`) rather than inside the `if` block, per the task suggestion and to keep constants easily discoverable. Module-level `const` is idiomatic Rust.
+2. **`info!` removal scope**: Only removed the format-string `info!` in `Engine::new()`. The structured `info!` inside `try_resolve_sdk` (locator.rs) is the canonical, richer log. The `warn!` in the `Err` arm was left untouched.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (1708 fdemon-app, 372 fdemon-core, 680 fdemon-daemon, 581 fdemon-tui, all others pass; 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed

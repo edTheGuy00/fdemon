@@ -202,15 +202,7 @@ impl Engine {
             &project_path,
             settings.flutter.sdk_path.as_deref(),
         ) {
-            Ok(sdk) => {
-                info!(
-                    "Flutter SDK resolved via {}: {} at {}",
-                    sdk.source,
-                    sdk.version,
-                    sdk.root.display()
-                );
-                Some(sdk)
-            }
+            Ok(sdk) => Some(sdk),
             Err(e) => {
                 warn!(
                     "Flutter SDK not found: {}. SDK-dependent features will be unavailable.",

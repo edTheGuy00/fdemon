@@ -28,6 +28,9 @@ pub enum SdkSource {
     FlutterWrapper,
     /// System PATH lookup (which/where flutter, symlinks resolved)
     SystemPath,
+    /// Flutter binary found on system PATH, but SDK could not be fully resolved.
+    /// The executable path is usable but version/channel may be unknown.
+    PathInferred,
 }
 
 impl std::fmt::Display for SdkSource {
@@ -42,6 +45,7 @@ impl std::fmt::Display for SdkSource {
             Self::Proto { version } => write!(f, "proto ({version})"),
             Self::FlutterWrapper => write!(f, "flutter_wrapper"),
             Self::SystemPath => write!(f, "system PATH"),
+            Self::PathInferred => write!(f, "system PATH (inferred)"),
         }
     }
 }
@@ -138,6 +142,34 @@ pub fn validate_sdk_path(root: &Path) -> Result<FlutterExecutable> {
             "Dart SDK cache not yet populated at {} (expected on fresh installs)",
             dart_sdk.display()
         );
+    }
+
+    Ok(executable_ctor(flutter_bin))
+}
+
+/// Lenient variant of [`validate_sdk_path`] that does NOT require a VERSION file.
+///
+/// Checks only that `<root>/bin/flutter` (or `flutter.bat` on Windows) exists.
+/// Used by the lenient PATH fallback (strategy 11) where the VERSION file may be
+/// absent (Homebrew shims, snap installs, etc.).
+///
+/// Returns the validated [`FlutterExecutable`] on success.
+pub fn validate_sdk_path_lenient(root: &Path) -> Result<FlutterExecutable> {
+    #[cfg(target_os = "windows")]
+    let (flutter_bin, executable_ctor): (PathBuf, fn(PathBuf) -> FlutterExecutable) = (
+        root.join("bin").join("flutter.bat"),
+        FlutterExecutable::WindowsBatch,
+    );
+
+    #[cfg(not(target_os = "windows"))]
+    let (flutter_bin, executable_ctor): (PathBuf, fn(PathBuf) -> FlutterExecutable) =
+        (root.join("bin").join("flutter"), FlutterExecutable::Direct);
+
+    if !flutter_bin.is_file() {
+        return Err(Error::flutter_sdk_invalid(
+            root,
+            format!("flutter binary not found at {}", flutter_bin.display()),
+        ));
     }
 
     Ok(executable_ctor(flutter_bin))
@@ -307,6 +339,14 @@ mod tests {
     #[test]
     fn test_sdk_source_display_system_path() {
         assert_eq!(SdkSource::SystemPath.to_string(), "system PATH");
+    }
+
+    #[test]
+    fn test_sdk_source_display_path_inferred() {
+        assert_eq!(
+            SdkSource::PathInferred.to_string(),
+            "system PATH (inferred)"
+        );
     }
 
     #[test]

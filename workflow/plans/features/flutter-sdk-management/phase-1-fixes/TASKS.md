@@ -33,9 +33,9 @@ Address all issues found during the Phase 1 code review. One critical bug (ToolA
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-tool-availability](tasks/01-fix-tool-availability.md) | Not Started | - | `fdemon-app: handler/update.rs, handler/tests.rs` |
-| 2 | [02-refactor-locator](tasks/02-refactor-locator.md) | Not Started | - | `fdemon-daemon: flutter_sdk/locator.rs, flutter_sdk/types.rs` |
-| 3 | [03-minor-quality-fixes](tasks/03-minor-quality-fixes.md) | Not Started | 02 | `fdemon-daemon: flutter_sdk/version_managers.rs, channel.rs, locator.rs` `fdemon-app: engine.rs, handler/tests.rs` |
+| 1 | [01-fix-tool-availability](tasks/01-fix-tool-availability.md) | Done | - | `fdemon-app: handler/update.rs, handler/tests.rs` |
+| 2 | [02-refactor-locator](tasks/02-refactor-locator.md) | Done | - | `fdemon-daemon: flutter_sdk/locator.rs, flutter_sdk/types.rs` |
+| 3 | [03-minor-quality-fixes](tasks/03-minor-quality-fixes.md) | Done | 02 | `fdemon-daemon: flutter_sdk/version_managers.rs, channel.rs, locator.rs` `fdemon-app: engine.rs, handler/tests.rs` |
 
 ## Success Criteria
 

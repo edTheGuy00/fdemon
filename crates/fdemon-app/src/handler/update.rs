@@ -1175,7 +1175,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // Tool Availability & Device Discovery Messages (Phase 4, Task 05)
         // ─────────────────────────────────────────────────────────────
         Message::ToolAvailabilityChecked { availability } => {
+            // Preserve Flutter SDK fields — they are set by Engine::new() via
+            // synchronous SDK resolution, not by the async ToolAvailability::check().
+            let flutter_sdk = state.tool_availability.flutter_sdk;
+            let flutter_sdk_source = state.tool_availability.flutter_sdk_source.clone();
             state.tool_availability = availability;
+            state.tool_availability.flutter_sdk = flutter_sdk;
+            state.tool_availability.flutter_sdk_source = flutter_sdk_source;
 
             // Log availability for debugging
             tracing::info!(

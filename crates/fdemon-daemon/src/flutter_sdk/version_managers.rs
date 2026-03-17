@@ -64,7 +64,7 @@ fn resolve_fvm_cache() -> Option<PathBuf> {
 ///
 /// Parses `.fvmrc` (JSON) for the `flutter` field (version string).
 /// Resolves SDK path: `$FVM_CACHE_PATH/<version>/` or `~/fvm/versions/<version>/`.
-pub fn detect_fvm_modern(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_fvm_modern(project_path: &Path) -> Result<Option<PathBuf>> {
     let config_file = match find_config_upward(project_path, ".fvmrc") {
         Some(p) => p,
         None => {
@@ -127,7 +127,7 @@ pub fn detect_fvm_modern(project_path: &Path) -> fdemon_core::error::Result<Opti
 /// 1. Walk upward to find a `.fvm` directory.
 /// 2. First attempt: resolve the `.fvm/flutter_sdk` symlink via `fs::canonicalize`.
 /// 3. Fallback: parse `.fvm/fvm_config.json` for `flutterSdkVersion`, resolve via FVM cache.
-pub fn detect_fvm_legacy(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_fvm_legacy(project_path: &Path) -> Result<Option<PathBuf>> {
     let fvm_dir = match find_config_upward(project_path, ".fvm") {
         Some(p) => p,
         None => {
@@ -209,7 +209,7 @@ pub fn detect_fvm_legacy(project_path: &Path) -> fdemon_core::error::Result<Opti
 ///
 /// Parses `.puro.json` for the `env` field.
 /// SDK at `$PURO_ROOT/envs/<env>/flutter/` or `~/.puro/envs/<env>/flutter/`.
-pub fn detect_puro(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_puro(project_path: &Path) -> Result<Option<PathBuf>> {
     let config_file = match find_config_upward(project_path, ".puro.json") {
         Some(p) => p,
         None => {
@@ -275,7 +275,7 @@ pub fn detect_puro(project_path: &Path) -> fdemon_core::error::Result<Option<Pat
 ///
 /// Parses `.tool-versions` (line format: `tool version`).
 /// SDK at `~/.asdf/installs/flutter/<version>/`.
-pub fn detect_asdf(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_asdf(project_path: &Path) -> Result<Option<PathBuf>> {
     let config_file = match find_config_upward(project_path, ".tool-versions") {
         Some(p) => p,
         None => {
@@ -356,7 +356,7 @@ pub fn detect_asdf(project_path: &Path) -> fdemon_core::error::Result<Option<Pat
 ///
 /// Parses `.mise.toml` (TOML) `[tools]` section for `flutter` key.
 /// SDK at `~/.local/share/mise/installs/flutter/<version>/`.
-pub fn detect_mise(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_mise(project_path: &Path) -> Result<Option<PathBuf>> {
     let config_file = match find_config_upward(project_path, ".mise.toml") {
         Some(p) => p,
         None => {
@@ -439,7 +439,7 @@ pub fn detect_mise(project_path: &Path) -> fdemon_core::error::Result<Option<Pat
 ///
 /// Parses `.prototools` (TOML) for `flutter` key.
 /// SDK at `~/.proto/tools/flutter/<version>/`.
-pub fn detect_proto(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_proto(project_path: &Path) -> Result<Option<PathBuf>> {
     let config_file = match find_config_upward(project_path, ".prototools") {
         Some(p) => p,
         None => {
@@ -520,7 +520,7 @@ pub fn detect_proto(project_path: &Path) -> fdemon_core::error::Result<Option<Pa
 /// SDK at `<project_root>/.flutter/`.
 ///
 /// Note: No parent-directory walk — flutter_wrapper is always at project root.
-pub fn detect_flutter_wrapper(project_path: &Path) -> fdemon_core::error::Result<Option<PathBuf>> {
+pub fn detect_flutter_wrapper(project_path: &Path) -> Result<Option<PathBuf>> {
     let flutterw = project_path.join("flutterw");
     let flutter_dir = project_path.join(".flutter");
 

@@ -118,4 +118,28 @@ fn test_tool_availability_checked_no_sdk_keeps_false() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Fixed `ToolAvailabilityChecked` handler to preserve `flutter_sdk` and `flutter_sdk_source` fields before overwriting `state.tool_availability` with the async check result |
+| `crates/fdemon-app/src/handler/tests.rs` | Added two tests: `test_tool_availability_checked_preserves_flutter_sdk_fields` and `test_tool_availability_checked_no_sdk_keeps_false` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Preserve-then-replace pattern**: Captured both fields into local variables before the struct replacement, then wrote them back. This is the minimal change that fixes the bug at the exact merge point described in the task, without touching `fdemon-daemon`'s `ToolAvailability::check()` which has no access to app state.
+
+2. **Test placement**: New tests were inserted between the existing `ToolAvailabilityChecked` tests and the "Bootable Device Caching" section, with their own section banner to keep the file organized.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1706 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Platform-conditional fields**: `ToolAvailability` has `#[cfg(target_os = "macos")]` fields (`macos_log`, `idevicesyslog`). The fix only preserves `flutter_sdk` and `flutter_sdk_source` as specified — the macOS-conditional fields are fully replaced by the async result, which is correct behaviour since they are genuinely OS-probed.
