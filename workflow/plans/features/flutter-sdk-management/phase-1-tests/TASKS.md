@@ -46,13 +46,13 @@ Create a two-tier test suite for the Flutter SDK detection system (Phase 1). **T
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-shared-test-infrastructure](tasks/01-shared-test-infrastructure.md) | Not Started | - | `tests/sdk_detection/mod.rs`, `tests/sdk_detection/fixtures.rs`, `tests/sdk_detection/assertions.rs` |
-| 2 | [02-tempdir-integration-tests](tasks/02-tempdir-integration-tests.md) | Not Started | 01 | `tests/sdk_detection/tier1_detection_chain.rs` |
-| 3 | [03-edge-case-stress-tests](tasks/03-edge-case-stress-tests.md) | Not Started | 01 | `tests/sdk_detection/tier1_edge_cases.rs` |
-| 4 | [04-docker-infrastructure](tasks/04-docker-infrastructure.md) | Not Started | - | `tests/docker/`, `tests/sdk_detection/docker_helpers.rs` |
-| 5 | [05-docker-linux-version-managers](tasks/05-docker-linux-version-managers.md) | Not Started | 04 | `tests/docker/*.Dockerfile`, `tests/sdk_detection/tier2_linux.rs` |
-| 6 | [06-docker-windows-wine](tasks/06-docker-windows-wine.md) | Not Started | 04 | `tests/docker/windows-wine.Dockerfile`, `tests/sdk_detection/tier2_windows.rs` |
-| 7 | [07-binary-headless-smoke-tests](tasks/07-binary-headless-smoke-tests.md) | Not Started | 01, 04 | `tests/sdk_detection/tier2_headless.rs` |
+| 1 | [01-shared-test-infrastructure](tasks/01-shared-test-infrastructure.md) | Done | - | `tests/sdk_detection/mod.rs`, `tests/sdk_detection/fixtures.rs`, `tests/sdk_detection/assertions.rs` |
+| 2 | [02-tempdir-integration-tests](tasks/02-tempdir-integration-tests.md) | Done | 01 | `tests/sdk_detection/tier1_detection_chain.rs` |
+| 3 | [03-edge-case-stress-tests](tasks/03-edge-case-stress-tests.md) | Done | 01 | `tests/sdk_detection/tier1_edge_cases.rs` |
+| 4 | [04-docker-infrastructure](tasks/04-docker-infrastructure.md) | Done | - | `tests/docker/`, `tests/sdk_detection/docker_helpers.rs` |
+| 5 | [05-docker-linux-version-managers](tasks/05-docker-linux-version-managers.md) | Done | 04 | `tests/docker/*.Dockerfile`, `tests/sdk_detection/tier2_linux.rs` |
+| 6 | [06-docker-windows-wine](tasks/06-docker-windows-wine.md) | Done | 04 | `tests/docker/windows-wine.Dockerfile`, `tests/sdk_detection/tier2_windows.rs` |
+| 7 | [07-binary-headless-smoke-tests](tasks/07-binary-headless-smoke-tests.md) | Done | 01, 04 | `tests/sdk_detection/tier2_headless.rs` |
 
 ## Architecture
 

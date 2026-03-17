@@ -218,3 +218,43 @@ fn test_docker_infrastructure_works() {
 - **No `testcontainers-rs` dependency** — raw `std::process::Command` with `docker` CLI is simpler and more transparent for this use case. The version manager images are built-and-run, not long-running services.
 - **Timeout handling** is important — if fdemon hangs (e.g., waiting for Flutter process that can't start), the Docker container should be killed after a reasonable timeout. Implement via `std::thread::spawn` + `process.kill()` or `docker run --timeout`.
 - **Consider `docker run --init`** — ensures fdemon receives signals properly inside the container.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/docker/base.Dockerfile` | Created — multi-stage Dockerfile: Rust 1.83-bookworm builder + Debian bookworm-slim runtime with test-project skeleton |
+| `tests/sdk_detection/docker_helpers.rs` | Created — `DockerTestResult`, `docker_build()`, `docker_run_headless()`, `docker_exec()`, `docker_available()`, `project_root()`, internal `run_with_timeout()` watchdog |
+| `.dockerignore` | Created — excludes `target/`, `.git/`, `*.md`, `workflow/`, `tests/docker/`, `.fdemon/`, `website/`, `tmp/`, `test-logs/` |
+| `tests/sdk_detection.rs` | Added `pub mod docker_helpers;` to the existing `mod sdk_detection` block (Task 01 had run in parallel and created this file without the docker_helpers declaration) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Timeout via watchdog thread + `docker stop`**: Used `std::thread::spawn` with a `Arc<Mutex<bool>>` killed-flag rather than `process.kill()` directly. This works because Docker container naming (`--name`) lets the watchdog identify and stop the container even after the `Child` handle is consumed by `wait_with_output()`. `docker stop --time 2` sends SIGTERM then SIGKILL after 2 seconds.
+
+2. **`--init` flag on all `docker run` calls**: Both `docker_run_headless` and `docker_exec` use `--rm --init`. The `--init` flag ensures fdemon (which is not PID 1-aware) receives Unix signals properly inside the container.
+
+3. **Container naming for uniqueness**: `docker_run_headless` uses a fixed name derived from the image tag (e.g., `fdemon-test-fdemon-test-base`) so repeated runs reuse the same slot. `docker_exec` appends the host PID to avoid name collisions between parallel test invocations.
+
+4. **`#[cfg(test)]` tests inside docker_helpers.rs**: Two non-Docker unit tests (`test_project_root_returns_valid_path`, `test_docker_available_does_not_panic`) verify basic infrastructure without requiring Docker. The smoke test (`test_docker_infrastructure_works`) is `#[ignore]`-gated.
+
+5. **Added `docker_helpers` to `tests/sdk_detection.rs`**: Task 01 (parallel) created the entry file with only `assertions` and `fixtures` submodules. Adding `docker_helpers` here was necessary for it to compile as part of the test suite — this was an integration step required due to parallel execution.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+- Docker tests not run (require Docker daemon; marked `#[ignore]`)
+
+### Risks/Limitations
+
+1. **Container name collision on parallel test runs**: `docker_run_headless` uses a fixed container name per image tag. If two test processes run the same Docker test concurrently, the second `docker run --name` call will fail. Mitigated by the `#[ignore]` gate (tests must be run explicitly) and by using `serial_test` for Docker tests in future tasks.
+
+2. **Watchdog thread is detached**: We `drop(watchdog)` without joining. If the test process exits immediately after the Docker container finishes, the watchdog thread may not complete its `thread::sleep` before being torn down. This is acceptable — the container has already exited by that point so the watchdog's `docker stop` call would be a no-op.

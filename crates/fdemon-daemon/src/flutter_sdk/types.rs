@@ -125,12 +125,18 @@ pub fn validate_sdk_path(root: &Path) -> Result<FlutterExecutable> {
         ));
     }
 
-    // Check VERSION file is readable
-    let version_file = root.join("VERSION");
-    if !version_file.is_file() {
+    // Check VERSION file is readable (try both `version` and `VERSION` — older
+    // Flutter SDKs used uppercase, newer ones use lowercase).
+    let version_file = root.join("version");
+    let version_file_alt = root.join("VERSION");
+    if !version_file.is_file() && !version_file_alt.is_file() {
         return Err(Error::flutter_sdk_invalid(
             root,
-            format!("VERSION file not found at {}", version_file.display()),
+            format!(
+                "version file not found at {} or {}",
+                version_file.display(),
+                version_file_alt.display()
+            ),
         ));
     }
 
@@ -175,17 +181,24 @@ pub fn validate_sdk_path_lenient(root: &Path) -> Result<FlutterExecutable> {
     Ok(executable_ctor(flutter_bin))
 }
 
-/// Reads the Flutter version string from `<root>/VERSION`.
+/// Reads the Flutter version string from `<root>/version` (or `<root>/VERSION`).
 ///
-/// The VERSION file typically contains a version like `3.19.0\n`.
-/// This function reads and trims the content.
+/// The version file typically contains a version like `3.19.0\n`.
+/// Newer Flutter SDKs use lowercase `version`; older ones use uppercase `VERSION`.
+/// This function tries lowercase first, then falls back to uppercase.
 pub fn read_version_file(root: &Path) -> Result<String> {
-    let version_file = root.join("VERSION");
+    let lowercase = root.join("version");
+    let uppercase = root.join("VERSION");
+    let version_file = if lowercase.is_file() {
+        lowercase
+    } else {
+        uppercase
+    };
     let content = std::fs::read_to_string(&version_file).map_err(|e| {
         Error::flutter_sdk_invalid(
             root,
             format!(
-                "failed to read VERSION file at {}: {}",
+                "failed to read version file at {}: {}",
                 version_file.display(),
                 e
             ),

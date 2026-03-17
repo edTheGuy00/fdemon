@@ -316,3 +316,52 @@ cargo test --test sdk_detection test_fvm_detection -- --ignored --nocapture
 - **Puro install script** — Puro's installer may require `PURO_ROOT` to be set explicitly in Docker (some installers auto-detect `$HOME` differently in containers).
 - **Timeout of 60 seconds** — fdemon headless with `--headless` should start quickly since it only does SDK detection + device discovery. If Flutter SDK triggers first-run setup (`flutter precache`), it may take longer. Consider running `flutter precache` in the Dockerfile to avoid this.
 - **Flutter precache in Dockerfiles** — add `RUN flutter precache --no-android --no-ios --no-web --no-linux --no-macos --no-windows --no-fuchsia` after installation to pre-cache the Dart SDK. This prevents first-run delays during tests. Or use `--universal` if available.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/docker/fvm.Dockerfile` | New — FVM v3 + Flutter stable multi-stage image with `flutter precache` |
+| `tests/docker/asdf.Dockerfile` | New — asdf v0.14.1 + asdf-flutter plugin multi-stage image |
+| `tests/docker/mise.Dockerfile` | New — mise + Flutter latest multi-stage image with `.mise.toml` |
+| `tests/docker/proto.Dockerfile` | New — proto + community Flutter plugin multi-stage image |
+| `tests/docker/puro.Dockerfile` | New — Puro + "default" environment multi-stage image with explicit `PURO_ROOT` |
+| `tests/docker/manual.Dockerfile` | New — Flutter tarball extraction to `/opt/flutter` via `ARG FLUTTER_VERSION` |
+| `tests/sdk_detection/tier2_linux.rs` | New — 7 `#[ignore]` tests (1 per version manager + FVM log verification) |
+
+### Notable Decisions/Tradeoffs
+
+1. **120-second test timeouts**: Increased from the 60s noted in the task to 120s across all tests. Even with `flutter precache` in the Dockerfiles, the headless run may still do some first-run initialisation. 120s provides headroom without being excessively long.
+
+2. **`flutter precache` in every Dockerfile**: Added `flutter precache --no-android --no-ios ...` after each SDK installation (with `|| true` to handle edge cases). This eliminates first-run Dart SDK download delays during the actual test run, keeping container execution well inside the timeout.
+
+3. **Explicit `PURO_ROOT` in puro.Dockerfile**: Set `PURO_ROOT=/root/.puro` both in the install command and as a persistent `ENV` so fdemon can locate Puro environments at runtime. The task notes flagged this as a potential issue.
+
+4. **`ARG FLUTTER_VERSION=3.22.0` in manual.Dockerfile**: Pinned to a known stable release with a valid tarball URL. The build arg allows callers to override without touching the Dockerfile.
+
+5. **`assert_no_fatal_error` helper**: Extracted the fatal-error check into a shared private function to avoid repeating the assertion string across all 6 basic detection tests.
+
+6. **7 tests instead of 6**: Added `test_fvm_source_identified_in_logs` (a source-verification test using `RUST_LOG` debug output) as the task sketch included it and it validates a distinct acceptance criterion (criterion 5).
+
+7. **Pre-existing warnings not addressed**: `cargo clippy --workspace -- -D warnings` was clean. The warnings visible in `cargo test` output come from pre-existing code in `docker_helpers.rs` (unused `mut`, unused field `exit_code`, unused `docker_exec`) and `fixtures.rs` (unused `with_bat_file`) — none introduced by this task.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed (fmt reformatted `ensure_image` closure in tier2_linux.rs)
+- `cargo check --workspace` — Passed (clean)
+- `cargo clippy --workspace -- -D warnings` — Passed (clean)
+- `cargo test --test sdk_detection` — Passed (60 passed; 0 failed; 8 ignored)
+
+### Risks/Limitations
+
+1. **proto community plugin stability**: The `proto install flutter` step uses a community-maintained plugin (`nickclaw/proto-flutter-plugin`). If that repository is removed or its URL changes, `proto.Dockerfile` will fail to build. The Dockerfile and task notes document this risk.
+
+2. **Version manager installer URLs**: FVM, mise, and Puro use `curl | bash` installer scripts from their respective CDNs. These URLs are correct as of 2026-03 but may change in future releases.
+
+3. **Docker tests not executed locally**: The Docker tests themselves require Docker + internet and are `#[ignore]`. Compilation and lint gates pass; functional correctness of the container builds will be validated only when run explicitly with `--ignored`.

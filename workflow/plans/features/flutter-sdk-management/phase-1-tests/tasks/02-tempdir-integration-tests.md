@@ -207,3 +207,41 @@ All tests are standard `#[test]` functions — no async, no Docker, no external 
 - The `#[serial]` attribute is required for all tests that set/unset env vars (`FLUTTER_ROOT`, `FVM_CACHE_PATH`, `ASDF_DATA_DIR`, `MISE_DATA_DIR`, `PROTO_HOME`, `PURO_ROOT`, `PATH`).
 - System PATH tests need special care — save the original `PATH`, prepend the mock SDK's `bin/` dir, then restore.
 - Some tests may need to unset env vars that are set in the actual development environment (e.g., if the developer has `FLUTTER_ROOT` set globally). The `EnvGuard` handles this.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/sdk_detection/tier1_detection_chain.rs` | Implemented all Tier 1 detection chain integration tests (was a placeholder stub) |
+
+### Notable Decisions/Tradeoffs
+
+1. **PATH isolation on all env-modifying tests**: Every test that touches any env var also guards `PATH` with `EnvGuard::set("PATH", tmp.path())`. This prevents the developer's installed Flutter SDK from winning via system PATH strategies 10/11 and causing false positives. The task description noted this concern for PATH tests specifically, but it applies equally to all lower-priority strategy tests.
+
+2. **`#[serial]` on `test_strategy_flutter_wrapper`**: The task skeleton marked this as not needing `#[serial]` since flutter_wrapper does not set env vars. However, it reads `FLUTTER_ROOT` (strategy 2 check) during detection, which can be set in a developer's environment. Added `#[serial]` + `EnvGuard::remove("FLUTTER_ROOT")` + PATH isolation to prevent interference. Defensive but correct.
+
+3. **FVM legacy canonical path comparison**: FVM legacy creates a symlink (`.fvm/flutter_sdk` → actual SDK dir). The detection function calls `fs::canonicalize()` on the symlink, so the returned `sdk.root` is the canonical path. We canonicalize `sdk_root` before `assert_sdk_root` to match, consistent with the pattern used in `sdk_detection.rs`.
+
+4. **`test_detached_head_channel_is_unknown` leniency**: The `detect_channel()` function converts a detached HEAD hash to `FlutterChannel::Unknown(short_hash)`, then `to_string()` makes it a channel string. The test checks the channel is neither `"stable"`, `"beta"`, nor `"main"` rather than asserting a specific hash value, keeping the test non-brittle.
+
+5. **Two bonus validation tests**: Added `test_mock_sdk_builder_passes_validate_sdk_path` and `test_mock_sdk_without_dart_still_passes_validation` to verify the fixture infrastructure itself is sound. These do not touch env vars and require no `#[serial]`.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed (0 errors, 0 warnings in workspace crates)
+- `cargo test --test sdk_detection tier1_detection_chain -- --nocapture` - Passed (37 tests)
+- `cargo test --workspace --lib` - Passed (826 unit tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing `libc` errors in `tier1_edge_cases.rs`**: Running `cargo test --test sdk_detection` fails due to `libc::getuid()` references in `tier1_edge_cases.rs` (a different task's file). This is a pre-existing issue unrelated to this task — confirmed by checking the error existed on the branch before our changes. Our file compiles and runs cleanly in isolation.
+
+2. **Windows strategy 10/11 tests skipped**: `test_strategy_system_path` and `test_strategy_system_path_lenient` are annotated `#[cfg(not(target_os = "windows"))]` because the binary name and PATH separator differ on Windows. The Windows-specific behavior is covered by the `tier2_windows.rs` module (separate task).

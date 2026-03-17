@@ -202,3 +202,41 @@ mod tests {
 - The `EnvGuard` pattern is more ergonomic than manual save/restore but **still requires `#[serial]`** since `std::env::set_var` is process-global
 - Fixture creators should match the actual filesystem layouts documented in the Phase 1 plan exactly — reference `version_managers.rs` for expected paths
 - `parse_headless_events()` is needed for Tier 2 Docker tests (Task 07) but defined here so it's available early
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/sdk_detection.rs` | New — integration test entry point; declares `mod sdk_detection { pub mod assertions; pub mod fixtures; }` and contains all 21 self-tests inline (following the `e2e.rs` pattern) |
+| `tests/sdk_detection/fixtures.rs` | New — `MockSdkBuilder`, `EnvGuard`, `create_flutter_project`, and seven version-manager layout creators (`create_fvm_layout`, `create_fvm_legacy_layout`, `create_puro_layout`, `create_asdf_layout`, `create_mise_layout`, `create_proto_layout`, `create_flutter_wrapper_layout`) |
+| `tests/sdk_detection/assertions.rs` | New — `assert_sdk_source`, `assert_sdk_root`, `assert_sdk_not_found`, `HeadlessEvent` struct, and `parse_headless_events` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Module layout matches `e2e.rs` pattern**: The task spec showed `tests/sdk_detection/mod.rs` as the module root, but Rust's module resolution rules mean `tests/sdk_detection.rs` with `mod sdk_detection;` would look for `tests/sdk_detection/sdk_detection.rs`. The existing `e2e.rs` uses an inline `mod e2e { ... }` block. We followed the same pattern — tests live inline in `tests/sdk_detection.rs` and the shared helper modules are `tests/sdk_detection/fixtures.rs` and `tests/sdk_detection/assertions.rs`. The `mod.rs` file was removed.
+
+2. **`assert_sdk_root` uses path canonicalization**: Both the actual SDK root and the expected path are canonicalized before comparison. This handles macOS's `/var` → `/private/var` symlink and the FVM legacy symlink that `fs::canonicalize` resolves in `detect_fvm_legacy`. If canonicalization fails (non-existent path), raw paths are compared as a fallback.
+
+3. **`parse_headless_events` silently skips non-JSON lines**: This matches the task spec and makes the parser robust against tracing output interleaved with NDJSON (common in CI environments where stderr is merged into stdout).
+
+4. **`with_channel` and `with_bat_file` builder methods are unused in self-tests**: These are `pub` because downstream test tasks (Tasks 02–07) will need them. The compiler warnings in test binaries are informational only and do not affect the quality gate.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test --test sdk_detection -- --nocapture` — Passed (21 tests, 0 failed)
+- `cargo test --workspace` — Passed (all existing tests continue to pass; 21 new tests added)
+- `cargo clippy --workspace -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Serial tests share process-global env vars**: All tests that call `EnvGuard::set/remove` are annotated with `#[serial]`. Tests that do not touch env vars run in parallel safely.
+
+2. **FVM legacy test relies on symlink creation**: `create_fvm_legacy_layout` creates a Unix symlink via `std::os::unix::fs::symlink`. The test will fail on Windows unless the `cfg(windows)` path is exercised. This is acceptable for the current macOS/Linux CI environment.
