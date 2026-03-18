@@ -6,10 +6,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::{Child, Command};
+use tokio::process::Child;
 use tokio::sync::{mpsc, oneshot, Notify};
 
 use super::commands::{CommandSender, DaemonCommand, RequestTracker};
+use super::flutter_sdk::FlutterExecutable;
 use fdemon_core::events::DaemonEvent;
 use fdemon_core::prelude::*;
 
@@ -46,6 +47,7 @@ pub struct FlutterProcess {
 impl FlutterProcess {
     /// Internal spawn implementation. All public methods delegate here.
     fn spawn_internal(
+        flutter: &FlutterExecutable,
         args: &[String],
         project_path: &Path,
         event_tx: mpsc::Sender<DaemonEvent>,
@@ -61,7 +63,8 @@ impl FlutterProcess {
         info!("Spawning Flutter: flutter {}", args.join(" "));
 
         // Spawn the Flutter process
-        let mut child = Command::new("flutter")
+        let mut child = flutter
+            .command()
             .args(args)
             .current_dir(project_path)
             .stdin(Stdio::piped())
@@ -177,15 +180,20 @@ impl FlutterProcess {
     /// Spawn a new Flutter process in the given project directory
     ///
     /// Events are sent to `event_tx` for processing by the TUI event loop.
-    pub async fn spawn(project_path: &Path, event_tx: mpsc::Sender<DaemonEvent>) -> Result<Self> {
+    pub async fn spawn(
+        flutter: &FlutterExecutable,
+        project_path: &Path,
+        event_tx: mpsc::Sender<DaemonEvent>,
+    ) -> Result<Self> {
         let args = vec!["run".to_string(), "--machine".to_string()];
-        Self::spawn_internal(&args, project_path, event_tx)
+        Self::spawn_internal(flutter, &args, project_path, event_tx)
     }
 
     /// Spawn a new Flutter process with a specific device
     ///
     /// Similar to `spawn()` but adds `-d <device_id>` argument.
     pub async fn spawn_with_device(
+        flutter: &FlutterExecutable,
         project_path: &Path,
         device_id: &str,
         event_tx: mpsc::Sender<DaemonEvent>,
@@ -196,7 +204,7 @@ impl FlutterProcess {
             "-d".to_string(),
             device_id.to_string(),
         ];
-        Self::spawn_internal(&args, project_path, event_tx)
+        Self::spawn_internal(flutter, &args, project_path, event_tx)
     }
 
     /// Spawn a Flutter process with pre-built arguments
@@ -204,11 +212,12 @@ impl FlutterProcess {
     /// The caller is responsible for building the complete argument list including
     /// `run`, `--machine`, `-d`, and all other flags.
     pub async fn spawn_with_args(
+        flutter: &FlutterExecutable,
         project_path: &Path,
         args: Vec<String>,
         event_tx: mpsc::Sender<DaemonEvent>,
     ) -> Result<Self> {
-        Self::spawn_internal(&args, project_path, event_tx)
+        Self::spawn_internal(flutter, &args, project_path, event_tx)
     }
 
     /// Read lines from stdout and send as `DaemonEvent::Stdout`.
@@ -428,11 +437,18 @@ impl Drop for FlutterProcess {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
+    use tokio::process::Command;
+
+    fn default_flutter() -> FlutterExecutable {
+        FlutterExecutable::Direct(PathBuf::from("flutter"))
+    }
 
     #[tokio::test]
     async fn test_spawn_no_project() {
         let (tx, _rx) = mpsc::channel(16);
-        let result = FlutterProcess::spawn(Path::new("/nonexistent/path"), tx).await;
+        let flutter = default_flutter();
+        let result = FlutterProcess::spawn(&flutter, Path::new("/nonexistent/path"), tx).await;
 
         assert!(matches!(result, Err(Error::NoProject { .. })));
     }
@@ -440,10 +456,11 @@ mod tests {
     #[tokio::test]
     async fn test_spawn_invalid_path() {
         let (tx, _rx) = mpsc::channel(16);
+        let flutter = default_flutter();
         let temp = std::env::temp_dir().join("fdemon-no-pubspec-test");
         std::fs::create_dir_all(&temp).ok();
 
-        let result = FlutterProcess::spawn(&temp, tx).await;
+        let result = FlutterProcess::spawn(&flutter, &temp, tx).await;
         assert!(matches!(result, Err(Error::NoProject { .. })));
 
         std::fs::remove_dir_all(&temp).ok();

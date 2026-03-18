@@ -33,6 +33,10 @@ This document provides a comprehensive reference of all keyboard controls availa
   - [Widget Inspector Panel](#widget-inspector-panel)
   - [Performance Panel](#performance-panel)
   - [Network Panel](#network-panel)
+- [Flutter Version Mode](#flutter-version-mode)
+  - [General Controls](#general-controls-4)
+  - [Pane Navigation](#pane-navigation)
+  - [Version List Controls](#version-list-controls-when-installed-versions-pane-is-focused)
 - [Confirm Dialog Mode](#confirm-dialog-mode)
 - [Loading Mode](#loading-mode)
 
@@ -178,6 +182,14 @@ Once in settings panel mode, see [Settings Panel Mode](#settings-panel-mode) for
 | `d` | DevTools Mode | Enter DevTools mode (Inspector/Performance/Network panels) |
 
 Once in DevTools mode, see [DevTools Mode](#devtools-mode) for detailed controls.
+
+### Flutter SDK
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `V` | Open Flutter Version Panel | Open the Flutter SDK version manager panel |
+
+Once in Flutter Version mode, see [Flutter Version Mode](#flutter-version-mode) for detailed controls.
 
 ### DAP Server
 
@@ -480,6 +492,40 @@ When filter input is active (after pressing `/`):
 | `Enter` | Apply Filter | Apply the filter and return to normal Network panel |
 | `Esc` | Cancel | Discard filter input and return to normal Network panel |
 | `Backspace` | Delete | Remove last character from filter |
+
+---
+
+## Flutter Version Mode
+
+Enter Flutter Version mode by pressing `V` in Normal mode. This panel shows the current Flutter SDK info and the list of versions installed in the FVM cache.
+
+The panel has a two-pane layout:
+- **SDK Info** (left): Current version, channel, source, SDK path, and bundled Dart version
+- **Installed Versions** (right): FVM cache entries with the active version highlighted
+
+### General Controls
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Esc` | Close Panel | Close the Flutter Version panel and return to Normal mode |
+| `Ctrl+C` | Force Quit | Emergency exit from Flutter Demon |
+
+### Pane Navigation
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `Tab` | Switch Pane | Toggle focus between SDK Info and Installed Versions |
+
+### Version List Controls (when Installed Versions pane is focused)
+
+| Key | Action | Description |
+|-----|--------|-------------|
+| `k` / `↑` | Navigate Up | Move selection up in the version list |
+| `j` / `↓` | Navigate Down | Move selection down in the version list |
+| `Enter` | Switch Version | Switch to the selected Flutter SDK version (writes `.fvmrc` in project root) |
+| `d` | Remove Version | Delete the selected SDK version from the FVM cache |
+
+> **Note:** Switching to the active version or removing the active version are both blocked — the status bar will show an error message.
 
 ---
 

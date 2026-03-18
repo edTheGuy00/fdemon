@@ -233,13 +233,21 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
 
     // If we have connected device cache, trigger background refresh
     if has_connected_cache {
-        return UpdateResult::action(UpdateAction::RefreshDevicesBackground);
+        let Some(flutter) = state.flutter_executable() else {
+            tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — skipping background device refresh");
+            return UpdateResult::none();
+        };
+        return UpdateResult::action(UpdateAction::RefreshDevicesBackground { flutter });
     }
 
     // Cache miss or expired - show loading and discover
     tracing::debug!("Device cache miss, triggering discovery");
+    let Some(flutter) = state.flutter_executable() else {
+        tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — cannot discover devices");
+        return UpdateResult::none();
+    };
     state.new_session_dialog_state.target_selector.loading = true;
-    UpdateResult::action(UpdateAction::DiscoverDevices)
+    UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
 }
 
 /// Closes the new session dialog and returns to the appropriate UI mode.
@@ -298,7 +306,7 @@ mod tests {
     use crate::config::LoadedConfigs;
     use crate::new_session_dialog::TargetTab;
     use crate::state::{AppState, UiMode};
-    use fdemon_daemon::test_utils::test_device_full;
+    use fdemon_daemon::test_utils::{fake_flutter_sdk, test_device_full};
     use std::path::PathBuf;
     use std::time::{Duration, Instant};
 
@@ -308,6 +316,8 @@ mod tests {
             crate::config::Settings::default(),
         );
         state.project_name = Some("TestProject".to_string());
+        // Inject a fake SDK so handlers that require flutter_executable() work in tests
+        state.resolved_sdk = Some(fake_flutter_sdk());
         state
     }
 
@@ -341,7 +351,7 @@ mod tests {
         // Should trigger background refresh
         assert!(matches!(
             result.action,
-            Some(UpdateAction::RefreshDevicesBackground)
+            Some(UpdateAction::RefreshDevicesBackground { .. })
         ));
     }
 
@@ -356,7 +366,10 @@ mod tests {
         assert!(state.new_session_dialog_state.target_selector.loading);
 
         // Should trigger foreground discovery
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]
@@ -371,7 +384,10 @@ mod tests {
 
         // Cache expired - should show loading
         assert!(state.new_session_dialog_state.target_selector.loading);
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]

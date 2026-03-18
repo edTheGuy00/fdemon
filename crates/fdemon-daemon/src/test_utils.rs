@@ -1,8 +1,10 @@
 //! Test utilities for daemon types
 //!
-//! Provides helper functions for creating test Device objects.
+//! Provides helper functions for creating test Device objects and Flutter SDK stubs.
 
 use super::Device;
+use crate::{FlutterExecutable, FlutterSdk, SdkSource};
+use std::path::PathBuf;
 
 /// Creates a test device with basic defaults.
 ///
@@ -43,6 +45,21 @@ pub fn test_device_full(id: &str, name: &str, platform: &str, emulator: bool) ->
         platform_type: None,
         ephemeral: false,
         emulator_id: None,
+    }
+}
+
+/// Creates a fake `FlutterSdk` for unit tests.
+///
+/// Uses a sentinel path (`/fake/flutter`) and `SdkSource::SystemPath` so that
+/// tests can exercise code paths that require a resolved SDK without touching
+/// the real filesystem.
+pub fn fake_flutter_sdk() -> FlutterSdk {
+    FlutterSdk {
+        root: PathBuf::from("/fake/flutter"),
+        executable: FlutterExecutable::Direct(PathBuf::from("/fake/flutter/bin/flutter")),
+        source: SdkSource::SystemPath,
+        version: "0.0.0-test".to_string(),
+        channel: None,
     }
 }
 

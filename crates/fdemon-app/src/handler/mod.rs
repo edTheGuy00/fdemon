@@ -15,11 +15,13 @@
 //! - `settings_extra_args`: Extra args fuzzy modal handlers for the settings panel
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
+//! - `flutter_version`: Flutter Version panel handlers
 
 pub(crate) mod daemon;
 pub(crate) mod dap;
 pub(crate) mod dap_backend;
 pub(crate) mod devtools;
+pub(crate) mod flutter_version;
 pub(crate) mod helpers;
 pub(crate) mod keys;
 pub(crate) mod log_view;
@@ -39,7 +41,7 @@ mod tests;
 use crate::config::{LaunchConfig, LoadedConfigs};
 use crate::message::Message;
 use crate::session::SessionId;
-use fdemon_daemon::Device;
+use fdemon_daemon::{Device, FlutterExecutable};
 
 // Re-export main entry point
 pub use update::update;
@@ -57,11 +59,17 @@ pub enum UpdateAction {
     SpawnTask(Task),
 
     /// Discover available devices
-    DiscoverDevices,
+    DiscoverDevices {
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Refresh devices in background (no loading spinner)
     /// Used when cache is fresh but we want to update in background
-    RefreshDevicesBackground,
+    RefreshDevicesBackground {
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Discover devices and auto-launch a session
     /// Used when auto_start=true to run device discovery in background
@@ -69,13 +77,22 @@ pub enum UpdateAction {
     DiscoverDevicesAndAutoLaunch {
         /// Pre-loaded configs for selection logic
         configs: LoadedConfigs,
+        /// Flutter executable to use for device discovery.
+        flutter: FlutterExecutable,
     },
 
     /// Discover available emulators
-    DiscoverEmulators,
+    DiscoverEmulators {
+        /// Flutter executable to use for emulator discovery.
+        flutter: FlutterExecutable,
+    },
 
     /// Launch an emulator by ID
-    LaunchEmulator { emulator_id: String },
+    LaunchEmulator {
+        emulator_id: String,
+        /// Flutter executable to use for emulator launch.
+        flutter: FlutterExecutable,
+    },
 
     /// Launch iOS Simulator (macOS shortcut)
     LaunchIOSSimulator,
@@ -88,6 +105,8 @@ pub enum UpdateAction {
         device: Device,
         /// Optional launch configuration
         config: Option<Box<LaunchConfig>>,
+        /// Flutter executable to use for spawning the process.
+        flutter: FlutterExecutable,
     },
 
     /// Reload all running sessions (file watcher auto-reload)
@@ -462,6 +481,48 @@ pub enum UpdateAction {
         /// Sources in this list are skipped by `spawn_pre_app_sources` so a shared
         /// source is never spawned twice.
         running_shared_names: Vec<String>,
+    },
+
+    // ── Flutter Version Panel ─────────────────────────────────────────────────
+    /// Scan the FVM cache for installed SDK versions.
+    /// Triggered when the Flutter Version panel opens.
+    ScanInstalledSdks {
+        /// Root path of the currently active SDK (for `is_active` marking)
+        active_sdk_root: Option<std::path::PathBuf>,
+    },
+
+    /// Switch the active Flutter SDK version.
+    /// Writes `.fvmrc` in the project root and re-resolves the SDK.
+    SwitchFlutterVersion {
+        /// Version string to switch to (e.g., "3.19.0", "stable")
+        version: String,
+        /// Path to the selected SDK in the FVM cache
+        sdk_path: std::path::PathBuf,
+        /// Project root where `.fvmrc` will be written
+        project_path: std::path::PathBuf,
+        /// Explicit SDK path from settings (passed to re-resolution)
+        explicit_sdk_path: Option<std::path::PathBuf>,
+    },
+
+    /// Remove an installed SDK version from the FVM cache.
+    RemoveFlutterVersion {
+        /// Version string being removed
+        version: String,
+        /// Path to the SDK directory to delete
+        path: std::path::PathBuf,
+        /// Root of the currently active SDK (to re-scan after removal)
+        active_sdk_root: Option<std::path::PathBuf>,
+    },
+
+    /// Run `flutter --version --machine` in the background to enrich SDK metadata.
+    ///
+    /// The spawned task sends `Message::FlutterVersionProbeCompleted` when it
+    /// finishes (success or error).  `executable` is `None` when no SDK is
+    /// resolved; `handle_action` silently skips the probe in that case.
+    ProbeFlutterVersion {
+        /// Flutter executable from `state.resolved_sdk` at action creation time.
+        /// `None` when no SDK is resolved — action is skipped.
+        executable: Option<fdemon_daemon::FlutterExecutable>,
     },
 }
 

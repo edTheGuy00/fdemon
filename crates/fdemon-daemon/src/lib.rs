@@ -32,6 +32,17 @@
 //! - [`ToolAvailability`] - Check for Android SDK, iOS tools
 //! - [`IosLogTool`] - Available tool for iOS native log capture (macOS only)
 //!
+//! ### Flutter SDK Discovery
+//! - [`FlutterSdk`] - A resolved Flutter SDK with metadata
+//! - [`SdkSource`] - How the SDK was discovered (FVM, Puro, asdf, mise, PATH, etc.)
+//! - [`FlutterExecutable`] - How to invoke the flutter binary (direct or Windows batch)
+//! - [`flutter_sdk::validate_sdk_path()`] - Validate a directory contains a complete SDK
+//! - [`flutter_sdk::read_version_file()`] - Read Flutter version from VERSION file
+//! - [`InstalledSdk`] - A Flutter SDK version installed in the FVM cache
+//! - [`scan_installed_versions()`] - Scan the FVM cache for installed SDK versions
+//! - [`FlutterVersionInfo`] - Extended metadata from `flutter --version --machine`
+//! - [`probe_flutter_version()`] - Async probe that runs `flutter --version --machine`
+//!
 //! ### Native Log Capture
 //! - [`NativeLogCapture`] - Trait for platform-specific log capture backends
 //! - [`NativeLogEvent`] - Parsed log event from a native capture backend
@@ -44,6 +55,7 @@ pub mod avds;
 pub mod commands;
 pub mod devices;
 pub mod emulators;
+pub mod flutter_sdk;
 pub mod native_logs;
 pub mod process;
 pub mod protocol;
@@ -70,6 +82,10 @@ pub use emulators::{
 };
 /// Re-exported from `fdemon_core` for convenience. Canonical import: `fdemon_core::DaemonMessage`.
 pub use fdemon_core::DaemonMessage;
+pub use flutter_sdk::{
+    probe_flutter_version, scan_installed_versions, scan_installed_versions_from_path,
+    FlutterExecutable, FlutterSdk, FlutterVersionInfo, InstalledSdk, SdkSource,
+};
 #[cfg(target_os = "macos")]
 pub use native_logs::IosLogConfig;
 #[cfg(target_os = "macos")]

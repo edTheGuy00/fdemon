@@ -104,8 +104,12 @@ pub fn handle_refresh_devices(state: &mut AppState) -> UpdateResult {
     use crate::new_session_dialog::TargetTab;
     match state.new_session_dialog_state.target_selector.active_tab {
         TargetTab::Connected => {
+            let Some(flutter) = state.flutter_executable() else {
+                tracing::warn!("handle_refresh_devices: no Flutter SDK — cannot discover devices");
+                return UpdateResult::none();
+            };
             state.new_session_dialog_state.target_selector.loading = true;
-            UpdateResult::action(UpdateAction::DiscoverDevices)
+            UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
         }
         TargetTab::Bootable => {
             state
@@ -182,8 +186,12 @@ pub fn handle_boot_completed(state: &mut AppState) -> UpdateResult {
         .new_session_dialog_state
         .target_selector
         .set_tab(TargetTab::Connected);
+    let Some(flutter) = state.flutter_executable() else {
+        tracing::warn!("handle_boot_completed: no Flutter SDK — cannot discover devices");
+        return UpdateResult::none();
+    };
     state.new_session_dialog_state.target_selector.loading = true;
-    UpdateResult::action(UpdateAction::DiscoverDevices)
+    UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
 }
 
 /// Handle boot failed notification
@@ -202,6 +210,7 @@ mod tests {
     use crate::new_session_dialog::TargetTab;
     use crate::state::{AppState, UiMode};
     use fdemon_core::Platform;
+    use fdemon_daemon::test_utils::fake_flutter_sdk;
     use fdemon_daemon::{AndroidAvd, IosSimulator, SimulatorState};
     use std::path::PathBuf;
 
@@ -213,6 +222,8 @@ mod tests {
         state.project_name = Some("TestProject".to_string());
         state.ui_mode = UiMode::NewSessionDialog;
         state.show_new_session_dialog(LoadedConfigs::default());
+        // Inject a fake SDK so handlers that require flutter_executable() work in tests
+        state.resolved_sdk = Some(fake_flutter_sdk());
         state
     }
 
@@ -367,7 +378,10 @@ mod tests {
         let result = handle_refresh_devices(&mut state);
 
         assert!(state.new_session_dialog_state.target_selector.loading);
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]
@@ -411,7 +425,10 @@ mod tests {
             TargetTab::Connected
         );
         assert!(state.new_session_dialog_state.target_selector.loading);
-        assert!(matches!(result.action, Some(UpdateAction::DiscoverDevices)));
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
+        ));
     }
 
     #[test]

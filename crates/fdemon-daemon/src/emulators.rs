@@ -11,6 +11,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
 
+use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 
 /// Default timeout for emulator list command
@@ -83,19 +84,20 @@ pub struct EmulatorDiscoveryResult {
 }
 
 /// Discover available emulators using flutter emulators --machine
-pub async fn discover_emulators() -> Result<EmulatorDiscoveryResult> {
-    discover_emulators_with_timeout(EMULATORS_TIMEOUT).await
+pub async fn discover_emulators(flutter: &FlutterExecutable) -> Result<EmulatorDiscoveryResult> {
+    discover_emulators_with_timeout(flutter, EMULATORS_TIMEOUT).await
 }
 
 /// Discover emulators with a custom timeout
 pub async fn discover_emulators_with_timeout(
+    flutter: &FlutterExecutable,
     timeout_duration: Duration,
 ) -> Result<EmulatorDiscoveryResult> {
     let start = std::time::Instant::now();
 
     info!("Discovering emulators...");
 
-    let output = timeout(timeout_duration, run_flutter_emulators())
+    let output = timeout(timeout_duration, run_flutter_emulators(flutter))
         .await
         .map_err(|_| Error::process("Emulator discovery timed out"))??;
 
@@ -121,8 +123,9 @@ pub async fn discover_emulators_with_timeout(
 }
 
 /// Run flutter emulators --machine command
-async fn run_flutter_emulators() -> Result<FlutterOutput> {
-    let output = Command::new("flutter")
+async fn run_flutter_emulators(flutter: &FlutterExecutable) -> Result<FlutterOutput> {
+    let output = flutter
+        .command()
         .args(["emulators", "--machine"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -207,8 +210,12 @@ pub struct EmulatorLaunchResult {
 }
 
 /// Launch an emulator by ID
-pub async fn launch_emulator(emulator_id: &str) -> Result<EmulatorLaunchResult> {
+pub async fn launch_emulator(
+    flutter: &FlutterExecutable,
+    emulator_id: &str,
+) -> Result<EmulatorLaunchResult> {
     launch_emulator_with_options(
+        flutter,
         emulator_id,
         EmulatorLaunchOptions::default(),
         LAUNCH_TIMEOUT,
@@ -221,8 +228,12 @@ pub async fn launch_emulator(emulator_id: &str) -> Result<EmulatorLaunchResult> 
 /// Cold boot starts the emulator from a clean state instead of using a snapshot.
 /// This option is silently ignored for non-Android emulators (iOS simulators).
 /// Added in Flutter daemon protocol v0.6.1
-pub async fn launch_emulator_cold(emulator_id: &str) -> Result<EmulatorLaunchResult> {
+pub async fn launch_emulator_cold(
+    flutter: &FlutterExecutable,
+    emulator_id: &str,
+) -> Result<EmulatorLaunchResult> {
     launch_emulator_with_options(
+        flutter,
         emulator_id,
         EmulatorLaunchOptions { cold_boot: true },
         LAUNCH_TIMEOUT,
@@ -232,6 +243,7 @@ pub async fn launch_emulator_cold(emulator_id: &str) -> Result<EmulatorLaunchRes
 
 /// Launch an emulator with custom options and timeout
 pub async fn launch_emulator_with_options(
+    flutter: &FlutterExecutable,
     emulator_id: &str,
     options: EmulatorLaunchOptions,
     timeout_duration: Duration,
@@ -245,7 +257,7 @@ pub async fn launch_emulator_with_options(
 
     let result = timeout(
         timeout_duration,
-        run_flutter_emulator_launch(emulator_id, options.cold_boot),
+        run_flutter_emulator_launch(flutter, emulator_id, options.cold_boot),
     )
     .await
     .map_err(|_| Error::process("Emulator launch timed out"))?;
@@ -282,13 +294,18 @@ pub async fn launch_emulator_with_options(
 ///
 /// The `cold_boot` parameter is only supported for Android emulators (v0.6.1+)
 /// and is silently ignored for iOS simulators.
-async fn run_flutter_emulator_launch(emulator_id: &str, cold_boot: bool) -> Result<FlutterOutput> {
+async fn run_flutter_emulator_launch(
+    flutter: &FlutterExecutable,
+    emulator_id: &str,
+    cold_boot: bool,
+) -> Result<FlutterOutput> {
     let mut args = vec!["emulators", "--launch", emulator_id];
     if cold_boot {
         args.push("--cold");
     }
 
-    let output = Command::new("flutter")
+    let output = flutter
+        .command()
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -565,7 +582,9 @@ Done."#;
     #[tokio::test]
     #[ignore] // Requires Flutter SDK
     async fn test_discover_emulators_integration() {
-        let result = discover_emulators().await;
+        use std::path::PathBuf;
+        let flutter = FlutterExecutable::Direct(PathBuf::from("flutter"));
+        let result = discover_emulators(&flutter).await;
 
         match result {
             Ok(discovery) => {
@@ -588,13 +607,15 @@ Done."#;
     #[tokio::test]
     #[ignore] // Actually launches an emulator
     async fn test_launch_emulator_integration() {
+        use std::path::PathBuf;
+        let flutter = FlutterExecutable::Direct(PathBuf::from("flutter"));
         // First discover emulators
-        let discovery = discover_emulators().await.unwrap();
+        let discovery = discover_emulators(&flutter).await.unwrap();
 
         if let Some(android_emu) = android_emulators(&discovery.emulators).first() {
             println!("Launching: {}", android_emu.display_name());
 
-            let result = launch_emulator(&android_emu.id).await.unwrap();
+            let result = launch_emulator(&flutter, &android_emu.id).await.unwrap();
 
             println!(
                 "Launch result: success={}, elapsed={:?}",

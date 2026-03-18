@@ -41,6 +41,13 @@ pub struct ToolAvailability {
     /// Part of the `libimobiledevice` suite. Not needed for simulators (uses `xcrun simctl`).
     #[cfg(target_os = "macos")]
     pub idevicesyslog: bool,
+
+    /// Whether a Flutter SDK was found and resolved at startup.
+    pub flutter_sdk: bool,
+
+    /// Human-readable description of how the Flutter SDK was discovered (e.g. "FVM (3.19.0)").
+    /// `None` when no SDK was found.
+    pub flutter_sdk_source: Option<String>,
 }
 
 impl ToolAvailability {
@@ -65,6 +72,11 @@ impl ToolAvailability {
             macos_log,
             #[cfg(target_os = "macos")]
             idevicesyslog,
+            // Flutter SDK fields are populated externally by Engine::new()
+            // after find_flutter_sdk() resolves the SDK. The async check()
+            // method only covers tools available via OS processes.
+            flutter_sdk: false,
+            flutter_sdk_source: None,
         }
     }
 
@@ -302,13 +314,7 @@ mod tests {
     fn test_ios_available_no_message() {
         let availability = ToolAvailability {
             xcrun_simctl: true,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
         assert!(availability.ios_unavailable_message().is_none());
     }
@@ -316,14 +322,9 @@ mod tests {
     #[test]
     fn test_android_available_no_message() {
         let availability = ToolAvailability {
-            xcrun_simctl: false,
             android_emulator: true,
             emulator_path: Some("/path/to/emulator".to_string()),
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
         assert!(availability.android_unavailable_message().is_none());
     }
@@ -332,14 +333,8 @@ mod tests {
     fn test_tool_availability_new_fields() {
         // Verify struct can be constructed with new fields
         let tools = ToolAvailability {
-            xcrun_simctl: false,
-            android_emulator: false,
-            emulator_path: None,
             adb: true,
-            #[cfg(target_os = "macos")]
-            macos_log: true,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
         assert!(tools.adb);
         assert!(tools.native_logs_available("android"));
@@ -349,16 +344,7 @@ mod tests {
 
     #[test]
     fn test_native_logs_available_android_false_when_no_adb() {
-        let tools = ToolAvailability {
-            xcrun_simctl: false,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
-        };
+        let tools = ToolAvailability::default();
         assert!(!tools.native_logs_available("android"));
     }
 
@@ -394,13 +380,7 @@ mod tests {
     fn test_native_logs_available_ios_with_simctl() {
         let tools = ToolAvailability {
             xcrun_simctl: true,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
         assert!(tools.native_logs_available("ios"));
     }
@@ -408,30 +388,16 @@ mod tests {
     #[test]
     fn test_native_logs_available_ios_with_idevicesyslog() {
         let tools = ToolAvailability {
-            xcrun_simctl: false,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
             #[cfg(target_os = "macos")]
             idevicesyslog: true,
+            ..Default::default()
         };
         assert!(tools.native_logs_available("ios"));
     }
 
     #[test]
     fn test_native_logs_available_ios_no_tools() {
-        let tools = ToolAvailability {
-            xcrun_simctl: false,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
-        };
+        let tools = ToolAvailability::default();
         assert!(!tools.native_logs_available("ios"));
     }
 

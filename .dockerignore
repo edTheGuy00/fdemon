@@ -1,0 +1,30 @@
+# .dockerignore
+#
+# Excludes large or irrelevant paths from the Docker build context so that
+# `docker build` does not send unnecessary data to the daemon.
+# This primarily benefits the SDK-detection Tier 2 test images whose
+# Dockerfiles run `COPY . .` to compile the fdemon binary inside the container.
+
+# Compiled artifacts — always regenerated inside the container
+target/
+
+# Git history — not needed for compilation
+.git/
+
+# Documentation and planning files — not needed at runtime
+*.md
+workflow/
+docs/
+
+# Docker test infrastructure itself — avoids redundant recursion
+tests/docker/
+
+# Local fdemon configuration — must not leak into test images
+.fdemon/
+
+# Website assets — irrelevant to fdemon compilation
+website/
+
+# Temporary files produced during development
+tmp/
+test-logs/

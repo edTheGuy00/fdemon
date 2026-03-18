@@ -521,12 +521,7 @@ mod tests {
         let tool_availability = ToolAvailability {
             xcrun_simctl: true,
             android_emulator: true,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
 
         let mut terminal = TestTerminal::new();
@@ -548,16 +543,7 @@ mod tests {
         let ios_sims = vec![];
         let android_avds = vec![];
 
-        let tool_availability = ToolAvailability {
-            xcrun_simctl: false,
-            android_emulator: false,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
-        };
+        let tool_availability = ToolAvailability::default();
 
         let mut terminal = TestTerminal::new();
 
@@ -581,12 +567,7 @@ mod tests {
         let tool_availability = ToolAvailability {
             xcrun_simctl: true,
             android_emulator: true,
-            emulator_path: None,
-            adb: false,
-            #[cfg(target_os = "macos")]
-            macos_log: false,
-            #[cfg(target_os = "macos")]
-            idevicesyslog: false,
+            ..Default::default()
         };
 
         let mut terminal = TestTerminal::new();

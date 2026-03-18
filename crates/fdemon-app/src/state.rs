@@ -9,10 +9,11 @@ use rand::Rng;
 
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
+use crate::flutter_version::FlutterVersionState;
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
-use fdemon_daemon::{AndroidAvd, Device, IosSimulator, ToolAvailability};
+use fdemon_daemon::{AndroidAvd, Device, FlutterSdk, IosSimulator, ToolAvailability};
 
 use super::session::SharedSourceHandle;
 use super::session_manager::SessionManager;
@@ -49,6 +50,9 @@ pub enum UiMode {
 
     /// Settings panel - full-screen settings UI
     Settings,
+
+    /// Flutter Version panel - displays current SDK info and installed versions
+    FlutterVersion,
 
     /// DevTools panel mode - replaces log view with Inspector/Performance panels
     DevTools,
@@ -980,6 +984,21 @@ pub struct AppState {
     /// One entry per configured custom source with `shared = true` that has been
     /// successfully spawned. Cleaned up only on engine shutdown.
     pub shared_source_handles: Vec<SharedSourceHandle>,
+
+    /// Resolved Flutter SDK from the detection chain.
+    ///
+    /// Populated at startup by `Engine::new()` via `find_flutter_sdk()`.
+    /// `None` if no SDK was found at startup (fdemon still starts, but
+    /// session spawning and device discovery are unavailable until an SDK
+    /// is configured via `.fdemon/config.toml` `[flutter] sdk_path`).
+    pub resolved_sdk: Option<FlutterSdk>,
+
+    /// State for the Flutter Version panel overlay.
+    ///
+    /// Initialized to `FlutterVersionState::default()` at startup.
+    /// Re-initialized via `show_flutter_version()` when the panel is opened,
+    /// which snapshots the current `resolved_sdk` at open time.
+    pub flutter_version_state: FlutterVersionState,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1036,7 +1055,22 @@ impl AppState {
             tag_filter_ui: TagFilterUiState::default(),
             pending_watcher_errors: Vec::new(),
             shared_source_handles: Vec::new(),
+            resolved_sdk: None,
+            flutter_version_state: FlutterVersionState::default(),
         }
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Flutter SDK Helpers
+    // ─────────────────────────────────────────────────────────
+
+    /// Return a clone of the `FlutterExecutable` from the resolved SDK, if any.
+    ///
+    /// Returns `None` when no SDK has been resolved yet (e.g., Flutter not
+    /// installed or `sdk_path` not configured). Callers that need the SDK to
+    /// dispatch an action should handle `None` by returning an error message.
+    pub fn flutter_executable(&self) -> Option<fdemon_daemon::FlutterExecutable> {
+        self.resolved_sdk.as_ref().map(|sdk| sdk.executable.clone())
     }
 
     // ─────────────────────────────────────────────────────────
@@ -1087,6 +1121,27 @@ impl AppState {
 
     /// Hide the new session dialog
     pub fn hide_new_session_dialog(&mut self) {
+        self.ui_mode = UiMode::Normal;
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Flutter Version Panel Helpers (Phase 2)
+    // ─────────────────────────────────────────────────────────
+
+    /// Opens the Flutter Version panel, snapshotting the current SDK state.
+    ///
+    /// Creates a fresh `FlutterVersionState` from the currently resolved SDK
+    /// (reading the Dart version file synchronously) and transitions to
+    /// `UiMode::FlutterVersion`.
+    pub fn show_flutter_version(&mut self) {
+        self.flutter_version_state = FlutterVersionState::new(self.resolved_sdk.clone());
+        self.flutter_version_state.visible = true;
+        self.ui_mode = UiMode::FlutterVersion;
+    }
+
+    /// Closes the Flutter Version panel, returning to Normal mode.
+    pub fn hide_flutter_version(&mut self) {
+        self.flutter_version_state.visible = false;
         self.ui_mode = UiMode::Normal;
     }
 
@@ -2083,5 +2138,50 @@ mod tests {
         // Should not panic when there are no handles.
         state.shutdown_shared_sources();
         assert!(state.shared_source_handles.is_empty());
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Flutter Version Panel Tests (Phase 2, Task 01)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_show_flutter_version_sets_ui_mode() {
+        let mut state = AppState::default();
+        state.show_flutter_version();
+        assert_eq!(state.ui_mode, UiMode::FlutterVersion);
+        assert!(state.flutter_version_state.visible);
+    }
+
+    #[test]
+    fn test_show_flutter_version_snapshots_sdk() {
+        let mut state = AppState::default();
+        // resolved_sdk is None by default — show_flutter_version should still work
+        state.show_flutter_version();
+        // sdk_info.resolved_sdk is None because resolved_sdk is None
+        assert!(state.flutter_version_state.sdk_info.resolved_sdk.is_none());
+    }
+
+    #[test]
+    fn test_hide_flutter_version_returns_to_normal() {
+        let mut state = AppState::default();
+        state.show_flutter_version();
+        state.hide_flutter_version();
+        assert_eq!(state.ui_mode, UiMode::Normal);
+        assert!(!state.flutter_version_state.visible);
+    }
+
+    #[test]
+    fn test_flutter_version_state_initialized_to_default() {
+        let state = AppState::new();
+        assert!(!state.flutter_version_state.visible);
+        assert_eq!(
+            state.flutter_version_state.focused_pane,
+            crate::flutter_version::FlutterVersionPane::SdkInfo
+        );
+        assert!(state
+            .flutter_version_state
+            .version_list
+            .installed_versions
+            .is_empty());
     }
 }

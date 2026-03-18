@@ -201,8 +201,10 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
         if state.session_manager.is_empty() {
             let configs = crate::config::load_all_configs(&state.project_path);
             state.show_new_session_dialog(configs);
-            // Trigger device discovery
-            return UpdateResult::action(UpdateAction::DiscoverDevices);
+            // Trigger device discovery (only if SDK is available)
+            if let Some(flutter) = state.flutter_executable() {
+                return UpdateResult::action(UpdateAction::DiscoverDevices { flutter });
+            }
         }
     }
     UpdateResult::none()

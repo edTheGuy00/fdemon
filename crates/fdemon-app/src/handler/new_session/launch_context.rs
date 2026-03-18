@@ -513,10 +513,19 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                         running_shared_names: state.running_shared_source_names(),
                     }
                 } else {
+                    let Some(flutter) = state.flutter_executable() else {
+                        tracing::warn!("handle_launch: no Flutter SDK — cannot spawn session");
+                        state
+                            .new_session_dialog_state
+                            .target_selector
+                            .set_error("No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter.".to_string());
+                        return UpdateResult::none();
+                    };
                     UpdateAction::SpawnSession {
                         session_id,
                         device,
                         config: config.map(Box::new),
+                        flutter,
                     }
                 };
 
@@ -596,6 +605,15 @@ mod tests {
     use crate::config::types::{ConfigSource, LaunchConfig};
     use crate::new_session_dialog::{DartDefine, FuzzyModalType};
     use crate::state::{AppState, UiMode};
+
+    /// Creates an `AppState` pre-loaded with a fake Flutter SDK so that
+    /// handlers that call `state.flutter_executable()` can proceed past the
+    /// SDK guard in unit tests.
+    fn state_with_sdk() -> AppState {
+        let mut state = AppState::default();
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+        state
+    }
 
     #[test]
     fn test_flavor_selected_no_config_creates_default() {
@@ -914,7 +932,7 @@ mod tests {
     fn test_handle_launch_entry_point_creates_config() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Add a connected device and select it
@@ -959,7 +977,7 @@ mod tests {
     fn test_handle_launch_with_entry_point_and_flavor() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Add a connected device and select it
@@ -1003,7 +1021,7 @@ mod tests {
 
     #[test]
     fn test_handle_launch_without_entry_point_no_config() {
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Add a connected device and select it
@@ -1039,7 +1057,7 @@ mod tests {
     fn test_handle_launch_entry_point_from_vscode_config() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Add a connected device and select it
@@ -1309,7 +1327,7 @@ mod tests {
     fn test_handle_launch_allows_device_reuse_when_session_stopped() {
         use fdemon_core::AppPhase;
 
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Create a session for the test device, then mark it as stopped
@@ -1424,7 +1442,7 @@ mod tests {
     fn test_handle_launch_allows_device_reuse_when_session_quitting() {
         use fdemon_core::AppPhase;
 
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Create a session for the test device, then mark it as Quitting
@@ -1507,7 +1525,7 @@ mod tests {
 
     #[test]
     fn test_handle_launch_extra_args_in_spawn_session_config() {
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Add a connected device and select it
@@ -1600,7 +1618,7 @@ mod tests {
 
     #[test]
     fn test_handle_launch_returns_spawn_session_when_no_pre_app_sources() {
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Enable native logs but no pre-app sources
@@ -1629,7 +1647,7 @@ mod tests {
 
     #[test]
     fn test_handle_launch_returns_spawn_session_when_native_logs_disabled() {
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
 
         // Disable native logs even though a pre-app source is defined
@@ -1697,7 +1715,7 @@ mod tests {
     fn test_launch_skips_gate_when_all_shared_pre_app_running() {
         // Second session scenario: the only pre-app source is shared and
         // already running. The gate should be skipped → SpawnSession.
-        let mut state = AppState::default();
+        let mut state = state_with_sdk();
         state.ui_mode = UiMode::NewSessionDialog;
         state.settings.native_logs.enabled = true;
         state

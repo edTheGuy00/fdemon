@@ -20,7 +20,9 @@ use crate::handler::Task;
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_core::{DaemonEvent, DaemonMessage};
-use fdemon_daemon::{CommandSender, DaemonCommand, Device, FlutterProcess, RequestTracker};
+use fdemon_daemon::{
+    CommandSender, DaemonCommand, Device, FlutterExecutable, FlutterProcess, RequestTracker,
+};
 
 use super::SessionTaskMap;
 
@@ -29,10 +31,12 @@ use super::SessionTaskMap;
 pub(super) const PROCESS_WATCHDOG_INTERVAL: Duration = Duration::from_secs(5);
 
 /// Spawn a Flutter session for a device (multi-session mode)
+#[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_session(
     session_id: SessionId,
     device: Device,
     config: Option<Box<LaunchConfig>>,
+    flutter: FlutterExecutable,
     project_path: &Path,
     msg_tx: mpsc::Sender<Message>,
     session_tasks: SessionTaskMap,
@@ -59,9 +63,9 @@ pub(super) fn spawn_session(
         let spawn_result = if let Some(cfg) = config {
             // Build flutter args from config (conversion happens here in app layer)
             let args = cfg.build_flutter_args(&device_id);
-            FlutterProcess::spawn_with_args(&project_path, args, daemon_tx).await
+            FlutterProcess::spawn_with_args(&flutter, &project_path, args, daemon_tx).await
         } else {
-            FlutterProcess::spawn_with_device(&project_path, &device_id, daemon_tx).await
+            FlutterProcess::spawn_with_device(&flutter, &project_path, &device_id, daemon_tx).await
         };
 
         match spawn_result {

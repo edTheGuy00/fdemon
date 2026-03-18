@@ -63,6 +63,7 @@ pub mod confirm_dialog;
 pub mod editor;
 pub mod engine;
 pub mod engine_event;
+pub mod flutter_version;
 pub mod handler;
 pub mod hyperlinks;
 pub mod ide_config;
@@ -101,4 +102,6 @@ pub use input_key::InputKey;
 
 /// Re-exported from `fdemon-daemon` for crates that depend on `fdemon-app`
 /// but not `fdemon-daemon` directly (e.g., `fdemon-tui`).
-pub use fdemon_daemon::{AndroidAvd, Device, IosSimulator, SimulatorState, ToolAvailability};
+pub use fdemon_daemon::{
+    AndroidAvd, Device, FlutterSdk, IosSimulator, SdkSource, SimulatorState, ToolAvailability,
+};
