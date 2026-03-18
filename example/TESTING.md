@@ -239,6 +239,54 @@ extensions = ["dart", "json"]
 
 ---
 
+## Test I — Verify profile mode lag reproduction (app3, Issue #25)
+
+**Purpose**: Reproduce the profile mode lag reported in Issue #25. Aggressive
+DevTools polling settings cause visible freezes in profile mode but not in
+debug mode, confirming the root cause is VM Service polling pressure.
+
+**Configuration:** `example/app3/.fdemon/config.toml`
+```toml
+[devtools]
+performance_refresh_ms = 500
+allocation_profile_interval_ms = 1000
+network_poll_interval_ms = 1000
+network_auto_record = true
+default_panel = "performance"
+```
+
+`example/app3/.fdemon/launch.toml`
+```toml
+[[configurations]]
+name = "Profile (Issue #25)"
+device = "auto"
+mode = "profile"
+auto_start = true
+```
+
+**Steps:**
+
+1. Start app3:
+   ```
+   cargo run -- example/app3
+   ```
+2. The "Profile (Issue #25)" config auto-launches in profile mode.
+3. Once the app is running, press `D` to enter DevTools mode — the performance
+   panel opens by default (`default_panel = "performance"`).
+4. Observe the running Flutter app on the device — look for periodic freezes
+   (~1 second apart), matching the `allocation_profile_interval_ms = 1000` cadence.
+5. Press `Q` to quit the session.
+6. Start a new session (`N`), select "Development" (debug mode), and repeat
+   steps 3-4.
+7. Compare: the same DevTools polling settings should produce no visible lag
+   in debug mode.
+
+**Expected result**: Profile mode shows periodic freezes when DevTools polling
+is active; debug mode does not. This confirms the lag is caused by VM Service
+polling pressure in profile mode.
+
+---
+
 ## Directory Structure Reference
 
 ```
@@ -253,10 +301,10 @@ example/
 │   │   ├── config.toml    # auto_start = false, paths = ["lib"]
 │   │   └── launch.toml    # no auto_start
 │   └── lib/
-├── app3/                  # Multi-config auto_start (Issue #18 reproduction)
+├── app3/                  # Profile mode lag reproduction (Issue #25) + multi-config (Issue #18)
 │   ├── .fdemon/
-│   │   ├── config.toml    # behavior.auto_start = false
-│   │   └── launch.toml    # "Staging" config has auto_start = true
+│   │   ├── config.toml    # Aggressive DevTools polling (min intervals)
+│   │   └── launch.toml    # "Profile (Issue #25)" with auto_start + mode=profile
 │   └── lib/
 ├── app4/                  # Watcher path edge cases (Issue #17 reproduction)
 │   ├── .fdemon/
