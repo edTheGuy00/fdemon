@@ -692,7 +692,164 @@ pub fn handle_action(
                 }
             });
         }
+
+        // ── Flutter Version Panel ─────────────────────────────────────────────
+        UpdateAction::ScanInstalledSdks { active_sdk_root } => {
+            let msg_tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    fdemon_daemon::flutter_sdk::scan_installed_versions(active_sdk_root.as_deref())
+                })
+                .await;
+
+                match result {
+                    Ok(versions) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionScanCompleted { versions })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionScanFailed {
+                                reason: format!("Cache scan failed: {e}"),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        UpdateAction::SwitchFlutterVersion {
+            version,
+            sdk_path: _,
+            project_path,
+            explicit_sdk_path,
+        } => {
+            let msg_tx = msg_tx.clone();
+            // Clone version before it is moved into the blocking closure so
+            // it is still available for the `FlutterVersionSwitchCompleted`
+            // message sent after the closure returns.
+            let version_for_msg = version.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    switch_flutter_version(&version, &project_path, explicit_sdk_path.as_deref())
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(sdk)) => {
+                        // Update global SDK state first so handle_switch_completed
+                        // sees the updated resolved_sdk when it refreshes the panel.
+                        let _ = msg_tx.send(Message::SdkResolved { sdk }).await;
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionSwitchCompleted {
+                                version: version_for_msg,
+                            })
+                            .await;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionSwitchFailed {
+                                reason: format!("{e}"),
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionSwitchFailed {
+                                reason: format!("Task failed: {e}"),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+
+        UpdateAction::RemoveFlutterVersion {
+            version,
+            path,
+            active_sdk_root: _,
+        } => {
+            let msg_tx = msg_tx.clone();
+            tokio::spawn(async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    // Safety: refuse to remove paths outside the FVM versions cache.
+                    // This is a defense-in-depth measure beyond the handler's is_active guard.
+                    let fvm_cache = dirs::home_dir()
+                        .unwrap_or_default()
+                        .join("fvm")
+                        .join("versions");
+                    if !path.starts_with(&fvm_cache) {
+                        return Err(fdemon_core::Error::config(format!(
+                            "Refusing to remove path outside FVM cache: {}",
+                            path.display()
+                        )));
+                    }
+                    std::fs::remove_dir_all(&path).map_err(|e| {
+                        fdemon_core::Error::config(format!(
+                            "Failed to remove {}: {e}",
+                            path.display()
+                        ))
+                    })
+                })
+                .await;
+
+                match result {
+                    Ok(Ok(())) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionRemoveCompleted {
+                                version: version.clone(),
+                            })
+                            .await;
+                    }
+                    Ok(Err(e)) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionRemoveFailed {
+                                reason: format!("{e}"),
+                            })
+                            .await;
+                    }
+                    Err(e) => {
+                        let _ = msg_tx
+                            .send(Message::FlutterVersionRemoveFailed {
+                                reason: format!("Task failed: {e}"),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
     }
+}
+
+/// Write `.fvmrc` in the project root and re-resolve the Flutter SDK.
+///
+/// The `.fvmrc` format is the minimal FVM-compatible JSON: `{"flutter": "<version>"}`.
+/// After writing, `find_flutter_sdk` is called so that the FVM detector picks up
+/// the newly written file and returns an updated `FlutterSdk`.
+fn switch_flutter_version(
+    version: &str,
+    project_path: &std::path::Path,
+    explicit_sdk_path: Option<&std::path::Path>,
+) -> fdemon_core::Result<fdemon_daemon::FlutterSdk> {
+    // 1. Write .fvmrc in project root
+    let fvmrc_path = project_path.join(".fvmrc");
+    let fvmrc_content = format!(r#"{{"flutter": "{}"}}"#, version);
+    std::fs::write(&fvmrc_path, &fvmrc_content).map_err(|e| {
+        fdemon_core::Error::config(format!("Failed to write {}: {e}", fvmrc_path.display()))
+    })?;
+
+    tracing::info!("Wrote .fvmrc: {}", fvmrc_content);
+
+    // 2. Re-resolve SDK — the FVM detector now picks up the new .fvmrc
+    let sdk = fdemon_daemon::flutter_sdk::find_flutter_sdk(project_path, explicit_sdk_path)?;
+
+    tracing::info!(
+        "SDK re-resolved after version switch: {} via {}",
+        sdk.version,
+        sdk.source
+    );
+    Ok(sdk)
 }
 
 #[cfg(test)]

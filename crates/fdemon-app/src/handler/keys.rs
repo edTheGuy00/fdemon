@@ -16,6 +16,7 @@ pub fn handle_key(state: &AppState, key: InputKey) -> Option<Message> {
         UiMode::Normal => handle_key_normal(state, key),
         UiMode::LinkHighlight => handle_key_link_highlight(key),
         UiMode::Settings => handle_key_settings(state, key),
+        UiMode::FlutterVersion => handle_key_flutter_version(key, state),
         UiMode::DevTools => handle_key_devtools(state, key),
     }
 }
@@ -301,6 +302,53 @@ fn handle_key_normal(state: &AppState, key: InputKey) -> Option<Message> {
         // ─────────────────────────────────────────────────────────
         // 'T' - Open tag filter overlay (mnemonic: Tag filter)
         InputKey::Char('T') | InputKey::Char('t') => Some(Message::ShowTagFilter),
+
+        // ─────────────────────────────────────────────────────────
+        // Flutter Version Panel
+        // ─────────────────────────────────────────────────────────
+        // 'V' - Open Flutter version panel (uppercase to avoid conflict with
+        // future vim-style visual mode that might use lowercase 'v')
+        InputKey::Char('V') => Some(Message::ShowFlutterVersion),
+
+        _ => None,
+    }
+}
+
+/// Handle key events in Flutter version panel mode.
+///
+/// Key bindings:
+/// - `Ctrl+C` — force quit (always active)
+/// - `Esc` — close the panel (`FlutterVersionEscape`)
+/// - `Tab` — switch between panes (`FlutterVersionSwitchPane`)
+/// - `k`/`Up` — navigate up in the list (`FlutterVersionUp`)
+/// - `j`/`Down` — navigate down in the list (`FlutterVersionDown`)
+/// - `Enter` — switch to selected Flutter version (`FlutterVersionSwitch`)
+/// - `d` — remove selected Flutter version (`FlutterVersionRemove`)
+/// - `i` — install a Flutter version (`FlutterVersionInstall`)
+/// - `u` — update the selected Flutter version (`FlutterVersionUpdate`)
+///
+/// Action keys (`Enter`, `d`, `i`, `u`) emit messages unconditionally;
+/// the update handlers gate on the focused pane to decide whether to act.
+fn handle_key_flutter_version(key: InputKey, _state: &AppState) -> Option<Message> {
+    match key {
+        // ── Global keys ───────────────────────────────────────────────────────
+        InputKey::CharCtrl('c') => Some(Message::Quit),
+
+        // ── Panel lifecycle ───────────────────────────────────────────────────
+        InputKey::Esc => Some(Message::FlutterVersionEscape),
+
+        // ── Pane switching ────────────────────────────────────────────────────
+        InputKey::Tab => Some(Message::FlutterVersionSwitchPane),
+
+        // ── Navigation ───────────────────────────────────────────────────────
+        InputKey::Char('k') | InputKey::Up => Some(Message::FlutterVersionUp),
+        InputKey::Char('j') | InputKey::Down => Some(Message::FlutterVersionDown),
+
+        // ── Actions ───────────────────────────────────────────────────────────
+        InputKey::Enter => Some(Message::FlutterVersionSwitch),
+        InputKey::Char('d') => Some(Message::FlutterVersionRemove),
+        InputKey::Char('i') => Some(Message::FlutterVersionInstall),
+        InputKey::Char('u') => Some(Message::FlutterVersionUpdate),
 
         _ => None,
     }
@@ -1949,5 +1997,118 @@ mod tag_filter_key_tests {
             matches!(result, Some(Message::HideAllNativeTags)),
             "'n' while tag filter overlay is open should emit Message::HideAllNativeTags"
         );
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Flutter version panel key handling tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod flutter_version_key_tests {
+    use super::*;
+
+    fn fv_state() -> AppState {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::FlutterVersion;
+        state
+    }
+
+    #[test]
+    fn test_v_key_in_normal_opens_panel() {
+        let state = AppState::new();
+        let msg = handle_key(&state, InputKey::Char('V'));
+        assert!(matches!(msg, Some(Message::ShowFlutterVersion)));
+    }
+
+    #[test]
+    fn test_escape_closes_panel() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Esc);
+        assert!(matches!(msg, Some(Message::FlutterVersionEscape)));
+    }
+
+    #[test]
+    fn test_tab_switches_pane() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Tab);
+        assert!(matches!(msg, Some(Message::FlutterVersionSwitchPane)));
+    }
+
+    #[test]
+    fn test_j_navigates_down() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('j'));
+        assert!(matches!(msg, Some(Message::FlutterVersionDown)));
+    }
+
+    #[test]
+    fn test_down_arrow_navigates_down() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Down);
+        assert!(matches!(msg, Some(Message::FlutterVersionDown)));
+    }
+
+    #[test]
+    fn test_k_navigates_up() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('k'));
+        assert!(matches!(msg, Some(Message::FlutterVersionUp)));
+    }
+
+    #[test]
+    fn test_up_arrow_navigates_up() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Up);
+        assert!(matches!(msg, Some(Message::FlutterVersionUp)));
+    }
+
+    #[test]
+    fn test_enter_switches_version() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Enter);
+        assert!(matches!(msg, Some(Message::FlutterVersionSwitch)));
+    }
+
+    #[test]
+    fn test_d_removes_version() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('d'));
+        assert!(matches!(msg, Some(Message::FlutterVersionRemove)));
+    }
+
+    #[test]
+    fn test_i_installs_version() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('i'));
+        assert!(matches!(msg, Some(Message::FlutterVersionInstall)));
+    }
+
+    #[test]
+    fn test_u_updates_version() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('u'));
+        assert!(matches!(msg, Some(Message::FlutterVersionUpdate)));
+    }
+
+    #[test]
+    fn test_ctrl_c_quits() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::CharCtrl('c'));
+        assert!(matches!(msg, Some(Message::Quit)));
+    }
+
+    #[test]
+    fn test_unmapped_key_returns_none() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::Char('z'));
+        assert!(msg.is_none());
+    }
+
+    #[test]
+    fn test_unmapped_backtab_returns_none() {
+        let state = fv_state();
+        let msg = handle_key(&state, InputKey::BackTab);
+        assert!(msg.is_none());
     }
 }

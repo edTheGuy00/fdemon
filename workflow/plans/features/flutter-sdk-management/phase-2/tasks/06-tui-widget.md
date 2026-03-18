@@ -507,6 +507,51 @@ mod tests {
 
 - **Color constants**: Use the existing theme constants from the codebase (`POPUP_BG`, `BORDER_COLOR`, `TEXT_MUTED`, `ACCENT_COLOR`, etc.). Find them in the existing widget code (e.g., `new_session_dialog/mod.rs` or a shared theme module).
 - **`IconSet`**: The widget takes `&IconSet` for emoji/nerd-font icon rendering (same as `NewSessionDialog`). Check the `IconSet` type definition for available icons.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/mod.rs` | NEW — Main widget: overlay rendering, layout dispatch, header/footer/separator, horizontal+vertical pane layout, too-small fallback, tests |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | NEW — SdkInfoPane: label/value grid for SDK details, no-SDK placeholder, focused label |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/version_list.rs` | NEW — VersionListPane: scrollable list, loading/error/empty/list states, render-hint Cell write-back, scroll clamp safety net |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Added `pub mod flutter_version_panel;` and `pub use flutter_version_panel::FlutterVersionPanel;` |
+| `crates/fdemon-tui/Cargo.toml` | Added `dirs.workspace = true` dependency for home-dir path substitution |
+| `crates/fdemon-app/src/lib.rs` | Added `FlutterSdk` and `SdkSource` to the re-export block (these types are used by the TUI widget via fdemon_app but originate in fdemon_daemon) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`fdemon_app` re-exports for `FlutterSdk` / `SdkSource`**: `fdemon-tui` does not depend on `fdemon-daemon` directly (by design — layer boundary). `FlutterSdk` is already in `SdkInfoState.resolved_sdk`. Rather than adding a full daemon dependency, added `FlutterSdk` and `SdkSource` to `fdemon_app`'s existing re-export block alongside `Device`, `ToolAvailability`, etc. This is consistent with the existing pattern in the file.
+
+2. **`dirs` added to `fdemon-tui`**: The `format_path()` helper uses `dirs::home_dir()` to substitute `~` for the home directory in path display. `dirs` is already a workspace dependency used by `fdemon-app`; adding it to `fdemon-tui` follows the same workspace pattern.
+
+3. **Render-hint Cell exception**: `VersionListPane::render()` writes `last_known_visible_height` via `Cell<usize>` each frame. Annotated with the required comment per `CODE_STANDARDS.md` Principle 3. Render-time scroll clamp applied as a local variable (does not mutate shared state).
+
+4. **Focused pane border**: Rather than adding a ratatui `Block` border around the active pane (which would require adjusting inner area calculations), a focused label ("SDK Info" / visible in the VersionListPane header) is shown in `ACCENT` color to indicate focus. This is lighter-weight and consistent with how the DevTools panels indicate selection.
+
+5. **`flutter_version_panel` module visibility**: Made `pub` in `widgets/mod.rs` with sub-modules `sdk_info` and `version_list` as private. Tests in `mod.rs` access sub-module items via full path within the same crate.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui` — PASS
+- `cargo test -p fdemon-tui` — PASS (859 tests, 0 failures; new widget adds ~30 tests)
+- `cargo clippy -p fdemon-tui -- -D warnings` — PASS
+- `cargo check --workspace` — PASS
+- `cargo test --workspace` — PASS (0 failures across all crates)
+- `cargo clippy --workspace -- -D warnings` — PASS
+- `cargo fmt --all` — Applied, no issues
+
+### Risks/Limitations
+
+1. **Sub-module test path access**: Tests in `mod.rs` reference `sdk_info::SdkInfoPane` and `version_list::VersionListPane` via `crate::widgets::flutter_version_panel::sdk_info::SdkInfoPane`. This works because the modules are declared `mod` (private) inside `flutter_version_panel`, so the test is in the same crate. If the sub-modules are ever made public, the import paths would remain valid.
+
+2. **Path truncation with multibyte characters**: `format_path()` uses `.chars().count()` for truncation, which handles multi-byte UTF-8 correctly for character count but may produce visual misalignment with CJK wide characters (which occupy 2 terminal columns each). This is acceptable for file system paths which are rarely CJK.
 - **`modal_overlay` functions** are in `crates/fdemon-tui/src/widgets/modal_overlay.rs` — `dim_background()`, `render_shadow()`, `clear_area()`, `centered_rect_percent()`. Import and reuse directly.
 - **Path truncation**: For the SDK PATH display, truncate from the left if the path exceeds the available width. Use `~` prefix for home directory paths (e.g., `~/fvm/versions/3.19.0/`).
 - **Responsive layout**: The horizontal/vertical threshold is based on the **inner** content area width (after border), not the full terminal width. This is consistent with how `NewSessionDialog` decides layout mode.

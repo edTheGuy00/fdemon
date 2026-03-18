@@ -241,7 +241,15 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Full-screen settings panel
             let settings_panel = widgets::SettingsPanel::new(&state.settings, &state.project_path);
             frame.render_stateful_widget(settings_panel, area, &mut state.settings_view_state);
-        } // Legacy StartupDialog removed - use NewSessionDialog instead
+        }
+        UiMode::FlutterVersion => {
+            // Render Flutter Version panel as an overlay on top of the normal log view.
+            // The underlying header and log view are already rendered above; here we
+            // render the dimmed overlay + centered panel dialog on top of them.
+            let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state, &icons);
+            frame.render_widget(panel, area);
+        }
+        // Legacy StartupDialog removed - use NewSessionDialog instead
         UiMode::DevTools => {
             // DevTools mode renders into the log area (below the header/tabs)
             // so the project name and session tabs remain visible.

@@ -231,3 +231,45 @@ mod tests {
 - **All exhaustive `match` arms on `UiMode` must be updated.** The compiler will flag every match in `keys.rs`, `update.rs`, and `render/mod.rs`. For now, add `UiMode::FlutterVersion => { /* TODO: Phase 2 */ }` stubs or combine with a `_` arm if one already exists. Tasks 05 and 07 will fill these in.
 - **`FlutterVersionState::new()` reads `dart-sdk/version` synchronously.** This is a single small file read (< 100 bytes). If the file doesn't exist, `dart_version` is `None`.
 - **`InstalledSdk` import**: If Task 02 isn't done yet, temporarily define `InstalledSdk` locally in `types.rs` with the fields from the PLAN (version, channel, path, is_active). Add a `// TODO: Replace with fdemon_daemon::flutter_sdk::InstalledSdk when Task 02 lands` comment.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/mod.rs` | NEW - module root with re-exports |
+| `crates/fdemon-app/src/flutter_version/state.rs` | NEW - `FlutterVersionState`, `SdkInfoState`, `VersionListState` with tests |
+| `crates/fdemon-app/src/flutter_version/types.rs` | NEW - `FlutterVersionPane` enum, `InstalledSdk` placeholder struct with tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub mod flutter_version;` declaration |
+| `crates/fdemon-app/src/state.rs` | Added `UiMode::FlutterVersion`, `flutter_version_state` field, import, `show_flutter_version()` / `hide_flutter_version()` helpers, 4 new tests |
+| `crates/fdemon-app/src/handler/keys.rs` | Added `UiMode::FlutterVersion => None` stub arm in exhaustive match |
+| `crates/fdemon-tui/src/render/mod.rs` | Added `UiMode::FlutterVersion => {}` stub arm in exhaustive match |
+
+### Notable Decisions/Tradeoffs
+
+1. **InstalledSdk placeholder in types.rs**: Task 02 (fdemon-daemon InstalledSdk) is running in parallel. Defined a local `InstalledSdk` struct in `flutter_version/types.rs` with the four fields from the PLAN and a TODO comment. When Task 02 lands, the import path is updated and the local definition removed.
+
+2. **Manual Debug + explicit Default for VersionListState**: `VersionListState` uses `Cell<usize>` for the render-hint field. `Cell<usize>` does implement `Debug` (via its own derive), so a derived impl would work, but the manual impl was added to display the Cell's current value directly (`.get()`) for cleaner debug output. The `Default` impl is explicit rather than derived to be explicit about `Cell::new(0)` initialization.
+
+3. **Only two exhaustive UiMode matches in Rust code**: The task notes mentioned `keys.rs`, `update.rs`, and `render/mod.rs`. Inspection showed that `update.rs` uses `==` comparisons and early returns, not an exhaustive `match state.ui_mode` — so no stub was needed there. Only `keys.rs` and `render/mod.rs` had exhaustive enum matches requiring update.
+
+4. **Dart version read is synchronous**: `FlutterVersionState::new()` reads `<sdk_root>/bin/cache/dart-sdk/version` synchronously. This is a tiny file (< 100 bytes) and matches the approach used in Phase 1's `read_version_file()`. The `filter(|s| !s.is_empty())` ensures whitespace-only content returns `None`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1725 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo fmt --all` - Applied (no diff on commit-ready code)
+
+### Risks/Limitations
+
+1. **InstalledSdk placeholder**: The local `InstalledSdk` in `types.rs` duplicates what Task 02 will define in `fdemon-daemon`. When Task 02 lands, the import in `state.rs` and `types.rs` must be updated and the local struct removed. The TODO comment marks the location clearly.

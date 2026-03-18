@@ -2,6 +2,7 @@
 
 mod confirm_dialog;
 pub mod devtools;
+pub mod flutter_version_panel;
 mod header;
 mod log_view;
 pub mod modal_overlay;
@@ -13,6 +14,7 @@ pub mod tag_filter;
 
 pub use confirm_dialog::ConfirmDialog;
 pub use devtools::{DevToolsView, PerformancePanel, WidgetInspector};
+pub use flutter_version_panel::FlutterVersionPanel;
 pub use header::MainHeader;
 pub use log_view::{LogView, StatusInfo};
 pub use new_session_dialog::*;

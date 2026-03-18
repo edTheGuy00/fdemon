@@ -296,3 +296,41 @@ mod tests {
 - **The handler stubs are intentionally minimal** — just enough to compile. Task 04 replaces them with real implementations.
 - **`update.rs` is already ~2,400 lines.** Add the Flutter Version block as a contiguous section near the existing SDK messages (`SdkResolved`/`SdkResolutionFailed`) to keep related code together.
 - **Naming convention**: All message variants use `FlutterVersion` prefix (matching `NewSessionDialog` prefix pattern). Handler functions use `handle_<action>` (matching `new_session::handle_*` pattern).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/types.rs` | Removed placeholder `InstalledSdk` struct; replaced with `pub use fdemon_daemon::flutter_sdk::InstalledSdk;` re-export. Added `use std::path::PathBuf` inside `#[cfg(test)]` module. |
+| `crates/fdemon-app/src/message.rs` | Added `use fdemon_daemon::flutter_sdk::InstalledSdk` import. Added 16 `FlutterVersion*` message variants after `SdkResolutionFailed`. |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `pub(crate) mod flutter_version;` declaration and updated doc comment. Added `ScanInstalledSdks`, `SwitchFlutterVersion`, `RemoveFlutterVersion` variants to `UpdateAction` enum. |
+| `crates/fdemon-app/src/handler/flutter_version/mod.rs` | Created new file with 14 stub handler functions that return `UpdateResult::none()`. |
+| `crates/fdemon-app/src/handler/update.rs` | Added `flutter_version` to imports. Added 16 match arms for all `FlutterVersion*` message variants delegating to `flutter_version::handle_*` functions. `FlutterVersionInstall` and `FlutterVersionUpdate` are inline Phase 3 stubs. |
+| `crates/fdemon-app/src/actions/mod.rs` | Added no-op match arms for `ScanInstalledSdks`, `SwitchFlutterVersion`, `RemoveFlutterVersion` to prevent non-exhaustive pattern errors. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`InstalledSdk` re-export in `types.rs`**: Rather than importing from `fdemon_daemon` in each consumer, the `types.rs` module re-exports it so the existing `use super::types::InstalledSdk` in `state.rs` continues to work without changes.
+2. **`actions/mod.rs` no-ops**: The new `UpdateAction` variants required match arms in `actions/mod.rs` (the action dispatcher). Added explicit TODO-commented no-ops rather than a wildcard catch-all so that Task 04/05 cannot silently slip through unhandled.
+3. **Stale compilation artifact**: Running `cargo clean -p fdemon-tui` was required after a git stash/unstash cycle to clear stale artifacts that caused false positive `fdemon_daemon` reference errors in the TUI crate. The workspace was clean after re-compilation.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1725 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+- `cargo fmt --all` - Applied (no format changes needed)
+
+### Risks/Limitations
+
+1. **Handler stubs are no-ops**: All `FlutterVersion*` message handlers return `UpdateResult::none()`. The panel will not function until Task 04 provides real implementations.
+2. **Action dispatcher no-ops**: `ScanInstalledSdks`, `SwitchFlutterVersion`, and `RemoveFlutterVersion` actions are registered but produce no side effects until Task 04/05 implementations replace the TODO stubs.

@@ -60,7 +60,9 @@ fn test_headless_fvm_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") { return; }
+    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-fvm", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -89,7 +91,9 @@ fn test_headless_asdf_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/asdf.Dockerfile", "fdemon-test-asdf") { return; }
+    if !ensure_image("tests/docker/asdf.Dockerfile", "fdemon-test-asdf") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-asdf", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -118,7 +122,9 @@ fn test_headless_mise_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/mise.Dockerfile", "fdemon-test-mise") { return; }
+    if !ensure_image("tests/docker/mise.Dockerfile", "fdemon-test-mise") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-mise", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -147,7 +153,9 @@ fn test_headless_proto_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/proto.Dockerfile", "fdemon-test-proto") { return; }
+    if !ensure_image("tests/docker/proto.Dockerfile", "fdemon-test-proto") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-proto", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -176,7 +184,9 @@ fn test_headless_puro_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/puro.Dockerfile", "fdemon-test-puro") { return; }
+    if !ensure_image("tests/docker/puro.Dockerfile", "fdemon-test-puro") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-puro", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -205,7 +215,9 @@ fn test_headless_manual_sdk_detected() {
         return;
     }
 
-    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") { return; }
+    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-manual", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -239,7 +251,9 @@ fn test_headless_no_sdk_emits_error() {
         return;
     }
 
-    if !ensure_image("tests/docker/base.Dockerfile", "fdemon-test-base") { return; }
+    if !ensure_image("tests/docker/base.Dockerfile", "fdemon-test-base") {
+        return;
+    }
 
     // Use a shorter timeout — fdemon should fail fast when no SDK is found.
     let result = docker_run_headless("fdemon-test-base", &[], 30)
@@ -283,7 +297,9 @@ fn test_headless_flutter_root_env_override() {
         return;
     }
 
-    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") { return; }
+    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") {
+        return;
+    }
 
     let result = docker_run_headless(
         "fdemon-test-manual",
@@ -314,7 +330,9 @@ fn test_headless_flutter_root_invalid_path_falls_through() {
         return;
     }
 
-    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") { return; }
+    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") {
+        return;
+    }
 
     // FLUTTER_ROOT points to a path that does not exist inside the container.
     // The FlutterRoot strategy should be skipped; the PATH probe should then
@@ -351,7 +369,9 @@ fn test_headless_debug_logs_show_detection_chain() {
         return;
     }
 
-    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") { return; }
+    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") {
+        return;
+    }
 
     let result = docker_run_headless(
         "fdemon-test-fvm",
@@ -395,7 +415,9 @@ fn test_headless_quit_command_no_panic() {
         return;
     }
 
-    if !ensure_image("tests/docker/base.Dockerfile", "fdemon-test-base") { return; }
+    if !ensure_image("tests/docker/base.Dockerfile", "fdemon-test-base") {
+        return;
+    }
 
     // Short timeout: fdemon should emit the "no SDK" error event quickly.
     // The container will be stopped after 10 s if it has not exited by then.

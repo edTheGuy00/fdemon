@@ -80,7 +80,9 @@ fn test_fvm_detection_real_install() {
         return;
     }
 
-    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") { return; }
+    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-fvm", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -99,7 +101,9 @@ fn test_fvm_source_identified_in_logs() {
         return;
     }
 
-    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") { return; }
+    if !ensure_image("tests/docker/fvm.Dockerfile", "fdemon-test-fvm") {
+        return;
+    }
 
     let result = docker_run_headless(
         "fdemon-test-fvm",
@@ -132,7 +136,9 @@ fn test_asdf_detection_real_install() {
         return;
     }
 
-    if !ensure_image("tests/docker/asdf.Dockerfile", "fdemon-test-asdf") { return; }
+    if !ensure_image("tests/docker/asdf.Dockerfile", "fdemon-test-asdf") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-asdf", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -158,7 +164,9 @@ fn test_mise_detection_real_install() {
         return;
     }
 
-    if !ensure_image("tests/docker/mise.Dockerfile", "fdemon-test-mise") { return; }
+    if !ensure_image("tests/docker/mise.Dockerfile", "fdemon-test-mise") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-mise", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -187,7 +195,9 @@ fn test_proto_detection_real_install() {
         return;
     }
 
-    if !ensure_image("tests/docker/proto.Dockerfile", "fdemon-test-proto") { return; }
+    if !ensure_image("tests/docker/proto.Dockerfile", "fdemon-test-proto") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-proto", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -214,7 +224,9 @@ fn test_puro_detection_real_install() {
         return;
     }
 
-    if !ensure_image("tests/docker/puro.Dockerfile", "fdemon-test-puro") { return; }
+    if !ensure_image("tests/docker/puro.Dockerfile", "fdemon-test-puro") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-puro", &[], 120)
         .expect("docker run should not fail to spawn");
@@ -240,7 +252,9 @@ fn test_manual_install_detection() {
         return;
     }
 
-    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") { return; }
+    if !ensure_image("tests/docker/manual.Dockerfile", "fdemon-test-manual") {
+        return;
+    }
 
     let result = docker_run_headless("fdemon-test-manual", &[], 120)
         .expect("docker run should not fail to spawn");

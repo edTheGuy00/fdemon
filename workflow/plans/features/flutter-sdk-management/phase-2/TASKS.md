@@ -53,13 +53,13 @@ Build a dedicated TUI panel for viewing and managing Flutter SDK versions. The p
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-state-types](tasks/01-state-types.md) | Not Started | - | `fdemon-app: flutter_version/mod.rs, state.rs, types.rs` `fdemon-app: state.rs` |
-| 2 | [02-cache-scanner](tasks/02-cache-scanner.md) | Not Started | - | `fdemon-daemon: flutter_sdk/cache_scanner.rs, mod.rs, lib.rs` |
-| 3 | [03-messages-and-update](tasks/03-messages-and-update.md) | Not Started | 01 | `fdemon-app: message.rs, handler/mod.rs, handler/update.rs` |
-| 4 | [04-handler-module](tasks/04-handler-module.md) | Not Started | 03 | `fdemon-app: handler/flutter_version/mod.rs, navigation.rs, actions.rs` |
-| 5 | [05-key-routing](tasks/05-key-routing.md) | Not Started | 03 | `fdemon-app: handler/keys.rs` |
-| 6 | [06-tui-widget](tasks/06-tui-widget.md) | Not Started | 01 | `fdemon-tui: widgets/flutter_version_panel/mod.rs, sdk_info.rs, version_list.rs, mod.rs` |
-| 7 | [07-render-integration](tasks/07-render-integration.md) | Not Started | 02, 04, 05, 06 | `fdemon-tui: render/mod.rs` `fdemon-app: engine.rs, actions/mod.rs` |
+| 1 | [01-state-types](tasks/01-state-types.md) | Done | - | `fdemon-app: flutter_version/mod.rs, state.rs, types.rs` `fdemon-app: state.rs` |
+| 2 | [02-cache-scanner](tasks/02-cache-scanner.md) | Done | - | `fdemon-daemon: flutter_sdk/cache_scanner.rs, mod.rs, lib.rs` |
+| 3 | [03-messages-and-update](tasks/03-messages-and-update.md) | Done | 01 | `fdemon-app: message.rs, handler/mod.rs, handler/update.rs` |
+| 4 | [04-handler-module](tasks/04-handler-module.md) | Done | 03 | `fdemon-app: handler/flutter_version/mod.rs, navigation.rs, actions.rs` |
+| 5 | [05-key-routing](tasks/05-key-routing.md) | Done | 03 | `fdemon-app: handler/keys.rs` |
+| 6 | [06-tui-widget](tasks/06-tui-widget.md) | Done | 01 | `fdemon-tui: widgets/flutter_version_panel/mod.rs, sdk_info.rs, version_list.rs, mod.rs` |
+| 7 | [07-render-integration](tasks/07-render-integration.md) | Done | 02, 04, 05, 06 | `fdemon-tui: render/mod.rs` `fdemon-app: engine.rs, actions/mod.rs` |
 
 ## Success Criteria
 

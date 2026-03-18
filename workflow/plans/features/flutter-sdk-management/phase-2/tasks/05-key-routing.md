@@ -189,3 +189,37 @@ mod tests {
 - **`InputKey` variants**: Check the actual `InputKey` enum for exact variant names. The codebase may use `InputKey::Char('k')`, `InputKey::Up`, `InputKey::CtrlC`, etc. — adjust the match arms to match the actual enum. Look at how `handle_key_new_session_dialog` matches keys for the exact syntax.
 - **No state reads needed**: The key routing function only needs `key` and `state.ui_mode`. Unlike the New Session Dialog (which checks `fuzzy_modal` and `dart_defines_modal` for priority intercept), the Flutter Version panel has no sub-modals in Phase 2.
 - **`V` vs `v`**: The PLAN specifies `V` (uppercase). Use `InputKey::Char('V')`. If the InputKey enum normalizes shift+letter differently, check `handle_key_normal` for how `'D'` (toggle DAP) is matched.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/keys.rs` | Added `InputKey::Char('V') => Some(Message::ShowFlutterVersion)` in `handle_key_normal`; replaced TODO stub with `handle_key_flutter_version(key, state)` dispatch; added `handle_key_flutter_version()` function; added 13 tests in `flutter_version_key_tests` module |
+
+### Notable Decisions/Tradeoffs
+
+1. **`assert!(matches!(...))` instead of `assert_eq!`**: `Message` does not implement `PartialEq`, so all test assertions use the `matches!` macro pattern consistent with every other test module in `keys.rs`.
+
+2. **`_state: &AppState` parameter**: The function signature takes `&AppState` (matching the pattern of `handle_key_settings`, `handle_key_devtools`, etc.) even though Phase 2 has no sub-modal checks. The underscore prefix suppresses the clippy unused-variable warning while leaving the signature future-proof for Phase 3 sub-modal intercepts.
+
+3. **`InputKey::Esc` not `Escape`, `InputKey::CharCtrl('c')` not `CtrlC`**: The task file's pseudo-code used `InputKey::Escape` and `InputKey::CtrlC` — the actual enum uses `InputKey::Esc` and `InputKey::CharCtrl('c')`. Verified by reading the enum definition and existing handler patterns.
+
+4. **`V` placed after Tag Filter section**: The new `'V'` arm is added at the end of `handle_key_normal` just before `_ => None`, after the Tag Filter section. This is consistent with the chronological-addition pattern used for other panel-opening keys.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1771 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+- `cargo check --workspace` - Passed
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Task 04 dependency**: `navigation.rs` and `actions.rs` were already present in the working tree (created by prior task work). Had they been missing, the compilation would have failed. This task is implemented correctly but depends on those files existing.

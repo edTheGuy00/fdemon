@@ -13,9 +13,9 @@ use fdemon_core::{AppPhase, LogLevel, LogSource};
 use tracing::warn;
 
 use super::{
-    daemon::handle_session_daemon_event, dap, devtools, keys::handle_key, log_view, new_session,
-    scroll, session_lifecycle, settings_dart_defines, settings_extra_args, settings_handlers, Task,
-    UpdateAction, UpdateResult,
+    daemon::handle_session_daemon_event, dap, devtools, flutter_version, keys::handle_key,
+    log_view, new_session, scroll, session_lifecycle, settings_dart_defines, settings_extra_args,
+    settings_handlers, Task, UpdateAction, UpdateResult,
 };
 
 /// Process a message and update state.
@@ -2449,6 +2449,59 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             state.tool_availability.flutter_sdk = false;
             state.tool_availability.flutter_sdk_source = None;
             state.resolved_sdk = None;
+            UpdateResult::none()
+        }
+
+        // ── Flutter Version Panel ──────────────────────────────────────────────
+        Message::ShowFlutterVersion => flutter_version::handle_show(state),
+
+        Message::HideFlutterVersion => flutter_version::handle_hide(state),
+
+        Message::FlutterVersionEscape => flutter_version::handle_escape(state),
+
+        Message::FlutterVersionSwitchPane => flutter_version::handle_switch_pane(state),
+
+        Message::FlutterVersionUp => flutter_version::handle_up(state),
+
+        Message::FlutterVersionDown => flutter_version::handle_down(state),
+
+        Message::FlutterVersionScanCompleted { versions } => {
+            flutter_version::handle_scan_completed(state, versions)
+        }
+
+        Message::FlutterVersionScanFailed { reason } => {
+            flutter_version::handle_scan_failed(state, reason)
+        }
+
+        Message::FlutterVersionSwitch => flutter_version::handle_switch(state),
+
+        Message::FlutterVersionSwitchCompleted { version } => {
+            flutter_version::handle_switch_completed(state, version)
+        }
+
+        Message::FlutterVersionSwitchFailed { reason } => {
+            flutter_version::handle_switch_failed(state, reason)
+        }
+
+        Message::FlutterVersionRemove => flutter_version::handle_remove(state),
+
+        Message::FlutterVersionRemoveCompleted { version } => {
+            flutter_version::handle_remove_completed(state, version)
+        }
+
+        Message::FlutterVersionRemoveFailed { reason } => {
+            flutter_version::handle_remove_failed(state, reason)
+        }
+
+        Message::FlutterVersionInstall => {
+            // Phase 3 stub
+            state.flutter_version_state.status_message = Some("Install not yet available".into());
+            UpdateResult::none()
+        }
+
+        Message::FlutterVersionUpdate => {
+            // Phase 3 stub
+            state.flutter_version_state.status_message = Some("Update not yet available".into());
             UpdateResult::none()
         }
     }

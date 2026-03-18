@@ -23,6 +23,11 @@
 //! ### Top-Level Locator
 //! - [`find_flutter_sdk()`] - Walk the 10-strategy detection chain and return the first valid SDK
 //!
+//! ### Cache Scanner
+//! - [`InstalledSdk`] - A Flutter SDK version installed in the FVM cache
+//! - [`scan_installed_versions()`] - Scan the FVM cache for installed SDK versions
+//! - [`scan_installed_versions_from_path()`] - Testable variant with explicit cache path
+//!
 //! ### Version Manager Detection
 //! - [`detect_fvm_modern()`] - FVM `.fvmrc` config
 //! - [`detect_fvm_legacy()`] - FVM `.fvm/fvm_config.json` + symlink
@@ -32,11 +37,13 @@
 //! - [`detect_proto()`] - proto `.prototools`
 //! - [`detect_flutter_wrapper()`] - flutter_wrapper `flutterw` + `.flutter/`
 
+pub mod cache_scanner;
 mod channel;
 mod locator;
 mod types;
 pub mod version_managers;
 
+pub use cache_scanner::{scan_installed_versions, scan_installed_versions_from_path, InstalledSdk};
 pub use channel::{detect_channel, read_dart_version, FlutterChannel, FlutterVersion};
 pub use locator::find_flutter_sdk;
 pub use types::{read_version_file, validate_sdk_path, FlutterExecutable, FlutterSdk, SdkSource};

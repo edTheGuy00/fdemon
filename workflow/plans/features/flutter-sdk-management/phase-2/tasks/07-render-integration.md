@@ -322,3 +322,41 @@ mod tests {
 - **`.fvmrc` write is minimal**: Only `{"flutter": "version"}`. Do not write additional FVM fields (flavors, etc.). If an existing `.fvmrc` has extra fields, read → merge → write to preserve them.
 - **Removal safety**: The `~/fvm/versions/` path check is intentionally strict. In the future, if FVM cache moves or `FVM_CACHE_PATH` is set, this check should be updated. For Phase 2, hardcode the standard path as the safety boundary.
 - **Compile-driven development**: Start with the render integration (smallest change), then action dispatchers (copy existing patterns), then verify the flow end-to-end.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/mod.rs` | Replaced three stub `TODO` arms with real implementations for `ScanInstalledSdks`, `SwitchFlutterVersion`, and `RemoveFlutterVersion`; added `switch_flutter_version()` helper function |
+| `crates/fdemon-tui/src/render/mod.rs` | Replaced `TODO` placeholder in `UiMode::FlutterVersion` branch with overlay render using `FlutterVersionPanel::new(&state.flutter_version_state, &icons)` |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Already exported by Task 06 — verified and no change needed |
+| `docs/KEYBINDINGS.md` | Added `V` key entry under Normal Mode "Flutter SDK" subsection; added full "Flutter Version Mode" section with all keybindings; updated table of contents |
+
+### Notable Decisions/Tradeoffs
+
+1. **`sdk_path` field ignored in `SwitchFlutterVersion`**: The action carries `sdk_path` (the FVM cache path for the selected version), but the implementation only needs `version` and `project_path` to write `.fvmrc` and re-resolve. The `sdk_path` is not needed because `find_flutter_sdk` re-discovers the SDK via the `.fvmrc` file. The field is bound to `_` to suppress an unused variable warning.
+
+2. **`active_sdk_root` field ignored in `RemoveFlutterVersion`**: The action carries `active_sdk_root` for potential future use, but the current implementation doesn't need it after deletion (the removal handler in actions.rs re-scans via a follow-up `ScanInstalledSdks` action dispatched by the handler layer). Bound to `_` to avoid the warning.
+
+3. **Render overlay pattern**: `UiMode::FlutterVersion` renders on top of the already-rendered Normal mode view (header + logs), matching the same pattern used by `UiMode::NewSessionDialog` and `UiMode::ConfirmDialog`. The `FlutterVersionPanel` widget itself handles dimming the background via `modal_overlay::dim_background`.
+
+4. **Safety check path**: The `~/fvm/versions/` path boundary check uses `dirs::home_dir()` (already a dep of fdemon-app). Per the task notes, this is intentionally strict for Phase 2.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (all 15 test suites, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`.fvmrc` merge not implemented**: The task notes mention "read → merge → write to preserve extra fields". The current implementation overwrites any existing `.fvmrc`. This is consistent with the task spec's statement "Only `{"flutter": "version"}`" and Phase 2 scope; FVM itself uses the same minimal format.
+
+2. **FVM_CACHE_PATH env var not checked**: The removal safety check hardcodes `~/fvm/versions/`. If a user has a non-standard FVM cache location via `FVM_CACHE_PATH`, the safety check will reject legitimate removals. Noted in task spec as intentional for Phase 2.

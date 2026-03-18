@@ -8,8 +8,8 @@ use crate::state::DevToolsPanel;
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
-    vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device, Emulator, EmulatorLaunchResult,
-    FlutterSdk, IosSimulator, NativeLogEvent, ToolAvailability,
+    flutter_sdk::InstalledSdk, vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device,
+    Emulator, EmulatorLaunchResult, FlutterSdk, IosSimulator, NativeLogEvent, ToolAvailability,
 };
 
 /// Shared, abort-able handle to a background task.
@@ -1334,4 +1334,53 @@ pub enum Message {
     ///
     /// Clears `AppState.resolved_sdk` and `tool_availability.flutter_sdk`.
     SdkResolutionFailed { reason: String },
+
+    // ── Flutter Version Panel ─────────────────────────────────────────────────
+    /// Open the Flutter Version panel (V key in Normal mode)
+    ShowFlutterVersion,
+
+    /// Close the Flutter Version panel (Esc key)
+    HideFlutterVersion,
+
+    /// Priority-ordered escape: close panel → return to Normal
+    FlutterVersionEscape,
+
+    /// Switch pane focus (Tab key)
+    FlutterVersionSwitchPane,
+
+    /// Navigate up in the version list (k/Up)
+    FlutterVersionUp,
+
+    /// Navigate down in the version list (j/Down)
+    FlutterVersionDown,
+
+    /// Cache scan completed — populate version list
+    FlutterVersionScanCompleted { versions: Vec<InstalledSdk> },
+
+    /// Cache scan failed
+    FlutterVersionScanFailed { reason: String },
+
+    /// Switch to the selected version (Enter key)
+    FlutterVersionSwitch,
+
+    /// Version switch completed — SDK re-resolved
+    FlutterVersionSwitchCompleted { version: String },
+
+    /// Version switch failed
+    FlutterVersionSwitchFailed { reason: String },
+
+    /// Remove the selected version from cache (d key)
+    FlutterVersionRemove,
+
+    /// Version removal completed
+    FlutterVersionRemoveCompleted { version: String },
+
+    /// Version removal failed
+    FlutterVersionRemoveFailed { reason: String },
+
+    /// Install a new version (i key) — stub for Phase 3
+    FlutterVersionInstall,
+
+    /// Update the selected version (u key) — stub for Phase 3
+    FlutterVersionUpdate,
 }

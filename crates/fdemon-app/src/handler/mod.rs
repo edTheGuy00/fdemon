@@ -15,11 +15,13 @@
 //! - `settings_extra_args`: Extra args fuzzy modal handlers for the settings panel
 //! - `scroll`: Scroll handlers
 //! - `log_view`: Log view operation handlers
+//! - `flutter_version`: Flutter Version panel handlers
 
 pub(crate) mod daemon;
 pub(crate) mod dap;
 pub(crate) mod dap_backend;
 pub(crate) mod devtools;
+pub(crate) mod flutter_version;
 pub(crate) mod helpers;
 pub(crate) mod keys;
 pub(crate) mod log_view;
@@ -479,6 +481,37 @@ pub enum UpdateAction {
         /// Sources in this list are skipped by `spawn_pre_app_sources` so a shared
         /// source is never spawned twice.
         running_shared_names: Vec<String>,
+    },
+
+    // ── Flutter Version Panel ─────────────────────────────────────────────────
+    /// Scan the FVM cache for installed SDK versions.
+    /// Triggered when the Flutter Version panel opens.
+    ScanInstalledSdks {
+        /// Root path of the currently active SDK (for `is_active` marking)
+        active_sdk_root: Option<std::path::PathBuf>,
+    },
+
+    /// Switch the active Flutter SDK version.
+    /// Writes `.fvmrc` in the project root and re-resolves the SDK.
+    SwitchFlutterVersion {
+        /// Version string to switch to (e.g., "3.19.0", "stable")
+        version: String,
+        /// Path to the selected SDK in the FVM cache
+        sdk_path: std::path::PathBuf,
+        /// Project root where `.fvmrc` will be written
+        project_path: std::path::PathBuf,
+        /// Explicit SDK path from settings (passed to re-resolution)
+        explicit_sdk_path: Option<std::path::PathBuf>,
+    },
+
+    /// Remove an installed SDK version from the FVM cache.
+    RemoveFlutterVersion {
+        /// Version string being removed
+        version: String,
+        /// Path to the SDK directory to delete
+        path: std::path::PathBuf,
+        /// Root of the currently active SDK (to re-scan after removal)
+        active_sdk_root: Option<std::path::PathBuf>,
     },
 }
 

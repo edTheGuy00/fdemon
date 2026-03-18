@@ -502,3 +502,37 @@ mod tests {
 - **`handle_remove` similarly delegates** to `UpdateAction::RemoveFlutterVersion` for async directory deletion.
 - **Scroll adjustment** follows the `Cell<usize>` render-hint pattern from CODE_STANDARDS.md Principle 3. The `DEFAULT_VISIBLE_HEIGHT` constant is only used as fallback before the first render.
 - **All handlers accept `&mut AppState`** (not `&mut FlutterVersionState`) to access `project_path`, `settings`, and `resolved_sdk` when building `UpdateAction` variants.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/flutter_version/mod.rs` | Replaced stubs with module delegation (`mod actions; mod navigation; pub use`) |
+| `crates/fdemon-app/src/handler/flutter_version/navigation.rs` | NEW: `handle_show`, `handle_hide`, `handle_escape`, `handle_switch_pane`, `handle_up`, `handle_down`, `adjust_scroll` with 12 tests |
+| `crates/fdemon-app/src/handler/flutter_version/actions.rs` | NEW: `handle_scan_completed`, `handle_scan_failed`, `handle_switch`, `handle_switch_completed`, `handle_switch_failed`, `handle_remove`, `handle_remove_completed`, `handle_remove_failed` with 18 tests |
+| `crates/fdemon-app/src/handler/keys.rs` | Fixed 14 `assert_eq!` calls in `flutter_version_key_tests` to use `assert!(matches!(..))` — `Message` enum cannot derive `PartialEq` due to complex contained types |
+
+### Notable Decisions/Tradeoffs
+
+1. **`assert_eq!` → `assert!(matches!(..))` in keys.rs**: The Task 03 tests in `flutter_version_key_tests` used `assert_eq!` on `Option<Message>`, which requires `Message: PartialEq`. Since `Message` contains `DaemonEvent` (which only has `Debug + Clone`), adding `PartialEq` would require changes to `fdemon-core` and many other types. Converting to `assert!(matches!(..))` is the minimal correct fix with no functional loss for unit variants.
+
+2. **`adjust_scroll` is a private helper**: Not exported from the module; only called internally by `handle_up` and `handle_down`. This keeps the API surface minimal.
+
+3. **Cell render-hint fallback**: `DEFAULT_VISIBLE_HEIGHT = 10` is only used before the first render frame. All navigation after the first frame uses the real height from `last_known_visible_height.get()`.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1771 tests, +61 new from this task)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **`handle_switch_completed` refreshes `sdk_info.resolved_sdk` from `state.resolved_sdk`**: This depends on `Message::SdkResolved` being dispatched by the action handler before `FlutterVersionSwitchCompleted`. The ordering is documented in the task Notes but is not enforced by the type system.
