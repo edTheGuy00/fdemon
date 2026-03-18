@@ -21,7 +21,7 @@
 //! - [`read_dart_version()`] - Read bundled Dart SDK version
 //!
 //! ### Top-Level Locator
-//! - [`find_flutter_sdk()`] - Walk the 10-strategy detection chain and return the first valid SDK
+//! - [`find_flutter_sdk()`] - Walk the 11-strategy detection chain and return the first valid SDK
 //!
 //! ### Version Probe
 //! - [`FlutterVersionInfo`] - Extended SDK metadata from `flutter --version --machine`

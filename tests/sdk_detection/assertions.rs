@@ -81,8 +81,7 @@ pub fn assert_sdk_not_found(result: &Result<FlutterSdk>) {
 /// A single parsed NDJSON event from headless mode stdout.
 ///
 /// Headless mode emits one JSON object per line.  Each object has at minimum an
-/// `"event"` string field and a `"timestamp"` field.  Additional fields are
-/// event-specific and available via [`HeadlessEvent::extra`].
+/// `"event"` string field and a `"timestamp"` field.
 #[derive(Debug)]
 pub struct HeadlessEvent {
     /// The event name, e.g. `"daemon_connected"`, `"app_started"`, `"error"`.
@@ -91,11 +90,6 @@ pub struct HeadlessEvent {
     pub message: Option<String>,
     /// Optional `"fatal"` field (present on `error` events).
     pub fatal: Option<bool>,
-    /// The full parsed JSON object, including all fields.
-    ///
-    /// Use this to access event-specific fields not covered by the named
-    /// struct fields above.
-    pub extra: serde_json::Value,
 }
 
 /// Assert that no fatal error event was emitted in the collected headless
@@ -157,7 +151,6 @@ pub fn parse_headless_events(stdout: &str) -> Vec<HeadlessEvent> {
                 event,
                 message,
                 fatal,
-                extra: value.clone(),
             })
         })
         .collect()
