@@ -7,6 +7,7 @@
 use crate::flutter_version::{FlutterVersionPane, InstalledSdk};
 use crate::handler::{UpdateAction, UpdateResult};
 use crate::state::AppState;
+use fdemon_daemon::FlutterVersionInfo;
 
 /// Handle `FlutterVersionScanCompleted` — populate the version list after a cache scan.
 ///
@@ -199,6 +200,96 @@ pub fn handle_remove_failed(state: &mut AppState, reason: String) -> UpdateResul
     UpdateResult::none()
 }
 
+/// Handle `FlutterVersionProbeRequested` — dispatch the version probe if not yet done.
+///
+/// Returns `UpdateAction::ProbeFlutterVersion` only when `probe_completed` is
+/// `false` (i.e., the probe has not yet run for the current panel open).
+/// Re-opening the panel after a successful probe is a no-op here because
+/// `probe_completed` persists across closes until the state is reset.
+pub fn handle_probe_requested(state: &mut AppState) -> UpdateResult {
+    if state.flutter_version_state.sdk_info.probe_completed {
+        // Probe already finished — cached data is current, do nothing.
+        return UpdateResult::none();
+    }
+    let executable = state
+        .resolved_sdk
+        .as_ref()
+        .map(|sdk| sdk.executable.clone());
+    UpdateResult::action(UpdateAction::ProbeFlutterVersion { executable })
+}
+
+/// Handle `FlutterVersionProbeCompleted` — populate extended SDK metadata.
+///
+/// On success, fills in `framework_revision`, `engine_revision`,
+/// `devtools_version`, and (if previously unknown) `version`, `channel`, and
+/// `dart_version` from the probe result.  On failure, logs at debug level and
+/// sets `probe_completed = true` so the TUI shows em-dashes rather than
+/// indefinite loading indicators.
+pub fn handle_version_probe_completed(
+    state: &mut AppState,
+    result: std::result::Result<FlutterVersionInfo, String>,
+) -> UpdateResult {
+    match result {
+        Ok(info) => {
+            let sdk_info = &mut state.flutter_version_state.sdk_info;
+
+            // Populate extended probe fields
+            sdk_info.framework_revision = info.framework_revision;
+            sdk_info.engine_revision = info.engine_revision.map(|r| {
+                // Truncate engine hash to 10 chars for display (matches Flutter CLI short hash)
+                if r.len() > 10 {
+                    r[..10].to_string()
+                } else {
+                    r
+                }
+            });
+            sdk_info.devtools_version = info.devtools_version;
+
+            // If the resolved SDK's version was "unknown", update from probe
+            if let Some(ref mut sdk) = sdk_info.resolved_sdk {
+                if sdk.version == "unknown" {
+                    if let Some(ref ver) = info.framework_version {
+                        sdk.version = ver.clone();
+                    }
+                }
+                // Populate channel if it was missing
+                if sdk.channel.is_none() {
+                    sdk.channel = info.channel.clone();
+                }
+            }
+
+            // Update dart_version if it was missing
+            if sdk_info.dart_version.is_none() {
+                sdk_info.dart_version = info.dart_sdk_version;
+            }
+
+            // Propagate enriched metadata to top-level resolved_sdk so that
+            // future panel opens start with correct version/channel.
+            if let Some(ref mut top_sdk) = state.resolved_sdk {
+                if top_sdk.version == "unknown" {
+                    if let Some(ref ver) = info.framework_version {
+                        top_sdk.version = ver.clone();
+                    }
+                }
+                if top_sdk.channel.is_none() {
+                    if let Some(ch) = info.channel {
+                        top_sdk.channel = Some(ch);
+                    }
+                }
+            }
+
+            state.flutter_version_state.sdk_info.probe_completed = true;
+        }
+        Err(reason) => {
+            tracing::debug!("Flutter version probe failed: {reason}");
+            // Non-fatal — file-based data remains displayed; TUI switches from
+            // "..." loading indicator to "—" em-dash for unavailable fields.
+            state.flutter_version_state.sdk_info.probe_completed = true;
+        }
+    }
+    UpdateResult::none()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,6 +297,264 @@ mod tests {
     use crate::state::AppState;
     use fdemon_daemon::test_utils::fake_flutter_sdk;
     use std::path::PathBuf;
+
+    // ── probe handler helpers ─────────────────────────────────────────────────
+
+    fn make_app_state_with_unknown_version() -> AppState {
+        let mut state = AppState::new();
+        let mut sdk = fake_flutter_sdk();
+        sdk.version = "unknown".to_string();
+        sdk.channel = None;
+        state.resolved_sdk = Some(sdk.clone());
+        state.show_flutter_version();
+        // sdk_info snapshot also has "unknown"
+        state.flutter_version_state.sdk_info.resolved_sdk = Some(sdk);
+        state.flutter_version_state.sdk_info.dart_version = None;
+        state
+    }
+
+    fn make_app_state_with_known_version(version: &str) -> AppState {
+        let mut state = AppState::new();
+        let mut sdk = fake_flutter_sdk();
+        sdk.version = version.to_string();
+        state.resolved_sdk = Some(sdk.clone());
+        state.show_flutter_version();
+        state.flutter_version_state.sdk_info.resolved_sdk = Some(sdk);
+        state
+    }
+
+    // ── probe handler tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_handle_version_probe_completed_success() {
+        let mut state = make_app_state_with_unknown_version();
+
+        let info = FlutterVersionInfo {
+            framework_version: Some("3.38.6".into()),
+            channel: Some("stable".into()),
+            framework_revision: Some("8b87286849".into()),
+            engine_revision: Some("6f3039bf7c3cb5306513c75092822d4d94716003".into()),
+            dart_sdk_version: Some("3.10.7".into()),
+            devtools_version: Some("2.51.1".into()),
+            ..Default::default()
+        };
+
+        let result = handle_version_probe_completed(&mut state, Ok(info));
+        assert!(result.action.is_none());
+
+        // Version should be updated from "unknown" to "3.38.6"
+        let sdk = state
+            .flutter_version_state
+            .sdk_info
+            .resolved_sdk
+            .as_ref()
+            .unwrap();
+        assert_eq!(sdk.version, "3.38.6");
+
+        // Extended fields populated; engine revision truncated to 10 chars
+        assert_eq!(
+            state
+                .flutter_version_state
+                .sdk_info
+                .framework_revision
+                .as_deref(),
+            Some("8b87286849")
+        );
+        assert_eq!(
+            state
+                .flutter_version_state
+                .sdk_info
+                .engine_revision
+                .as_deref(),
+            Some("6f3039bf7c")
+        );
+        assert_eq!(
+            state
+                .flutter_version_state
+                .sdk_info
+                .devtools_version
+                .as_deref(),
+            Some("2.51.1")
+        );
+        assert!(state.flutter_version_state.sdk_info.probe_completed);
+    }
+
+    #[test]
+    fn test_handle_version_probe_completed_failure() {
+        let mut state = make_app_state_with_unknown_version();
+
+        let result = handle_version_probe_completed(&mut state, Err("timeout".into()));
+        assert!(result.action.is_none());
+        assert!(state.flutter_version_state.sdk_info.probe_completed);
+
+        // Original "unknown" version should remain
+        let sdk = state
+            .flutter_version_state
+            .sdk_info
+            .resolved_sdk
+            .as_ref()
+            .unwrap();
+        assert_eq!(sdk.version, "unknown");
+    }
+
+    #[test]
+    fn test_handle_version_probe_does_not_overwrite_known_version() {
+        let mut state = make_app_state_with_known_version("3.19.0");
+
+        let info = FlutterVersionInfo {
+            framework_version: Some("3.19.0".into()),
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+
+        // Version should remain "3.19.0" (was already known)
+        let sdk = state
+            .flutter_version_state
+            .sdk_info
+            .resolved_sdk
+            .as_ref()
+            .unwrap();
+        assert_eq!(sdk.version, "3.19.0");
+    }
+
+    #[test]
+    fn test_probe_completed_sets_probe_flag() {
+        let mut state = make_app_state_with_unknown_version();
+        assert!(!state.flutter_version_state.sdk_info.probe_completed);
+
+        handle_version_probe_completed(&mut state, Err("any error".into()));
+        assert!(state.flutter_version_state.sdk_info.probe_completed);
+    }
+
+    #[test]
+    fn test_probe_requested_returns_probe_action_when_not_completed() {
+        let mut state = make_app_state_with_known_version("3.19.0");
+        state.flutter_version_state.sdk_info.probe_completed = false;
+
+        let result = handle_probe_requested(&mut state);
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::ProbeFlutterVersion { .. })
+        ));
+    }
+
+    #[test]
+    fn test_probe_requested_skips_when_already_completed() {
+        let mut state = make_app_state_with_known_version("3.19.0");
+        state.flutter_version_state.sdk_info.probe_completed = true;
+
+        let result = handle_probe_requested(&mut state);
+        assert!(result.action.is_none());
+    }
+
+    #[test]
+    fn test_probe_requested_with_no_sdk_passes_none_executable() {
+        let mut state = AppState::new();
+        state.resolved_sdk = None;
+        state.show_flutter_version();
+        state.flutter_version_state.sdk_info.probe_completed = false;
+
+        let result = handle_probe_requested(&mut state);
+        // Should still return the action, but with None executable
+        match result.action {
+            Some(UpdateAction::ProbeFlutterVersion { executable }) => {
+                assert!(executable.is_none());
+            }
+            _ => panic!("expected ProbeFlutterVersion action"),
+        }
+    }
+
+    #[test]
+    fn test_probe_updates_dart_version_when_missing() {
+        let mut state = make_app_state_with_unknown_version();
+        state.flutter_version_state.sdk_info.dart_version = None;
+
+        let info = FlutterVersionInfo {
+            dart_sdk_version: Some("3.10.7".into()),
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+        assert_eq!(
+            state.flutter_version_state.sdk_info.dart_version.as_deref(),
+            Some("3.10.7")
+        );
+    }
+
+    #[test]
+    fn test_probe_does_not_overwrite_existing_dart_version() {
+        let mut state = make_app_state_with_unknown_version();
+        state.flutter_version_state.sdk_info.dart_version = Some("3.3.0".into());
+
+        let info = FlutterVersionInfo {
+            dart_sdk_version: Some("3.10.7".into()),
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+        // Existing dart_version should be preserved
+        assert_eq!(
+            state.flutter_version_state.sdk_info.dart_version.as_deref(),
+            Some("3.3.0")
+        );
+    }
+
+    #[test]
+    fn test_probe_truncates_long_engine_revision() {
+        let mut state = make_app_state_with_known_version("3.19.0");
+
+        let info = FlutterVersionInfo {
+            engine_revision: Some("6f3039bf7c3cb5306513c75092822d4d94716003".into()), // 40 chars
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+        let engine = state
+            .flutter_version_state
+            .sdk_info
+            .engine_revision
+            .as_deref();
+        assert_eq!(engine, Some("6f3039bf7c")); // truncated to 10 chars
+    }
+
+    #[test]
+    fn test_probe_short_engine_revision_not_truncated() {
+        let mut state = make_app_state_with_known_version("3.19.0");
+
+        let info = FlutterVersionInfo {
+            engine_revision: Some("abc123".into()), // 6 chars, shorter than 10
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+        assert_eq!(
+            state
+                .flutter_version_state
+                .sdk_info
+                .engine_revision
+                .as_deref(),
+            Some("abc123")
+        );
+    }
+
+    #[test]
+    fn test_probe_updates_top_level_resolved_sdk() {
+        let mut state = make_app_state_with_unknown_version();
+
+        let info = FlutterVersionInfo {
+            framework_version: Some("3.38.6".into()),
+            channel: Some("stable".into()),
+            ..Default::default()
+        };
+
+        handle_version_probe_completed(&mut state, Ok(info));
+
+        // Top-level resolved_sdk should also be updated
+        let top_sdk = state.resolved_sdk.as_ref().unwrap();
+        assert_eq!(top_sdk.version, "3.38.6");
+        assert_eq!(top_sdk.channel.as_deref(), Some("stable"));
+    }
 
     fn test_app_state() -> AppState {
         let mut state = AppState::new();

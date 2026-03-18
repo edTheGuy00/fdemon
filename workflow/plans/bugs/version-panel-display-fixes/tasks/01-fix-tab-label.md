@@ -119,4 +119,26 @@ fn test_sdk_info_pane_label_has_underline_separator() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | Added `HEADER_HEIGHT` constant; added `render_header()` method; replaced focused/unfocused branching in `Widget::render()` to always call `render_header()`; added two new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Header height changed from 1 to 2**: The old focused-only path consumed 1 row; the new path always consumes 2 rows (label + separator). This matches the `VersionListPane` pattern exactly. Task 02 will adjust `VERTICAL_SDK_INFO_HEIGHT` to account for this extra row.
+2. **`render_header()` mirrors `render_list_header()` exactly**: Same structure, same palette constants, same separator character — ensures visual consistency between the two panes.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (861 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Content area shrinks by 1 extra row**: Because the header now always occupies 2 rows instead of the previous 1-row focused path, the content area is 1 row shorter in the focused state. Task 02 should adjust the overall pane height constant to compensate.

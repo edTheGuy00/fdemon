@@ -44,6 +44,10 @@ impl FlutterVersionState {
             sdk_info: SdkInfoState {
                 resolved_sdk,
                 dart_version,
+                framework_revision: None,
+                engine_revision: None,
+                devtools_version: None,
+                probe_completed: false,
             },
             version_list: VersionListState::default(),
             focused_pane: FlutterVersionPane::default(),
@@ -79,6 +83,23 @@ pub struct SdkInfoState {
     pub resolved_sdk: Option<FlutterSdk>,
     /// Dart SDK version (read from `<sdk>/bin/cache/dart-sdk/version`)
     pub dart_version: Option<String>,
+    /// Framework git revision (short hash, from probe).
+    /// `None` until the version probe completes.
+    pub framework_revision: Option<String>,
+    /// Engine revision (short hash, from probe).
+    /// `None` until the version probe completes.
+    pub engine_revision: Option<String>,
+    /// DevTools version (from probe).
+    /// `None` until the version probe completes.
+    pub devtools_version: Option<String>,
+    /// Whether the `flutter --version --machine` probe has finished.
+    ///
+    /// `false` (default) means the probe is still in-flight or has not started;
+    /// fields populated by the probe (`framework_revision`, `engine_revision`,
+    /// `devtools_version`) show a "..." loading indicator in the TUI.
+    /// `true` means the probe completed (successfully or with an error); missing
+    /// fields show an em-dash ("—") instead.
+    pub probe_completed: bool,
 }
 
 /// Scrollable list of installed SDK versions.
@@ -174,6 +195,13 @@ mod tests {
         let state = SdkInfoState::default();
         assert!(state.resolved_sdk.is_none());
         assert!(state.dart_version.is_none());
+        assert!(state.framework_revision.is_none());
+        assert!(state.engine_revision.is_none());
+        assert!(state.devtools_version.is_none());
+        assert!(
+            !state.probe_completed,
+            "probe_completed should default to false"
+        );
     }
 
     #[test]

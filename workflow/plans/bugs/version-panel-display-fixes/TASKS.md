@@ -48,11 +48,11 @@ Fix three display issues in the Flutter Version Panel: tab label disappearing on
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-tab-label](tasks/01-fix-tab-label.md) | Not Started | - | `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
-| 2 | [02-fix-vertical-layout](tasks/02-fix-vertical-layout.md) | Not Started | 01 | `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs, mod.rs` |
-| 3 | [03-version-probe-backend](tasks/03-version-probe-backend.md) | Not Started | - | `fdemon-daemon: flutter_sdk/version_probe.rs (NEW), flutter_sdk/types.rs, flutter_sdk/mod.rs` |
-| 4 | [04-sdk-info-extended-fields](tasks/04-sdk-info-extended-fields.md) | Not Started | 01, 02 | `fdemon-app: flutter_version/state.rs` `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
-| 5 | [05-probe-wiring-and-display](tasks/05-probe-wiring-and-display.md) | Not Started | 03, 04 | `fdemon-app: message.rs, handler/flutter_version/actions.rs, handler/update.rs, actions/mod.rs` `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
+| 1 | [01-fix-tab-label](tasks/01-fix-tab-label.md) | Done | - | `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
+| 2 | [02-fix-vertical-layout](tasks/02-fix-vertical-layout.md) | Done | 01 | `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs, mod.rs` |
+| 3 | [03-version-probe-backend](tasks/03-version-probe-backend.md) | Done | - | `fdemon-daemon: flutter_sdk/version_probe.rs (NEW), flutter_sdk/types.rs, flutter_sdk/mod.rs` |
+| 4 | [04-sdk-info-extended-fields](tasks/04-sdk-info-extended-fields.md) | Done | 01, 02 | `fdemon-app: flutter_version/state.rs` `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
+| 5 | [05-probe-wiring-and-display](tasks/05-probe-wiring-and-display.md) | Done | 03, 04 | `fdemon-app: message.rs, handler/flutter_version/actions.rs, handler/update.rs, actions/mod.rs` `fdemon-tui: widgets/flutter_version_panel/sdk_info.rs` |
 
 ## Success Criteria
 

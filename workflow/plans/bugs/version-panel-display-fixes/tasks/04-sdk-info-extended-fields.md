@@ -163,4 +163,35 @@ fn test_sdk_path_dynamic_width_wide_terminal() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/state.rs` | Added `framework_revision`, `engine_revision`, `devtools_version` (`Option<String>`) fields to `SdkInfoState`; updated `FlutterVersionState::new()` to initialise them to `None`; added assertions for new fields in existing default state test |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | Removed hardcoded `MAX_PATH_WIDTH`; added `PATH_WIDTH_MARGIN` constant; updated `MIN_EXPANDED_CONTENT_HEIGHT` from 8 to 11; expanded layout to 4 field groups (added DART/DEVTOOLS group and FRAMEWORK/ENGINE group); compact layout now renders all 4 concepts in 4 rows; dynamic PATH width computed from actual column width; updated test helpers and added 3 new tests |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/mod.rs` | Updated `VERTICAL_SDK_INFO_HEIGHT` from 10 to 13; added new `SdkInfoState` fields to all struct literal constructions in tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **PATH_WIDTH_MARGIN = 4**: Replaces the hardcoded `MAX_PATH_WIDTH = 28`. The margin (2 label-prefix spaces + 2 safety chars) is subtracted from the actual column pixel width each render frame, so path display scales with terminal width rather than being capped at a fixed 28 chars.
+
+2. **MIN_EXPANDED_CONTENT_HEIGHT raised from 8 to 11**: The new value reflects the correct derivation (4 groups × 2 rows + 3 spacers = 11). Panels that previously rendered in expanded mode will continue to do so on typical terminal heights (≥13 total rows). Panels in very tight vertical space (content < 11 rows) will fall through to compact mode which now also shows all 4 data groups.
+
+3. **`None` → em-dash for all probe-sourced fields**: `framework_revision`, `engine_revision`, and `devtools_version` default to `None` until task 05 wires the probe. All three render as "—" in both expanded and compact modes until then.
+
+4. **`channel` fallback changed to em-dash**: Previously used the string "unknown"; now consistently uses em-dash ("—") to match the project's convention for missing/unresolved fields.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (4,567 tests across all crates, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **New fields are always `None` until task 05**: The probe results for `framework_revision`, `engine_revision`, and `devtools_version` are not yet wired. Users will see "—" for these fields until task 05 is complete. This is the expected behaviour per the task spec.
+
+2. **Compact mode now shows 4 rows**: Previously compact showed 4 rows too, but the new row content is denser (e.g. "rev X  engine Y" on one line). On very narrow terminals the line may wrap or be clipped by Ratatui's paragraph rendering — this is acceptable given the minimum render width guard (`MIN_RENDER_WIDTH = 40`) in `mod.rs`.

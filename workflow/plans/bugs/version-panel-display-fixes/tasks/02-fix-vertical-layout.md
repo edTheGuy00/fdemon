@@ -106,4 +106,30 @@ fn test_sdk_info_expanded_mode_with_spacers() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/mod.rs` | Updated `VERTICAL_SDK_INFO_HEIGHT` from 6 to 10 with corrected derivation doc comment |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | Added `MIN_EXPANDED_CONTENT_HEIGHT = 8` constant; split `render_sdk_details` into dispatcher, `render_sdk_details_expanded` (existing logic), and new `render_sdk_details_compact`; added two new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Compact layout uses inline string formatting**: The compact renderer builds each row as a formatted `String` (`"  VERSION: {version}  CHANNEL: {channel}"`) rather than using `render_field` sub-calls. This keeps each compact row to 1 line without reusing the 2-row label/value layout, which is the intent of compact mode.
+
+2. **Threshold comparison is on content area height**: The `MIN_EXPANDED_CONTENT_HEIGHT` check is applied to `area` inside `render_sdk_details`, which already has the header removed by the `Widget` impl. This correctly measures only the space available for field content, consistent with Architecture Principle 1.
+
+3. **Test area sizes**: The compact test uses an 8-row total area (6 rows of content after 2-row header), which is just below `MIN_EXPANDED_CONTENT_HEIGHT = 8`, confirming compact mode activates. The expanded test uses 15 rows (13 rows content), confirming expanded mode at comfortable sizes.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui` - Passed (863 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Compact row width**: The compact format concatenates VERSION+CHANNEL on one line (`VERSION: 3.38.6  CHANNEL: stable`). On very narrow panes this may be clipped by the terminal, but the data is still rendered — no fields are omitted.

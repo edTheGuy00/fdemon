@@ -83,6 +83,31 @@ impl FlutterExecutable {
     }
 }
 
+/// Extended Flutter SDK metadata obtained from `flutter --version --machine`.
+///
+/// All fields are optional because the probe is async and may fail.
+/// This complements the file-based [`FlutterSdk`] detection with richer metadata
+/// that can only be obtained by running the Flutter CLI.
+#[derive(Debug, Clone, Default)]
+pub struct FlutterVersionInfo {
+    /// Full Flutter framework version (e.g., "3.38.6")
+    pub framework_version: Option<String>,
+    /// Release channel (e.g., "stable", "beta", "main")
+    pub channel: Option<String>,
+    /// Git repository URL
+    pub repository_url: Option<String>,
+    /// Framework commit hash (e.g., "8b87286849")
+    pub framework_revision: Option<String>,
+    /// Framework commit date (e.g., "2026-01-08 10:49:17 -0800")
+    pub framework_commit_date: Option<String>,
+    /// Engine revision hash
+    pub engine_revision: Option<String>,
+    /// Bundled Dart SDK version (e.g., "3.10.7")
+    pub dart_sdk_version: Option<String>,
+    /// Bundled DevTools version (e.g., "2.51.1")
+    pub devtools_version: Option<String>,
+}
+
 /// A resolved Flutter SDK with metadata.
 #[derive(Debug, Clone)]
 pub struct FlutterSdk {

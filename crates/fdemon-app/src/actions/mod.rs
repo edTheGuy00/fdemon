@@ -765,6 +765,23 @@ pub fn handle_action(
             });
         }
 
+        UpdateAction::ProbeFlutterVersion { executable } => {
+            if let Some(executable) = executable {
+                let tx = msg_tx.clone();
+                tokio::spawn(async move {
+                    let result =
+                        fdemon_daemon::flutter_sdk::probe_flutter_version(&executable).await;
+                    let _ = tx
+                        .send(Message::FlutterVersionProbeCompleted {
+                            result: result.map_err(|e| e.to_string()),
+                        })
+                        .await;
+                });
+            } else {
+                tracing::debug!("ProbeFlutterVersion: no resolved SDK executable — skipping probe");
+            }
+        }
+
         UpdateAction::RemoveFlutterVersion {
             version,
             path,

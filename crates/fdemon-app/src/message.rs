@@ -9,7 +9,8 @@ use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
 use fdemon_core::{BootableDevice, DaemonEvent, DiagnosticsNode, LayoutInfo};
 use fdemon_daemon::{
     flutter_sdk::InstalledSdk, vm_service::VmRequestHandle, AndroidAvd, CommandSender, Device,
-    Emulator, EmulatorLaunchResult, FlutterSdk, IosSimulator, NativeLogEvent, ToolAvailability,
+    Emulator, EmulatorLaunchResult, FlutterSdk, FlutterVersionInfo, IosSimulator, NativeLogEvent,
+    ToolAvailability,
 };
 
 /// Shared, abort-able handle to a background task.
@@ -1383,4 +1384,22 @@ pub enum Message {
 
     /// Update the selected version (u key) — stub for Phase 3
     FlutterVersionUpdate,
+
+    /// Internal trigger: start the version probe.
+    ///
+    /// Sent as a follow-up message from `handle_show` so that both
+    /// `ScanInstalledSdks` (returned as action) and `ProbeFlutterVersion`
+    /// (returned as action on this message's turn) can be dispatched in the
+    /// same TEA processing cycle. Only fires if `probe_completed == false`.
+    FlutterVersionProbeRequested,
+
+    /// Result of the async `flutter --version --machine` probe.
+    ///
+    /// Sent by the `ProbeFlutterVersion` background task once the subprocess
+    /// exits (successfully or with an error).
+    FlutterVersionProbeCompleted {
+        /// `Ok` carries the parsed metadata; `Err` carries a human-readable
+        /// error description. Both variants set `probe_completed = true`.
+        result: std::result::Result<FlutterVersionInfo, String>,
+    },
 }

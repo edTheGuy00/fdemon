@@ -40,6 +40,8 @@
 //! - [`flutter_sdk::read_version_file()`] - Read Flutter version from VERSION file
 //! - [`InstalledSdk`] - A Flutter SDK version installed in the FVM cache
 //! - [`scan_installed_versions()`] - Scan the FVM cache for installed SDK versions
+//! - [`FlutterVersionInfo`] - Extended metadata from `flutter --version --machine`
+//! - [`probe_flutter_version()`] - Async probe that runs `flutter --version --machine`
 //!
 //! ### Native Log Capture
 //! - [`NativeLogCapture`] - Trait for platform-specific log capture backends
@@ -81,8 +83,8 @@ pub use emulators::{
 /// Re-exported from `fdemon_core` for convenience. Canonical import: `fdemon_core::DaemonMessage`.
 pub use fdemon_core::DaemonMessage;
 pub use flutter_sdk::{
-    scan_installed_versions, scan_installed_versions_from_path, FlutterExecutable, FlutterSdk,
-    InstalledSdk, SdkSource,
+    probe_flutter_version, scan_installed_versions, scan_installed_versions_from_path,
+    FlutterExecutable, FlutterSdk, FlutterVersionInfo, InstalledSdk, SdkSource,
 };
 #[cfg(target_os = "macos")]
 pub use native_logs::IosLogConfig;

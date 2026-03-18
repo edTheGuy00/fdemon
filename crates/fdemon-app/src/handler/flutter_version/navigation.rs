@@ -5,6 +5,7 @@
 
 use crate::flutter_version::{FlutterVersionPane, VersionListState};
 use crate::handler::{UpdateAction, UpdateResult};
+use crate::message::Message;
 use crate::state::AppState;
 
 /// Default visible height when no render-hint is available yet.
@@ -18,12 +19,23 @@ const DEFAULT_VISIBLE_HEIGHT: usize = 10;
 /// Snapshots the current `resolved_sdk` into `SdkInfoState` and transitions
 /// to `UiMode::FlutterVersion`. Triggers an async cache scan so the version
 /// list is populated once `FlutterVersionScanCompleted` arrives.
+///
+/// Also queues a `FlutterVersionProbeRequested` follow-up message so that
+/// `ProbeFlutterVersion` is dispatched in the same TEA cycle as
+/// `ScanInstalledSdks`.  The probe guard (`probe_completed`) prevents
+/// re-running the probe if the panel is closed and reopened.
 pub fn handle_show(state: &mut AppState) -> UpdateResult {
     state.show_flutter_version();
 
     // Trigger async cache scan
     let active_sdk_root = state.resolved_sdk.as_ref().map(|sdk| sdk.root.clone());
-    UpdateResult::action(UpdateAction::ScanInstalledSdks { active_sdk_root })
+
+    // Queue probe follow-up: processed in the same TEA cycle, after the
+    // ScanInstalledSdks action has been dispatched.
+    UpdateResult {
+        message: Some(Message::FlutterVersionProbeRequested),
+        action: Some(UpdateAction::ScanInstalledSdks { active_sdk_root }),
+    }
 }
 
 /// Handle `HideFlutterVersion` — closes the Flutter Version panel.

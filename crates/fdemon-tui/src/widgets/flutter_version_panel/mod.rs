@@ -65,9 +65,8 @@ const LEFT_PANE_PERCENT: u16 = 40;
 
 /// Height of the left pane in vertical (stacked) layout.
 ///
-/// Derived from: 1 focused label + 1 spacer + 4 fields × 2 rows + 3 spacers = 12.
-/// Clamped to 6 for compact display in vertical mode.
-const VERTICAL_SDK_INFO_HEIGHT: u16 = 6;
+/// Derived from: 2 header + (4 field groups × 2 rows) + 3 spacers = 2 + 8 + 3 = 13.
+const VERTICAL_SDK_INFO_HEIGHT: u16 = 13;
 
 /// Panel width as a percentage of the terminal width.
 ///
@@ -329,6 +328,10 @@ mod tests {
                     channel: Some("stable".to_string()),
                 }),
                 dart_version: Some("3.3.0".to_string()),
+                framework_revision: None,
+                engine_revision: None,
+                devtools_version: None,
+                probe_completed: true,
             },
             version_list: VersionListState {
                 installed_versions: vec![fdemon_app::flutter_version::InstalledSdk {
@@ -355,6 +358,10 @@ mod tests {
             sdk_info: SdkInfoState {
                 resolved_sdk: None,
                 dart_version: None,
+                framework_revision: None,
+                engine_revision: None,
+                devtools_version: None,
+                probe_completed: true,
             },
             version_list: VersionListState::default(),
             focused_pane: FlutterVersionPane::SdkInfo,
@@ -491,6 +498,10 @@ mod tests {
         let state = SdkInfoState {
             resolved_sdk: None,
             dart_version: None,
+            framework_revision: None,
+            engine_revision: None,
+            devtools_version: None,
+            probe_completed: true,
         };
         let pane = SdkInfoPane::new(&state, true);
         let area = Rect::new(0, 0, 30, 10);

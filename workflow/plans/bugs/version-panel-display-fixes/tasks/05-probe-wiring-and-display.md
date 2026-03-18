@@ -234,4 +234,41 @@ fn test_handle_version_probe_does_not_overwrite_known_version() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/state.rs` | Added `probe_completed: bool` field to `SdkInfoState`; updated `FlutterVersionState::new()` initializer; added test for default value |
+| `crates/fdemon-app/src/message.rs` | Added `FlutterVersionInfo` import; added `FlutterVersionProbeRequested` and `FlutterVersionProbeCompleted { result }` message variants |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `ProbeFlutterVersion { executable: Option<FlutterExecutable> }` action variant to `UpdateAction` enum |
+| `crates/fdemon-app/src/handler/flutter_version/navigation.rs` | Added `Message` import; updated `handle_show()` to return `message_and_action` with `FlutterVersionProbeRequested` follow-up + `ScanInstalledSdks` action |
+| `crates/fdemon-app/src/handler/flutter_version/actions.rs` | Added `FlutterVersionInfo` import; added `handle_probe_requested()` and `handle_version_probe_completed()` handlers + 13 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Added routing for `Message::FlutterVersionProbeRequested` and `Message::FlutterVersionProbeCompleted` |
+| `crates/fdemon-app/src/actions/mod.rs` | Added `ProbeFlutterVersion` arm to `handle_action()` that spawns the async probe task |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | Added `probe_field_str()` and `render_probe_field()` helpers; updated expanded/compact renderers to show `"..."` while probe in-flight, `"—"` after completion with None value; updated test helpers to set `probe_completed: true`; added 2 new loading indicator tests |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/mod.rs` | Added `probe_completed: true` to 3 `SdkInfoState` struct literals in test helpers |
+
+### Notable Decisions/Tradeoffs
+
+1. **Dual-action via follow-up message**: `UpdateResult` only supports one `action`. To dispatch both `ScanInstalledSdks` and `ProbeFlutterVersion` when the panel opens, `handle_show()` uses `UpdateResult::{ message: Some(FlutterVersionProbeRequested), action: Some(ScanInstalledSdks) }`. The `message` field is processed in the same TEA cycle as a follow-up, allowing `ProbeFlutterVersion` to be dispatched immediately after. This avoids modifying `UpdateResult` to support `Vec<UpdateAction>`.
+
+2. **Executable carried in action**: `ProbeFlutterVersion` carries `Option<FlutterExecutable>` because `handle_action()` does not have access to `AppState`. The handler captures the executable from `state.resolved_sdk` before returning the action, matching the same pattern as `ScanInstalledSdks { active_sdk_root }`. A `None` executable causes `handle_action` to log at debug level and skip the probe.
+
+3. **`probe_completed` persists across panel close/reopen**: Once the probe finishes, `probe_completed = true` remains set in `SdkInfoState` until `AppState::show_flutter_version()` is called again (which recreates the state via `FlutterVersionState::new()`). This means re-opening the panel shows cached data immediately (acceptance criterion 7) since `handle_probe_requested` is a no-op when `probe_completed == true`.
+
+4. **Loading indicator with distinct styling**: Probe-dependent fields showing `"..."` use `TEXT_MUTED` style (dimmed) to visually distinguish them from real values. Fields showing `"—"` (probe done, value unavailable) use the normal `TEXT_PRIMARY + BOLD` style. This gives users a clear signal about what data is still loading vs. genuinely unavailable.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (1797 fdemon-app + 731 fdemon-daemon + 581 fdemon-core + 867 fdemon-tui unit tests; all green)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Probe on every panel open (if state reset)**: `show_flutter_version()` in `AppState` calls `FlutterVersionState::new()` which resets `probe_completed` to `false`. This means the probe re-runs each time the panel is opened from scratch. This is intentional for correctness (SDK may have changed), but if the probe is slow it may show `"..."` briefly on repeated opens. Acceptance criterion 7 ("re-opening the panel shows cached data immediately") is satisfied for a single session because `probe_completed` persists while the panel state lives.
+
+2. **No deduplication if multiple `ShowFlutterVersion` messages arrive before first probe completes**: The `handle_probe_requested` guard (`probe_completed == false`) does not prevent multiple concurrent probes if the panel is opened rapidly. In practice this is not an issue because the panel is modal and the user cannot open it twice simultaneously.

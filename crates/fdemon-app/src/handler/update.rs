@@ -2496,6 +2496,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::FlutterVersionInstall => flutter_version::handle_install(state),
 
         Message::FlutterVersionUpdate => flutter_version::handle_update(state),
+
+        Message::FlutterVersionProbeRequested => flutter_version::handle_probe_requested(state),
+
+        Message::FlutterVersionProbeCompleted { result } => {
+            flutter_version::handle_version_probe_completed(state, result)
+        }
     }
 }
 

@@ -513,6 +513,17 @@ pub enum UpdateAction {
         /// Root of the currently active SDK (to re-scan after removal)
         active_sdk_root: Option<std::path::PathBuf>,
     },
+
+    /// Run `flutter --version --machine` in the background to enrich SDK metadata.
+    ///
+    /// The spawned task sends `Message::FlutterVersionProbeCompleted` when it
+    /// finishes (success or error).  `executable` is `None` when no SDK is
+    /// resolved; `handle_action` silently skips the probe in that case.
+    ProbeFlutterVersion {
+        /// Flutter executable from `state.resolved_sdk` at action creation time.
+        /// `None` when no SDK is resolved — action is skipped.
+        executable: Option<fdemon_daemon::FlutterExecutable>,
+    },
 }
 
 /// Background tasks to spawn

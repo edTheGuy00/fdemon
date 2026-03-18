@@ -198,4 +198,36 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | Added `FlutterVersionInfo` struct with 8 `Option<String>` fields and `#[derive(Debug, Clone, Default)]` |
+| `crates/fdemon-daemon/src/flutter_sdk/version_probe.rs` | NEW — async `probe_flutter_version()` + private `parse_version_json()` with 7 unit tests |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Declared `version_probe` module, re-exported `FlutterVersionInfo`, `probe_flutter_version`, added doc section |
+| `crates/fdemon-daemon/src/lib.rs` | Added `FlutterVersionInfo` and `probe_flutter_version` to public re-exports and crate doc comments |
+
+### Notable Decisions/Tradeoffs
+
+1. **Named timeout constant**: Used `const VERSION_PROBE_TIMEOUT_SECS: u64 = 30` following CODE_STANDARDS no-magic-numbers rule, rather than inlining `30` in the timeout call.
+
+2. **serde_json::Value instead of Deserialize derive**: Matches the task spec's design decision — avoids tight coupling to the JSON schema and handles future field additions or type mismatches without breakage. A numeric `frameworkVersion` field gracefully produces `None` rather than an error.
+
+3. **Extra tests beyond spec**: Added `test_parse_version_json_non_object_json` (array input), `test_parse_version_json_extra_fields_are_ignored`, and `test_parse_version_json_numeric_field_produces_none` to improve edge-case coverage per CODE_STANDARDS testing requirements.
+
+4. **`Error::config` for all probe errors**: Probe failures (timeout, non-zero exit, invalid JSON) use `Error::config` which is recoverable (`is_fatal()` returns false), consistent with how the probe is meant to be an optional enrichment step.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon` - Passed (734 tests total; all 7 new version_probe tests pass)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (zero warnings)
+
+### Risks/Limitations
+
+1. **No integration test for subprocess execution**: `probe_flutter_version()` is not integration-tested because it requires a real Flutter executable on PATH. The JSON parsing logic (which contains all the non-trivial logic) is fully unit tested via `parse_version_json()`.
+
+2. **Pre-existing flaky test**: `flutter_sdk::locator::tests::test_flutter_wrapper_detection` occasionally fails when run alongside other tests (environment state issue). This is unrelated to this task and passes in isolation.
