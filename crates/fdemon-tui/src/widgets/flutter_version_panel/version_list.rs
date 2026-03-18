@@ -21,7 +21,7 @@ use ratatui::{
 
 use fdemon_app::flutter_version::{InstalledSdk, VersionListState};
 
-use crate::theme::{icons::IconSet, palette};
+use crate::theme::palette;
 
 /// Height of the section title ("Installed Versions") + underline separator.
 ///
@@ -38,9 +38,6 @@ const INACTIVE_INDICATOR: char = ' ';
 pub struct VersionListPane<'a> {
     state: &'a VersionListState,
     focused: bool,
-    /// Icon set (reserved for future icon decorations).
-    #[allow(dead_code)]
-    icons: &'a IconSet,
 }
 
 impl<'a> VersionListPane<'a> {
@@ -49,13 +46,8 @@ impl<'a> VersionListPane<'a> {
     /// # Arguments
     /// * `state`   – Version list state
     /// * `focused` – Whether this pane has keyboard focus
-    /// * `icons`   – Runtime icon resolver
-    pub fn new(state: &'a VersionListState, focused: bool, icons: &'a IconSet) -> Self {
-        Self {
-            state,
-            focused,
-            icons,
-        }
+    pub fn new(state: &'a VersionListState, focused: bool) -> Self {
+        Self { state, focused }
     }
 
     /// Render a single version item row at absolute y position `y`.
@@ -345,8 +337,7 @@ mod tests {
     #[test]
     fn test_version_list_renders_versions() {
         let state = make_state_with_versions();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -357,8 +348,7 @@ mod tests {
     #[test]
     fn test_version_list_active_indicator_shown() {
         let state = make_state_with_versions();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -372,8 +362,7 @@ mod tests {
     #[test]
     fn test_version_list_loading_state() {
         let state = make_state_loading();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -387,8 +376,7 @@ mod tests {
     #[test]
     fn test_version_list_empty_state() {
         let state = make_state_empty();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -402,8 +390,7 @@ mod tests {
     #[test]
     fn test_version_list_error_state() {
         let state = make_state_error();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -419,8 +406,7 @@ mod tests {
         let state = make_state_with_versions();
         assert_eq!(state.last_known_visible_height.get(), 0);
 
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -438,8 +424,7 @@ mod tests {
         let state = make_state_loading();
         assert_eq!(state.last_known_visible_height.get(), 0);
 
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -454,8 +439,7 @@ mod tests {
         state.selected_index = 2;
         state.scroll_offset = 5; // beyond end of list (3 items)
 
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -464,8 +448,7 @@ mod tests {
     #[test]
     fn test_no_panic_tiny_area() {
         let state = make_state_with_versions();
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 5, 2);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -488,8 +471,7 @@ mod tests {
             last_known_visible_height: Cell::new(0),
         };
 
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state, true, &icons);
+        let pane = VersionListPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 10);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);

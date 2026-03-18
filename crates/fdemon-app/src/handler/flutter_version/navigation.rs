@@ -55,11 +55,14 @@ pub fn handle_switch_pane(state: &mut AppState) -> UpdateResult {
 /// Handle `FlutterVersionUp` — navigate up in the version list.
 ///
 /// No-op when the `SdkInfo` pane is focused.
+/// Clears any pending deletion confirmation on navigation.
 pub fn handle_up(state: &mut AppState) -> UpdateResult {
     let fv = &mut state.flutter_version_state;
     if fv.focused_pane != FlutterVersionPane::VersionList {
         return UpdateResult::none();
     }
+    // Clear pending delete on navigation — user changed their mind
+    fv.pending_delete = None;
     if fv.version_list.selected_index > 0 {
         fv.version_list.selected_index -= 1;
         adjust_scroll(&mut fv.version_list);
@@ -70,11 +73,14 @@ pub fn handle_up(state: &mut AppState) -> UpdateResult {
 /// Handle `FlutterVersionDown` — navigate down in the version list.
 ///
 /// No-op when the `SdkInfo` pane is focused.
+/// Clears any pending deletion confirmation on navigation.
 pub fn handle_down(state: &mut AppState) -> UpdateResult {
     let fv = &mut state.flutter_version_state;
     if fv.focused_pane != FlutterVersionPane::VersionList {
         return UpdateResult::none();
     }
+    // Clear pending delete on navigation — user changed their mind
+    fv.pending_delete = None;
     let max = fv.version_list.installed_versions.len().saturating_sub(1);
     if fv.version_list.selected_index < max {
         fv.version_list.selected_index += 1;
@@ -246,6 +252,26 @@ mod tests {
         state.flutter_version_state.version_list.selected_index = 0;
         handle_down(&mut state);
         assert_eq!(state.flutter_version_state.version_list.selected_index, 0);
+    }
+
+    #[test]
+    fn test_up_clears_pending_delete() {
+        let mut state = panel_state_with_versions();
+        state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
+        state.flutter_version_state.version_list.selected_index = 2;
+        state.flutter_version_state.pending_delete = Some(2);
+        handle_up(&mut state);
+        assert!(state.flutter_version_state.pending_delete.is_none());
+    }
+
+    #[test]
+    fn test_down_clears_pending_delete() {
+        let mut state = panel_state_with_versions();
+        state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
+        state.flutter_version_state.version_list.selected_index = 0;
+        state.flutter_version_state.pending_delete = Some(0);
+        handle_down(&mut state);
+        assert!(state.flutter_version_state.pending_delete.is_none());
     }
 
     #[test]

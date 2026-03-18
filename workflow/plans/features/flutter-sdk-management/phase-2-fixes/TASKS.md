@@ -31,11 +31,11 @@ Address all issues found during the Phase 2 code review. Three critical bugs (FV
 
 | # | Task | Status | Depends On | Modules |
 |---|------|--------|------------|---------|
-| 1 | [01-fix-fvm-cache-path](tasks/01-fix-fvm-cache-path.md) | Not Started | - | `fdemon-daemon: flutter_sdk/cache_scanner.rs, mod.rs` `fdemon-app: actions/mod.rs` |
-| 2 | [02-fix-fvmrc-merge](tasks/02-fix-fvmrc-merge.md) | Not Started | - | `fdemon-app: actions/mod.rs` |
-| 3 | [03-fix-dart-version](tasks/03-fix-dart-version.md) | Not Started | - | `fdemon-app: flutter_version/state.rs, handler/flutter_version/actions.rs` |
-| 4 | [04-fix-loading-state](tasks/04-fix-loading-state.md) | Not Started | - | `fdemon-app: flutter_version/state.rs` |
-| 5 | [05-deletion-confirm-and-cleanup](tasks/05-deletion-confirm-and-cleanup.md) | Not Started | - | `fdemon-app: handler/flutter_version/actions.rs, handler/update.rs, flutter_version/state.rs, message.rs` `fdemon-tui: widgets/flutter_version_panel/mod.rs, sdk_info.rs, version_list.rs` |
+| 1 | [01-fix-fvm-cache-path](tasks/01-fix-fvm-cache-path.md) | Done | - | `fdemon-daemon: flutter_sdk/cache_scanner.rs, mod.rs` `fdemon-app: actions/mod.rs` |
+| 2 | [02-fix-fvmrc-merge](tasks/02-fix-fvmrc-merge.md) | Done | - | `fdemon-app: actions/mod.rs` |
+| 3 | [03-fix-dart-version](tasks/03-fix-dart-version.md) | Done | - | `fdemon-app: flutter_version/state.rs, handler/flutter_version/actions.rs` |
+| 4 | [04-fix-loading-state](tasks/04-fix-loading-state.md) | Done | - | `fdemon-app: flutter_version/state.rs` |
+| 5 | [05-deletion-confirm-and-cleanup](tasks/05-deletion-confirm-and-cleanup.md) | Done | - | `fdemon-app: handler/flutter_version/actions.rs, handler/update.rs, flutter_version/state.rs, message.rs` `fdemon-tui: widgets/flutter_version_panel/mod.rs, sdk_info.rs, version_list.rs` |
 
 ## Success Criteria
 

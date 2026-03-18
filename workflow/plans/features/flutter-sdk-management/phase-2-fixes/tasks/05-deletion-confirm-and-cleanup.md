@@ -211,3 +211,41 @@ fn test_delete_active_version_clears_pending() {
 - The double-press pattern is preferred over `ConfirmDialog` because it's faster (no dialog rendering/dismissal), more consistent with TUI conventions, and doesn't require the complex dialog infrastructure for a single-action confirmation.
 - The minor fixes (Parts B-D) are bundled here because they're small and several touch the same widget files.
 - Part D may require updating the `flutter_version` handler module's `mod.rs` to expose the new functions.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/state.rs` | Added `pub pending_delete: Option<usize>` field to `FlutterVersionState`; initialized in `new()` and default; updated test for default state |
+| `crates/fdemon-app/src/handler/flutter_version/actions.rs` | Rewrote `handle_remove` with double-press confirmation pattern; added `handle_install` and `handle_update` Phase 3 stubs; updated tests to cover first/second press, active version guard, cancellation |
+| `crates/fdemon-app/src/handler/flutter_version/navigation.rs` | Added `fv.pending_delete = None` in `handle_up` and `handle_down`; added two tests `test_up_clears_pending_delete` and `test_down_clears_pending_delete` |
+| `crates/fdemon-app/src/handler/update.rs` | Replaced inline stubs for `FlutterVersionInstall`/`FlutterVersionUpdate` with calls to `flutter_version::handle_install`/`handle_update` |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/sdk_info.rs` | Removed `#[allow(dead_code)]` `icons` field and parameter from `SdkInfoPane`; updated `new()` signature; updated tests |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/version_list.rs` | Removed `#[allow(dead_code)]` `icons` field and parameter from `VersionListPane`; updated `new()` signature; updated tests |
+| `crates/fdemon-tui/src/widgets/flutter_version_panel/mod.rs` | Removed private `centered_rect` method; added `PANEL_WIDTH_PERCENT`/`PANEL_HEIGHT_PERCENT` constants; imported `centered_rect_percent` from `modal_overlay`; removed `icons` field from `FlutterVersionPanel`; updated sub-widget construction calls; updated tests; added `pending_delete: None` to struct literals |
+| `crates/fdemon-tui/src/render/mod.rs` | Updated `FlutterVersionPanel::new` call site to remove `&icons` argument |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed `icons` from `FlutterVersionPanel` entirely**: The task said to remove from sub-widgets and update call sites in `FlutterVersionPanel`. Since `self.icons` was no longer passed anywhere, keeping it would cause a clippy `dead_code` error. Removed from the top-level widget too, updating the `render/mod.rs` call site.
+
+2. **`handle_install` and `handle_update` placed in `actions.rs`**: These stubs fit naturally with the other action handlers in the same file rather than requiring a new `stubs.rs` file.
+
+3. **Double-press confirmation borrow pattern**: The `handle_remove` function re-borrows `state.flutter_version_state` after setting `pending_delete = None` to avoid Rust borrow checker issues with the confirmed-deletion path.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (4,546+ tests across all crates, 0 failed)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`pending_delete` not cleared on pane switch**: If the user presses `Tab` to switch to `SdkInfo` and back, `pending_delete` is not cleared. This is intentional — only `j`/`k`/`Up`/`Down` navigation (index change) cancels the pending delete, consistent with the task spec.

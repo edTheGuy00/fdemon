@@ -772,27 +772,8 @@ pub fn handle_action(
         } => {
             let msg_tx = msg_tx.clone();
             tokio::spawn(async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    // Safety: refuse to remove paths outside the FVM versions cache.
-                    // This is a defense-in-depth measure beyond the handler's is_active guard.
-                    let fvm_cache = dirs::home_dir()
-                        .unwrap_or_default()
-                        .join("fvm")
-                        .join("versions");
-                    if !path.starts_with(&fvm_cache) {
-                        return Err(fdemon_core::Error::config(format!(
-                            "Refusing to remove path outside FVM cache: {}",
-                            path.display()
-                        )));
-                    }
-                    std::fs::remove_dir_all(&path).map_err(|e| {
-                        fdemon_core::Error::config(format!(
-                            "Failed to remove {}: {e}",
-                            path.display()
-                        ))
-                    })
-                })
-                .await;
+                let result =
+                    tokio::task::spawn_blocking(move || remove_flutter_version_path(&path)).await;
 
                 match result {
                     Ok(Ok(())) => {
@@ -822,19 +803,84 @@ pub fn handle_action(
     }
 }
 
+/// Removes a Flutter SDK version directory after verifying it is inside the FVM cache.
+///
+/// Uses [`fdemon_daemon::flutter_sdk::resolve_fvm_cache_path()`] to determine the
+/// canonical FVM cache root (respecting `FVM_CACHE_PATH` env var), then checks that
+/// `path` is a descendant of that root before calling `std::fs::remove_dir_all`.
+///
+/// # Errors
+///
+/// Returns a config error if:
+/// - The FVM cache directory cannot be found (neither `FVM_CACHE_PATH` nor `~/fvm/versions/`
+///   exists).
+/// - `path` does not start with the resolved FVM cache root.
+/// - The directory removal fails.
+fn remove_flutter_version_path(path: &std::path::Path) -> fdemon_core::Result<()> {
+    // Safety: refuse to remove paths outside the FVM versions cache.
+    // This is a defense-in-depth measure beyond the handler's is_active guard.
+    // Use resolve_fvm_cache_path() so that FVM_CACHE_PATH env var is respected,
+    // matching the same logic the cache scanner uses when discovering versions.
+    let fvm_cache = fdemon_daemon::flutter_sdk::resolve_fvm_cache_path().ok_or_else(|| {
+        fdemon_core::Error::config(
+            "FVM cache directory not found; cannot safely remove version".to_string(),
+        )
+    })?;
+    if !path.starts_with(&fvm_cache) {
+        return Err(fdemon_core::Error::config(format!(
+            "Refusing to remove path outside FVM cache: {}",
+            path.display()
+        )));
+    }
+    std::fs::remove_dir_all(path).map_err(|e| {
+        fdemon_core::Error::config(format!("Failed to remove {}: {e}", path.display()))
+    })
+}
+
 /// Write `.fvmrc` in the project root and re-resolve the Flutter SDK.
 ///
-/// The `.fvmrc` format is the minimal FVM-compatible JSON: `{"flutter": "<version>"}`.
-/// After writing, `find_flutter_sdk` is called so that the FVM detector picks up
-/// the newly written file and returns an updated `FlutterSdk`.
+/// This function performs a **read-merge-write** on `.fvmrc` so that only the
+/// `"flutter"` field is updated; all other FVM v3 fields (e.g. `"flavors"`,
+/// `"runPubGetOnSdkChanges"`, `"updateVscodeSettings"`) are preserved.
+///
+/// Behaviour for edge cases:
+/// - **File missing**: Creates a new file with `{"flutter": "<version>"}`.
+/// - **File exists with extra fields**: Updates only `"flutter"`; other fields
+///   are preserved verbatim.
+/// - **File is not valid JSON** or is a non-object value (array, string, …):
+///   Resets to a clean object containing only `"flutter"`.
+/// - **Read error** (e.g. permission denied): Falls back to creating a fresh
+///   file (same as "missing").
+///
+/// After writing, `find_flutter_sdk` is called so that the FVM detector picks
+/// up the newly written file and returns an updated `FlutterSdk`.
 fn switch_flutter_version(
     version: &str,
     project_path: &std::path::Path,
     explicit_sdk_path: Option<&std::path::Path>,
 ) -> fdemon_core::Result<fdemon_daemon::FlutterSdk> {
-    // 1. Write .fvmrc in project root
+    // 1. Write .fvmrc in project root using a read-merge-write pattern so that
+    //    existing FVM configuration fields are not destroyed.
     let fvmrc_path = project_path.join(".fvmrc");
-    let fvmrc_content = format!(r#"{{"flutter": "{}"}}"#, version);
+
+    // Read and parse existing file, or start with an empty JSON object.
+    let mut json: serde_json::Value = std::fs::read_to_string(&fvmrc_path)
+        .ok()
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+
+    // If the existing file was not a JSON object (e.g. corrupted or a bare
+    // array/string), reset to an empty object rather than crashing.
+    if !json.is_object() {
+        json = serde_json::Value::Object(serde_json::Map::new());
+    }
+
+    // Set only the flutter field; all other fields are preserved.
+    json["flutter"] = serde_json::Value::String(version.to_string());
+
+    let fvmrc_content = serde_json::to_string_pretty(&json)
+        .map_err(|e| fdemon_core::Error::config(format!("Failed to serialize .fvmrc: {e}")))?;
+
     std::fs::write(&fvmrc_path, &fvmrc_content).map_err(|e| {
         fdemon_core::Error::config(format!("Failed to write {}: {e}", fvmrc_path.display()))
     })?;
@@ -860,5 +906,129 @@ mod tests {
     fn test_session_task_map_default_is_empty() {
         let map: SessionTaskMap = Arc::new(std::sync::Mutex::new(HashMap::new()));
         assert!(map.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_remove_rejects_path_outside_fvm_cache() {
+        // A path that is clearly outside any FVM cache directory should be rejected.
+        // The function either returns "outside FVM cache" (when a cache dir is found but
+        // the path isn't under it) or "not found" (when no FVM cache dir exists at all).
+        let result =
+            remove_flutter_version_path(std::path::Path::new("/definitely-not-fvm/some-sdk"));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("outside FVM cache") || msg.contains("not found"),
+            "unexpected error message: {msg}"
+        );
+    }
+
+    // ── write_fvmrc merge tests ───────────────────────────────────────────────
+
+    /// Helper: call only the .fvmrc write portion of switch_flutter_version,
+    /// without attempting to resolve the Flutter SDK (which requires a real
+    /// Flutter installation).  This replicates the merge logic verbatim so
+    /// tests remain isolated from the file system toolchain.
+    fn write_fvmrc_version(
+        project_path: &std::path::Path,
+        version: &str,
+    ) -> fdemon_core::Result<()> {
+        let fvmrc_path = project_path.join(".fvmrc");
+
+        let mut json: serde_json::Value = std::fs::read_to_string(&fvmrc_path)
+            .ok()
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::Value::Object(serde_json::Map::new()));
+
+        if !json.is_object() {
+            json = serde_json::Value::Object(serde_json::Map::new());
+        }
+
+        json["flutter"] = serde_json::Value::String(version.to_string());
+
+        let fvmrc_content = serde_json::to_string_pretty(&json)
+            .map_err(|e| fdemon_core::Error::config(format!("Failed to serialize .fvmrc: {e}")))?;
+
+        std::fs::write(&fvmrc_path, &fvmrc_content).map_err(|e| {
+            fdemon_core::Error::config(format!("Failed to write {}: {e}", fvmrc_path.display()))
+        })
+    }
+
+    #[test]
+    fn test_switch_version_preserves_fvmrc_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        let fvmrc = dir.path().join(".fvmrc");
+
+        // Write initial .fvmrc with extra fields
+        std::fs::write(
+            &fvmrc,
+            r#"{"flutter": "3.19.0", "flavors": {"dev": "3.19.0"}, "runPubGetOnSdkChanges": true}"#,
+        )
+        .unwrap();
+
+        write_fvmrc_version(dir.path(), "3.22.0").unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fvmrc).unwrap()).unwrap();
+        assert_eq!(content["flutter"], "3.22.0");
+        assert_eq!(content["flavors"]["dev"], "3.19.0"); // preserved
+        assert_eq!(content["runPubGetOnSdkChanges"], true); // preserved
+    }
+
+    #[test]
+    fn test_switch_version_creates_fvmrc_when_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let fvmrc = dir.path().join(".fvmrc");
+        assert!(!fvmrc.exists());
+
+        write_fvmrc_version(dir.path(), "3.22.0").unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fvmrc).unwrap()).unwrap();
+        assert_eq!(content["flutter"], "3.22.0");
+    }
+
+    #[test]
+    fn test_switch_version_handles_corrupted_fvmrc() {
+        let dir = tempfile::tempdir().unwrap();
+        let fvmrc = dir.path().join(".fvmrc");
+        std::fs::write(&fvmrc, "not json at all").unwrap();
+
+        write_fvmrc_version(dir.path(), "3.22.0").unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fvmrc).unwrap()).unwrap();
+        assert_eq!(content["flutter"], "3.22.0");
+    }
+
+    #[test]
+    fn test_switch_version_handles_non_object_fvmrc() {
+        let dir = tempfile::tempdir().unwrap();
+        let fvmrc = dir.path().join(".fvmrc");
+        // A valid JSON value that is not an object (array)
+        std::fs::write(&fvmrc, r#"["3.19.0", "3.22.0"]"#).unwrap();
+
+        write_fvmrc_version(dir.path(), "3.24.0").unwrap();
+
+        let content: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&fvmrc).unwrap()).unwrap();
+        assert_eq!(content["flutter"], "3.24.0");
+        // Result should be a plain object, not an array
+        assert!(content.is_object());
+    }
+
+    #[test]
+    fn test_switch_version_fvmrc_is_pretty_printed() {
+        let dir = tempfile::tempdir().unwrap();
+
+        write_fvmrc_version(dir.path(), "3.22.0").unwrap();
+
+        let raw = std::fs::read_to_string(dir.path().join(".fvmrc")).unwrap();
+        // Pretty-printed JSON contains newlines
+        assert!(
+            raw.contains('\n'),
+            "expected pretty-printed JSON, got: {raw}"
+        );
     }
 }

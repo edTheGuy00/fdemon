@@ -2493,17 +2493,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             flutter_version::handle_remove_failed(state, reason)
         }
 
-        Message::FlutterVersionInstall => {
-            // Phase 3 stub
-            state.flutter_version_state.status_message = Some("Install not yet available".into());
-            UpdateResult::none()
-        }
+        Message::FlutterVersionInstall => flutter_version::handle_install(state),
 
-        Message::FlutterVersionUpdate => {
-            // Phase 3 stub
-            state.flutter_version_state.status_message = Some("Update not yet available".into());
-            UpdateResult::none()
-        }
+        Message::FlutterVersionUpdate => flutter_version::handle_update(state),
     }
 }
 

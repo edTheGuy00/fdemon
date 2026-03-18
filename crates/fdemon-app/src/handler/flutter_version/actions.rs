@@ -89,6 +89,12 @@ pub fn handle_switch_completed(state: &mut AppState, version: String) -> UpdateR
     // Refresh the SDK info pane with the new resolved SDK
     state.flutter_version_state.sdk_info.resolved_sdk = state.resolved_sdk.clone();
 
+    // Refresh dart_version from the new SDK's dart-sdk/version file
+    state.flutter_version_state.sdk_info.dart_version = state
+        .resolved_sdk
+        .as_ref()
+        .and_then(|sdk| crate::flutter_version::read_dart_version(&sdk.root));
+
     // Re-scan to update is_active markers
     let active_sdk_root = state.resolved_sdk.as_ref().map(|sdk| sdk.root.clone());
     UpdateResult::action(UpdateAction::ScanInstalledSdks { active_sdk_root })
@@ -102,12 +108,17 @@ pub fn handle_switch_failed(state: &mut AppState, reason: String) -> UpdateResul
 
 /// Handle `FlutterVersionRemove` — initiate removal of the selected version.
 ///
+/// Implements a double-press `d` confirmation pattern (similar to Vim's `dd`):
+/// - First press: Set `pending_delete = Some(selected_index)`, show confirmation prompt.
+/// - Second press (same index): Execute removal, clear `pending_delete`.
+/// - Active version guard: Show error message, clear `pending_delete`.
+///
 /// Guards:
 /// - Must be focused on the `VersionList` pane.
 /// - Must not remove the currently active version.
 ///
-/// Returns `UpdateAction::RemoveFlutterVersion` on success; otherwise sets a
-/// status message and returns no action.
+/// Returns `UpdateAction::RemoveFlutterVersion` on confirmed second press;
+/// otherwise sets a status message and returns no action.
 pub fn handle_remove(state: &mut AppState) -> UpdateResult {
     let fv = &state.flutter_version_state;
 
@@ -115,30 +126,60 @@ pub fn handle_remove(state: &mut AppState) -> UpdateResult {
         return UpdateResult::none();
     }
 
-    let Some(selected) = fv
-        .version_list
-        .installed_versions
-        .get(fv.version_list.selected_index)
-    else {
+    let selected_index = fv.version_list.selected_index;
+
+    let Some(selected) = fv.version_list.installed_versions.get(selected_index) else {
         return UpdateResult::none();
     };
 
-    // Don't allow removing the active version
+    // Don't allow removing the active version — clear any pending state
     if selected.is_active {
         state.flutter_version_state.status_message =
-            Some("Cannot remove the active version".into());
+            Some("Cannot remove the active SDK version".into());
+        state.flutter_version_state.pending_delete = None;
         return UpdateResult::none();
     }
 
-    let version = selected.version.clone();
-    let path = selected.path.clone();
-    let active_sdk_root = state.resolved_sdk.as_ref().map(|sdk| sdk.root.clone());
+    // Double-press confirmation pattern
+    if state.flutter_version_state.pending_delete == Some(selected_index) {
+        // Second press — confirmed, proceed with removal
+        state.flutter_version_state.pending_delete = None;
+        let fv = &state.flutter_version_state;
+        let selected = &fv.version_list.installed_versions[selected_index];
+        let version = selected.version.clone();
+        let path = selected.path.clone();
+        let active_sdk_root = state.resolved_sdk.as_ref().map(|sdk| sdk.root.clone());
+        UpdateResult::action(UpdateAction::RemoveFlutterVersion {
+            version,
+            path,
+            active_sdk_root,
+        })
+    } else {
+        // First press — set pending and show confirmation prompt
+        let version = state.flutter_version_state.version_list.installed_versions[selected_index]
+            .version
+            .clone();
+        state.flutter_version_state.pending_delete = Some(selected_index);
+        state.flutter_version_state.status_message =
+            Some(format!("Press d again to remove {version}"));
+        UpdateResult::none()
+    }
+}
 
-    UpdateResult::action(UpdateAction::RemoveFlutterVersion {
-        version,
-        path,
-        active_sdk_root,
-    })
+/// Handle `FlutterVersionInstall` — Phase 3 stub.
+///
+/// Install functionality is not yet available; shows an informational message.
+pub fn handle_install(state: &mut AppState) -> UpdateResult {
+    state.flutter_version_state.status_message = Some("Install not yet available".into());
+    UpdateResult::none()
+}
+
+/// Handle `FlutterVersionUpdate` — Phase 3 stub.
+///
+/// Update functionality is not yet available; shows an informational message.
+pub fn handle_update(state: &mut AppState) -> UpdateResult {
+    state.flutter_version_state.status_message = Some("Update not yet available".into());
+    UpdateResult::none()
 }
 
 /// Handle `FlutterVersionRemoveCompleted` — update display state after a successful removal.
@@ -330,6 +371,58 @@ mod tests {
     }
 
     #[test]
+    fn test_switch_completed_updates_dart_version() {
+        let mut state = panel_state_with_versions();
+        // Simulate a dart_version from the original SDK
+        state.flutter_version_state.sdk_info.dart_version = Some("3.3.0".to_string());
+
+        // After switch, dart_version should be refreshed (will be None in test
+        // since the fake SDK path doesn't have a real dart-sdk/version file)
+        let result = handle_switch_completed(&mut state, "3.22.0".to_string());
+
+        // The key assertion is that the code path runs without error
+        assert!(result.action.is_some()); // ScanInstalledSdks returned
+                                          // resolved_sdk was copied to sdk_info
+        assert!(state.flutter_version_state.sdk_info.resolved_sdk.is_some());
+        // dart_version was refreshed (fake SDK has no version file, so it's None)
+        assert!(state.flutter_version_state.sdk_info.dart_version.is_none());
+    }
+
+    #[test]
+    fn test_switch_completed_reads_new_dart_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let dart_version_dir = dir.path().join("bin/cache/dart-sdk");
+        std::fs::create_dir_all(&dart_version_dir).unwrap();
+        std::fs::write(dart_version_dir.join("version"), "3.4.0\n").unwrap();
+
+        let mut state = panel_state_with_versions();
+        let mut sdk = fdemon_daemon::test_utils::fake_flutter_sdk();
+        sdk.root = dir.path().to_path_buf();
+        state.resolved_sdk = Some(sdk);
+        state.flutter_version_state.sdk_info.dart_version = Some("3.3.0".to_string());
+
+        handle_switch_completed(&mut state, "3.22.0".to_string());
+
+        assert_eq!(
+            state.flutter_version_state.sdk_info.dart_version.as_deref(),
+            Some("3.4.0")
+        );
+    }
+
+    #[test]
+    fn test_switch_completed_none_sdk_clears_dart_version() {
+        let mut state = panel_state_with_versions();
+        // Set resolved_sdk to None (edge case)
+        state.resolved_sdk = None;
+        state.flutter_version_state.sdk_info.dart_version = Some("3.3.0".to_string());
+
+        handle_switch_completed(&mut state, "3.22.0".to_string());
+
+        // When resolved_sdk is None, dart_version should be None
+        assert!(state.flutter_version_state.sdk_info.dart_version.is_none());
+    }
+
+    #[test]
     fn test_switch_failed_sets_status() {
         let mut state = panel_state_with_versions();
         handle_switch_failed(&mut state, "permission denied".into());
@@ -355,23 +448,75 @@ mod tests {
     }
 
     #[test]
-    fn test_remove_non_active_returns_action() {
+    fn test_remove_active_version_clears_pending() {
+        let mut state = panel_state_with_versions();
+        state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
+        state.flutter_version_state.version_list.selected_index = 0; // active
+        state.flutter_version_state.pending_delete = Some(0);
+        handle_remove(&mut state);
+        assert!(state.flutter_version_state.pending_delete.is_none());
+    }
+
+    #[test]
+    fn test_remove_first_press_sets_pending() {
         let mut state = panel_state_with_versions();
         state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
         state.flutter_version_state.version_list.selected_index = 1; // non-active
+        let result = handle_remove(&mut state);
+        assert!(result.action.is_none());
+        assert_eq!(state.flutter_version_state.pending_delete, Some(1));
+        assert!(state
+            .flutter_version_state
+            .status_message
+            .as_deref()
+            .unwrap()
+            .contains("again"));
+    }
+
+    #[test]
+    fn test_remove_first_press_shows_version_in_message() {
+        let mut state = panel_state_with_versions();
+        state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
+        state.flutter_version_state.version_list.selected_index = 1; // 3.16.0
+        handle_remove(&mut state);
+        assert!(state
+            .flutter_version_state
+            .status_message
+            .as_deref()
+            .unwrap()
+            .contains("3.16.0"));
+    }
+
+    #[test]
+    fn test_remove_second_press_returns_action() {
+        let mut state = panel_state_with_versions();
+        state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
+        state.flutter_version_state.version_list.selected_index = 1; // non-active
+
+        // First press
+        handle_remove(&mut state);
+        assert_eq!(state.flutter_version_state.pending_delete, Some(1));
+
+        // Second press — should trigger removal
         let result = handle_remove(&mut state);
         assert!(matches!(
             result.action,
             Some(UpdateAction::RemoveFlutterVersion { .. })
         ));
+        assert!(state.flutter_version_state.pending_delete.is_none());
     }
 
     #[test]
-    fn test_remove_non_active_carries_correct_version() {
+    fn test_remove_second_press_carries_correct_version() {
         let mut state = panel_state_with_versions();
         state.flutter_version_state.focused_pane = FlutterVersionPane::VersionList;
         state.flutter_version_state.version_list.selected_index = 2; // 3.22.0-beta
+
+        // First press
+        handle_remove(&mut state);
+        // Second press
         let result = handle_remove(&mut state);
+
         if let Some(UpdateAction::RemoveFlutterVersion { version, .. }) = result.action {
             assert_eq!(version, "3.22.0-beta");
         } else {

@@ -37,8 +37,8 @@ use ratatui::{
 
 use fdemon_app::flutter_version::{FlutterVersionPane, FlutterVersionState};
 
-use crate::theme::{icons::IconSet, palette};
-use crate::widgets::modal_overlay;
+use crate::theme::palette;
+use crate::widgets::modal_overlay::{self, centered_rect_percent};
 
 use sdk_info::SdkInfoPane;
 use version_list::VersionListPane;
@@ -69,12 +69,21 @@ const LEFT_PANE_PERCENT: u16 = 40;
 /// Clamped to 6 for compact display in vertical mode.
 const VERTICAL_SDK_INFO_HEIGHT: u16 = 6;
 
+/// Panel width as a percentage of the terminal width.
+///
+/// Derived from: 80% provides comfortable margins on typical 80–200 column terminals.
+const PANEL_WIDTH_PERCENT: u16 = 80;
+
+/// Panel height as a percentage of the terminal height.
+///
+/// Derived from: 70% reserves header/footer space while showing all panel content.
+const PANEL_HEIGHT_PERCENT: u16 = 70;
+
 /// The main Flutter Version Panel widget.
 ///
 /// Renders as a centered overlay over the full terminal area.
 pub struct FlutterVersionPanel<'a> {
     state: &'a FlutterVersionState,
-    icons: &'a IconSet,
 }
 
 impl<'a> FlutterVersionPanel<'a> {
@@ -82,26 +91,8 @@ impl<'a> FlutterVersionPanel<'a> {
     ///
     /// # Arguments
     /// * `state` – Panel state snapshot
-    /// * `icons` – Runtime icon resolver
-    pub fn new(state: &'a FlutterVersionState, icons: &'a IconSet) -> Self {
-        Self { state, icons }
-    }
-
-    /// Calculate the centered dialog area (80% width, 70% height).
-    fn centered_rect(area: Rect) -> Rect {
-        let vertical = Layout::vertical([
-            Constraint::Percentage(15),
-            Constraint::Percentage(70),
-            Constraint::Percentage(15),
-        ])
-        .split(area);
-
-        Layout::horizontal([
-            Constraint::Percentage(10),
-            Constraint::Percentage(80),
-            Constraint::Percentage(10),
-        ])
-        .split(vertical[1])[1]
+    pub fn new(state: &'a FlutterVersionState) -> Self {
+        Self { state }
     }
 
     /// Render header: title + close hint on row 1, subtitle on row 2.
@@ -184,7 +175,6 @@ impl<'a> FlutterVersionPanel<'a> {
         let sdk_info = SdkInfoPane::new(
             &self.state.sdk_info,
             self.state.focused_pane == FlutterVersionPane::SdkInfo,
-            self.icons,
         );
         sdk_info.render(chunks[0], buf);
 
@@ -193,7 +183,6 @@ impl<'a> FlutterVersionPanel<'a> {
         let version_list = VersionListPane::new(
             &self.state.version_list,
             self.state.focused_pane == FlutterVersionPane::VersionList,
-            self.icons,
         );
         version_list.render(chunks[2], buf);
     }
@@ -210,7 +199,6 @@ impl<'a> FlutterVersionPanel<'a> {
         let sdk_info = SdkInfoPane::new(
             &self.state.sdk_info,
             self.state.focused_pane == FlutterVersionPane::SdkInfo,
-            self.icons,
         );
         sdk_info.render(chunks[0], buf);
 
@@ -219,7 +207,6 @@ impl<'a> FlutterVersionPanel<'a> {
         let version_list = VersionListPane::new(
             &self.state.version_list,
             self.state.focused_pane == FlutterVersionPane::VersionList,
-            self.icons,
         );
         version_list.render(chunks[2], buf);
     }
@@ -270,8 +257,8 @@ impl Widget for FlutterVersionPanel<'_> {
         // 1. Dim the entire background
         modal_overlay::dim_background(buf, area);
 
-        // 2. Calculate centered dialog area (80% width, 70% height)
-        let dialog_area = Self::centered_rect(area);
+        // 2. Calculate centered dialog area (PANEL_WIDTH_PERCENT × PANEL_HEIGHT_PERCENT)
+        let dialog_area = centered_rect_percent(PANEL_WIDTH_PERCENT, PANEL_HEIGHT_PERCENT, area);
 
         // 3. Check minimum size — render "too small" and return early
         if dialog_area.width < MIN_RENDER_WIDTH || dialog_area.height < MIN_RENDER_HEIGHT {
@@ -359,6 +346,7 @@ mod tests {
             focused_pane: FlutterVersionPane::SdkInfo,
             visible: true,
             status_message: None,
+            pending_delete: None,
         }
     }
 
@@ -372,14 +360,14 @@ mod tests {
             focused_pane: FlutterVersionPane::SdkInfo,
             visible: true,
             status_message: None,
+            pending_delete: None,
         }
     }
 
     #[test]
     fn test_panel_renders_without_panic() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -388,8 +376,7 @@ mod tests {
     #[test]
     fn test_too_small_renders_message() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 30, 8); // too small
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -399,8 +386,7 @@ mod tests {
     #[test]
     fn test_no_sdk_renders_without_panic() {
         let state = test_state_no_sdk();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 100, 40);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -409,8 +395,7 @@ mod tests {
     #[test]
     fn test_panel_header_shows_title() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -424,8 +409,7 @@ mod tests {
     #[test]
     fn test_panel_header_shows_esc_close() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -438,8 +422,7 @@ mod tests {
     fn test_panel_footer_sdk_info_focused_shows_versions_hint() {
         let mut state = test_state();
         state.focused_pane = FlutterVersionPane::SdkInfo;
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -454,8 +437,7 @@ mod tests {
     fn test_panel_footer_version_list_focused_shows_switch_hint() {
         let mut state = test_state();
         state.focused_pane = FlutterVersionPane::VersionList;
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -470,8 +452,7 @@ mod tests {
     fn test_panel_status_message_shown_in_footer() {
         let mut state = test_state();
         state.status_message = Some("Switched to 3.19.0".into());
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
         widget.render(area, &mut buf);
@@ -485,8 +466,7 @@ mod tests {
     #[test]
     fn test_panel_vertical_layout_narrow_terminal() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         // Use a narrow area to force vertical layout
         let area = Rect::new(0, 0, 60, 40);
         let mut buf = Buffer::empty(area);
@@ -496,8 +476,7 @@ mod tests {
     #[test]
     fn test_panel_horizontal_layout_wide_terminal() {
         let state = test_state();
-        let icons = IconSet::default();
-        let widget = FlutterVersionPanel::new(&state, &icons);
+        let widget = FlutterVersionPanel::new(&state);
         // Wide enough to trigger horizontal layout
         let area = Rect::new(0, 0, 120, 50);
         let mut buf = Buffer::empty(area);
@@ -513,8 +492,7 @@ mod tests {
             resolved_sdk: None,
             dart_version: None,
         };
-        let icons = IconSet::default();
-        let pane = SdkInfoPane::new(&state, true, &icons);
+        let pane = SdkInfoPane::new(&state, true);
         let area = Rect::new(0, 0, 30, 10);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -531,8 +509,7 @@ mod tests {
 
         let mut state = test_state();
         state.version_list.loading = true;
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state.version_list, true, &icons);
+        let pane = VersionListPane::new(&state.version_list, true);
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -549,8 +526,7 @@ mod tests {
 
         let state = test_state();
         assert_eq!(state.version_list.last_known_visible_height.get(), 0);
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state.version_list, true, &icons);
+        let pane = VersionListPane::new(&state.version_list, true);
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -571,8 +547,7 @@ mod tests {
             path: PathBuf::from("/test"),
             is_active: true,
         }];
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state.version_list, true, &icons);
+        let pane = VersionListPane::new(&state.version_list, true);
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -590,8 +565,7 @@ mod tests {
         let mut state = test_state();
         state.version_list.installed_versions = vec![];
         state.version_list.loading = false;
-        let icons = IconSet::default();
-        let pane = VersionListPane::new(&state.version_list, true, &icons);
+        let pane = VersionListPane::new(&state.version_list, true);
         let area = Rect::new(0, 0, 40, 10);
         let mut buf = Buffer::empty(area);
         pane.render(area, &mut buf);

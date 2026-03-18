@@ -103,3 +103,29 @@ Also verify any tests that assert `loading == false` after default construction 
 - This is a 1-line fix with minimal risk.
 - The TUI widget already has a "Scanning..." rendering path when `loading: true` — no widget changes needed.
 - After the scan completes, the handler sets `loading: false` and populates `installed_versions`, which is unchanged.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/state.rs` | Changed `loading: false` to `loading: true` in `VersionListState::default()`; updated `test_flutter_version_state_default` assertion from `assert!(!state.version_list.loading)` to `assert!(state.version_list.loading)` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Single-site fix in `Default` impl**: Fixing the default in `VersionListState::default()` rather than at each call site ensures all future construction paths are correct without needing changes at every consumer. The existing test at `navigation.rs:146` that sets `loading = false` explicitly is harmless and left untouched, as it intentionally establishes a pre-test state.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1771 unit tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: This is a one-line change with no downstream risk. Every code path that constructs `VersionListState` immediately triggers a scan (`UpdateAction::ScanInstalledSdks`), so initializing to `loading: true` is always correct.

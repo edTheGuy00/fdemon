@@ -123,3 +123,37 @@ The FVM_CACHE_PATH env var test is best done as a manual test or integration tes
 - `resolve_fvm_cache_path` in `cache_scanner.rs` is the best canonical version because it checks both the env var AND verifies the path is a directory (`.is_dir()`).
 - `fdemon-app` already depends on `fdemon-daemon`, so the cross-crate call introduces no new dependency.
 - The `dirs` import in `actions/mod.rs` may become unused after this fix — remove it if so.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/cache_scanner.rs` | Changed `fn resolve_fvm_cache_path` to `pub fn resolve_fvm_cache_path` |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Added `resolve_fvm_cache_path` to `pub use cache_scanner::{...}` re-export list |
+| `crates/fdemon-app/src/actions/mod.rs` | Extracted `remove_flutter_version_path()` helper that calls `resolve_fvm_cache_path()`; replaced inline `dirs::home_dir().unwrap_or_default()` logic with call to the new helper; added `test_remove_rejects_path_outside_fvm_cache` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Extracted helper function**: Rather than only patching the inline closure, extracted a `remove_flutter_version_path()` free function. This made the closure one line, made the safety logic unit-testable, and keeps the async dispatch code clean.
+
+2. **`dirs` dependency retained in Cargo.toml**: The `dirs` crate remains in `fdemon-app/Cargo.toml` because it may be used elsewhere in the crate at compile time. Clippy confirmed zero warnings after the inline usage was removed — no unused-extern-crate lint was triggered, so no Cargo.toml change is needed.
+
+3. **`ok_or_else` error for missing FVM cache**: When neither `FVM_CACHE_PATH` nor `~/fvm/versions/` exists, the function returns a config error rather than silently passing an empty-path check, satisfying acceptance criterion 3.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1772 tests, 0 failed)
+- `cargo clippy -p fdemon-app -p fdemon-daemon -- -D warnings` - Passed (0 warnings)
+- `cargo fmt --all && cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **`FVM_CACHE_PATH` env var test**: The task notes that testing the env-var path requires `serial_test` or `temp_env` to avoid parallel test interference. This was intentionally left as a manual/integration test per the task's guidance.

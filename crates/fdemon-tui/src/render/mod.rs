@@ -246,7 +246,7 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             // Render Flutter Version panel as an overlay on top of the normal log view.
             // The underlying header and log view are already rendered above; here we
             // render the dimmed overlay + centered panel dialog on top of them.
-            let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state, &icons);
+            let panel = widgets::FlutterVersionPanel::new(&state.flutter_version_state);
             frame.render_widget(panel, area);
         }
         // Legacy StartupDialog removed - use NewSessionDialog instead

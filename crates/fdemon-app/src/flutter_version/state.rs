@@ -24,6 +24,9 @@ pub struct FlutterVersionState {
     pub visible: bool,
     /// Status message shown at bottom (e.g., "Switched to 3.19.0")
     pub status_message: Option<String>,
+    /// Index of version pending deletion (double-press `d` confirmation).
+    /// Set on first `d` press, cleared on second `d` press or any other action.
+    pub pending_delete: Option<usize>,
 }
 
 impl FlutterVersionState {
@@ -46,6 +49,7 @@ impl FlutterVersionState {
             focused_pane: FlutterVersionPane::default(),
             visible: false,
             status_message: None,
+            pending_delete: None,
         }
     }
 }
@@ -55,7 +59,7 @@ impl FlutterVersionState {
 /// Returns `None` if the file does not exist or cannot be read.
 /// This is a small synchronous file read (< 100 bytes) and is safe to call
 /// from the message handler during panel open.
-fn read_dart_version(sdk_root: &Path) -> Option<String> {
+pub(crate) fn read_dart_version(sdk_root: &Path) -> Option<String> {
     let version_path = sdk_root
         .join("bin")
         .join("cache")
@@ -102,7 +106,7 @@ impl Default for VersionListState {
             installed_versions: Vec::new(),
             selected_index: 0,
             scroll_offset: 0,
-            loading: false,
+            loading: true, // Start in loading state — scan is always triggered on panel open
             error: None,
             last_known_visible_height: Cell::new(0),
         }
@@ -138,8 +142,9 @@ mod tests {
         assert_eq!(state.focused_pane, FlutterVersionPane::SdkInfo);
         assert!(state.version_list.installed_versions.is_empty());
         assert_eq!(state.version_list.selected_index, 0);
-        assert!(!state.version_list.loading);
+        assert!(state.version_list.loading); // starts in loading state
         assert!(state.status_message.is_none());
+        assert!(state.pending_delete.is_none());
     }
 
     #[test]

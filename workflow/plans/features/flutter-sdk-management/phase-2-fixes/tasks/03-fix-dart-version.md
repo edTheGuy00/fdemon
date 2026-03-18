@@ -172,3 +172,32 @@ fn test_switch_completed_reads_new_dart_version() {
 
 - This is a 2-line fix (1 visibility change + 1 new line in handler). Minimal blast radius.
 - The `pub(crate)` visibility is sufficient — `read_dart_version` does not need to be visible outside `fdemon-app`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/flutter_version/state.rs` | Changed `read_dart_version` visibility from private `fn` to `pub(crate) fn` |
+| `crates/fdemon-app/src/handler/flutter_version/actions.rs` | Added `dart_version` refresh line in `handle_switch_completed`; added 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub(crate)` via `pub use state::*`**: The `pub use state::*` in `flutter_version/mod.rs` re-exports `pub(crate)` items within the crate, so `crate::flutter_version::read_dart_version` resolves correctly from `handler/flutter_version/actions.rs`.
+
+2. **Extra `None` sentinel test**: Added `test_switch_completed_none_sdk_clears_dart_version` beyond the two tests in the task spec to cover the safety case where `resolved_sdk` is `None` — per acceptance criterion 4.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1780 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Synchronous file read in handler**: Consistent with the existing `FlutterVersionState::new()` pattern; the version file is under 100 bytes and this has been explicitly documented as acceptable in the codebase.

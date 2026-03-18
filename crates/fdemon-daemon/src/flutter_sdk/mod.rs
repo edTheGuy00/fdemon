@@ -43,7 +43,10 @@ mod locator;
 mod types;
 pub mod version_managers;
 
-pub use cache_scanner::{scan_installed_versions, scan_installed_versions_from_path, InstalledSdk};
+pub use cache_scanner::{
+    resolve_fvm_cache_path, scan_installed_versions, scan_installed_versions_from_path,
+    InstalledSdk,
+};
 pub use channel::{detect_channel, read_dart_version, FlutterChannel, FlutterVersion};
 pub use locator::find_flutter_sdk;
 pub use types::{read_version_file, validate_sdk_path, FlutterExecutable, FlutterSdk, SdkSource};

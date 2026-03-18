@@ -43,7 +43,7 @@ fn is_channel_name(name: &str) -> bool {
 ///
 /// Checks the `FVM_CACHE_PATH` environment variable first, then falls back to
 /// `~/fvm/versions/`. Returns `None` if neither path exists as a directory.
-fn resolve_fvm_cache_path() -> Option<PathBuf> {
+pub fn resolve_fvm_cache_path() -> Option<PathBuf> {
     // 1. Check FVM_CACHE_PATH env var
     if let Ok(path) = std::env::var("FVM_CACHE_PATH") {
         let cache_path = PathBuf::from(path);

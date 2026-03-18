@@ -16,7 +16,7 @@ use ratatui::{
 use fdemon_app::flutter_version::SdkInfoState;
 use fdemon_app::FlutterSdk;
 
-use crate::theme::{icons::IconSet, palette};
+use crate::theme::palette;
 
 /// Height of a label+value pair (2 lines: label on top, value below).
 ///
@@ -37,9 +37,6 @@ const MAX_PATH_WIDTH: usize = 28;
 pub struct SdkInfoPane<'a> {
     state: &'a SdkInfoState,
     focused: bool,
-    /// Icon set (currently unused; reserved for future icon decorations).
-    #[allow(dead_code)]
-    icons: &'a IconSet,
 }
 
 impl<'a> SdkInfoPane<'a> {
@@ -48,13 +45,8 @@ impl<'a> SdkInfoPane<'a> {
     /// # Arguments
     /// * `state`   – SDK info state snapshot
     /// * `focused` – Whether this pane has keyboard focus (for border highlight)
-    /// * `icons`   – Runtime icon resolver
-    pub fn new(state: &'a SdkInfoState, focused: bool, icons: &'a IconSet) -> Self {
-        Self {
-            state,
-            focused,
-            icons,
-        }
+    pub fn new(state: &'a SdkInfoState, focused: bool) -> Self {
+        Self { state, focused }
     }
 
     /// Render a label/value pair at the top of `area`.
@@ -290,8 +282,7 @@ mod tests {
     #[test]
     fn test_sdk_info_pane_renders_with_sdk() {
         let state = make_state_with_sdk();
-        let icons = IconSet::default();
-        let pane = SdkInfoPane::new(&state, false, &icons);
+        let pane = SdkInfoPane::new(&state, false);
         let area = ratatui::layout::Rect::new(0, 0, 40, 15);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -304,8 +295,7 @@ mod tests {
     #[test]
     fn test_sdk_info_pane_renders_no_sdk() {
         let state = make_state_no_sdk();
-        let icons = IconSet::default();
-        let pane = SdkInfoPane::new(&state, false, &icons);
+        let pane = SdkInfoPane::new(&state, false);
         let area = ratatui::layout::Rect::new(0, 0, 40, 15);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
@@ -319,8 +309,7 @@ mod tests {
     #[test]
     fn test_sdk_info_pane_no_panic_tiny_area() {
         let state = make_state_with_sdk();
-        let icons = IconSet::default();
-        let pane = SdkInfoPane::new(&state, true, &icons);
+        let pane = SdkInfoPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 5, 2);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf); // must not panic
@@ -329,8 +318,7 @@ mod tests {
     #[test]
     fn test_sdk_info_pane_focused_shows_label() {
         let state = make_state_with_sdk();
-        let icons = IconSet::default();
-        let pane = SdkInfoPane::new(&state, true, &icons);
+        let pane = SdkInfoPane::new(&state, true);
         let area = ratatui::layout::Rect::new(0, 0, 40, 15);
         let mut buf = ratatui::buffer::Buffer::empty(area);
         pane.render(area, &mut buf);
