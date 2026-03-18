@@ -1,6 +1,15 @@
-# Launch configurations for multi-config auto_start test (Issue #18 reproduction)
-# The "Staging" config has auto_start = true — fdemon should auto-launch with it.
-# The other configs do NOT have auto_start, so only one auto-start is present.
+# Launch configurations for profile mode lag reproduction (Issue #25)
+# and multi-config testing (Issue #18).
+#
+# The "Profile (Issue #25)" config has auto_start = true and mode = "profile".
+# Use it to reproduce the lag reported in Issue #25.
+# Switch to "Development" (debug mode) for A/B comparison.
+
+[[configurations]]
+name = "Profile (Issue #25)"
+device = "auto"
+mode = "profile"
+auto_start = true
 
 [[configurations]]
 name = "Development"
@@ -9,7 +18,6 @@ device = "auto"
 [[configurations]]
 name = "Staging"
 device = "auto"
-auto_start = true
 flavor = "staging"
 
 [[configurations]]
