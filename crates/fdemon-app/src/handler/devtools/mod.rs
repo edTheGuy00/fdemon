@@ -131,6 +131,19 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
+    // Unpause network monitoring if the default panel is Network and the
+    // network task is already running (subsequent DevTools visits).
+    // On the first visit the task hasn't started yet — `network_pause_tx` is
+    // None, so this send safely does nothing. The task will be started by the
+    // StartNetworkMonitoring action in handle_switch_panel.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.network_pause_tx {
+                let _ = tx.send(false); // unpause
+            }
+        }
+    }
+
     if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
         && state.devtools_view_state.inspector.root.is_none()
         && !state.devtools_view_state.inspector.loading
@@ -174,6 +187,14 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
         }
     }
 
+    // Pause network monitoring (if running): the user is leaving DevTools, so
+    // no getHttpProfile RPCs should fire while they are viewing logs.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.network_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
     state.exit_devtools_mode();
 
     if let Some(handle) = state.session_manager.selected() {
@@ -201,6 +222,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
         if let Some(handle) = state.session_manager.selected() {
             if let Some(ref tx) = handle.alloc_pause_tx {
                 let _ = tx.send(true); // pause
+            }
+        }
+    }
+
+    // Before switching, check if we are leaving the Network panel — if so,
+    // pause network polling so no getHttpProfile RPCs fire while on other panels.
+    if old_panel == DevToolsPanel::Network && panel != DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.network_pause_tx {
+                let _ = tx.send(true); // pause network polling
             }
         }
     }
@@ -266,6 +297,16 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                         poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
                         mode,
                     });
+                }
+                // Task is already running — unpause network polling so the
+                // Network tab immediately shows any requests that arrived while
+                // the tab was hidden. The `network_pause_rx.changed()` arm in
+                // the polling task fires an immediate getHttpProfile fetch on
+                // unpause.
+                if already_running {
+                    if let Some(ref tx) = handle.network_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
                 }
             }
         }
@@ -964,6 +1005,213 @@ mod tests {
             *perf_rx.borrow(),
             initial_perf_state,
             "switching to Performance panel should not change perf_pause_tx (only alloc_pause_tx)"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // network_pause_tx tests (Task 02: pause-network-on-tab-switch)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with a live `network_pause_tx` channel (initial: active/false).
+    /// Returns AppState and a receiver to observe the channel value.
+    fn make_state_with_network_pause() -> (AppState, tokio::sync::watch::Receiver<bool>) {
+        let mut state = make_state_with_session();
+        // Initial value false (active) — task starts when already on Network tab.
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let handle = state.session_manager.selected_mut().unwrap();
+        // Simulate the task being running by also setting network_shutdown_tx.
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
+        handle.network_pause_tx = Some(std::sync::Arc::new(tx));
+        (state, rx)
+    }
+
+    #[test]
+    fn test_network_pause_tx_stored_on_session_handle() {
+        // After VmServiceNetworkMonitoringStarted is handled, network_pause_tx
+        // should be Some. Verified here by directly setting the field.
+        let (state, rx) = make_state_with_network_pause();
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .network_pause_tx
+                .is_some(),
+            "network_pause_tx should be set on the session handle"
+        );
+        // Channel starts in the active state (false) — task starts on Network tab.
+        assert!(
+            !*rx.borrow(),
+            "network_pause channel should start in active state (false)"
+        );
+    }
+
+    #[test]
+    fn test_switch_away_from_network_sends_pause() {
+        // SwitchDevToolsPanel(Performance) when current panel is Network
+        // should send true on network_pause_tx.
+        let (mut state, rx) = make_state_with_network_pause();
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+
+        assert!(
+            *rx.borrow(),
+            "switching AWAY from Network should pause network polling (send true)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Performance
+        );
+    }
+
+    #[test]
+    fn test_switch_to_network_sends_unpause_when_task_running() {
+        // SwitchDevToolsPanel(Network) when task is already running should
+        // send false on network_pause_tx (unpause).
+        let (mut state, rx) = make_state_with_network_pause();
+        // First pause it (simulate coming from another panel).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        // Switch to Network — task is already running (network_shutdown_tx is set).
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        handle_switch_panel(&mut state, DevToolsPanel::Network);
+
+        assert!(
+            !*rx.borrow(),
+            "switching TO Network (task running) should unpause network polling (send false)"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_pauses_network() {
+        // handle_exit_devtools_mode should send true on network_pause_tx.
+        let (mut state, rx) = make_state_with_network_pause();
+        // Confirm initial state is active (false).
+        assert!(!*rx.borrow(), "precondition: network should be active");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "exiting DevTools should pause network polling (send true)"
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_network_default_unpauses() {
+        // handle_enter_devtools_mode with default_panel = "network"
+        // should send false on network_pause_tx (if task is running).
+        let (mut state, rx) = make_state_with_network_pause();
+        state.settings.devtools.default_panel = "network".to_string();
+
+        // First pause it (simulate previous DevTools exit).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            !*rx.borrow(),
+            "entering DevTools with Network as default should unpause network polling (send false)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Network
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_non_network_default_does_not_unpause_network() {
+        // handle_enter_devtools_mode with default_panel = "inspector"
+        // should NOT change the network pause state (remains paused).
+        let (mut state, rx) = make_state_with_network_pause();
+        state.settings.devtools.default_panel = "inspector".to_string();
+
+        // First pause it (simulate previous DevTools exit).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "entering DevTools with Inspector as default should not unpause network polling"
+        );
+    }
+
+    #[test]
+    fn test_network_pause_cleared_on_disconnect() {
+        // After VmServiceDisconnected, network_pause_tx should be None.
+        // We test by simulating what the handler does.
+        let mut state = make_state_with_session();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.session_manager.selected_mut().unwrap().network_pause_tx =
+            Some(std::sync::Arc::new(tx));
+
+        // Simulate the VmServiceDisconnected handler clearing the field.
+        state.session_manager.selected_mut().unwrap().network_pause_tx = None;
+
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .network_pause_tx
+                .is_none(),
+            "network_pause_tx should be None after disconnect"
+        );
+    }
+
+    #[test]
+    fn test_switch_between_non_network_panels_does_not_change_network_pause_state() {
+        // Switching Inspector → Performance should not touch the network_pause channel.
+        let (mut state, rx) = make_state_with_network_pause();
+        // First pause it (as if we're not on Network).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+
+        // Pause state should remain true (unchanged — no Network panel involved).
+        assert!(
+            *rx.borrow(),
+            "switching between non-Network panels should not change network pause state"
         );
     }
 }

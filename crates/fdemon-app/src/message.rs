@@ -976,6 +976,13 @@ pub enum Message {
         session_id: SessionId,
         network_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
         network_task_handle: SharedTaskHandle,
+        /// Pause sender for the network polling loop.
+        ///
+        /// `true` = paused (not on Network tab), `false` = active (polling).
+        ///
+        /// Initial value is `false` (active) — the task starts when the user is
+        /// already on the Network tab, so polling should begin immediately.
+        network_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
     /// Network extensions not available (e.g., release mode).

@@ -1343,6 +1343,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.network_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the network-pause sender — a new one will arrive with
+                // the next VmServiceNetworkMonitoringStarted message.
+                handle.network_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1563,6 +1566,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     let _ = tx.send(true);
                 }
                 handle.network_shutdown_tx = None;
+                // Clear the network-pause sender. The polling task's
+                // network_pause_rx will see the sender drop; the shutdown arm
+                // handles clean exit. Setting to None signals no Network tab
+                // is open for this disconnected session.
+                handle.network_pause_tx = None;
             }
             UpdateResult::none()
         }
@@ -1898,11 +1906,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             network_shutdown_tx,
             network_task_handle,
+            network_pause_tx,
         } => devtools::network::handle_network_monitoring_started(
             state,
             session_id,
             network_shutdown_tx,
             network_task_handle,
+            network_pause_tx,
         ),
 
         Message::VmServiceNetworkExtensionsUnavailable { session_id } => {

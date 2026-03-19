@@ -111,6 +111,14 @@ pub(super) fn spawn_network_monitoring(
     // Arc is required because Message derives Clone and watch::Sender does not impl Clone.
     let network_shutdown_tx = std::sync::Arc::new(network_shutdown_tx);
 
+    // Create the pause channel outside the task. Initial value is `false` (active)
+    // because the network task only starts when the user is already on the Network
+    // tab — polling should begin immediately without a separate unpause signal.
+    // Unlike perf_pause/alloc_pause which start paused (true).
+    let (network_pause_tx, mut network_pause_rx) = tokio::sync::watch::channel(false);
+    let network_pause_tx = std::sync::Arc::new(network_pause_tx);
+    let network_pause_tx_for_msg = network_pause_tx.clone();
+
     // The JoinHandle from `tokio::spawn` is only available after the call, but
     // the task will read it from the slot when sending the "started" message.
     // We use `Arc<Mutex<Option<>>>` as a rendezvous — the slot is filled
@@ -128,6 +136,7 @@ pub(super) fn spawn_network_monitoring(
                 session_id,
                 network_shutdown_tx,
                 network_task_handle: task_handle_slot_for_msg,
+                network_pause_tx: network_pause_tx_for_msg,
             })
             .await
             .is_err()
@@ -208,6 +217,10 @@ pub(super) fn spawn_network_monitoring(
         loop {
             tokio::select! {
                 _ = poll_tick.tick() => {
+                    // Skip if network monitoring is paused (user is not on Network tab).
+                    if *network_pause_rx.borrow() {
+                        continue;
+                    }
                     match network::get_http_profile_handle(&handle, &isolate_id, last_timestamp).await {
                         Ok(profile) => {
                             // Always update the timestamp so the next poll only returns new data.
@@ -235,6 +248,45 @@ pub(super) fn spawn_network_monitoring(
                                 session_id,
                                 e
                             );
+                        }
+                    }
+                }
+                Ok(()) = network_pause_rx.changed() => {
+                    // When the pause state changes to `false` (unpaused), fire an
+                    // immediate getHttpProfile fetch so the Network tab shows any
+                    // requests that arrived while the tab was hidden. Network data
+                    // accumulates on the VM side during the pause and is retrieved
+                    // in full on the next fetch.
+                    if !*network_pause_rx.borrow() {
+                        tracing::debug!(
+                            "Network monitoring: unpaused for session {}, firing immediate fetch",
+                            session_id
+                        );
+                        match network::get_http_profile_handle(&handle, &isolate_id, last_timestamp).await {
+                            Ok(profile) => {
+                                last_timestamp = Some(profile.timestamp);
+                                if !profile.requests.is_empty()
+                                    && msg_tx
+                                        .send(Message::VmServiceHttpProfileReceived {
+                                            session_id,
+                                            timestamp: profile.timestamp,
+                                            entries: profile.requests,
+                                        })
+                                        .await
+                                        .is_err()
+                                {
+                                    // Engine shutting down.
+                                    break;
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!(
+                                    "Network monitoring: immediate fetch on unpause failed for \
+                                     session {} (non-fatal): {}",
+                                    session_id,
+                                    e
+                                );
+                            }
                         }
                     }
                 }

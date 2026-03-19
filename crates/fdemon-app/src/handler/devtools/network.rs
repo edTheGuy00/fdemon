@@ -95,13 +95,14 @@ pub(crate) fn handle_network_extensions_unavailable(
 
 /// Handle network monitoring task started.
 ///
-/// Stores the shutdown sender and task handle in the session handle so they
-/// can be stopped cleanly on session close or VM disconnect.
+/// Stores the shutdown sender, pause sender, and task handle in the session
+/// handle so they can be stopped/paused cleanly on session close or VM disconnect.
 pub(crate) fn handle_network_monitoring_started(
     state: &mut AppState,
     session_id: SessionId,
     shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     task_handle: SharedTaskHandle,
+    pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
 ) -> UpdateResult {
     if let Some(handle) = state.session_manager.get_mut(session_id) {
         // Belt-and-suspenders: if a monitoring task is already running (e.g.
@@ -118,6 +119,7 @@ pub(crate) fn handle_network_monitoring_started(
 
         handle.network_shutdown_tx = Some(shutdown_tx);
         handle.network_task_handle = task_handle.lock().ok().and_then(|mut g| g.take());
+        handle.network_pause_tx = Some(pause_tx);
     }
     UpdateResult::none()
 }
@@ -769,17 +771,26 @@ mod tests {
 
             let (tx, _rx) = watch::channel(false);
             let shutdown_tx = Arc::new(tx);
+            let (pause_tx, _pause_rx) = watch::channel(false);
+            let pause_tx = Arc::new(pause_tx);
             let task: tokio::task::JoinHandle<()> =
                 tokio::spawn(async { tokio::time::sleep(std::time::Duration::from_secs(1)).await });
             let task_handle = Arc::new(Mutex::new(Some(task)));
 
-            let result =
-                handle_network_monitoring_started(&mut state, session_id, shutdown_tx, task_handle);
+            let result = handle_network_monitoring_started(
+                &mut state,
+                session_id,
+                shutdown_tx,
+                task_handle,
+                pause_tx,
+            );
             assert!(result.action.is_none());
             let handle = state.session_manager.get(session_id).unwrap();
             assert!(handle.network_shutdown_tx.is_some());
             // The JoinHandle should have been moved out of the Arc<Mutex<Option<>>>.
             assert!(handle.network_task_handle.is_some());
+            // The pause sender should be stored.
+            assert!(handle.network_pause_tx.is_some());
         });
     }
 }

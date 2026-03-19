@@ -161,6 +161,21 @@ pub struct SessionHandle {
     /// Sending `false` unpauses (user entered DevTools); `true` pauses (user left).
     pub perf_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
 
+    /// Pause sender for the network monitoring polling loop.
+    ///
+    /// When `true`, the `poll_tick` arm of the network polling loop is skipped —
+    /// no `getHttpProfile` RPCs fire. When `false`, polling is active.
+    ///
+    /// Initial value is `false` (active) — unlike `perf_pause` and `alloc_pause`,
+    /// network monitoring only starts when the user is already on the Network tab,
+    /// so polling should begin immediately without a separate unpause signal.
+    ///
+    /// Set by `VmServiceNetworkMonitoringStarted`, cleared on disconnect.
+    /// Sending `true` pauses (user left Network tab or exited DevTools);
+    /// `false` unpauses (user switched back to Network tab or entered DevTools
+    /// with Network as the default panel).
+    pub network_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -200,6 +215,7 @@ impl std::fmt::Debug for SessionHandle {
             )
             .field("has_alloc_pause", &self.alloc_pause_tx.is_some())
             .field("has_perf_pause", &self.perf_pause_tx.is_some())
+            .field("has_network_pause", &self.network_pause_tx.is_some())
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -226,6 +242,7 @@ impl SessionHandle {
             native_log_task_handle: None,
             alloc_pause_tx: None,
             perf_pause_tx: None,
+            network_pause_tx: None,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }
