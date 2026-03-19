@@ -9,8 +9,10 @@
 //!
 //! **Polling strategy:**
 //! - Memory tick (every `performance_refresh_ms`, min [`PERF_POLL_MIN_MS`]):
-//!   calls `getMemoryUsage` and `get_memory_sample`, populating both the basic
-//!   gauge and the rich time-series ring buffer.
+//!   calls `getMemoryUsage` **once**, then uses the result for both the basic
+//!   gauge (`VmServiceMemorySnapshot`) and the rich sample (`VmServiceMemorySample`
+//!   via `get_memory_sample_from_usage`). Only one additional `getIsolate` RPC is
+//!   issued per tick for RSS. This reduces per-tick VM Service calls from 3 to 2.
 //! - Allocation tick (every `allocation_profile_interval_ms`, min
 //!   [`ALLOC_PROFILE_POLL_MIN_MS`]): calls `getAllocationProfile` (expensive —
 //!   forces a full heap walk), so it runs at a lower frequency than the memory tick.
@@ -47,10 +49,12 @@ pub(super) const ALLOC_PROFILE_POLL_MIN_MS: u64 = 1000;
 /// - The `msg_tx` channel is closed (engine shutting down).
 ///
 /// **Memory tick** (every `performance_refresh_ms`, min 500ms):
-/// 1. Calls `getMemoryUsage` → sends `VmServiceMemorySnapshot` (basic gauge).
-/// 2. Calls `get_memory_sample` (combines `getMemoryUsage` + `getIsolate` RSS) →
+/// 1. Calls `getMemoryUsage` **once** → result shared between both messages.
+/// 2. Sends `VmServiceMemorySnapshot` (basic gauge) from the fetched data.
+/// 3. Calls `get_memory_sample_from_usage` (only fetches `getIsolate` for RSS) →
 ///    sends `VmServiceMemorySample` (rich time-series). The two ring buffers stay
-///    in sync because both are populated from the same tick.
+///    in sync because both are populated from the same tick, and `getMemoryUsage`
+///    is only called once (2 RPCs/tick instead of 3).
 ///
 /// **Allocation tick** (every `allocation_profile_interval_ms`, min 1000ms):
 /// - Calls `getAllocationProfile` → sends `VmServiceAllocationProfileReceived`.
@@ -130,21 +134,17 @@ pub(super) fn spawn_performance_polling(
                         }
                     };
 
-                    // 1. Basic memory snapshot (existing behaviour — populates memory_history).
-                    match fdemon_daemon::vm_service::get_memory_usage(&handle, &isolate_id).await {
-                        Ok(memory) => {
-                            if msg_tx
-                                .send(Message::VmServiceMemorySnapshot {
-                                    session_id,
-                                    memory,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                // Engine shutting down.
-                                break;
-                            }
-                        }
+                    // Single `getMemoryUsage` RPC — result shared between both messages.
+                    //
+                    // Before this change two separate RPC calls were issued:
+                    //   1. get_memory_usage()  → VmServiceMemorySnapshot
+                    //   2. get_memory_sample() → internally calls get_memory_usage again
+                    //
+                    // Now we call `getMemoryUsage` once and pass the result to
+                    // `get_memory_sample_from_usage`, which only needs `getIsolate` (RSS).
+                    // This reduces the per-tick RPC count from 3 to 2.
+                    let usage = match fdemon_daemon::vm_service::get_memory_usage(&handle, &isolate_id).await {
+                        Ok(usage) => usage,
                         Err(e) => {
                             // Transient errors are expected during hot reload when
                             // the isolate is paused. Log at debug and continue.
@@ -154,15 +154,32 @@ pub(super) fn spawn_performance_polling(
                             );
                             continue;
                         }
+                    };
+
+                    // 1. Basic memory snapshot — populates memory_history gauge.
+                    if msg_tx
+                        .send(Message::VmServiceMemorySnapshot {
+                            session_id,
+                            memory: usage.clone(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        // Engine shutting down.
+                        break;
                     }
 
-                    // 2. Rich memory sample (new — populates memory_samples ring buffer).
-                    //    Shares the same tick as the basic snapshot so both ring buffers
-                    //    stay in sync. If `get_memory_sample` fails (e.g. getIsolate
-                    //    unavailable), the basic VmServiceMemorySnapshot still succeeded
-                    //    above, so the gauge fallback remains functional.
+                    // 2. Rich memory sample — populates memory_samples ring buffer.
+                    //    Re-uses the already-fetched `usage`; only `getIsolate` (RSS) is
+                    //    fetched here. If `getIsolate` fails, `rss` defaults to 0 and the
+                    //    sample is still sent (non-fatal degradation).
                     if let Some(sample) =
-                        fdemon_daemon::vm_service::get_memory_sample(&handle, &isolate_id).await
+                        fdemon_daemon::vm_service::get_memory_sample_from_usage(
+                            &handle,
+                            &isolate_id,
+                            &usage,
+                        )
+                        .await
                     {
                         if msg_tx
                             .send(Message::VmServiceMemorySample { session_id, sample })
