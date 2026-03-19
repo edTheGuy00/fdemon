@@ -1310,6 +1310,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
             let allocation_profile_interval_ms =
                 state.settings.devtools.allocation_profile_interval_ms;
+            let mode = state
+                .session_manager
+                .get(session_id)
+                .and_then(|h| h.session.launch_config.as_ref())
+                .map(|c| c.mode)
+                .unwrap_or(crate::config::FlutterMode::Debug);
             let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
 
@@ -1400,6 +1406,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     handle: None, // hydrated by process.rs
                     performance_refresh_ms,
                     allocation_profile_interval_ms,
+                    mode,
                 }),
             }
         }
@@ -1409,6 +1416,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
             let allocation_profile_interval_ms =
                 state.settings.devtools.allocation_profile_interval_ms;
+            let mode = state
+                .session_manager
+                .get(session_id)
+                .and_then(|h| h.session.launch_config.as_ref())
+                .map(|c| c.mode)
+                .unwrap_or(crate::config::FlutterMode::Debug);
 
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Abort the old performance polling task before spawning a new one.
@@ -1460,6 +1473,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 handle: None, // hydrated by process.rs
                 performance_refresh_ms,
                 allocation_profile_interval_ms,
+                mode,
             })
         }
 

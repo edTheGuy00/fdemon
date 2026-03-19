@@ -196,6 +196,7 @@ pub fn handle_action(
             handle,
             performance_refresh_ms,
             allocation_profile_interval_ms,
+            mode,
         } => {
             // `handle` is guaranteed to be Some here because process.rs
             // discards actions where it couldn't hydrate the handle.
@@ -206,6 +207,7 @@ pub fn handle_action(
                     msg_tx,
                     performance_refresh_ms,
                     allocation_profile_interval_ms,
+                    mode,
                 );
             } else {
                 warn!(
@@ -310,11 +312,18 @@ pub fn handle_action(
             session_id,
             handle,
             poll_interval_ms,
+            mode,
         } => {
             // `handle` is guaranteed to be Some here because process.rs
             // discards actions where it couldn't hydrate the handle.
             if let Some(vm_handle) = handle {
-                network::spawn_network_monitoring(session_id, vm_handle, msg_tx, poll_interval_ms);
+                network::spawn_network_monitoring(
+                    session_id,
+                    vm_handle,
+                    msg_tx,
+                    poll_interval_ms,
+                    mode,
+                );
             } else {
                 warn!(
                     "StartNetworkMonitoring reached handle_action with no VmRequestHandle \

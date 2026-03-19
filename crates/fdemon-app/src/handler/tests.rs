@@ -6265,6 +6265,129 @@ fn test_vm_service_reconnected_cleans_up_perf_task() {
     });
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Mode threading tests (Phase 2, Task 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_service_connected_passes_debug_mode_when_no_launch_config() {
+    // Session with launch_config = None — should default to Debug.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Confirm no launch_config is set (default).
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .launch_config
+            .is_none(),
+        "Precondition: launch_config must be None"
+    );
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    match result.action {
+        Some(UpdateAction::StartPerformanceMonitoring { mode, .. }) => {
+            assert_eq!(
+                mode,
+                crate::config::FlutterMode::Debug,
+                "Mode should default to Debug when launch_config is None"
+            );
+        }
+        other => panic!(
+            "Expected StartPerformanceMonitoring action, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_vm_service_connected_passes_profile_mode_from_launch_config() {
+    // Session with launch_config.mode = Profile — should pass Profile through.
+    use crate::config::LaunchConfig;
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set the launch_config to Profile mode.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.launch_config = Some(LaunchConfig {
+            name: "Profile".to_string(),
+            mode: crate::config::FlutterMode::Profile,
+            ..Default::default()
+        });
+    }
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    match result.action {
+        Some(UpdateAction::StartPerformanceMonitoring { mode, .. }) => {
+            assert_eq!(
+                mode,
+                crate::config::FlutterMode::Profile,
+                "Mode should be Profile when launch_config.mode is Profile"
+            );
+        }
+        other => panic!(
+            "Expected StartPerformanceMonitoring action, got: {:?}",
+            other
+        ),
+    }
+}
+
+#[test]
+fn test_switch_to_network_panel_passes_mode() {
+    // Session with launch_config.mode = Profile — SwitchDevToolsPanel(Network)
+    // should produce StartNetworkMonitoring with mode = Profile.
+    use crate::config::LaunchConfig;
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set the launch_config to Profile mode and mark VM connected.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.vm_connected = true;
+        handle.session.launch_config = Some(LaunchConfig {
+            name: "Profile".to_string(),
+            mode: crate::config::FlutterMode::Profile,
+            ..Default::default()
+        });
+    }
+
+    // Ensure network_shutdown_tx is None (no task already running).
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .network_shutdown_tx
+            .is_none(),
+        "Precondition: network_shutdown_tx must be None"
+    );
+
+    let result = update(
+        &mut state,
+        Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Network),
+    );
+
+    match result.action {
+        Some(UpdateAction::StartNetworkMonitoring { mode, .. }) => {
+            assert_eq!(
+                mode,
+                crate::config::FlutterMode::Profile,
+                "Mode should be Profile when launch_config.mode is Profile"
+            );
+        }
+        other => panic!("Expected StartNetworkMonitoring action, got: {:?}", other),
+    }
+}
+
 #[test]
 fn test_vm_service_connected_background_session_no_status_change() {
     // Two sessions: A is active, B is background.

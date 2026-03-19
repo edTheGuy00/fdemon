@@ -24,6 +24,7 @@ use std::process::Command;
 
 use tokio::sync::mpsc;
 
+use crate::config::FlutterMode;
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::vm_service::{network, VmRequestHandle};
@@ -54,6 +55,7 @@ pub(super) fn spawn_network_monitoring(
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     poll_interval_ms: u64,
+    _mode: FlutterMode,
 ) {
     let poll_interval_ms = poll_interval_ms.max(NETWORK_POLL_MIN_MS);
 

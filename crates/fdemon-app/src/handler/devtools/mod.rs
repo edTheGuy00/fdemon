@@ -186,11 +186,18 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 let extensions_unavailable =
                     handle.session.network.extensions_available == Some(false);
                 let already_running = handle.network_shutdown_tx.is_some();
+                let mode = handle
+                    .session
+                    .launch_config
+                    .as_ref()
+                    .map(|c| c.mode)
+                    .unwrap_or(crate::config::FlutterMode::Debug);
                 if vm_connected && !extensions_unavailable && !already_running {
                     return UpdateResult::action(UpdateAction::StartNetworkMonitoring {
                         session_id,
                         handle: None, // hydrated by process.rs
                         poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
+                        mode,
                     });
                 }
             }

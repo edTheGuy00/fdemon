@@ -22,6 +22,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tracing::info;
 
+use crate::config::FlutterMode;
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::vm_service::VmRequestHandle;
@@ -76,6 +77,7 @@ pub(super) fn spawn_performance_polling(
     msg_tx: mpsc::Sender<Message>,
     performance_refresh_ms: u64,
     allocation_profile_interval_ms: u64,
+    _mode: FlutterMode,
 ) {
     // Clamp intervals to their respective minimums.
     let memory_interval = Duration::from_millis(performance_refresh_ms.max(PERF_POLL_MIN_MS));
