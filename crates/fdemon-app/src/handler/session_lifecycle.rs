@@ -3,7 +3,7 @@
 //! Handles session creation, switching, and closing.
 
 use crate::session::SessionId;
-use crate::state::AppState;
+use crate::state::{AppState, UiMode};
 use fdemon_core::{AppPhase, LogSource};
 use fdemon_daemon::CommandSender;
 
@@ -89,6 +89,7 @@ pub fn handle_select_session_by_index(state: &mut AppState, index: usize) -> Upd
     state.session_manager.select_by_index(index);
     if state.session_manager.selected_index() != old_index {
         state.devtools_view_state.reset();
+        return maybe_start_monitoring_for_selected_session(state);
     }
     UpdateResult::none()
 }
@@ -100,6 +101,7 @@ pub fn handle_next_session(state: &mut AppState) -> UpdateResult {
     let new_id = state.session_manager.selected_id();
     if old_id != new_id {
         state.devtools_view_state.reset();
+        return maybe_start_monitoring_for_selected_session(state);
     }
     UpdateResult::none()
 }
@@ -111,8 +113,53 @@ pub fn handle_previous_session(state: &mut AppState) -> UpdateResult {
     let new_id = state.session_manager.selected_id();
     if old_id != new_id {
         state.devtools_view_state.reset();
+        return maybe_start_monitoring_for_selected_session(state);
     }
     UpdateResult::none()
+}
+
+/// Start performance monitoring for the newly selected session if DevTools is
+/// active, the VM is connected, and no polling task is already running.
+///
+/// This handles the edge case where the user switches sessions while in
+/// DevTools — the new session may never have had monitoring started (it was
+/// connected before the user first opened DevTools) so we must start it now.
+///
+/// Uses `session.vm_connected` (the session's own connection flag) rather than
+/// `devtools_view_state.connection_status` because the view state is reset to
+/// `Disconnected` by `DevToolsViewState::reset()` during session switching.
+fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateResult {
+    if state.ui_mode != UiMode::DevTools {
+        return UpdateResult::none();
+    }
+
+    let needs_start = if let Some(handle) = state.session_manager.selected() {
+        handle.perf_shutdown_tx.is_none() && handle.session.vm_connected
+    } else {
+        false
+    };
+
+    if !needs_start {
+        return UpdateResult::none();
+    }
+
+    let session_id = state.session_manager.selected_id().unwrap();
+    let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+    let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
+    let mode = state
+        .session_manager
+        .selected()
+        .and_then(|h| h.session.launch_config.as_ref())
+        .map(|c| c.mode)
+        .unwrap_or(crate::config::FlutterMode::Debug);
+
+    UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+        session_id,
+        handle: None, // hydrated by process.rs
+        performance_refresh_ms,
+        allocation_profile_interval_ms,
+        mode,
+    })
 }
 
 /// Handle close current session message

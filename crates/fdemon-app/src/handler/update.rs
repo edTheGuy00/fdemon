@@ -1405,18 +1405,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Start performance monitoring for this session.
+            // Start performance monitoring only when DevTools is already active.
+            // When the user is viewing logs (Normal mode), the monitoring task
+            // is not spawned at all — zero overhead until DevTools is opened.
+            // handle_enter_devtools_mode will start it lazily on first entry.
             // process.rs will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            UpdateResult {
-                message: follow_up_msg,
-                action: Some(UpdateAction::StartPerformanceMonitoring {
-                    session_id,
-                    handle: None, // hydrated by process.rs
-                    performance_refresh_ms,
-                    allocation_profile_interval_ms,
-                    mode,
-                }),
+            if state.ui_mode == UiMode::DevTools {
+                UpdateResult {
+                    message: follow_up_msg,
+                    action: Some(UpdateAction::StartPerformanceMonitoring {
+                        session_id,
+                        handle: None, // hydrated by process.rs
+                        performance_refresh_ms,
+                        allocation_profile_interval_ms,
+                        mode,
+                    }),
+                }
+            } else {
+                UpdateResult {
+                    message: follow_up_msg,
+                    action: None,
+                }
             }
         }
 
@@ -1478,18 +1488,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     crate::state::VmConnectionStatus::Connected;
             }
 
-            // Re-subscribe to VM streams and restart performance monitoring.
-            // The old WebSocket connection's stream subscriptions are gone — the
-            // Dart VM Service requires re-subscription after a WebSocket reconnect.
+            // Re-subscribe to VM streams and restart performance monitoring only
+            // when DevTools is already active. If the user is viewing logs, the
+            // monitoring task will be started lazily when they open DevTools.
             // `process.rs` will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
-                session_id,
-                handle: None, // hydrated by process.rs
-                performance_refresh_ms,
-                allocation_profile_interval_ms,
-                mode,
-            })
+            if state.ui_mode == UiMode::DevTools {
+                UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+                    session_id,
+                    handle: None, // hydrated by process.rs
+                    performance_refresh_ms,
+                    allocation_profile_interval_ms,
+                    mode,
+                })
+            } else {
+                UpdateResult::none()
+            }
         }
 
         Message::VmServiceConnectionFailed { session_id, error } => {
@@ -1700,6 +1714,25 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Store the higher-level perf-pause sender so DevTools entry/exit
                 // handlers can gate the entire polling loop (memory + alloc).
                 handle.perf_pause_tx = Some(perf_pause_tx);
+
+                // Adjust initial pause values based on current UI state.
+                // The polling task always starts with perf_pause = true (paused).
+                // If monitoring was lazy-started because the user entered DevTools,
+                // we must immediately unpause it so polling actually begins.
+                // Without this, the task would sit paused until the user leaves and
+                // re-enters DevTools.
+                if state.ui_mode == UiMode::DevTools {
+                    // Unpause the performance polling loop (memory + alloc timer).
+                    if let Some(ref tx) = handle.perf_pause_tx {
+                        let _ = tx.send(false);
+                    }
+                    // Unpause allocation polling only if the Performance panel is active.
+                    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+                        if let Some(ref tx) = handle.alloc_pause_tx {
+                            let _ = tx.send(false);
+                        }
+                    }
+                }
             }
             UpdateResult::none()
         }

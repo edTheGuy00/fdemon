@@ -105,16 +105,74 @@ pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
 /// If the default panel is Performance, unpauses allocation polling so data
 /// is immediately fresh.
 ///
-/// Also unpauses the entire performance polling loop (`perf_pause_tx`) so
-/// memory usage polling resumes while the user is in DevTools.
+/// If the performance monitoring task has not been started yet (first DevTools
+/// entry), dispatches `StartPerformanceMonitoring` instead of unpausing. The
+/// `VmServicePerformanceMonitoringStarted` handler will unpause appropriately
+/// based on current UI state. On subsequent entries, unpauses the existing task
+/// via `perf_pause_tx`.
 pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     let default_panel = parse_default_panel(&state.settings.devtools.default_panel);
     state.devtools_view_state.active_panel = default_panel;
     state.enter_devtools_mode();
 
-    // Unpause the entire performance polling loop (memory + alloc).
-    // The perf_pause_rx.changed() arm in the polling task fires immediately,
-    // triggering an on-demand memory fetch so the panel shows current data.
+    // Check whether performance monitoring needs to be lazy-started.
+    // This happens on the first DevTools entry when the VM is connected but no
+    // perf task was spawned yet (because VmServiceConnected skips the spawn
+    // when DevTools is not active at connect time).
+    // Use `session.vm_connected` (the reliable per-session flag) rather than
+    // `devtools_view_state.connection_status` which may lag behind the session.
+    let needs_perf_start = if let Some(handle) = state.session_manager.selected() {
+        handle.perf_shutdown_tx.is_none() && handle.session.vm_connected
+    } else {
+        false
+    };
+
+    if needs_perf_start {
+        // Collect data needed for StartPerformanceMonitoring before returning.
+        // NOTE: perf_pause_tx and alloc_pause_tx are not yet set (task not started),
+        // so the unpause signals below are skipped — the
+        // VmServicePerformanceMonitoringStarted handler adjusts initial pause
+        // state based on ui_mode and active_panel after the task starts.
+        let session_id = state.session_manager.selected_id().unwrap();
+        let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+        let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
+        let mode = state
+            .session_manager
+            .selected()
+            .and_then(|h| h.session.launch_config.as_ref())
+            .map(|c| c.mode)
+            .unwrap_or(crate::config::FlutterMode::Debug);
+
+        // If the default panel is Inspector and there is no widget tree loaded,
+        // we need FetchWidgetTree — but we also need StartPerformanceMonitoring.
+        // Return StartPerformanceMonitoring as the action (higher priority) and
+        // queue the FetchWidgetTree as a follow-up message so both happen.
+        let widget_tree_msg = if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+            && state.devtools_view_state.inspector.root.is_none()
+            && !state.devtools_view_state.inspector.loading
+        {
+            state.devtools_view_state.inspector.loading = true;
+            Some(crate::message::Message::RequestWidgetTree { session_id })
+        } else {
+            None
+        };
+
+        return UpdateResult {
+            message: widget_tree_msg,
+            action: Some(UpdateAction::StartPerformanceMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+                performance_refresh_ms,
+                allocation_profile_interval_ms,
+                mode,
+            }),
+        };
+    }
+
+    // Task already running — unpause the entire performance polling loop
+    // (memory + alloc). The perf_pause_rx.changed() arm in the polling task
+    // fires immediately, triggering an on-demand memory fetch so the panel
+    // shows current data.
     if let Some(handle) = state.session_manager.selected() {
         if let Some(ref tx) = handle.perf_pause_tx {
             let _ = tx.send(false); // unpause
@@ -1172,11 +1230,18 @@ mod tests {
         // We test by simulating what the handler does.
         let mut state = make_state_with_session();
         let (tx, _rx) = tokio::sync::watch::channel(false);
-        state.session_manager.selected_mut().unwrap().network_pause_tx =
-            Some(std::sync::Arc::new(tx));
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .network_pause_tx = Some(std::sync::Arc::new(tx));
 
         // Simulate the VmServiceDisconnected handler clearing the field.
-        state.session_manager.selected_mut().unwrap().network_pause_tx = None;
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .network_pause_tx = None;
 
         assert!(
             state

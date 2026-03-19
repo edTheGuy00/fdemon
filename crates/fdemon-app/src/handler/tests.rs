@@ -3715,20 +3715,36 @@ fn test_vm_service_connected_sets_flag() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
+    // VmServiceConnected does NOT start monitoring when DevTools is not active
+    // (lazy-start: monitoring is deferred until the user opens DevTools).
     let result = update(&mut state, Message::VmServiceConnected { session_id });
 
-    // VmServiceConnected now triggers StartPerformanceMonitoring
     assert!(
-        matches!(
-            result.action,
-            Some(UpdateAction::StartPerformanceMonitoring { .. })
-        ),
-        "VmServiceConnected should trigger StartPerformanceMonitoring"
+        result.action.is_none(),
+        "VmServiceConnected should NOT trigger StartPerformanceMonitoring when DevTools is not active"
     );
     let handle = state.session_manager.get(session_id).unwrap();
     assert!(
         handle.session.vm_connected,
         "vm_connected should be true after VmServiceConnected"
+    );
+
+    // When DevTools IS active, VmServiceConnected should start monitoring.
+    let mut state2 = AppState::new();
+    let session_id2 = state2.session_manager.create_session(&device).unwrap();
+    state2.ui_mode = crate::state::UiMode::DevTools;
+    let result2 = update(
+        &mut state2,
+        Message::VmServiceConnected {
+            session_id: session_id2,
+        },
+    );
+    assert!(
+        matches!(
+            result2.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceConnected SHOULD trigger StartPerformanceMonitoring when DevTools is active"
     );
 }
 
@@ -3736,14 +3752,25 @@ fn test_vm_service_connected_sets_flag() {
 fn test_vm_service_connected_ignores_unknown_session() {
     let mut state = AppState::new();
 
-    // Should not panic when session doesn't exist, but still returns the action
+    // Should not panic when session doesn't exist.
+    // Without DevTools active, no action is returned.
     let result = update(&mut state, Message::VmServiceConnected { session_id: 9999 });
+    assert!(
+        result.action.is_none(),
+        "VmServiceConnected with unknown session and no DevTools should return no action"
+    );
 
-    // Action is still returned even if session not found (process.rs handles discarding)
-    assert!(matches!(
-        result.action,
-        Some(UpdateAction::StartPerformanceMonitoring { .. })
-    ));
+    // With DevTools active, it still returns StartPerformanceMonitoring
+    // (process.rs will hydrate the handle from the session; if not found it discards).
+    state.ui_mode = crate::state::UiMode::DevTools;
+    let result2 = update(&mut state, Message::VmServiceConnected { session_id: 9999 });
+    assert!(
+        matches!(
+            result2.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceConnected with DevTools active should return StartPerformanceMonitoring"
+    );
 }
 
 #[test]
@@ -4267,16 +4294,29 @@ fn test_vm_connected_starts_monitoring() {
     let mut state = AppState::new();
     let session_id = state.session_manager.create_session(&device).unwrap();
 
-    let msg = Message::VmServiceConnected { session_id };
-    let result = update(&mut state, msg);
+    // With DevTools inactive: no monitoring started (lazy-start).
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+    assert!(
+        result.action.is_none(),
+        "VmServiceConnected should NOT start monitoring when DevTools is not active"
+    );
 
-    // Should trigger StartPerformanceMonitoring action
+    // With DevTools active: monitoring starts immediately.
+    let mut state2 = AppState::new();
+    let session_id2 = state2.session_manager.create_session(&device).unwrap();
+    state2.ui_mode = crate::state::UiMode::DevTools;
+    let result2 = update(
+        &mut state2,
+        Message::VmServiceConnected {
+            session_id: session_id2,
+        },
+    );
     assert!(
         matches!(
-            result.action,
+            result2.action,
             Some(UpdateAction::StartPerformanceMonitoring { .. })
         ),
-        "VmServiceConnected should trigger StartPerformanceMonitoring"
+        "VmServiceConnected should trigger StartPerformanceMonitoring when DevTools is active"
     );
 }
 
@@ -5673,10 +5713,11 @@ fn test_devtools_view_state_reset_clears_has_object_group_flags() {
 
 #[test]
 fn test_vm_connected_starts_perf_monitoring_with_allocation_interval() {
-    // Verify that VmServiceConnected produces a StartPerformanceMonitoring action
-    // that includes the allocation_profile_interval_ms from settings.
+    // Verify that VmServiceConnected (when DevTools active) produces a
+    // StartPerformanceMonitoring action that includes allocation_profile_interval_ms.
     let device = test_device("dev-1", "Device 1");
     let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
 
     // Set a custom allocation profile interval to verify it is threaded through.
     state.settings.devtools.allocation_profile_interval_ms = 8000;
@@ -5705,8 +5746,10 @@ fn test_vm_connected_starts_perf_monitoring_with_allocation_interval() {
 fn test_vm_connected_uses_default_allocation_interval() {
     // Verify that the default allocation_profile_interval_ms (5000ms) is used
     // when the settings value has not been overridden.
+    // DevTools must be active for VmServiceConnected to start monitoring.
     let device = test_device("dev-1", "Device 1");
     let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
     let session_id = state.session_manager.create_session(&device).unwrap();
 
     // Default settings — allocation_profile_interval_ms defaults to 5000.
@@ -6161,15 +6204,22 @@ fn test_vm_service_reconnected_restarts_monitoring() {
     let session_id = state.session_manager.create_session(&device).unwrap();
     state.session_manager.select_by_id(session_id);
 
+    // Without DevTools: reconnect does NOT start monitoring (lazy-start).
     let result = update(&mut state, Message::VmServiceReconnected { session_id });
+    assert!(
+        result.action.is_none(),
+        "VmServiceReconnected should NOT trigger StartPerformanceMonitoring when DevTools is not active"
+    );
 
-    // VmServiceReconnected must return a StartPerformanceMonitoring action.
+    // With DevTools active: reconnect DOES start monitoring.
+    state.ui_mode = crate::state::UiMode::DevTools;
+    let result2 = update(&mut state, Message::VmServiceReconnected { session_id });
     assert!(
         matches!(
-            result.action,
+            result2.action,
             Some(UpdateAction::StartPerformanceMonitoring { .. })
         ),
-        "VmServiceReconnected should trigger StartPerformanceMonitoring"
+        "VmServiceReconnected should trigger StartPerformanceMonitoring when DevTools is active"
     );
 }
 
@@ -6278,8 +6328,10 @@ fn test_vm_service_reconnected_cleans_up_perf_task() {
 #[test]
 fn test_vm_service_connected_passes_debug_mode_when_no_launch_config() {
     // Session with launch_config = None — should default to Debug.
+    // DevTools must be active for VmServiceConnected to start monitoring.
     let device = test_device("dev-1", "Device 1");
     let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
     let session_id = state.session_manager.create_session(&device).unwrap();
 
     // Confirm no launch_config is set (default).
@@ -6314,9 +6366,11 @@ fn test_vm_service_connected_passes_debug_mode_when_no_launch_config() {
 #[test]
 fn test_vm_service_connected_passes_profile_mode_from_launch_config() {
     // Session with launch_config.mode = Profile — should pass Profile through.
+    // DevTools must be active for VmServiceConnected to start monitoring.
     use crate::config::LaunchConfig;
     let device = test_device("dev-1", "Device 1");
     let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
     let session_id = state.session_manager.create_session(&device).unwrap();
 
     // Set the launch_config to Profile mode.
@@ -9455,4 +9509,433 @@ fn test_sdk_resolution_failed_clears_state() {
     assert!(!state.tool_availability.flutter_sdk);
     assert!(state.tool_availability.flutter_sdk_source.is_none());
     assert!(result.action.is_none());
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lazy-start performance monitoring tests (Phase 3, Task 03)
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn test_vm_connect_without_devtools_does_not_start_monitoring() {
+    // VmServiceConnected when ui_mode != DevTools should NOT return
+    // StartPerformanceMonitoring action (lazy-start behavior).
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    // Default ui_mode is Startup, not DevTools.
+    assert_ne!(state.ui_mode, crate::state::UiMode::DevTools);
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceConnected in non-DevTools mode must NOT start performance monitoring"
+    );
+    // vm_connected flag should still be set.
+    assert!(
+        state
+            .session_manager
+            .get(session_id)
+            .unwrap()
+            .session
+            .vm_connected
+    );
+}
+
+#[test]
+fn test_vm_connect_with_devtools_active_starts_monitoring() {
+    // VmServiceConnected when ui_mode == DevTools SHOULD return
+    // StartPerformanceMonitoring action.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    let result = update(&mut state, Message::VmServiceConnected { session_id });
+
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceConnected with DevTools active MUST start performance monitoring"
+    );
+}
+
+#[test]
+fn test_enter_devtools_starts_monitoring_when_vm_connected() {
+    use crate::handler::devtools::handle_enter_devtools_mode;
+
+    // handle_enter_devtools_mode when VM connected and no perf task running
+    // should return StartPerformanceMonitoring action.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+
+    // Set VM connected and connection_status = Connected.
+    state
+        .session_manager
+        .get_mut(session_id)
+        .unwrap()
+        .session
+        .vm_connected = true;
+    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
+    // No perf task running (perf_shutdown_tx is None).
+    assert!(state
+        .session_manager
+        .get(session_id)
+        .unwrap()
+        .perf_shutdown_tx
+        .is_none());
+
+    let result = handle_enter_devtools_mode(&mut state);
+
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "handle_enter_devtools_mode should start monitoring when VM connected and no task running"
+    );
+}
+
+#[test]
+fn test_enter_devtools_does_not_start_when_vm_disconnected() {
+    use crate::handler::devtools::handle_enter_devtools_mode;
+
+    // handle_enter_devtools_mode when VM not connected should NOT return
+    // StartPerformanceMonitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    let _ = session_id;
+
+    // VM is not connected (default).
+    assert!(
+        !state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .vm_connected
+    );
+
+    let result = handle_enter_devtools_mode(&mut state);
+
+    assert!(
+        !matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "handle_enter_devtools_mode must NOT start monitoring when VM is not connected"
+    );
+}
+
+#[test]
+fn test_enter_devtools_does_not_restart_existing_task() {
+    use crate::handler::devtools::handle_enter_devtools_mode;
+
+    // handle_enter_devtools_mode when perf_shutdown_tx is Some (task already running)
+    // should just unpause via perf_pause_tx, not restart.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    let _ = session_id;
+
+    // Set VM connected, task already running (perf_shutdown_tx is Some).
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+    let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true); // starts paused
+    {
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.vm_connected = true;
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_pause_tx));
+    }
+    state.devtools_view_state.connection_status = VmConnectionStatus::Connected;
+
+    let result = handle_enter_devtools_mode(&mut state);
+
+    // Should NOT return StartPerformanceMonitoring (task already running).
+    assert!(
+        !matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "handle_enter_devtools_mode should not restart an already-running task"
+    );
+    // Should have unpaused via perf_pause_tx.
+    assert!(
+        !*perf_pause_rx.borrow(),
+        "perf_pause_tx should have been unpaused (false) on DevTools entry"
+    );
+}
+
+#[test]
+fn test_monitoring_started_handler_adjusts_pause_for_active_devtools() {
+    // VmServicePerformanceMonitoringStarted when ui_mode == DevTools should
+    // send false (unpause) on perf_pause_tx.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Inspector;
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        // Create the channels that VmServicePerformanceMonitoringStarted carries.
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true); // starts paused
+        let (alloc_pause_tx, alloc_pause_rx) = tokio::sync::watch::channel(true); // starts paused
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_arc = std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::VmServicePerformanceMonitoringStarted {
+                session_id,
+                perf_shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                perf_task_handle: task_arc,
+                alloc_pause_tx: std::sync::Arc::new(alloc_pause_tx),
+                perf_pause_tx: std::sync::Arc::new(perf_pause_tx),
+            },
+        );
+
+        // DevTools is active (Inspector panel) → perf should be unpaused.
+        assert!(
+            !*perf_pause_rx.borrow(),
+            "perf_pause_tx should be unpaused (false) when DevTools is active"
+        );
+        // Inspector panel active → alloc should remain paused.
+        assert!(
+            *alloc_pause_rx.borrow(),
+            "alloc_pause_tx should remain paused (true) when Performance panel is not active"
+        );
+    });
+}
+
+#[test]
+fn test_monitoring_started_handler_adjusts_alloc_for_performance_panel() {
+    // VmServicePerformanceMonitoringStarted when DevTools active AND active_panel
+    // == Performance should send false on both perf_pause_tx and alloc_pause_tx.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Performance;
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true);
+        let (alloc_pause_tx, alloc_pause_rx) = tokio::sync::watch::channel(true);
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_arc = std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::VmServicePerformanceMonitoringStarted {
+                session_id,
+                perf_shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                perf_task_handle: task_arc,
+                alloc_pause_tx: std::sync::Arc::new(alloc_pause_tx),
+                perf_pause_tx: std::sync::Arc::new(perf_pause_tx),
+            },
+        );
+
+        // Performance panel active → both should be unpaused.
+        assert!(
+            !*perf_pause_rx.borrow(),
+            "perf_pause_tx should be unpaused when DevTools is active"
+        );
+        assert!(
+            !*alloc_pause_rx.borrow(),
+            "alloc_pause_tx should be unpaused when Performance panel is active"
+        );
+    });
+}
+
+#[test]
+fn test_monitoring_started_handler_leaves_paused_when_devtools_not_active() {
+    // VmServicePerformanceMonitoringStarted when ui_mode != DevTools should NOT
+    // send anything on perf_pause_tx (leaves it paused, which is the initial value).
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        let device = test_device("dev-1", "Device 1");
+        let mut state = AppState::new();
+        // Not in DevTools mode (this shouldn't happen in practice with lazy-start,
+        // but we test it for robustness — e.g. a race condition during startup).
+        assert_ne!(state.ui_mode, crate::state::UiMode::DevTools);
+        let session_id = state.session_manager.create_session(&device).unwrap();
+
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true); // starts paused
+        let (alloc_pause_tx, alloc_pause_rx) = tokio::sync::watch::channel(true);
+        let task: tokio::task::JoinHandle<()> = tokio::spawn(async {});
+        let task_arc = std::sync::Arc::new(std::sync::Mutex::new(Some(task)));
+
+        update(
+            &mut state,
+            Message::VmServicePerformanceMonitoringStarted {
+                session_id,
+                perf_shutdown_tx: std::sync::Arc::new(shutdown_tx),
+                perf_task_handle: task_arc,
+                alloc_pause_tx: std::sync::Arc::new(alloc_pause_tx),
+                perf_pause_tx: std::sync::Arc::new(perf_pause_tx),
+            },
+        );
+
+        // DevTools not active → perf should stay paused.
+        assert!(
+            *perf_pause_rx.borrow(),
+            "perf_pause_tx should remain paused when DevTools is not active"
+        );
+        assert!(
+            *alloc_pause_rx.borrow(),
+            "alloc_pause_tx should remain paused when DevTools is not active"
+        );
+    });
+}
+
+#[test]
+fn test_session_switch_in_devtools_starts_monitoring_for_new_session() {
+    // When switching sessions while in DevTools, if the new session has VM
+    // connected but no perf task, monitoring should start.
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let mut state = AppState::new();
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    // Start on session A (index 0).
+    state.session_manager.select_by_id(session_a);
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    // Session B: VM connected, no perf task.
+    {
+        let handle = state.session_manager.get_mut(session_b).unwrap();
+        handle.session.vm_connected = true;
+        // perf_shutdown_tx is None (no task running).
+        assert!(handle.perf_shutdown_tx.is_none());
+    }
+    // Note: devtools_view_state.connection_status is NOT used for this check.
+    // The maybe_start check uses session.vm_connected directly (view state is
+    // reset to Disconnected by DevToolsViewState::reset() on session switch).
+
+    // Switch to session B by index (index 1).
+    let result = update(&mut state, Message::SelectSessionByIndex(1));
+
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "Session switch in DevTools should start monitoring for the new session if not running"
+    );
+
+    // Verify it's for the right session.
+    if let Some(UpdateAction::StartPerformanceMonitoring { session_id, .. }) = result.action {
+        assert_eq!(
+            session_id, session_b,
+            "StartPerformanceMonitoring should target the newly selected session"
+        );
+    }
+}
+
+#[test]
+fn test_session_switch_in_devtools_no_action_if_task_running() {
+    // When switching sessions while in DevTools, if the new session already has
+    // a running perf task, no StartPerformanceMonitoring action should be returned.
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let mut state = AppState::new();
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    state.session_manager.select_by_id(session_a);
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    // Session B: VM connected AND perf task already running.
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_b).unwrap();
+        handle.session.vm_connected = true;
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
+    }
+
+    let result = update(&mut state, Message::SelectSessionByIndex(1));
+
+    assert!(
+        !matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "Session switch should not restart monitoring when a task is already running"
+    );
+}
+
+#[test]
+fn test_session_switch_outside_devtools_does_not_start_monitoring() {
+    // When switching sessions while NOT in DevTools, no monitoring should start.
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let mut state = AppState::new();
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    state.session_manager.select_by_id(session_a);
+    // NOT in DevTools mode.
+    state.ui_mode = crate::state::UiMode::Normal;
+
+    // Session B: VM connected, no perf task.
+    state
+        .session_manager
+        .get_mut(session_b)
+        .unwrap()
+        .session
+        .vm_connected = true;
+
+    let result = update(&mut state, Message::SelectSessionByIndex(1));
+
+    assert!(
+        result.action.is_none(),
+        "Session switch outside DevTools must not start performance monitoring"
+    );
+}
+
+#[test]
+fn test_vm_reconnect_without_devtools_does_not_start_monitoring() {
+    // VmServiceReconnected when ui_mode != DevTools should NOT start monitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+    // Default mode is not DevTools.
+    assert_ne!(state.ui_mode, crate::state::UiMode::DevTools);
+
+    let result = update(&mut state, Message::VmServiceReconnected { session_id });
+
+    assert!(
+        result.action.is_none(),
+        "VmServiceReconnected must NOT start monitoring when DevTools is not active"
+    );
+}
+
+#[test]
+fn test_vm_reconnect_with_devtools_active_starts_monitoring() {
+    // VmServiceReconnected when ui_mode == DevTools SHOULD start monitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    state.ui_mode = crate::state::UiMode::DevTools;
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    let result = update(&mut state, Message::VmServiceReconnected { session_id });
+
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "VmServiceReconnected with DevTools active MUST start performance monitoring"
+    );
 }
