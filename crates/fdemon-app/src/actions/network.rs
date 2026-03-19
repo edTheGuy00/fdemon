@@ -72,7 +72,7 @@ fn effective_network_interval(base_ms: u64, mode: FlutterMode) -> u64 {
     let clamped = base_ms.max(NETWORK_POLL_MIN_MS);
     match mode {
         FlutterMode::Profile | FlutterMode::Release => {
-            (clamped * PROFILE_MODE_MULTIPLIER).max(PROFILE_NETWORK_POLL_MIN_MS)
+            (clamped.saturating_mul(PROFILE_MODE_MULTIPLIER)).max(PROFILE_NETWORK_POLL_MIN_MS)
         }
         FlutterMode::Debug => clamped,
     }

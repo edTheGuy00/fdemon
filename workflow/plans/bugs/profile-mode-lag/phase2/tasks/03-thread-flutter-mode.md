@@ -168,4 +168,37 @@ fn test_switch_to_network_panel_passes_mode() {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `mode: FlutterMode` field to `StartPerformanceMonitoring` and `StartNetworkMonitoring` action variants; added `FlutterMode` to imports |
+| `crates/fdemon-app/src/handler/update.rs` | Read `mode` from `session.launch_config` at `VmServiceConnected` and `VmServiceReconnected` handlers; pass it into the action |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Read `mode` from session in `handle_switch_panel` Network branch; pass it into `StartNetworkMonitoring` |
+| `crates/fdemon-app/src/process.rs` | Thread `mode` through both `hydrate_start_performance_monitoring` and `hydrate_start_network_monitoring` unchanged |
+| `crates/fdemon-app/src/actions/mod.rs` | Destructure `mode` from both actions and pass it to `spawn_performance_polling` and `spawn_network_monitoring` |
+| `crates/fdemon-app/src/actions/performance.rs` | Added `_mode: FlutterMode` parameter to `spawn_performance_polling` signature; added `FlutterMode` import |
+| `crates/fdemon-app/src/actions/network.rs` | Added `_mode: FlutterMode` parameter to `spawn_network_monitoring` signature; added `FlutterMode` import |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 3 new tests: `test_vm_service_connected_passes_debug_mode_when_no_launch_config`, `test_vm_service_connected_passes_profile_mode_from_launch_config`, `test_switch_to_network_panel_passes_mode` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`_mode` prefix**: The mode parameter in `spawn_performance_polling` and `spawn_network_monitoring` uses the `_mode` underscore prefix to suppress unused variable warnings while keeping the field visible for task 04 to use. This avoids needing a `#[allow(unused)]` attribute.
+
+2. **Default to `FlutterMode::Debug`**: When `session.launch_config` is `None` (bare `flutter run` without `.fdemon/launch.toml`), mode defaults to `Debug`. This preserves current behavior — no throttling applied to unmanaged sessions.
+
+3. **Import placement**: `FlutterMode` is imported in `handler/mod.rs` alongside the existing config imports rather than being fully qualified everywhere, matching the project convention. In `handler/update.rs`, since `FlutterMode` was already accessible via `crate::config::FlutterMode`, no additional import was needed.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1800 tests, up from 1797 baseline — +3 new tests)
+- `cargo clippy --workspace -- -D warnings` - Passed (no new warnings)
+
+### Risks/Limitations
+
+1. **No behavioral change yet**: Mode is threaded through the system but not acted upon. Task 04 will apply interval scaling based on the mode value stored in the spawned task closures.

@@ -46,11 +46,11 @@ Reduce VM Service pressure in profile/release modes by deduplicating RPCs, preve
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-dedup-memory-rpc](tasks/01-dedup-memory-rpc.md) | Not Started | - | 1-1.5h | `daemon/vm_service/performance.rs`, `actions/performance.rs` |
-| 2 | [02-missed-tick-skip](tasks/02-missed-tick-skip.md) | Not Started | - | 0.5h | `actions/performance.rs`, `actions/network.rs` |
-| 3 | [03-thread-flutter-mode](tasks/03-thread-flutter-mode.md) | Not Started | 1, 2 | 1.5-2h | `handler/mod.rs`, `handler/update.rs`, `handler/devtools/mod.rs`, `process.rs`, `actions/mod.rs`, `actions/performance.rs`, `actions/network.rs` |
-| 4 | [04-scale-intervals-by-mode](tasks/04-scale-intervals-by-mode.md) | Not Started | 3 | 1-1.5h | `actions/performance.rs`, `actions/network.rs` |
-| 5 | [05-gate-alloc-on-panel](tasks/05-gate-alloc-on-panel.md) | Not Started | 4 | 1.5-2h | `actions/performance.rs`, `handler/devtools/mod.rs`, `session/handle.rs`, `message.rs` |
+| 1 | [01-dedup-memory-rpc](tasks/01-dedup-memory-rpc.md) | Done | - | 1-1.5h | `daemon/vm_service/performance.rs`, `actions/performance.rs` |
+| 2 | [02-missed-tick-skip](tasks/02-missed-tick-skip.md) | Done | - | 0.5h | `actions/performance.rs`, `actions/network.rs` |
+| 3 | [03-thread-flutter-mode](tasks/03-thread-flutter-mode.md) | Done | 1, 2 | 1.5-2h | `handler/mod.rs`, `handler/update.rs`, `handler/devtools/mod.rs`, `process.rs`, `actions/mod.rs`, `actions/performance.rs`, `actions/network.rs` |
+| 4 | [04-scale-intervals-by-mode](tasks/04-scale-intervals-by-mode.md) | Done | 3 | 1-1.5h | `actions/performance.rs`, `actions/network.rs` |
+| 5 | [05-gate-alloc-on-panel](tasks/05-gate-alloc-on-panel.md) | Done | 4 | 1.5-2h | `actions/performance.rs`, `handler/devtools/mod.rs`, `session/handle.rs`, `message.rs` |
 
 ## File Overlap Analysis
 

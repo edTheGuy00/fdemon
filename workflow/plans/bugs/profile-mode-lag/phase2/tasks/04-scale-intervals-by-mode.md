@@ -187,4 +187,37 @@ fn effective_interval(base_ms: u64, base_min: u64, mode: FlutterMode, profile_mu
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/performance.rs` | Added `PROFILE_MODE_MULTIPLIER`, `PROFILE_PERF_POLL_MIN_MS`, `PROFILE_ALLOC_POLL_MIN_MS` constants; extracted `effective_perf_interval()` pure function; updated `spawn_performance_polling` to use mode-aware scaling (removed `_mode` prefix from parameter); added 8 new unit tests |
+| `crates/fdemon-app/src/actions/network.rs` | Added `PROFILE_MODE_MULTIPLIER`, `PROFILE_NETWORK_POLL_MIN_MS` constants; extracted `effective_network_interval()` pure function; updated `spawn_network_monitoring` to use mode-aware scaling (removed `_mode` prefix from parameter); added 8 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pure function extraction**: Both `effective_perf_interval` and `effective_network_interval` are extracted as private pure functions, making interval calculation directly testable without needing to spawn async tasks. This matches the suggestion in the task spec.
+
+2. **`effective_perf_interval` takes `base_min` and `profile_min` as parameters**: Unlike the network function (which uses module constants directly), the performance function is parameterized so it can be reused for both memory and alloc intervals with their different minimums.
+
+3. **No change to the spawn function signatures**: The `mode: FlutterMode` parameter was already threaded through by task 03 (with an underscore prefix). This task removed the underscore and added the actual usage.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app` - Passed (1816 tests)
+- `cargo test -p fdemon-app actions::performance::tests` - Passed (9 tests)
+- `cargo test -p fdemon-app actions::network::tests` - Passed (9 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+- `cargo fmt --check -p fdemon-app` - Passed
+
+Note: 4 pre-existing TUI snapshot test failures (`fdemon-tui` render tests) exist on the branch unrelated to this task — they fail because snapshot files show `v0.2.2` but the crate is now `v0.3.0`.
+
+### Risks/Limitations
+
+1. **Hardcoded multiplier**: `PROFILE_MODE_MULTIPLIER = 3` is hardcoded. The task spec notes this is intentional, with a future `profile_polling_multiplier` config key deferred. Both constants have doc comments noting this.
+
+2. **Release mode scaling**: Release builds rarely connect to fdemon (no VM Service), but if they do via `--enable-vm-service`, they receive the same scaling as profile. This is the correct conservative behavior.

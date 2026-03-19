@@ -89,7 +89,7 @@ fn effective_perf_interval(
     let clamped = base_ms.max(base_min);
     match mode {
         FlutterMode::Profile | FlutterMode::Release => {
-            (clamped * PROFILE_MODE_MULTIPLIER).max(profile_min)
+            (clamped.saturating_mul(PROFILE_MODE_MULTIPLIER)).max(profile_min)
         }
         FlutterMode::Debug => clamped,
     }
@@ -301,46 +301,8 @@ pub(super) fn spawn_performance_polling(
                         continue;
                     }
 
-                    // Allocation profile polling (lower frequency than memory polling).
-                    // `getAllocationProfile` is expensive — it forces the VM to walk the
-                    // entire Dart heap. Transient failures are silently skipped.
-                    let isolate_id = match handle.main_isolate_id().await {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::debug!(
-                                "Could not get isolate ID for allocation polling (session {}): {}",
-                                session_id, e
-                            );
-                            continue;
-                        }
-                    };
-
-                    match fdemon_daemon::vm_service::get_allocation_profile(
-                        &handle,
-                        &isolate_id,
-                        false, // gc=false — no forced GC before profiling
-                    )
-                    .await
-                    {
-                        Ok(profile) => {
-                            if msg_tx
-                                .send(Message::VmServiceAllocationProfileReceived {
-                                    session_id,
-                                    profile,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                // Engine shutting down.
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                "Allocation profile poll failed for session {}: {}",
-                                session_id, e
-                            );
-                        }
+                    if fetch_and_send_alloc_profile(&handle, &msg_tx, session_id).await {
+                        break;
                     }
                 }
 
@@ -358,43 +320,8 @@ pub(super) fn spawn_performance_polling(
                     // Transitioned to active (Performance panel became visible).
                     // Fire one immediate allocation profile fetch so the panel is
                     // populated without waiting for the next tick.
-                    let isolate_id = match handle.main_isolate_id().await {
-                        Ok(id) => id,
-                        Err(e) => {
-                            tracing::debug!(
-                                "Could not get isolate ID for immediate allocation fetch (session {}): {}",
-                                session_id, e
-                            );
-                            continue;
-                        }
-                    };
-
-                    match fdemon_daemon::vm_service::get_allocation_profile(
-                        &handle,
-                        &isolate_id,
-                        false, // gc=false
-                    )
-                    .await
-                    {
-                        Ok(profile) => {
-                            if msg_tx
-                                .send(Message::VmServiceAllocationProfileReceived {
-                                    session_id,
-                                    profile,
-                                })
-                                .await
-                                .is_err()
-                            {
-                                // Engine shutting down.
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            tracing::debug!(
-                                "Immediate allocation profile fetch failed for session {}: {}",
-                                session_id, e
-                            );
-                        }
+                    if fetch_and_send_alloc_profile(&handle, &msg_tx, session_id).await {
+                        break;
                     }
                 }
 
@@ -417,6 +344,56 @@ pub(super) fn spawn_performance_polling(
     if let Ok(mut slot) = task_handle_slot.lock() {
         *slot = Some(join_handle);
     };
+}
+
+/// Fetch the allocation profile for the session and send it to the TEA handler.
+///
+/// Returns `true` if the message channel is closed (caller should `break`),
+/// `false` if the caller should continue the polling loop.
+async fn fetch_and_send_alloc_profile(
+    handle: &VmRequestHandle,
+    msg_tx: &mpsc::Sender<Message>,
+    session_id: SessionId,
+) -> bool {
+    let isolate_id = match handle.main_isolate_id().await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::debug!(
+                "Could not get isolate ID for allocation polling (session {}): {}",
+                session_id, e
+            );
+            return false;
+        }
+    };
+
+    match fdemon_daemon::vm_service::get_allocation_profile(
+        handle,
+        &isolate_id,
+        false, // gc=false — no forced GC before profiling
+    )
+    .await
+    {
+        Ok(profile) => {
+            if msg_tx
+                .send(Message::VmServiceAllocationProfileReceived {
+                    session_id,
+                    profile,
+                })
+                .await
+                .is_err()
+            {
+                // Engine shutting down.
+                return true;
+            }
+        }
+        Err(e) => {
+            tracing::debug!(
+                "Allocation profile poll failed for session {}: {}",
+                session_id, e
+            );
+        }
+    }
+    false
 }
 
 #[cfg(test)]

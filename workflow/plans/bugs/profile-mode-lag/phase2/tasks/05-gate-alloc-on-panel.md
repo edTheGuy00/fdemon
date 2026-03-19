@@ -234,4 +234,40 @@ mod tests {
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/performance.rs` | Created `alloc_pause_tx/rx` watch channel (initial: `true`/paused); gated `alloc_tick` arm with pause check; added `alloc_pause_rx.changed()` arm for immediate fetch on unpause; included `alloc_pause_tx` in `VmServicePerformanceMonitoringStarted` message |
+| `crates/fdemon-app/src/message.rs` | Added `alloc_pause_tx: Arc<watch::Sender<bool>>` field to `VmServicePerformanceMonitoringStarted` variant |
+| `crates/fdemon-app/src/session/handle.rs` | Added `alloc_pause_tx: Option<Arc<watch::Sender<bool>>>` field; initialized to `None` in `new()`; added to `Debug` impl |
+| `crates/fdemon-app/src/handler/update.rs` | Store `alloc_pause_tx` in `VmServicePerformanceMonitoringStarted` handler; clear in `VmServiceDisconnected`, `VmServiceConnected`, `VmServiceReconnected` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Send `false` (unpause) in `handle_enter_devtools_mode` when default is Performance; send `true` (pause) at start of `handle_exit_devtools_mode`; send `true` when leaving Performance panel and `false` when entering it in `handle_switch_panel`; added 8 new tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Fixed existing `VmServicePerformanceMonitoringStarted` construction to include new `alloc_pause_tx` field |
+
+### Notable Decisions/Tradeoffs
+
+1. **Initial value `true` (paused)**: Consistent with the task spec — performance monitoring starts at VM connect time, before the user opens any DevTools panel. Starting paused means no heap walk ever fires unless the user actually views the Performance panel.
+
+2. **`Ok(()) = alloc_pause_rx.changed()` arm syntax**: Tokio's `watch::Receiver::changed()` returns `Result<(), watch::error::RecvError>`. The `RecvError` fires only when the sender is dropped (session disconnect). In that case the `perf_shutdown_rx.changed()` arm will also fire (the perf shutdown sender is dropped at the same time), ensuring clean exit.
+
+3. **Memory tick not gated**: Exactly as specified — `getMemoryUsage` + `getIsolate` is lightweight and continues running unconditionally. Only `getAllocationProfile` is gated.
+
+4. **Panel switch pause logic**: Pause is sent _before_ `switch_devtools_panel()` executes, reading `old_panel` before the state mutation. Unpause is sent after the switch, inside the `Performance` match arm. This ensures no window where both panels claim the channel simultaneously.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app` — Passed (1824 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all && cargo check --workspace` — Passed
+- `cargo test --workspace` — 4 pre-existing fdemon-tui snapshot failures (v0.2.2→v0.3.0 version string); all other crates pass
+
+### Risks/Limitations
+
+1. **No memory tick gating**: The memory tick (`getMemoryUsage` + `getIsolate`) runs unconditionally. This is intentional per the task spec — Phase 3 will address full performance monitoring pause for non-DevTools mode.
+
+2. **Snapshot test failures**: 4 pre-existing fdemon-tui snapshot tests fail due to a version string change (v0.2.2→v0.3.0) introduced in an earlier commit, not by this task.

@@ -78,4 +78,29 @@ This change is difficult to unit test directly (tokio interval behavior is runti
 
 ## Completion Summary
 
-**Status:** Not Started
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/performance.rs` | Added `set_missed_tick_behavior(MissedTickBehavior::Skip)` on `memory_tick` (line 120) and `alloc_tick` (line 123) immediately after interval creation |
+| `crates/fdemon-app/src/actions/network.rs` | Added `set_missed_tick_behavior(MissedTickBehavior::Skip)` on `poll_tick` (line 156) immediately after interval creation |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement**: Each `.set_missed_tick_behavior()` call is placed on the line immediately following the corresponding `tokio::time::interval()` call, matching the pattern shown in the task spec and making the relationship visually obvious.
+2. **No functional change for normal operation**: When RPCs complete within their tick interval, `Skip` and `Burst` are identical — only recovery-after-slowness behavior differs.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app` - Passed (1797 tests, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (no new warnings)
+
+### Risks/Limitations
+
+1. **Timing correctness**: The first tick of `tokio::time::interval` fires immediately at creation regardless of `MissedTickBehavior`. This is unaffected by this change — only missed-tick recovery behavior changes.
+2. **Untestable directly**: Tokio interval behavior is runtime-dependent; correctness is verified by code inspection and the existing test suite (which has no tests depending on Burst recovery behavior).
