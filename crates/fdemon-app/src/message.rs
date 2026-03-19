@@ -798,6 +798,18 @@ pub enum Message {
         /// before the user opens the Performance panel. The handler sends `false`
         /// when the user enters the Performance panel.
         alloc_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Higher-level pause sender for the entire performance polling loop.
+        ///
+        /// Sending `true` pauses both memory and allocation polling (user not in
+        /// DevTools mode). Sending `false` unpauses both (user entered DevTools).
+        ///
+        /// Initial channel value is `true` (paused) — monitoring starts at VM
+        /// connect time, before the user opens DevTools. This prevents all
+        /// `getMemoryUsage` and `getIsolate` RPCs while viewing logs.
+        ///
+        /// The `alloc_tick` arm checks both `perf_pause_rx` and `alloc_pause_rx`;
+        /// the `memory_tick` arm checks only `perf_pause_rx`.
+        perf_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
     // ─────────────────────────────────────────────────────────

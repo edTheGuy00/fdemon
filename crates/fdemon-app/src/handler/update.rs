@@ -1333,6 +1333,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the old alloc-pause sender — a new one will arrive with
                 // the next VmServicePerformanceMonitoringStarted message.
                 handle.alloc_pause_tx = None;
+                // Clear the old perf-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.perf_pause_tx = None;
                 // Clean up any existing network monitoring task for the same reason.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1440,6 +1443,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Clear the old alloc-pause sender — a new one will arrive with
                 // the next VmServicePerformanceMonitoringStarted message.
                 handle.alloc_pause_tx = None;
+                // Clear the old perf-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.perf_pause_tx = None;
                 // Abort the old network monitoring task for the same reason.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1545,6 +1551,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // the clean exit. Setting to None here signals that no
                 // Performance panel is open for this disconnected session.
                 handle.alloc_pause_tx = None;
+                // Clear the perf-pause sender. The polling task's perf_pause_rx
+                // will see the sender drop; the shutdown arm handles clean exit.
+                handle.perf_pause_tx = None;
                 handle.session.performance.monitoring_active = false;
                 // Abort the network monitoring polling task and signal it to stop.
                 if let Some(h) = handle.network_task_handle.take() {
@@ -1669,6 +1678,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             perf_shutdown_tx,
             perf_task_handle,
             alloc_pause_tx,
+            perf_pause_tx,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.perf_shutdown_tx = Some(perf_shutdown_tx);
@@ -1679,6 +1689,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // can pause/unpause `getAllocationProfile` polling without going
                 // through the full UpdateAction machinery.
                 handle.alloc_pause_tx = Some(alloc_pause_tx);
+                // Store the higher-level perf-pause sender so DevTools entry/exit
+                // handlers can gate the entire polling loop (memory + alloc).
+                handle.perf_pause_tx = Some(perf_pause_tx);
             }
             UpdateResult::none()
         }

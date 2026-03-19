@@ -179,6 +179,14 @@ pub(super) fn spawn_performance_polling(
     let (alloc_pause_tx, mut alloc_pause_rx) = tokio::sync::watch::channel(true);
     let alloc_pause_tx = std::sync::Arc::new(alloc_pause_tx);
 
+    // Create the performance-pause channel (higher-level gate).
+    // Initial value: `true` (paused) — monitoring starts at VM connect time,
+    // before the user opens DevTools. The handler sends `false` when the user
+    // enters DevTools mode and `true` when they exit. This prevents all
+    // `getMemoryUsage` and `getIsolate` RPCs while viewing logs.
+    let (perf_pause_tx, mut perf_pause_rx) = tokio::sync::watch::channel(true);
+    let perf_pause_tx = std::sync::Arc::new(perf_pause_tx);
+
     // The JoinHandle from `tokio::spawn` is only available after the call, but
     // the task will send it in `VmServicePerformanceMonitoringStarted` as the
     // first async operation. We use `Arc<Mutex<Option<>>>` as a rendezvous:
@@ -200,6 +208,7 @@ pub(super) fn spawn_performance_polling(
                 perf_shutdown_tx,
                 perf_task_handle: task_handle_slot_for_msg,
                 alloc_pause_tx,
+                perf_pause_tx,
             })
             .await
             .is_err()
@@ -217,6 +226,13 @@ pub(super) fn spawn_performance_polling(
         loop {
             tokio::select! {
                 _ = memory_tick.tick() => {
+                    // Skip if performance monitoring is paused (user not in DevTools).
+                    // This prevents `getMemoryUsage` and `getIsolate` RPCs while the
+                    // user is viewing logs, eliminating VM Service pressure outside DevTools.
+                    if *perf_pause_rx.borrow() {
+                        continue;
+                    }
+
                     // Fetch the main isolate ID (cached after first call).
                     let isolate_id = match handle.main_isolate_id().await {
                         Ok(id) => id,
@@ -293,16 +309,78 @@ pub(super) fn spawn_performance_polling(
                 }
 
                 _ = alloc_tick.tick() => {
-                    // Skip if allocation polling is paused (Performance panel not visible).
-                    // `getAllocationProfile` forces a full heap walk — the most expensive
-                    // RPC. Running it only when the user is viewing the Performance panel
-                    // eliminates jank in all other views (logs, inspector, network).
-                    if *alloc_pause_rx.borrow() {
+                    // Skip if performance monitoring is globally paused (user not in
+                    // DevTools) OR if allocation polling is paused (Performance panel
+                    // not visible). Both channels must be clear for `getAllocationProfile`
+                    // to fire — it is the most expensive RPC (forces a full heap walk).
+                    if *perf_pause_rx.borrow() || *alloc_pause_rx.borrow() {
                         continue;
                     }
 
                     if fetch_and_send_alloc_profile(&handle, &msg_tx, session_id).await {
                         break;
+                    }
+                }
+
+                // Watch for perf_pause unpause transitions so the user sees fresh
+                // memory data immediately when they enter DevTools, without waiting
+                // up to `memory_interval` for the next scheduled tick.
+                Ok(()) = perf_pause_rx.changed() => {
+                    if *perf_pause_rx.borrow() {
+                        // Transitioned to paused (user left DevTools) — nothing to do.
+                        continue;
+                    }
+
+                    // Transitioned to active (user entered DevTools). Fire one immediate
+                    // memory fetch so the Performance panel shows current data.
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not get isolate ID for immediate memory fetch (session {}): {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    let usage = match fdemon_daemon::vm_service::get_memory_usage(&handle, &isolate_id).await {
+                        Ok(usage) => usage,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Immediate memory fetch on DevTools entry failed for session {}: {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    if msg_tx
+                        .send(Message::VmServiceMemorySnapshot {
+                            session_id,
+                            memory: usage.clone(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+
+                    if let Some(sample) =
+                        fdemon_daemon::vm_service::get_memory_sample_from_usage(
+                            &handle,
+                            &isolate_id,
+                            &usage,
+                        )
+                        .await
+                    {
+                        if msg_tx
+                            .send(Message::VmServiceMemorySample { session_id, sample })
+                            .await
+                            .is_err()
+                        {
+                            break;
+                        }
                     }
                 }
 
@@ -360,7 +438,8 @@ async fn fetch_and_send_alloc_profile(
         Err(e) => {
             tracing::debug!(
                 "Could not get isolate ID for allocation polling (session {}): {}",
-                session_id, e
+                session_id,
+                e
             );
             return false;
         }
@@ -389,7 +468,8 @@ async fn fetch_and_send_alloc_profile(
         Err(e) => {
             tracing::debug!(
                 "Allocation profile poll failed for session {}: {}",
-                session_id, e
+                session_id,
+                e
             );
         }
     }

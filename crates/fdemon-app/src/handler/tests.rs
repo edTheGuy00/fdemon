@@ -4367,6 +4367,8 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
     let perf_shutdown_tx = std::sync::Arc::new(tx);
     let (alloc_tx, _alloc_rx) = tokio::sync::watch::channel(true);
     let alloc_pause_tx = std::sync::Arc::new(alloc_tx);
+    let (perf_pause_tx_ch, _perf_pause_rx) = tokio::sync::watch::channel(true);
+    let perf_pause_tx = std::sync::Arc::new(perf_pause_tx_ch);
 
     let result = update(
         &mut state,
@@ -4375,6 +4377,7 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
             perf_shutdown_tx,
             perf_task_handle: std::sync::Arc::new(std::sync::Mutex::new(None)),
             alloc_pause_tx,
+            perf_pause_tx,
         },
     );
 

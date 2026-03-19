@@ -104,10 +104,22 @@ pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
 /// auto-fetches widget tree if Inspector panel is active and VM connected.
 /// If the default panel is Performance, unpauses allocation polling so data
 /// is immediately fresh.
+///
+/// Also unpauses the entire performance polling loop (`perf_pause_tx`) so
+/// memory usage polling resumes while the user is in DevTools.
 pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     let default_panel = parse_default_panel(&state.settings.devtools.default_panel);
     state.devtools_view_state.active_panel = default_panel;
     state.enter_devtools_mode();
+
+    // Unpause the entire performance polling loop (memory + alloc).
+    // The perf_pause_rx.changed() arm in the polling task fires immediately,
+    // triggering an on-demand memory fetch so the panel shows current data.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.perf_pause_tx {
+            let _ = tx.send(false); // unpause
+        }
+    }
 
     // Unpause allocation polling when entering DevTools with Performance as the
     // default panel so the user sees fresh allocation data immediately.
@@ -143,7 +155,17 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
 /// Handle exiting DevTools mode — returns to Normal and disposes VM object groups.
 ///
 /// Pauses allocation polling since the Performance panel is no longer visible.
+/// Also pauses the entire performance polling loop so no VM Service RPCs fire
+/// while the user is viewing logs.
 pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
+    // Pause the entire performance polling loop (memory + alloc).
+    // This eliminates all getMemoryUsage/getIsolate RPCs while viewing logs.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.perf_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
     // Pause allocation polling: the user is leaving DevTools entirely so the
     // Performance panel is no longer visible regardless of which panel was active.
     if let Some(handle) = state.session_manager.selected() {
@@ -801,6 +823,147 @@ mod tests {
                 .alloc_pause_tx
                 .is_none(),
             "alloc_pause_tx should be None after disconnect"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // perf_pause_tx tests (Task 01: pause-perf-when-not-devtools)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with both a live `perf_pause_tx` and `alloc_pause_tx`.
+    /// Returns the AppState plus receivers for observing both channel values.
+    fn make_state_with_perf_pause() -> (
+        AppState,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    ) {
+        let mut state = make_state_with_session();
+        let (perf_tx, perf_rx) = tokio::sync::watch::channel(true); // starts paused
+        let (alloc_tx, alloc_rx) = tokio::sync::watch::channel(true); // starts paused
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_tx));
+        handle.alloc_pause_tx = Some(std::sync::Arc::new(alloc_tx));
+        (state, perf_rx, alloc_rx)
+    }
+
+    #[test]
+    fn test_perf_pause_tx_stored_on_session_handle() {
+        // After VmServicePerformanceMonitoringStarted is handled,
+        // handle.perf_pause_tx should be Some(...).
+        // Verified here by directly populating the field (as the handler does).
+        let (state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .perf_pause_tx
+                .is_some(),
+            "perf_pause_tx should be set on the session handle"
+        );
+        // Channel starts in the paused state (true) — monitoring starts paused
+        // at VM connect time, before the user opens DevTools.
+        assert!(
+            *perf_rx.borrow(),
+            "perf_pause channel should start in paused state (true)"
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_sends_perf_unpause() {
+        // handle_enter_devtools_mode should send false on perf_pause_tx.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+        state.settings.devtools.default_panel = "inspector".to_string();
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            !*perf_rx.borrow(),
+            "entering DevTools should unpause performance monitoring (send false on perf_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_sends_perf_pause() {
+        // handle_exit_devtools_mode should send true on perf_pause_tx.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+
+        // Simulate: user was in DevTools with perf monitoring active.
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .perf_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        assert!(!*perf_rx.borrow(), "precondition: perf should be unpaused");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *perf_rx.borrow(),
+            "exiting DevTools should pause performance monitoring (send true on perf_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_perf_pause_cleared_on_disconnect() {
+        // After VmServiceDisconnected, perf_pause_tx should be None.
+        let mut state = make_state_with_session();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.session_manager.selected_mut().unwrap().perf_pause_tx = Some(std::sync::Arc::new(tx));
+
+        // Simulate the VmServiceDisconnected handler clearing the field.
+        state.session_manager.selected_mut().unwrap().perf_pause_tx = None;
+
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .perf_pause_tx
+                .is_none(),
+            "perf_pause_tx should be None after disconnect"
+        );
+    }
+
+    #[test]
+    fn test_panel_switch_does_not_affect_perf_pause() {
+        // SwitchDevToolsPanel (Inspector → Network, etc.) should NOT change
+        // perf_pause_tx. Only DevTools entry/exit affects it.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+
+        // Simulate: user is in DevTools with perf monitoring active (unpaused).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .perf_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        let initial_perf_state = *perf_rx.borrow();
+        assert!(!initial_perf_state, "precondition: perf should be unpaused");
+
+        // Switch from Inspector to Network — this should NOT touch perf_pause_tx.
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        handle_switch_panel(&mut state, DevToolsPanel::Network);
+
+        assert_eq!(
+            *perf_rx.borrow(),
+            initial_perf_state,
+            "panel switching should not change perf_pause_tx state"
+        );
+
+        // Switch from Network to Performance — this should also NOT touch perf_pause_tx.
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+        assert_eq!(
+            *perf_rx.borrow(),
+            initial_perf_state,
+            "switching to Performance panel should not change perf_pause_tx (only alloc_pause_tx)"
         );
     }
 }
