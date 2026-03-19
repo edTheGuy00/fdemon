@@ -117,7 +117,10 @@ pub(super) fn spawn_performance_polling(
         }
 
         let mut memory_tick = tokio::time::interval(memory_interval);
+        memory_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         let mut alloc_tick = tokio::time::interval(alloc_interval);
+        alloc_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {

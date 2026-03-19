@@ -153,6 +153,7 @@ pub(super) fn spawn_network_monitoring(
         // Step 3: Start incremental polling loop.
         let mut poll_tick =
             tokio::time::interval(tokio::time::Duration::from_millis(poll_interval_ms));
+        poll_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         // Track the last profile timestamp for incremental `updatedSince` polling.
         let mut last_timestamp: Option<i64> = None;
 
