@@ -21,8 +21,8 @@ Configure example app3 to reproduce the profile mode lag reported in Issue #25. 
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-add-profile-configs](tasks/01-add-profile-configs.md) | Not Started | - | 0.25h | `example/app3/.fdemon/launch.toml`, `example/app3/.fdemon/config.toml` |
-| 2 | [02-add-reproduction-test](tasks/02-add-reproduction-test.md) | Not Started | - | 0.25h | `example/TESTING.md` |
+| 1 | [01-add-profile-configs](tasks/01-add-profile-configs.md) | Done | - | 0.25h | `example/app3/.fdemon/launch.toml`, `example/app3/.fdemon/config.toml` |
+| 2 | [02-add-reproduction-test](tasks/02-add-reproduction-test.md) | Done | - | 0.25h | `example/TESTING.md` |
 
 ## File Overlap Analysis
 
@@ -41,11 +41,11 @@ Configure example app3 to reproduce the profile mode lag reported in Issue #25. 
 
 Phase 1 is complete when:
 
-- [ ] `example/app3/.fdemon/launch.toml` has a "Profile (Issue #25)" config with `mode = "profile"` and `auto_start = true`
-- [ ] `example/app3/.fdemon/config.toml` has aggressive DevTools polling matching the reporter's settings (`performance_refresh_ms = 500`, `allocation_profile_interval_ms = 1000`, `network_poll_interval_ms = 1000`)
-- [ ] `example/TESTING.md` documents the reproduction procedure for profile mode lag
+- [x] `example/app3/.fdemon/launch.toml` has a "Profile (Issue #25)" config with `mode = "profile"` and `auto_start = true`
+- [x] `example/app3/.fdemon/config.toml` has aggressive DevTools polling matching the reporter's settings (`performance_refresh_ms = 500`, `allocation_profile_interval_ms = 1000`, `network_poll_interval_ms = 1000`)
+- [x] `example/TESTING.md` documents the reproduction procedure for profile mode lag
 - [ ] Running `cargo run -- example/app3` auto-launches in profile mode
-- [ ] Existing configs (Development, Staging, Production) remain available for comparison testing
+- [x] Existing configs (Development, Staging, Production) remain available for comparison testing
 
 ## Notes
 
