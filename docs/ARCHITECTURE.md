@@ -681,7 +681,9 @@ SessionHandle
 ├── request_tracker: Arc<RequestTracker>
 ├── vm_shutdown_tx / vm_request_handle  (VM Service connection)
 ├── perf_shutdown_tx / perf_task_handle  (performance monitoring task)
+├── perf_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume perf polling)
 ├── network_shutdown_tx / network_task_handle  (network monitoring task)
+├── network_pause_tx: Option<Arc<watch::Sender<bool>>>  (pause/resume network polling)
 ├── debug_shutdown_tx / debug_task_handle  (DAP debug event task)
 ├── native_log_shutdown_tx / native_log_task_handle  (platform capture task)
 ├── native_tag_state: NativeTagState  (discovered tags + visibility)
@@ -777,9 +779,14 @@ DevTools state lives at two levels:
 - **View state** (`DevToolsViewState` in `state.rs`): UI-level state shared across sessions — active panel, overlay toggles, VM connection status. Reset when exiting DevTools mode.
 - **Session state** (`PerformanceState`, `NetworkState` on `Session`): Per-session data (frame history, memory samples, network entries). Persists across tab switches and survives DevTools mode exit.
 
+Monitoring is panel-gated via `watch` channels stored on `SessionHandle`:
+
+- `perf_pause_tx` — pauses the performance polling loop (memory + allocation ticks) when the user is not in DevTools; unpaused on DevTools entry, paused on DevTools exit.
+- `network_pause_tx` — pauses the network polling loop when the user is not on the Network tab; unpaused on Network tab entry, paused on Network tab exit.
+
 ### VM Service Data Flow
 
-1. Engine spawns background polling tasks (performance monitor, network monitor) when a session connects
+1. Performance monitoring starts lazily on the first DevTools entry for a session (not at VM Service connect time); network monitoring starts on the first Network tab visit. Both tasks pause when their corresponding panel is not visible and resume when it becomes visible again.
 2. Polling tasks call VM Service extensions via `VmServiceHandle`
 3. Responses are parsed into domain types (`MemorySample`, `HttpProfileEntry`, etc.)
 4. Results sent as `Message` variants to the Engine message channel
