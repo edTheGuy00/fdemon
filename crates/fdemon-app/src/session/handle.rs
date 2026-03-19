@@ -134,6 +134,19 @@ pub struct SessionHandle {
     /// cleared on session stop or capture exit.
     pub native_log_task_handle: Option<tokio::task::JoinHandle<()>>,
 
+    /// Pause sender for the allocation profile polling arm.
+    ///
+    /// When `true` is held by the channel, `getAllocationProfile` polling is
+    /// paused (the alloc tick arm is skipped). When `false`, polling is active.
+    ///
+    /// Initial value is `true` (paused) — allocation polling starts paused
+    /// because performance monitoring begins at VM connect time, typically
+    /// before the user opens the Performance panel.
+    ///
+    /// Set by `VmServicePerformanceMonitoringStarted`, cleared on disconnect.
+    /// Sending `false` unpauses; sending `true` pauses.
+    pub alloc_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -171,6 +184,7 @@ impl std::fmt::Debug for SessionHandle {
                 "has_native_log_task",
                 &self.native_log_task_handle.is_some(),
             )
+            .field("has_alloc_pause", &self.alloc_pause_tx.is_some())
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -195,6 +209,7 @@ impl SessionHandle {
             debug_task_handle: None,
             native_log_shutdown_tx: None,
             native_log_task_handle: None,
+            alloc_pause_tx: None,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }

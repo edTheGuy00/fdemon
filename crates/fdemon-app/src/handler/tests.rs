@@ -4362,9 +4362,11 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
         "perf_shutdown_tx should be None initially"
     );
 
-    // Create a watch channel and send VmServicePerformanceMonitoringStarted
+    // Create watch channels and send VmServicePerformanceMonitoringStarted
     let (tx, _rx) = tokio::sync::watch::channel(false);
     let perf_shutdown_tx = std::sync::Arc::new(tx);
+    let (alloc_tx, _alloc_rx) = tokio::sync::watch::channel(true);
+    let alloc_pause_tx = std::sync::Arc::new(alloc_tx);
 
     let result = update(
         &mut state,
@@ -4372,6 +4374,7 @@ fn test_performance_monitoring_started_stores_shutdown_tx() {
             session_id,
             perf_shutdown_tx,
             perf_task_handle: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            alloc_pause_tx,
         },
     );
 

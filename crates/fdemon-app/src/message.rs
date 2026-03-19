@@ -788,6 +788,16 @@ pub enum Message {
         /// storing it on `SessionHandle`, leaving `None` for any subsequent
         /// (unexpected) clone.
         perf_task_handle: SharedTaskHandle,
+        /// Pause sender for the `getAllocationProfile` polling arm.
+        ///
+        /// Sending `true` pauses allocation polling (Performance panel not visible).
+        /// Sending `false` unpauses it (Performance panel is visible).
+        ///
+        /// Initial channel value is `true` (paused) — allocation polling starts
+        /// paused because performance monitoring begins at VM connect time, often
+        /// before the user opens the Performance panel. The handler sends `false`
+        /// when the user enters the Performance panel.
+        alloc_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
     // ─────────────────────────────────────────────────────────

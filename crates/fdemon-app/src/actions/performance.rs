@@ -171,6 +171,14 @@ pub(super) fn spawn_performance_polling(
     // Arc is required because Message derives Clone and watch::Sender does not impl Clone.
     let perf_shutdown_tx = std::sync::Arc::new(perf_shutdown_tx);
 
+    // Create the allocation-pause channel.
+    // Initial value: `true` (paused) — allocation polling starts paused
+    // because performance monitoring begins at VM connect time, often before
+    // the user opens the Performance panel. The TEA handler sends `false`
+    // when the user enters the Performance panel.
+    let (alloc_pause_tx, mut alloc_pause_rx) = tokio::sync::watch::channel(true);
+    let alloc_pause_tx = std::sync::Arc::new(alloc_pause_tx);
+
     // The JoinHandle from `tokio::spawn` is only available after the call, but
     // the task will send it in `VmServicePerformanceMonitoringStarted` as the
     // first async operation. We use `Arc<Mutex<Option<>>>` as a rendezvous:
@@ -191,6 +199,7 @@ pub(super) fn spawn_performance_polling(
                 session_id,
                 perf_shutdown_tx,
                 perf_task_handle: task_handle_slot_for_msg,
+                alloc_pause_tx,
             })
             .await
             .is_err()
@@ -284,6 +293,14 @@ pub(super) fn spawn_performance_polling(
                 }
 
                 _ = alloc_tick.tick() => {
+                    // Skip if allocation polling is paused (Performance panel not visible).
+                    // `getAllocationProfile` forces a full heap walk — the most expensive
+                    // RPC. Running it only when the user is viewing the Performance panel
+                    // eliminates jank in all other views (logs, inspector, network).
+                    if *alloc_pause_rx.borrow() {
+                        continue;
+                    }
+
                     // Allocation profile polling (lower frequency than memory polling).
                     // `getAllocationProfile` is expensive — it forces the VM to walk the
                     // entire Dart heap. Transient failures are silently skipped.
@@ -321,6 +338,60 @@ pub(super) fn spawn_performance_polling(
                         Err(e) => {
                             tracing::debug!(
                                 "Allocation profile poll failed for session {}: {}",
+                                session_id, e
+                            );
+                        }
+                    }
+                }
+
+                // Watch for unpause transitions so the user sees fresh allocation
+                // data immediately when they open the Performance panel, without
+                // waiting up to `alloc_interval` for the next scheduled tick.
+                // The `watch` channel coalesces rapid toggles — only the final
+                // value matters, so burst panel switches don't create burst fetches.
+                Ok(()) = alloc_pause_rx.changed() => {
+                    if *alloc_pause_rx.borrow() {
+                        // Transitioned to paused — nothing to do.
+                        continue;
+                    }
+
+                    // Transitioned to active (Performance panel became visible).
+                    // Fire one immediate allocation profile fetch so the panel is
+                    // populated without waiting for the next tick.
+                    let isolate_id = match handle.main_isolate_id().await {
+                        Ok(id) => id,
+                        Err(e) => {
+                            tracing::debug!(
+                                "Could not get isolate ID for immediate allocation fetch (session {}): {}",
+                                session_id, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    match fdemon_daemon::vm_service::get_allocation_profile(
+                        &handle,
+                        &isolate_id,
+                        false, // gc=false
+                    )
+                    .await
+                    {
+                        Ok(profile) => {
+                            if msg_tx
+                                .send(Message::VmServiceAllocationProfileReceived {
+                                    session_id,
+                                    profile,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                // Engine shutting down.
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Immediate allocation profile fetch failed for session {}: {}",
                                 session_id, e
                             );
                         }
