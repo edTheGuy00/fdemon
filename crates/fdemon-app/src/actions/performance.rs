@@ -16,6 +16,13 @@
 //! - Allocation tick (every `allocation_profile_interval_ms`, min
 //!   [`ALLOC_PROFILE_POLL_MIN_MS`]): calls `getAllocationProfile` (expensive —
 //!   forces a full heap walk), so it runs at a lower frequency than the memory tick.
+//!
+//! **Mode-aware scaling:**
+//! In profile/release mode, both intervals are scaled by [`PROFILE_MODE_MULTIPLIER`]
+//! and clamped to their respective profile-mode minimums
+//! ([`PROFILE_PERF_POLL_MIN_MS`], [`PROFILE_ALLOC_POLL_MIN_MS`]). This reduces
+//! VM Service pressure from ~4 RPCs/sec (debug) to ~1.2 RPCs/sec (profile) with
+//! the reporter's aggressive 500ms/1000ms settings, eliminating observable jank.
 
 use std::time::Duration;
 
@@ -36,6 +43,57 @@ pub(super) const PERF_POLL_MIN_MS: u64 = 500;
 /// more expensive than `getMemoryUsage`. A higher minimum ensures it is never
 /// called more frequently than once per second even with aggressive settings.
 pub(super) const ALLOC_PROFILE_POLL_MIN_MS: u64 = 1000;
+
+/// Multiplier applied to polling intervals in profile/release mode.
+///
+/// Profile mode has tighter frame budgets (16ms vs ~100ms tolerance in debug).
+/// A 3x multiplier reduces RPC frequency enough to eliminate observable jank
+/// while keeping data reasonably fresh for monitoring.
+///
+/// Note: this could be made configurable via a `profile_polling_multiplier`
+/// config key as a future follow-up. Hardcoded for now.
+const PROFILE_MODE_MULTIPLIER: u64 = 3;
+
+/// Minimum performance refresh interval in profile/release mode (ms).
+///
+/// Derived from: reporter's 500ms setting × 3x multiplier = 1500ms,
+/// raised to 2000ms for safety margin against heap walk latency.
+const PROFILE_PERF_POLL_MIN_MS: u64 = 2000;
+
+/// Minimum allocation profile interval in profile/release mode (ms).
+///
+/// `getAllocationProfile` forces a full heap walk — the primary lag source.
+/// 5000ms gives the app 300 frames (at 60fps) between heap walks.
+const PROFILE_ALLOC_POLL_MIN_MS: u64 = 5000;
+
+/// Compute the effective polling interval for a given base value, considering
+/// the current Flutter run mode.
+///
+/// In debug mode the interval is clamped to `base_min` only.
+/// In profile/release mode the interval is first clamped, then multiplied by
+/// [`PROFILE_MODE_MULTIPLIER`], and finally clamped to `profile_min`.
+///
+/// # Examples
+///
+/// ```text
+/// // Debug: base_ms=500, base_min=500  → 500ms
+/// // Profile: base_ms=500, base_min=500, profile_min=2000 → max(500*3, 2000) = 2000ms
+/// // Profile: base_ms=10000, base_min=500, profile_min=2000 → max(10000*3, 2000) = 30000ms
+/// ```
+fn effective_perf_interval(
+    base_ms: u64,
+    base_min: u64,
+    mode: FlutterMode,
+    profile_min: u64,
+) -> u64 {
+    let clamped = base_ms.max(base_min);
+    match mode {
+        FlutterMode::Profile | FlutterMode::Release => {
+            (clamped * PROFILE_MODE_MULTIPLIER).max(profile_min)
+        }
+        FlutterMode::Debug => clamped,
+    }
+}
 
 /// Spawn the periodic memory-usage polling task for a session.
 ///
@@ -62,27 +120,50 @@ pub(super) const ALLOC_PROFILE_POLL_MIN_MS: u64 = 1000;
 ///   This is intentionally lower frequency than the memory tick because it is
 ///   expensive (forces the VM to walk the entire heap).
 ///
+/// **Mode-aware scaling:**
+/// In profile/release mode both intervals are scaled by [`PROFILE_MODE_MULTIPLIER`]
+/// (currently 3×) and clamped to [`PROFILE_PERF_POLL_MIN_MS`] /
+/// [`PROFILE_ALLOC_POLL_MIN_MS`] respectively. This reduces VM Service pressure
+/// and eliminates jank caused by frequent heap walks. In debug mode the
+/// existing minimums ([`PERF_POLL_MIN_MS`], [`ALLOC_PROFILE_POLL_MIN_MS`]) apply.
+///
 /// Transient errors from any RPC (e.g., isolate paused during hot reload) are
 /// logged at debug level and skipped — the next tick will retry.
 ///
 /// The `performance_refresh_ms` parameter controls the memory polling interval.
-/// It is clamped to a minimum of [`PERF_POLL_MIN_MS`] (500ms).
+/// In debug mode it is clamped to [`PERF_POLL_MIN_MS`] (500ms).
+/// In profile/release mode it is scaled and clamped to [`PROFILE_PERF_POLL_MIN_MS`]
+/// (2000ms).
 ///
 /// The `allocation_profile_interval_ms` parameter controls the allocation profile
-/// polling interval. It is clamped to a minimum of [`ALLOC_PROFILE_POLL_MIN_MS`]
-/// (1000ms).
+/// polling interval. In debug mode it is clamped to [`ALLOC_PROFILE_POLL_MIN_MS`]
+/// (1000ms). In profile/release mode it is scaled and clamped to
+/// [`PROFILE_ALLOC_POLL_MIN_MS`] (5000ms).
 pub(super) fn spawn_performance_polling(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     performance_refresh_ms: u64,
     allocation_profile_interval_ms: u64,
-    _mode: FlutterMode,
+    mode: FlutterMode,
 ) {
-    // Clamp intervals to their respective minimums.
-    let memory_interval = Duration::from_millis(performance_refresh_ms.max(PERF_POLL_MIN_MS));
-    let alloc_interval =
-        Duration::from_millis(allocation_profile_interval_ms.max(ALLOC_PROFILE_POLL_MIN_MS));
+    // Clamp intervals to their respective minimums, applying mode-aware scaling
+    // for profile/release mode to reduce VM Service pressure.
+    let memory_interval_ms = effective_perf_interval(
+        performance_refresh_ms,
+        PERF_POLL_MIN_MS,
+        mode,
+        PROFILE_PERF_POLL_MIN_MS,
+    );
+    let alloc_interval_ms = effective_perf_interval(
+        allocation_profile_interval_ms,
+        ALLOC_PROFILE_POLL_MIN_MS,
+        mode,
+        PROFILE_ALLOC_POLL_MIN_MS,
+    );
+
+    let memory_interval = Duration::from_millis(memory_interval_ms);
+    let alloc_interval = Duration::from_millis(alloc_interval_ms);
 
     // Create the shutdown channel outside the task so both ends are available
     // before the task starts running.
@@ -281,6 +362,161 @@ mod tests {
         assert!(
             ALLOC_PROFILE_POLL_MIN_MS >= PERF_POLL_MIN_MS,
             "allocation profiling is more expensive and should never poll faster than memory polling"
+        );
+    }
+
+    #[test]
+    fn test_profile_mode_constants_are_reasonable() {
+        assert_eq!(
+            PROFILE_MODE_MULTIPLIER, 3,
+            "profile multiplier should be 3x"
+        );
+        assert_eq!(
+            PROFILE_PERF_POLL_MIN_MS, 2000,
+            "profile perf minimum should be 2000ms"
+        );
+        assert_eq!(
+            PROFILE_ALLOC_POLL_MIN_MS, 5000,
+            "profile alloc minimum should be 5000ms"
+        );
+        assert!(
+            PROFILE_PERF_POLL_MIN_MS > PERF_POLL_MIN_MS,
+            "profile perf minimum must exceed debug minimum"
+        );
+        assert!(
+            PROFILE_ALLOC_POLL_MIN_MS > ALLOC_PROFILE_POLL_MIN_MS,
+            "profile alloc minimum must exceed debug minimum"
+        );
+    }
+
+    #[test]
+    fn test_debug_mode_uses_base_intervals() {
+        // Given performance_refresh_ms = 500 and mode = Debug
+        // Then effective interval = 500ms (base minimum, no multiplier)
+        let result = effective_perf_interval(
+            500,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Debug,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(result, 500, "debug mode should not scale the interval");
+    }
+
+    #[test]
+    fn test_debug_mode_clamps_to_base_minimum() {
+        // Given performance_refresh_ms = 100 and mode = Debug
+        // Then effective interval = 500ms (clamped to base minimum)
+        let result = effective_perf_interval(
+            100,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Debug,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(result, 500, "debug mode should clamp to base minimum");
+    }
+
+    #[test]
+    fn test_profile_mode_scales_memory_interval() {
+        // Given performance_refresh_ms = 500 and mode = Profile
+        // Then effective interval = max(500 * 3, 2000) = 2000ms
+        let result = effective_perf_interval(
+            500,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(
+            result, 2000,
+            "profile mode should scale 500ms to 2000ms (profile minimum)"
+        );
+    }
+
+    #[test]
+    fn test_profile_mode_scales_alloc_interval() {
+        // Given allocation_profile_interval_ms = 1000 and mode = Profile
+        // Then effective interval = max(1000 * 3, 5000) = 5000ms
+        let result = effective_perf_interval(
+            1000,
+            ALLOC_PROFILE_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_ALLOC_POLL_MIN_MS,
+        );
+        assert_eq!(
+            result, 5000,
+            "profile mode should scale 1000ms to 5000ms (profile minimum)"
+        );
+    }
+
+    #[test]
+    fn test_profile_mode_respects_user_higher_interval() {
+        // Given performance_refresh_ms = 10000 and mode = Profile
+        // Then effective interval = max(10000 * 3, 2000) = 30000ms
+        // User's explicit high value is respected (with multiplier applied)
+        let result = effective_perf_interval(
+            10_000,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(
+            result, 30_000,
+            "profile mode should apply multiplier to user's high interval"
+        );
+    }
+
+    #[test]
+    fn test_release_mode_uses_same_scaling_as_profile() {
+        // Release mode must produce identical results to Profile mode
+        let memory_profile = effective_perf_interval(
+            500,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        let memory_release = effective_perf_interval(
+            500,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Release,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(
+            memory_profile, memory_release,
+            "release and profile should produce the same memory interval"
+        );
+
+        let alloc_profile = effective_perf_interval(
+            1000,
+            ALLOC_PROFILE_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_ALLOC_POLL_MIN_MS,
+        );
+        let alloc_release = effective_perf_interval(
+            1000,
+            ALLOC_PROFILE_POLL_MIN_MS,
+            FlutterMode::Release,
+            PROFILE_ALLOC_POLL_MIN_MS,
+        );
+        assert_eq!(
+            alloc_profile, alloc_release,
+            "release and profile should produce the same alloc interval"
+        );
+    }
+
+    #[test]
+    fn test_profile_multiplier_applied_after_base_clamp() {
+        // Verifies: clamp first, then multiply (acceptance criterion #6)
+        // Given performance_refresh_ms = 100 (below base_min=500), mode = Profile
+        // Step 1: clamp(100, 500) = 500
+        // Step 2: 500 * 3 = 1500, then max(1500, 2000) = 2000
+        let result = effective_perf_interval(
+            100,
+            PERF_POLL_MIN_MS,
+            FlutterMode::Profile,
+            PROFILE_PERF_POLL_MIN_MS,
+        );
+        assert_eq!(
+            result, 2000,
+            "multiplier should be applied after base clamp"
         );
     }
 }

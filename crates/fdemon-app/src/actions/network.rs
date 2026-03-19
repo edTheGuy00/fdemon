@@ -19,6 +19,12 @@
 //!   (min [`NETWORK_POLL_MIN_MS`]), passing the previous response's `timestamp`
 //!   as `updatedSince` for incremental updates.
 //! - Exits when the shutdown channel receives `true` or `msg_tx` is closed.
+//!
+//! **Mode-aware scaling:**
+//! In profile/release mode, the poll interval is scaled by
+//! [`PROFILE_MODE_MULTIPLIER`] and clamped to [`PROFILE_NETWORK_POLL_MIN_MS`].
+//! This reduces VM Service round-trip frequency while keeping network data
+//! reasonably fresh. In debug mode, [`NETWORK_POLL_MIN_MS`] applies.
 
 use std::process::Command;
 
@@ -31,6 +37,46 @@ use fdemon_daemon::vm_service::{network, VmRequestHandle};
 
 /// Minimum network polling interval (500 ms) to avoid excessive VM Service calls.
 pub(super) const NETWORK_POLL_MIN_MS: u64 = 500;
+
+/// Multiplier applied to network poll interval in profile/release mode.
+///
+/// Network polling is less expensive than memory/alloc polling, but still adds
+/// VM Service round-trip latency. A 3x multiplier is consistent with the
+/// performance module's scaling.
+///
+/// Note: this could be made configurable via a `profile_polling_multiplier`
+/// config key as a future follow-up. Hardcoded for now.
+const PROFILE_MODE_MULTIPLIER: u64 = 3;
+
+/// Minimum network poll interval in profile/release mode (ms).
+///
+/// Network polling is less expensive than memory/alloc polling,
+/// but still adds VM Service round-trip latency.
+const PROFILE_NETWORK_POLL_MIN_MS: u64 = 3000;
+
+/// Compute the effective network poll interval for a given base value, considering
+/// the current Flutter run mode.
+///
+/// In debug mode the interval is clamped to [`NETWORK_POLL_MIN_MS`] only.
+/// In profile/release mode the interval is first clamped, then multiplied by
+/// [`PROFILE_MODE_MULTIPLIER`], and finally clamped to [`PROFILE_NETWORK_POLL_MIN_MS`].
+///
+/// # Examples
+///
+/// ```text
+/// // Debug: base_ms=1000  → 1000ms (above base minimum, no change)
+/// // Profile: base_ms=1000 → max(1000*3, 3000) = 3000ms
+/// // Profile: base_ms=500  → max(500*3, 3000)  = 3000ms  (profile minimum wins)
+/// ```
+fn effective_network_interval(base_ms: u64, mode: FlutterMode) -> u64 {
+    let clamped = base_ms.max(NETWORK_POLL_MIN_MS);
+    match mode {
+        FlutterMode::Profile | FlutterMode::Release => {
+            (clamped * PROFILE_MODE_MULTIPLIER).max(PROFILE_NETWORK_POLL_MIN_MS)
+        }
+        FlutterMode::Debug => clamped,
+    }
+}
 
 /// Spawn the periodic HTTP-profile polling task for a session.
 ///
@@ -46,18 +92,18 @@ pub(super) const NETWORK_POLL_MIN_MS: u64 = 500;
 ///    - If the extension is unavailable (release mode), sends
 ///      `VmServiceNetworkExtensionsUnavailable` and exits.
 /// 3. Best-effort: enables socket profiling via `ext.dart.io.socketProfilingEnabled`.
-/// 4. Polls `ext.dart.io.getHttpProfile` at `poll_interval_ms` (min 500ms),
-///    passing the previous response's `timestamp` as `updatedSince` for
-///    incremental updates.
+/// 4. Polls `ext.dart.io.getHttpProfile` at `poll_interval_ms` (min 500ms in
+///    debug, min 3000ms in profile/release after 3× scaling), passing the
+///    previous response's `timestamp` as `updatedSince` for incremental updates.
 /// 5. Exits when the shutdown channel receives `true` or `msg_tx` is closed.
 pub(super) fn spawn_network_monitoring(
     session_id: SessionId,
     handle: VmRequestHandle,
     msg_tx: mpsc::Sender<Message>,
     poll_interval_ms: u64,
-    _mode: FlutterMode,
+    mode: FlutterMode,
 ) {
-    let poll_interval_ms = poll_interval_ms.max(NETWORK_POLL_MIN_MS);
+    let poll_interval_ms = effective_network_interval(poll_interval_ms, mode);
 
     // Create the shutdown channel outside the task so both ends are available
     // before the task starts running.
@@ -360,6 +406,95 @@ mod tests {
         assert_eq!(
             NETWORK_POLL_MIN_MS, 500,
             "network poll minimum should be 500ms"
+        );
+    }
+
+    #[test]
+    fn test_profile_network_constants_are_reasonable() {
+        assert_eq!(
+            PROFILE_MODE_MULTIPLIER, 3,
+            "profile multiplier should be 3x"
+        );
+        assert_eq!(
+            PROFILE_NETWORK_POLL_MIN_MS, 3000,
+            "profile network minimum should be 3000ms"
+        );
+        assert!(
+            PROFILE_NETWORK_POLL_MIN_MS > NETWORK_POLL_MIN_MS,
+            "profile network minimum must exceed debug minimum"
+        );
+    }
+
+    #[test]
+    fn test_debug_mode_uses_base_interval() {
+        // Given poll_interval_ms = 1000 and mode = Debug
+        // Then effective interval = 1000ms (above base minimum, no multiplier)
+        let result = effective_network_interval(1000, FlutterMode::Debug);
+        assert_eq!(result, 1000, "debug mode should not scale the interval");
+    }
+
+    #[test]
+    fn test_debug_mode_clamps_to_base_minimum() {
+        // Given poll_interval_ms = 100 and mode = Debug
+        // Then effective interval = 500ms (clamped to base minimum)
+        let result = effective_network_interval(100, FlutterMode::Debug);
+        assert_eq!(result, 500, "debug mode should clamp to base minimum");
+    }
+
+    #[test]
+    fn test_profile_network_interval_scales() {
+        // Given network_poll_interval_ms = 1000 and mode = Profile
+        // Then effective interval = max(1000 * 3, 3000) = 3000ms
+        let result = effective_network_interval(1000, FlutterMode::Profile);
+        assert_eq!(
+            result, 3000,
+            "profile mode should scale 1000ms to 3000ms (profile minimum)"
+        );
+    }
+
+    #[test]
+    fn test_profile_mode_network_from_aggressive_settings() {
+        // Given network_poll_interval_ms = 500 and mode = Profile
+        // Then effective interval = max(500 * 3, 3000) = 3000ms (profile minimum wins)
+        let result = effective_network_interval(500, FlutterMode::Profile);
+        assert_eq!(
+            result, 3000,
+            "profile mode with 500ms base should reach 3000ms minimum"
+        );
+    }
+
+    #[test]
+    fn test_profile_mode_network_respects_user_higher_interval() {
+        // Given network_poll_interval_ms = 5000 and mode = Profile
+        // Then effective interval = max(5000 * 3, 3000) = 15000ms
+        let result = effective_network_interval(5000, FlutterMode::Profile);
+        assert_eq!(
+            result, 15_000,
+            "profile mode should apply multiplier to user's high interval"
+        );
+    }
+
+    #[test]
+    fn test_release_mode_network_uses_same_scaling_as_profile() {
+        // Release mode must produce identical results to Profile mode
+        let profile_result = effective_network_interval(1000, FlutterMode::Profile);
+        let release_result = effective_network_interval(1000, FlutterMode::Release);
+        assert_eq!(
+            profile_result, release_result,
+            "release and profile should produce the same network interval"
+        );
+    }
+
+    #[test]
+    fn test_network_multiplier_applied_after_base_clamp() {
+        // Verifies: clamp first, then multiply
+        // Given poll_interval_ms = 100 (below base_min=500), mode = Profile
+        // Step 1: clamp(100, 500) = 500
+        // Step 2: 500 * 3 = 1500, then max(1500, 3000) = 3000
+        let result = effective_network_interval(100, FlutterMode::Profile);
+        assert_eq!(
+            result, 3000,
+            "multiplier should be applied after base clamp"
         );
     }
 }
