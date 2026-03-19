@@ -250,3 +250,40 @@ mod tests {
 - **Backwards compatibility tradeoff**: Users who relied on memory history being populated before opening DevTools will now see an empty Performance panel until they enter DevTools. The BUG.md suggests a mitigation (slow background poll or config flag), but the simplest approach is to populate on first visit. The immediate-fetch-on-unpause from Task 01 ensures data appears within one RPC round-trip.
 - Frame timing is completely separate from the performance polling task. It's driven by `Dart Developer Service Extension` stream events, which are received over the VM Service WebSocket connection. The WebSocket connection is established in `VmServiceConnected` and stays open regardless of monitoring state.
 - The perf state reset in `VmServiceConnected` (clearing ring buffers, etc.) should remain unconditional — it's about clearing stale data, not about monitoring lifecycle.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Gated `StartPerformanceMonitoring` in `VmServiceConnected` and `VmServiceReconnected` on `ui_mode == DevTools`; added pause adjustment in `VmServicePerformanceMonitoringStarted` handler |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Added lazy-start logic in `handle_enter_devtools_mode`: detects missing perf task, dispatches `StartPerformanceMonitoring` on first DevTools entry |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Added `maybe_start_monitoring_for_selected_session` helper; called from `handle_select_session_by_index`, `handle_next_session`, `handle_previous_session` |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated 8 existing tests for new behavior; added 13 new tests covering lazy-start, VM reconnect during DevTools, and session switch scenarios |
+
+### Notable Decisions/Tradeoffs
+
+1. **`session.vm_connected` instead of `connection_status`**: The `devtools_view_state.connection_status` is reset to `Disconnected` by `DevToolsViewState::reset()` during session switching, making it unreliable for the "should we start monitoring?" check. Used `session.vm_connected` (the authoritative per-session flag) throughout.
+
+2. **Timing fix in `VmServicePerformanceMonitoringStarted`**: When monitoring is lazy-started from `handle_enter_devtools_mode`, the task starts with `perf_pause = true` (the initial channel value). The handler now checks `ui_mode` and `active_panel` immediately after storing the senders and sends the correct unpause signals, avoiding a window where monitoring is alive but paused while the user is staring at DevTools.
+
+3. **Session switch**: `DevToolsViewState::reset()` is called during session switches but does not affect `session.vm_connected`. The `maybe_start_monitoring_for_selected_session` helper is a clean DRY extraction used by all three session switch handlers.
+
+4. **Performance state reset remains unconditional**: The ring buffer clearing in `VmServiceConnected` was intentionally left unconditional — it clears stale data on reconnect regardless of monitoring lifecycle.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app` - PASS (1850 tests)
+- `cargo test --workspace` - PASS (all crates)
+- `cargo clippy --workspace` - PASS (no warnings)
+- `cargo fmt --all -- --check` - PASS
+
+### Risks/Limitations
+
+1. **Empty Performance panel on first visit**: Users who were accustomed to memory data being pre-populated before opening DevTools will now see an empty panel on first open. The immediate-fetch-on-unpause from Task 01 means data appears within one polling cycle (~2 seconds), which is acceptable per the task notes.

@@ -1466,6 +1466,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.network_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the old network-pause sender — a new one will arrive
+                // if the user re-enters the Network tab after reconnect.
+                handle.network_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(

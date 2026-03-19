@@ -9939,3 +9939,135 @@ fn test_vm_reconnect_with_devtools_active_starts_monitoring() {
         "VmServiceReconnected with DevTools active MUST start performance monitoring"
     );
 }
+
+#[test]
+fn test_session_switch_in_devtools_unpauses_existing_perf_task() {
+    // When switching to a session that already has a running (but paused) perf task,
+    // the task should be unpaused rather than restarted.
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let mut state = AppState::new();
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    state.session_manager.select_by_id(session_a);
+    state.ui_mode = crate::state::UiMode::DevTools;
+
+    // Session B: VM connected, perf task running but PAUSED (perf_pause = true).
+    let (shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let (perf_pause_tx, perf_pause_rx) = tokio::sync::watch::channel(true); // paused
+    {
+        let handle = state.session_manager.get_mut(session_b).unwrap();
+        handle.session.vm_connected = true;
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_pause_tx));
+    }
+
+    // Switch to session B (index 1)
+    let _result = update(&mut state, Message::SelectSessionByIndex(1));
+
+    // perf_pause should now be false (unpaused)
+    assert_eq!(
+        *perf_pause_rx.borrow(),
+        false,
+        "Session switch in DevTools must unpause existing perf task"
+    );
+}
+
+#[test]
+fn test_session_switch_in_devtools_unpauses_network_when_on_network_panel() {
+    // When switching sessions while on the Network panel, the network task
+    // should be unpaused.
+    let device_a = test_device("dev-a", "Device A");
+    let device_b = test_device("dev-b", "Device B");
+    let mut state = AppState::new();
+    let session_a = state.session_manager.create_session(&device_a).unwrap();
+    let session_b = state.session_manager.create_session(&device_b).unwrap();
+
+    state.session_manager.select_by_id(session_a);
+    state.ui_mode = crate::state::UiMode::DevTools;
+    state.devtools_view_state.active_panel = crate::state::DevToolsPanel::Network;
+
+    // Session B: running perf + network tasks, both paused.
+    let (perf_shutdown_tx, _) = tokio::sync::watch::channel(false);
+    let (perf_pause_tx, _) = tokio::sync::watch::channel(true);
+    let (net_pause_tx, net_pause_rx) = tokio::sync::watch::channel(true); // paused
+    {
+        let handle = state.session_manager.get_mut(session_b).unwrap();
+        handle.session.vm_connected = true;
+        handle.perf_shutdown_tx = Some(std::sync::Arc::new(perf_shutdown_tx));
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_pause_tx));
+        handle.network_pause_tx = Some(std::sync::Arc::new(net_pause_tx));
+    }
+
+    let _result = update(&mut state, Message::SelectSessionByIndex(1));
+
+    assert_eq!(
+        *net_pause_rx.borrow(),
+        false,
+        "Session switch on Network panel must unpause network task"
+    );
+}
+
+#[test]
+fn test_vm_reconnect_clears_network_pause_tx() {
+    // VmServiceReconnected should clear network_pause_tx alongside the other
+    // lifecycle handles, matching VmServiceConnected and VmServiceDisconnected.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+
+    // Set up a network_pause_tx as if network monitoring was running.
+    let (net_pause_tx, _) = tokio::sync::watch::channel(false);
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.network_pause_tx = Some(std::sync::Arc::new(net_pause_tx));
+    }
+
+    let _result = update(&mut state, Message::VmServiceReconnected { session_id });
+
+    let handle = state.session_manager.get(session_id).unwrap();
+    assert!(
+        handle.network_pause_tx.is_none(),
+        "VmServiceReconnected must clear network_pause_tx"
+    );
+}
+
+#[test]
+fn test_enter_devtools_with_network_default_queues_switch_panel_message() {
+    // When entering DevTools for the first time with Network as default panel,
+    // the lazy-start path should queue a SwitchDevToolsPanel(Network) follow-up
+    // message so that handle_switch_panel fires StartNetworkMonitoring.
+    let device = test_device("dev-1", "Device 1");
+    let mut state = AppState::new();
+    let session_id = state.session_manager.create_session(&device).unwrap();
+    state.session_manager.select_by_id(session_id);
+    state.settings.devtools.default_panel = "network".to_string();
+
+    // VM connected, no perf task running — triggers the lazy-start path.
+    {
+        let handle = state.session_manager.get_mut(session_id).unwrap();
+        handle.session.vm_connected = true;
+    }
+
+    let result = super::devtools::handle_enter_devtools_mode(&mut state);
+
+    // Action should be StartPerformanceMonitoring
+    assert!(
+        matches!(
+            result.action,
+            Some(UpdateAction::StartPerformanceMonitoring { .. })
+        ),
+        "Lazy-start path should return StartPerformanceMonitoring"
+    );
+
+    // Follow-up message should be SwitchDevToolsPanel(Network)
+    assert!(
+        matches!(
+            result.message,
+            Some(Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Network))
+        ),
+        "Lazy-start path with Network default should queue SwitchDevToolsPanel(Network)"
+    );
+}

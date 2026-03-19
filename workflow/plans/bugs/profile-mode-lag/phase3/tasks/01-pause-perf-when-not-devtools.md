@@ -238,3 +238,41 @@ mod tests {
 - Initial value is `true` (paused) because monitoring currently starts at VM connect time, well before the user opens DevTools. Task 03 will change when monitoring starts, but the pause channel remains relevant for re-entry.
 - The `memory_tick` continues to tick even when paused (timers are cheap). The `continue` on the borrow check skips the actual VM calls. This is simpler than pausing/resuming the timer itself and consistent with the alloc_pause approach.
 - When both `perf_pause` and `alloc_pause` are false (DevTools active, Performance panel visible), all three RPCs fire normally. When `perf_pause` is true, nothing fires regardless of `alloc_pause` state.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/performance.rs` | Added `perf_pause_tx/rx` channel; gated `memory_tick` on `perf_pause_rx`; gated `alloc_tick` on both channels; added `perf_pause_rx.changed()` arm with immediate memory fetch on unpause |
+| `crates/fdemon-app/src/message.rs` | Added `perf_pause_tx` field to `VmServicePerformanceMonitoringStarted` |
+| `crates/fdemon-app/src/session/handle.rs` | Added `perf_pause_tx` field; initialized to `None` in `new()`; updated `Debug` impl |
+| `crates/fdemon-app/src/handler/update.rs` | Store `perf_pause_tx` in `VmServicePerformanceMonitoringStarted` handler; clear on `VmServiceConnected`, `VmServiceReconnected`, `VmServiceDisconnected` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Send `false` (unpause) in `handle_enter_devtools_mode`; send `true` (pause) in `handle_exit_devtools_mode`; added 5 new tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `perf_pause_tx` field to `VmServicePerformanceMonitoringStarted` message construction in existing test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Immediate memory fetch on unpause**: The `perf_pause_rx.changed()` arm duplicates the memory fetch logic from `memory_tick` rather than factoring it into a shared helper. This is consistent with the existing `alloc_pause_rx.changed()` pattern, and the duplicated code is straightforward enough to not warrant a shared helper at this stage.
+
+2. **`handle_exit_devtools_mode` accesses `session_manager.selected()` twice**: One for `perf_pause_tx` and one for `alloc_pause_tx`. The existing code already accessed it once for `alloc_pause_tx`; adding a second access is the simplest correct approach given the TEA model (no intermediate mutable borrows to thread through).
+
+3. **`perf_pause_tx` is sent before `alloc_pause_tx` in `handle_enter_devtools_mode`**: This order doesn't matter semantically (both are async watch channels), but sends the higher-level gate before the finer-grained one as a readability convention.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app -- handler::devtools` - Passed (175 tests)
+- `cargo test --workspace` - Passed (all test suites, 0 failures)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` + `--check` - Passed
+
+### Risks/Limitations
+
+1. **Initial value true vs. DevTools-open scenario**: If somehow the user is in DevTools when a VM reconnect fires (e.g., hot restart), `perf_pause_tx` starts `true` (paused). The user must exit and re-enter DevTools to unpause. Task 03 (change when monitoring starts) may address this, but it is out of scope here.

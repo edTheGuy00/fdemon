@@ -47,10 +47,10 @@ Stop polling entirely when the user isn't viewing DevTools panels. Phase 2 reduc
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-pause-perf-when-not-devtools](tasks/01-pause-perf-when-not-devtools.md) | Not Started | Phase 2 task 05 | 1.5-2h | `actions/performance.rs`, `handler/devtools/mod.rs`, `session/handle.rs`, `message.rs`, `handler/update.rs` |
-| 2 | [02-pause-network-on-tab-switch](tasks/02-pause-network-on-tab-switch.md) | Not Started | 1 | 1.5-2h | `actions/network.rs`, `handler/devtools/mod.rs`, `handler/devtools/network.rs`, `session/handle.rs`, `message.rs` |
-| 3 | [03-lazy-start-monitoring](tasks/03-lazy-start-monitoring.md) | Not Started | 1 | 1.5-2h | `handler/update.rs`, `handler/devtools/mod.rs`, `actions/performance.rs` |
-| 4 | [04-update-docs](tasks/04-update-docs.md) | Not Started | 3 | 0.5h | `docs/ARCHITECTURE.md` |
+| 1 | [01-pause-perf-when-not-devtools](tasks/01-pause-perf-when-not-devtools.md) | Done | Phase 2 task 05 | 1.5-2h | `actions/performance.rs`, `handler/devtools/mod.rs`, `session/handle.rs`, `message.rs`, `handler/update.rs` |
+| 2 | [02-pause-network-on-tab-switch](tasks/02-pause-network-on-tab-switch.md) | Done | 1 | 1.5-2h | `actions/network.rs`, `handler/devtools/mod.rs`, `handler/devtools/network.rs`, `session/handle.rs`, `message.rs` |
+| 3 | [03-lazy-start-monitoring](tasks/03-lazy-start-monitoring.md) | Done | 1 | 1.5-2h | `handler/update.rs`, `handler/devtools/mod.rs`, `actions/performance.rs` |
+| 4 | [04-update-docs](tasks/04-update-docs.md) | Done | 3 | 0.5h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

@@ -143,22 +143,26 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             .map(|c| c.mode)
             .unwrap_or(crate::config::FlutterMode::Debug);
 
-        // If the default panel is Inspector and there is no widget tree loaded,
-        // we need FetchWidgetTree — but we also need StartPerformanceMonitoring.
-        // Return StartPerformanceMonitoring as the action (higher priority) and
-        // queue the FetchWidgetTree as a follow-up message so both happen.
-        let widget_tree_msg = if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+        // StartPerformanceMonitoring consumes the action slot, so use the
+        // follow-up message slot for panel-specific initialization that would
+        // normally be handled by handle_switch_panel:
+        //  - Inspector: queue FetchWidgetTree if the tree isn't loaded yet.
+        //  - Network: queue SwitchDevToolsPanel(Network) so handle_switch_panel
+        //    fires StartNetworkMonitoring (the network task hasn't started yet).
+        let followup_msg = if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
             && state.devtools_view_state.inspector.root.is_none()
             && !state.devtools_view_state.inspector.loading
         {
             state.devtools_view_state.inspector.loading = true;
             Some(crate::message::Message::RequestWidgetTree { session_id })
+        } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+            Some(crate::message::Message::SwitchDevToolsPanel(DevToolsPanel::Network))
         } else {
             None
         };
 
         return UpdateResult {
-            message: widget_tree_msg,
+            message: followup_msg,
             action: Some(UpdateAction::StartPerformanceMonitoring {
                 session_id,
                 handle: None, // hydrated by process.rs

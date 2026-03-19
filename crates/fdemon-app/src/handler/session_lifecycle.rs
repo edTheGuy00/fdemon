@@ -3,7 +3,7 @@
 //! Handles session creation, switching, and closing.
 
 use crate::session::SessionId;
-use crate::state::{AppState, UiMode};
+use crate::state::{AppState, DevToolsPanel, UiMode};
 use fdemon_core::{AppPhase, LogSource};
 use fdemon_daemon::CommandSender;
 
@@ -140,6 +140,27 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
     };
 
     if !needs_start {
+        // Task already running — unpause it for the newly selected session.
+        // Without this, switching back to a session whose perf task was paused
+        // (by a prior DevTools exit) would leave polling paused until the user
+        // exits and re-enters DevTools.
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.perf_pause_tx {
+                let _ = tx.send(false); // unpause
+            }
+            // Also unpause allocation polling if the Performance panel is active.
+            if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+                if let Some(ref tx) = handle.alloc_pause_tx {
+                    let _ = tx.send(false); // unpause
+                }
+            }
+            // Unpause network polling if the Network panel is active.
+            if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+                if let Some(ref tx) = handle.network_pause_tx {
+                    let _ = tx.send(false); // unpause
+                }
+            }
+        }
         return UpdateResult::none();
     }
 

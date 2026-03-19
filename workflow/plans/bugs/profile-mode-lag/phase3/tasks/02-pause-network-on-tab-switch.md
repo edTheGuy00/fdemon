@@ -264,3 +264,40 @@ mod tests {
 - The `getHttpProfile` VM Service call returns all HTTP requests since the last call. Network data captured during a pause is not lost — it accumulates on the VM side and is retrieved in full on the next unpause fetch.
 - The `watch::channel` coalesces rapid updates. If the user rapidly switches panels, only the final pause/unpause state matters, preventing burst fetches.
 - Edge case: if the user enters DevTools on the Network tab for the first time, the task hasn't started yet, so `network_pause_tx` is `None`. The `handle_enter_devtools_mode` unpause send safely does nothing (checks `is_some()`). The task will be started by the `StartNetworkMonitoring` action in `handle_switch_panel`, which the enter handler delegates to.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/profile-mode-lag-25
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/network.rs` | Added `network_pause_tx/rx` watch channel (initial `false`/active); gated `poll_tick` arm on `*network_pause_rx.borrow()`; added `network_pause_rx.changed()` arm for immediate fetch on unpause |
+| `crates/fdemon-app/src/message.rs` | Added `network_pause_tx: Arc<watch::Sender<bool>>` field to `VmServiceNetworkMonitoringStarted` variant |
+| `crates/fdemon-app/src/handler/devtools/network.rs` | Updated `handle_network_monitoring_started` signature to accept `pause_tx`; stores it on `handle.network_pause_tx` |
+| `crates/fdemon-app/src/handler/devtools/mod.rs` | Send pause `true` on leaving Network tab or exiting DevTools; send unpause `false` on switching to Network (task running) or entering DevTools with Network default; 7 new tests |
+| `crates/fdemon-app/src/handler/update.rs` | Updated `VmServiceNetworkMonitoringStarted` destructuring to include `network_pause_tx`; pass to handler; clear `network_pause_tx` on `VmServiceDisconnected` and `VmServiceConnected` |
+| `crates/fdemon-app/src/session/handle.rs` | Added `network_pause_tx: Option<Arc<watch::Sender<bool>>>` field; initialized to `None` in `new()`; added `has_network_pause` to Debug impl |
+
+### Notable Decisions/Tradeoffs
+
+1. **Initial value `false` (active)**: Unlike `perf_pause_tx` and `alloc_pause_tx` which start `true` (paused), network monitoring starts active. This is correct because the task only spawns when the user is already on the Network tab — the first visit needs immediate polling.
+2. **`already_running` check in `handle_switch_panel`**: The unpause send for Network tab is guarded by `already_running` (i.e., `network_shutdown_tx.is_some()`). This correctly handles the case where the user returns to an already-started network task versus the first visit that triggers `StartNetworkMonitoring`.
+3. **Cleared on `VmServiceConnected`**: Added clearing `network_pause_tx = None` in the hot-restart reconnect path (`VmServiceConnected`), matching the existing pattern for `alloc_pause_tx` and `perf_pause_tx`.
+
+### Testing Performed
+
+- `cargo build --workspace` - Passed
+- `cargo clippy --workspace` - Passed (no warnings in modified crates)
+- `cargo test --workspace` - Passed (1841 fdemon-app tests, 0 failures)
+- New tests in `handler::devtools::tests`: 7 tests covering all acceptance criteria
+- Updated `handler::devtools::network::tests::test_handle_monitoring_started_stores_handles` to pass `pause_tx`
+
+### Risks/Limitations
+
+1. **No integration test**: The async behavior of the polling task pausing/unpausing is unit-tested at the handler level. An integration test with a real VM would require PTY infrastructure.
+2. **Rapid panel switching**: The `watch::channel` coalesces rapid updates, so only the final state matters. This is the desired behavior per the design notes.
