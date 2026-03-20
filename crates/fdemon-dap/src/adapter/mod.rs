@@ -171,6 +171,16 @@ pub struct DapAdapter<B: DebugBackend> {
     /// conditionally include an "Exceptions" scope, and by [`handle_evaluate`]
     /// to support the `$_threadException` magic expression.
     pub exception_refs: HashMap<i64, ExceptionRef>,
+
+    /// Maps variable references (i64) to their `evaluateName` expressions.
+    ///
+    /// Populated when a variable reference is allocated by
+    /// `instance_ref_to_variable_with_eval_name` and an `evaluate_name` is
+    /// provided. Cleared on every resume alongside `var_store`.
+    ///
+    /// Used by `expand_object` to look up the parent's evaluate expression and
+    /// construct child evaluate expressions (e.g., `obj.field`, `list[0]`).
+    pub(crate) evaluate_name_map: HashMap<i64, String>,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -210,6 +220,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             source_reference_store: SourceReferenceStore::new(),
             vm_disconnected: false,
             exception_refs: HashMap::new(),
+            evaluate_name_map: HashMap::new(),
         };
         (adapter, ())
     }

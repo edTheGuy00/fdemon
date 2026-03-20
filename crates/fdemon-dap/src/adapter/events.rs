@@ -539,6 +539,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     pub fn on_resume(&mut self) {
         self.var_store.reset();
         self.frame_store.reset();
+        self.evaluate_name_map.clear();
     }
 
     /// Invalidate source references after a hot restart.
@@ -556,6 +557,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         self.source_reference_store.clear();
         self.var_store.reset();
         self.frame_store.reset();
+        self.evaluate_name_map.clear();
         // Active VM-tracked breakpoints are cleared here. Re-application happens
         // on IsolateRunnable via handle_debug_event.
         self.breakpoint_state.drain_all();

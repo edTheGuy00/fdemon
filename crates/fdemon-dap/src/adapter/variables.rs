@@ -285,6 +285,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                 isolate_id,
                 object_id,
             } => {
+                // Look up the evaluateName for this variable reference so that
+                // expand_object can construct child expressions (e.g., obj.field,
+                // list[0]).
+                let parent_eval_name = self
+                    .evaluate_name_map
+                    .get(&args.variables_reference)
+                    .cloned();
                 // Object expansion: pass start/count to the backend so the VM
                 // Service returns only the requested slice (e.g., list elements).
                 self.expand_object(
@@ -292,6 +299,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     &object_id.clone(),
                     args.start,
                     Some(capped_count),
+                    parent_eval_name.as_deref(),
                 )
                 .await
             }
@@ -349,10 +357,11 @@ impl<B: DebugBackend> DapAdapter<B> {
                         .to_string();
                     let instance_ref = exc.instance_ref.clone();
                     let isolate_id_clone = exc.isolate_id.clone();
-                    let var = self.instance_ref_to_variable(
+                    let var = self.instance_ref_to_variable_with_eval_name(
                         &class_name,
                         &instance_ref,
                         &isolate_id_clone,
+                        Some("$_threadException"),
                     );
                     Ok(vec![var])
                 } else {
@@ -401,7 +410,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                         .unwrap_or("?")
                         .to_string();
                     let value = var.get("value").cloned().unwrap_or(serde_json::Value::Null);
-                    result.push(self.instance_ref_to_variable(&name, &value, &isolate_id_clone));
+                    // Pass the variable name as its evaluateName so the IDE can
+                    // use it in "Add to Watch" and nested expression drill-down.
+                    result.push(self.instance_ref_to_variable_with_eval_name(
+                        &name,
+                        &value,
+                        &isolate_id_clone,
+                        Some(&name),
+                    ));
                 }
                 Ok(result)
             }
@@ -536,8 +552,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                             ..Default::default()
                         }
                     } else {
-                        let mut v =
-                            self.instance_ref_to_variable(&field_name, &sv, &isolate_id_clone);
+                        // Use the field name as evaluateName for globals —
+                        // global statics are accessible by name directly.
+                        let mut v = self.instance_ref_to_variable_with_eval_name(
+                            &field_name,
+                            &sv,
+                            &isolate_id_clone,
+                            Some(&field_name),
+                        );
                         v.presentation_hint = Some(hint);
                         v
                     }
@@ -628,11 +650,34 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// inline with `variables_reference: 0` (no expansion). Complex types
     /// (collections and plain instances) are allocated a variable reference
     /// that the IDE can use to drill in further.
+    ///
+    /// This is the public 3-argument form that delegates to the internal
+    /// implementation with `evaluate_name: None`. Use
+    /// `instance_ref_to_variable_with_eval_name` internally when an
+    /// `evaluateName` expression is available.
     pub(super) fn instance_ref_to_variable(
         &mut self,
         name: &str,
         instance_ref: &serde_json::Value,
         isolate_id: &str,
+    ) -> DapVariable {
+        self.instance_ref_to_variable_with_eval_name(name, instance_ref, isolate_id, None)
+    }
+
+    /// Internal implementation of `instance_ref_to_variable` that accepts an
+    /// optional `evaluateName` expression.
+    ///
+    /// When `evaluate_name` is `Some`, the returned [`DapVariable`] will have
+    /// its `evaluate_name` field set. For expandable types (collections and
+    /// instances), the expression is also stored in `evaluate_name_map` keyed
+    /// by the allocated variable reference so that `expand_object` can
+    /// construct child expressions.
+    fn instance_ref_to_variable_with_eval_name(
+        &mut self,
+        name: &str,
+        instance_ref: &serde_json::Value,
+        isolate_id: &str,
+        evaluate_name: Option<&str>,
     ) -> DapVariable {
         let kind = instance_ref
             .get("kind")
@@ -655,6 +700,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 value: "null".to_string(),
                 type_field: Some("Null".to_string()),
                 variables_reference: 0,
+                evaluate_name: evaluate_name.map(|s| s.to_string()),
                 ..Default::default()
             },
 
@@ -663,6 +709,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 value: value_as_string.unwrap_or("false").to_string(),
                 type_field: Some("bool".to_string()),
                 variables_reference: 0,
+                evaluate_name: evaluate_name.map(|s| s.to_string()),
                 ..Default::default()
             },
 
@@ -671,6 +718,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 value: value_as_string.unwrap_or("0").to_string(),
                 type_field: Some(kind.to_lowercase()),
                 variables_reference: 0,
+                evaluate_name: evaluate_name.map(|s| s.to_string()),
                 ..Default::default()
             },
 
@@ -689,10 +737,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                 // user can expand to inspect the full value via `expand_object`.
                 let var_ref = if truncated {
                     if let Some(id) = obj_id {
-                        self.var_store.allocate(VariableRef::Object {
+                        let r = self.var_store.allocate(VariableRef::Object {
                             isolate_id: isolate_id.to_string(),
                             object_id: id.to_string(),
-                        })
+                        });
+                        if let Some(en) = evaluate_name {
+                            self.evaluate_name_map.insert(r, en.to_string());
+                        }
+                        r
                     } else {
                         0
                     }
@@ -704,6 +756,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     value: display,
                     type_field: Some("String".to_string()),
                     variables_reference: var_ref,
+                    evaluate_name: evaluate_name.map(|s| s.to_string()),
                     ..Default::default()
                 }
             }
@@ -719,10 +772,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                 let value = format!("{} (length: {})", type_name, length);
 
                 let var_ref = if let Some(id) = obj_id {
-                    self.var_store.allocate(VariableRef::Object {
+                    let r = self.var_store.allocate(VariableRef::Object {
                         isolate_id: isolate_id.to_string(),
                         object_id: id.to_string(),
-                    })
+                    });
+                    if let Some(en) = evaluate_name {
+                        self.evaluate_name_map.insert(r, en.to_string());
+                    }
+                    r
                 } else {
                     0
                 };
@@ -733,6 +790,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     type_field: Some(type_name.to_string()),
                     variables_reference: var_ref,
                     indexed_variables: Some(length),
+                    evaluate_name: evaluate_name.map(|s| s.to_string()),
                     ..Default::default()
                 }
             }
@@ -745,10 +803,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                     .unwrap_or(0);
                 let display = format!("Record ({} fields)", length);
                 let var_ref = if let Some(id) = obj_id {
-                    self.var_store.allocate(VariableRef::Object {
+                    let r = self.var_store.allocate(VariableRef::Object {
                         isolate_id: isolate_id.to_string(),
                         object_id: id.to_string(),
-                    })
+                    });
+                    if let Some(en) = evaluate_name {
+                        self.evaluate_name_map.insert(r, en.to_string());
+                    }
+                    r
                 } else {
                     0
                 };
@@ -757,6 +819,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     value: display,
                     type_field: Some("Record".to_string()),
                     variables_reference: var_ref,
+                    evaluate_name: evaluate_name.map(|s| s.to_string()),
                     ..Default::default()
                 }
             }
@@ -764,10 +827,14 @@ impl<B: DebugBackend> DapAdapter<B> {
             // ── WeakReference: expandable to inspect the target ──────────────
             "WeakReference" => {
                 let var_ref = if let Some(id) = obj_id {
-                    self.var_store.allocate(VariableRef::Object {
+                    let r = self.var_store.allocate(VariableRef::Object {
                         isolate_id: isolate_id.to_string(),
                         object_id: id.to_string(),
-                    })
+                    });
+                    if let Some(en) = evaluate_name {
+                        self.evaluate_name_map.insert(r, en.to_string());
+                    }
+                    r
                 } else {
                     0
                 };
@@ -776,6 +843,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     value: "WeakReference".to_string(),
                     type_field: Some("WeakReference".to_string()),
                     variables_reference: var_ref,
+                    evaluate_name: evaluate_name.map(|s| s.to_string()),
                     ..Default::default()
                 }
             }
@@ -788,6 +856,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     .unwrap_or_else(|| "<optimized out>".to_string()),
                 type_field: Some("Sentinel".to_string()),
                 variables_reference: 0,
+                evaluate_name: evaluate_name.map(|s| s.to_string()),
                 ..Default::default()
             },
 
@@ -799,10 +868,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                     .unwrap_or_else(|| format!("{} instance", type_name));
 
                 let var_ref = if let Some(id) = obj_id {
-                    self.var_store.allocate(VariableRef::Object {
+                    let r = self.var_store.allocate(VariableRef::Object {
                         isolate_id: isolate_id.to_string(),
                         object_id: id.to_string(),
-                    })
+                    });
+                    if let Some(en) = evaluate_name {
+                        self.evaluate_name_map.insert(r, en.to_string());
+                    }
+                    r
                 } else {
                     0
                 };
@@ -812,6 +885,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     value,
                     type_field: Some(type_name.to_string()),
                     variables_reference: var_ref,
+                    evaluate_name: evaluate_name.map(|s| s.to_string()),
                     ..Default::default()
                 }
             }
@@ -822,6 +896,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 value: value_as_string.unwrap_or("<unknown>").to_string(),
                 type_field: class_name.map(|s| s.to_string()),
                 variables_reference: 0,
+                evaluate_name: evaluate_name.map(|s| s.to_string()),
                 ..Default::default()
             },
         }
@@ -838,12 +913,21 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///
     /// The `start` and `count` paging parameters are forwarded to the VM
     /// Service so that large collections can be fetched in chunks.
+    ///
+    /// `parent_evaluate_name` is the `evaluateName` expression for the parent
+    /// object being expanded (e.g., `"myList"`, `"obj"`). When provided, child
+    /// variables are assigned `evaluateName` expressions of the form:
+    /// - Fields: `parent.fieldName`
+    /// - Indexed elements: `parent[index]`
+    /// - Map string keys: `parent["key"]`
+    /// - Map integer keys: `parent[42]`
     async fn expand_object(
         &mut self,
         isolate_id: &str,
         object_id: &str,
         start: Option<i64>,
         count: Option<i64>,
+        parent_evaluate_name: Option<&str>,
     ) -> Result<Vec<DapVariable>, String> {
         let obj = self
             .backend
@@ -876,10 +960,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                         for (i, elem) in elements.iter().enumerate() {
                             let index = offset + i as i64;
                             let elem_name = format!("[{}]", index);
-                            result.push(self.instance_ref_to_variable(
+                            // Construct child evaluateName: parent[index]
+                            let child_eval_name: Option<String> =
+                                parent_evaluate_name.map(|p| format!("{}[{}]", p, index));
+                            result.push(self.instance_ref_to_variable_with_eval_name(
                                 &elem_name,
                                 elem,
                                 &isolate_id,
+                                child_eval_name.as_deref(),
                             ));
                         }
                         Ok(result)
@@ -896,20 +984,37 @@ impl<B: DebugBackend> DapAdapter<B> {
 
                         let mut result = Vec::with_capacity(associations.len());
                         for assoc in &associations {
-                            let key = assoc
-                                .get("key")
+                            let key_val = assoc.get("key");
+                            let key_str = key_val
                                 .and_then(|k| k.get("valueAsString"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("?");
+                            // Determine the key kind to choose the right
+                            // evaluateName format:
+                            // - String keys: parent["key"]
+                            // - Int keys:    parent[42]
+                            // - Other:       parent[key] (same as display)
+                            let key_kind = key_val
+                                .and_then(|k| k.get("kind"))
+                                .and_then(|k| k.as_str())
+                                .unwrap_or("");
                             let value = assoc
                                 .get("value")
                                 .cloned()
                                 .unwrap_or(serde_json::Value::Null);
-                            let entry_name = format!("[{}]", key);
-                            result.push(self.instance_ref_to_variable(
+                            let entry_name = format!("[{}]", key_str);
+                            // Construct child evaluateName based on key kind.
+                            let child_eval_name: Option<String> =
+                                parent_evaluate_name.map(|p| match key_kind {
+                                    "String" => format!("{}[\"{}\"]", p, key_str),
+                                    "Int" => format!("{}[{}]", p, key_str),
+                                    _ => format!("{}[{}]", p, key_str),
+                                });
+                            result.push(self.instance_ref_to_variable_with_eval_name(
                                 &entry_name,
                                 &value,
                                 &isolate_id,
+                                child_eval_name.as_deref(),
                             ));
                         }
                         Ok(result)
@@ -937,7 +1042,15 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 .get("value")
                                 .cloned()
                                 .unwrap_or(serde_json::Value::Null);
-                            result.push(self.instance_ref_to_variable(&name, &value, &isolate_id));
+                            // Construct child evaluateName: parent.fieldName
+                            let child_eval_name: Option<String> =
+                                parent_evaluate_name.map(|p| format!("{}.{}", p, name));
+                            result.push(self.instance_ref_to_variable_with_eval_name(
+                                &name,
+                                &value,
+                                &isolate_id,
+                                child_eval_name.as_deref(),
+                            ));
                         }
                         Ok(result)
                     }
@@ -955,7 +1068,15 @@ impl<B: DebugBackend> DapAdapter<B> {
                             Some(t) if !t.is_null() => t,
                             _ => serde_json::json!({ "kind": "Null" }),
                         };
-                        let var = self.instance_ref_to_variable("target", &target, &isolate_id);
+                        // WeakReference.target is accessed via `.target` field.
+                        let child_eval_name: Option<String> =
+                            parent_evaluate_name.map(|p| format!("{}.target", p));
+                        let var = self.instance_ref_to_variable_with_eval_name(
+                            "target",
+                            &target,
+                            &isolate_id,
+                            child_eval_name.as_deref(),
+                        );
                         Ok(vec![var])
                     }
 
@@ -987,7 +1108,15 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 .get("value")
                                 .cloned()
                                 .unwrap_or(serde_json::Value::Null);
-                            result.push(self.instance_ref_to_variable(&name, &value, &isolate_id));
+                            // Construct child evaluateName: parent.fieldName
+                            let child_eval_name: Option<String> =
+                                parent_evaluate_name.map(|p| format!("{}.{}", p, name));
+                            result.push(self.instance_ref_to_variable_with_eval_name(
+                                &name,
+                                &value,
+                                &isolate_id,
+                                child_eval_name.as_deref(),
+                            ));
                         }
                         Ok(result)
                     }

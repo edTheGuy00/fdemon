@@ -11,6 +11,7 @@ mod breakpoint_persistence;
 mod breakpoints;
 mod conditional_breakpoints;
 mod custom_events;
+mod evaluate_name;
 mod events_logging;
 mod exception_scope;
 mod execution;
