@@ -696,7 +696,18 @@ impl<B: DebugBackend> DapClientSession<B> {
                             let (tx, _) = mpsc::channel(1);
                             tx
                         });
-                        let (adapter, _event_rx) = DapAdapter::new_with_tx(backend, event_tx);
+                        let (mut adapter, _event_rx) = DapAdapter::new_with_tx(backend, event_tx);
+
+                        // Propagate the client's progress-reporting capability so
+                        // that hot reload/restart handlers know whether to emit
+                        // progressStart/progressEnd events.
+                        let supports_progress = self
+                            .client_info
+                            .as_ref()
+                            .and_then(|ci| ci.supports_progress_reporting)
+                            .unwrap_or(false);
+                        adapter.set_client_supports_progress(supports_progress);
+
                         self.adapter = Some(adapter);
                     }
                 }

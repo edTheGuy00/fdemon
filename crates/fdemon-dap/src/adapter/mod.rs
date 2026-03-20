@@ -246,6 +246,21 @@ pub struct DapAdapter<B: DebugBackend> {
     /// Set during `handle_attach` from the `packageName` argument. Empty
     /// string means "not set" — all `package:` URIs will be treated as external.
     pub(crate) app_package_name: String,
+
+    /// Whether the connected DAP client supports progress reporting.
+    ///
+    /// Set from the `supportsProgressReporting` field of the `initialize`
+    /// request arguments. When `true`, the adapter emits `progressStart` and
+    /// `progressEnd` events around hot reload/restart operations so the IDE
+    /// can show a progress indicator.
+    pub(crate) client_supports_progress: bool,
+
+    /// Monotonic counter used to generate unique progress IDs.
+    ///
+    /// Incremented by [`DapAdapter::alloc_progress_id`] each time a new
+    /// progress sequence is started. The ID is embedded in `progressStart` /
+    /// `progressEnd` events so the IDE can match them correctly.
+    pub(crate) next_progress_id: u64,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -292,8 +307,30 @@ impl<B: DebugBackend> DapAdapter<B> {
             debug_sdk_libraries: false,
             debug_external_package_libraries: false,
             app_package_name: String::new(),
+            client_supports_progress: false,
+            next_progress_id: 0,
         };
         (adapter, ())
+    }
+
+    /// Set whether the connected client supports DAP progress reporting.
+    ///
+    /// Must be called before the first `hotReload` or `hotRestart` request if
+    /// the client advertises `supportsProgressReporting: true` in its
+    /// `initialize` arguments. Called by the session layer immediately after
+    /// the adapter is constructed.
+    pub fn set_client_supports_progress(&mut self, supported: bool) {
+        self.client_supports_progress = supported;
+    }
+
+    /// Allocate a monotonically increasing progress ID.
+    ///
+    /// Each `progressStart`/`progressEnd` pair must use the same unique ID.
+    /// The ID is formatted as a string for the DAP wire format.
+    pub(crate) fn alloc_progress_id(&mut self) -> String {
+        let id = self.next_progress_id;
+        self.next_progress_id += 1;
+        format!("fdemon-progress-{id}")
     }
 }
 

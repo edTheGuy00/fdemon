@@ -929,12 +929,49 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// The `arguments.reason` field is optional and informational — it does
     /// not change reload behavior.
     ///
+    /// When the client advertises `supportsProgressReporting`, emits:
+    /// - `progressStart` (title: `"Hot Reload"`, `cancellable: false`)
+    /// - `progressEnd` on completion (even on failure, per DAP spec)
+    ///
+    /// Always emits `dart.hotReloadComplete` on success, as expected by the
+    /// Dart-Code VS Code extension for updating its internal state.
+    ///
     /// Compatible with the VS Code Dart extension's `hotReload` custom request.
     pub(super) async fn handle_hot_reload(&mut self, request: &DapRequest) -> DapResponse {
         tracing::debug!("DAP adapter: hotReload");
-        match self.backend.hot_reload().await {
+
+        let progress_id = if self.client_supports_progress {
+            let id = self.alloc_progress_id();
+            self.send_event(
+                "progressStart",
+                Some(serde_json::json!({
+                    "progressId": id,
+                    "title": "Hot Reload",
+                    "cancellable": false,
+                })),
+            )
+            .await;
+            Some(id)
+        } else {
+            None
+        };
+
+        let result = self.backend.hot_reload().await;
+
+        // Always close the progress indicator, even on failure, so the IDE
+        // does not display a stale spinner indefinitely.
+        if let Some(ref id) = progress_id {
+            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
+                .await;
+        }
+
+        match result {
             Ok(()) => {
                 tracing::debug!("Hot reload dispatched successfully");
+                // dart.hotReloadComplete is a custom event expected by the
+                // Dart-Code extension to update its internal session state.
+                self.send_event("dart.hotReloadComplete", Some(serde_json::json!({})))
+                    .await;
                 DapResponse::success(request, None)
             }
             Err(e) => {
@@ -953,12 +990,49 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// The `arguments.reason` field is optional and informational — it does
     /// not change restart behavior.
     ///
+    /// When the client advertises `supportsProgressReporting`, emits:
+    /// - `progressStart` (title: `"Hot Restart"`, `cancellable: false`)
+    /// - `progressEnd` on completion (even on failure, per DAP spec)
+    ///
+    /// Always emits `dart.hotRestartComplete` on success, as expected by the
+    /// Dart-Code VS Code extension for updating its internal state.
+    ///
     /// Compatible with the VS Code Dart extension's `hotRestart` custom request.
     pub(super) async fn handle_hot_restart(&mut self, request: &DapRequest) -> DapResponse {
         tracing::debug!("DAP adapter: hotRestart");
-        match self.backend.hot_restart().await {
+
+        let progress_id = if self.client_supports_progress {
+            let id = self.alloc_progress_id();
+            self.send_event(
+                "progressStart",
+                Some(serde_json::json!({
+                    "progressId": id,
+                    "title": "Hot Restart",
+                    "cancellable": false,
+                })),
+            )
+            .await;
+            Some(id)
+        } else {
+            None
+        };
+
+        let result = self.backend.hot_restart().await;
+
+        // Always close the progress indicator, even on failure, so the IDE
+        // does not display a stale spinner indefinitely.
+        if let Some(ref id) = progress_id {
+            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
+                .await;
+        }
+
+        match result {
             Ok(()) => {
                 tracing::debug!("Hot restart dispatched successfully");
+                // dart.hotRestartComplete is a custom event expected by the
+                // Dart-Code extension to update its internal session state.
+                self.send_event("dart.hotRestartComplete", Some(serde_json::json!({})))
+                    .await;
                 DapResponse::success(request, None)
             }
             Err(e) => {

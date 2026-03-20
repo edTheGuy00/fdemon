@@ -22,6 +22,7 @@ mod hot_operations;
 mod loaded_sources;
 mod logpoints;
 mod production_hardening;
+mod progress_reporting;
 mod restart_frame;
 mod stack_scopes_variables;
 mod to_string_display;
