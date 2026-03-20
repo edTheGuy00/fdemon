@@ -55,6 +55,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "hotReload" => self.handle_hot_reload(request).await,
             "hotRestart" => self.handle_hot_restart(request).await,
             "restartFrame" => self.handle_restart_frame(request).await,
+            "callService" => self.handle_call_service(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -1034,6 +1035,53 @@ impl<B: DebugBackend> DapAdapter<B> {
                 DapResponse::success(request, Some(serde_json::json!({})))
             }
             Err(e) => DapResponse::error(request, format!("restartFrame failed: {e}")),
+        }
+    }
+
+    /// Handle the `callService` custom DAP request.
+    ///
+    /// Forwards an arbitrary VM Service RPC call to the backend's
+    /// `call_service` method. This is a Dart-specific custom request used by
+    /// the VS Code Dart extension to invoke service extensions such as:
+    ///
+    /// | Method | Purpose |
+    /// |---|---|
+    /// | `ext.flutter.debugDumpApp` | Widget inspector dump |
+    /// | `ext.flutter.showPerformanceOverlay` | Toggle perf overlay |
+    /// | `ext.flutter.debugPaint` | Toggle debug painting |
+    /// | `ext.flutter.reassemble` | Trigger hot reload |
+    ///
+    /// ## Arguments
+    ///
+    /// The request body must include a `"method"` string field identifying the
+    /// VM Service RPC. An optional `"params"` object is forwarded verbatim.
+    ///
+    /// ## Security
+    ///
+    /// All invocations are logged at `debug` level for auditability. No
+    /// method-level filtering is applied — the VM Service itself handles
+    /// authorization. The DAP server is already bound to `127.0.0.1` by
+    /// default so only local callers can reach this endpoint.
+    pub(super) async fn handle_call_service(&mut self, request: &DapRequest) -> DapResponse {
+        let args = match request.arguments.as_ref() {
+            Some(a) => a,
+            None => return DapResponse::error(request, "callService: missing arguments"),
+        };
+
+        let method = match args.get("method").and_then(|m| m.as_str()) {
+            Some(m) => m,
+            None => return DapResponse::error(request, "callService: missing 'method' argument"),
+        };
+
+        let params = args.get("params").cloned();
+
+        tracing::debug!("callService: method={}, params={:?}", method, params);
+
+        match self.backend.call_service(method, params).await {
+            Ok(result) => {
+                DapResponse::success(request, Some(serde_json::json!({ "result": result })))
+            }
+            Err(e) => DapResponse::error(request, format!("callService failed: {}", e)),
         }
     }
 }

@@ -9,6 +9,7 @@ mod attach_threads;
 mod backend_phase6;
 mod breakpoint_persistence;
 mod breakpoints;
+mod call_service;
 mod conditional_breakpoints;
 mod custom_events;
 mod evaluate_name;
