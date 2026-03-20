@@ -442,6 +442,8 @@ pub fn is_expandable(instance: &serde_json::Value) -> bool {
             | "Uint8ClampedList"
             | "Int32List"
             | "Float64List"
+            | "Record"
+            | "WeakReference"
     )
 }
 

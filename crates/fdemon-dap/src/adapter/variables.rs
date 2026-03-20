@@ -675,14 +675,35 @@ impl<B: DebugBackend> DapAdapter<B> {
             },
 
             "String" => {
-                let value = value_as_string
-                    .map(|s| format!("\"{}\"", s))
-                    .unwrap_or_else(|| "\"\"".to_string());
+                let val = value_as_string.unwrap_or("");
+                let truncated = instance_ref
+                    .get("valueAsStringIsTruncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let display = if truncated {
+                    format!("\"{}...\"", val)
+                } else {
+                    format!("\"{}\"", val)
+                };
+                // Allocate a variable reference for truncated strings so the
+                // user can expand to inspect the full value via `expand_object`.
+                let var_ref = if truncated {
+                    if let Some(id) = obj_id {
+                        self.var_store.allocate(VariableRef::Object {
+                            isolate_id: isolate_id.to_string(),
+                            object_id: id.to_string(),
+                        })
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 DapVariable {
                     name: name.to_string(),
-                    value,
+                    value: display,
                     type_field: Some("String".to_string()),
-                    variables_reference: 0,
+                    variables_reference: var_ref,
                     ..Default::default()
                 }
             }
@@ -715,6 +736,60 @@ impl<B: DebugBackend> DapAdapter<B> {
                     ..Default::default()
                 }
             }
+
+            // ── Record types: expandable via fields ─────────────────────────
+            "Record" => {
+                let length = instance_ref
+                    .get("length")
+                    .and_then(|l| l.as_i64())
+                    .unwrap_or(0);
+                let display = format!("Record ({} fields)", length);
+                let var_ref = if let Some(id) = obj_id {
+                    self.var_store.allocate(VariableRef::Object {
+                        isolate_id: isolate_id.to_string(),
+                        object_id: id.to_string(),
+                    })
+                } else {
+                    0
+                };
+                DapVariable {
+                    name: name.to_string(),
+                    value: display,
+                    type_field: Some("Record".to_string()),
+                    variables_reference: var_ref,
+                    ..Default::default()
+                }
+            }
+
+            // ── WeakReference: expandable to inspect the target ──────────────
+            "WeakReference" => {
+                let var_ref = if let Some(id) = obj_id {
+                    self.var_store.allocate(VariableRef::Object {
+                        isolate_id: isolate_id.to_string(),
+                        object_id: id.to_string(),
+                    })
+                } else {
+                    0
+                };
+                DapVariable {
+                    name: name.to_string(),
+                    value: "WeakReference".to_string(),
+                    type_field: Some("WeakReference".to_string()),
+                    variables_reference: var_ref,
+                    ..Default::default()
+                }
+            }
+
+            // ── Sentinel: optimized-out or otherwise inaccessible ────────────
+            "Sentinel" => DapVariable {
+                name: name.to_string(),
+                value: value_as_string
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "<optimized out>".to_string()),
+                type_field: Some("Sentinel".to_string()),
+                variables_reference: 0,
+                ..Default::default()
+            },
 
             // ── Plain instances: expandable via fields ───────────────────────
             "PlainInstance" | "Closure" | "RegExp" | "Type" | "StackTrace" => {
@@ -782,8 +857,13 @@ impl<B: DebugBackend> DapAdapter<B> {
             "Instance" => {
                 let kind = obj.get("kind").and_then(|k| k.as_str()).unwrap_or("");
                 match kind {
-                    "List" | "Uint8List" | "Uint8ClampedList" | "Int32List" | "Float64List" => {
-                        // Expand list elements.
+                    // Sets are stored in the VM Service like Lists — they have
+                    // an `elements` array. Include "Set" here so it uses the
+                    // correct indexed-expansion path instead of falling through
+                    // to the fields path (which returns nothing for Sets).
+                    "List" | "Set" | "Uint8List" | "Uint8ClampedList" | "Int32List"
+                    | "Float64List" => {
+                        // Expand list/set elements.
                         let elements: Vec<serde_json::Value> = obj
                             .get("elements")
                             .and_then(|e| e.as_array())
@@ -835,6 +915,50 @@ impl<B: DebugBackend> DapAdapter<B> {
                         Ok(result)
                     }
 
+                    // Records use the same `fields` structure as PlainInstance.
+                    // Positional fields have names like "$1", "$2"; named
+                    // fields use their actual name.
+                    "Record" => {
+                        let fields: Vec<serde_json::Value> = obj
+                            .get("fields")
+                            .and_then(|f| f.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let isolate_id = isolate_id.to_string();
+
+                        let mut result = Vec::with_capacity(fields.len());
+                        for field in &fields {
+                            let name = field
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            let value = field
+                                .get("value")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            result.push(self.instance_ref_to_variable(&name, &value, &isolate_id));
+                        }
+                        Ok(result)
+                    }
+
+                    // WeakReference has a `target` field that may be JSON null
+                    // (absent key) or a VM Service Null instance if the target
+                    // was garbage collected.
+                    "WeakReference" => {
+                        let raw_target = obj.get("target").cloned();
+                        let isolate_id = isolate_id.to_string();
+                        // Normalise: if the target is absent or JSON null, treat
+                        // it as the VM Service Null kind so instance_ref_to_variable
+                        // renders it as "null".
+                        let target = match raw_target {
+                            Some(t) if !t.is_null() => t,
+                            _ => serde_json::json!({ "kind": "Null" }),
+                        };
+                        let var = self.instance_ref_to_variable("target", &target, &isolate_id);
+                        Ok(vec![var])
+                    }
+
                     _ => {
                         // Expand instance fields.
                         let fields: Vec<serde_json::Value> = obj
@@ -846,6 +970,14 @@ impl<B: DebugBackend> DapAdapter<B> {
 
                         let mut result = Vec::with_capacity(fields.len());
                         for field in &fields {
+                            // Skip TypeArguments entries — they are internal VM
+                            // details not meaningful to the user.
+                            let field_type =
+                                field.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if field_type == "@TypeArguments" || field_type == "TypeArguments" {
+                                continue;
+                            }
+
                             let name = field
                                 .get("name")
                                 .and_then(|n| n.as_str())

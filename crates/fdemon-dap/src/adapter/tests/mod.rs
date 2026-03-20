@@ -18,6 +18,7 @@ mod hot_operations;
 mod logpoints;
 mod production_hardening;
 mod stack_scopes_variables;
+mod variable_type_rendering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared test helpers
