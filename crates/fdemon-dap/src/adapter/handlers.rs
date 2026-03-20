@@ -8,9 +8,9 @@ use crate::adapter::stack::build_source_from_uri;
 use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
-    AttachRequestArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread, PauseArguments,
-    RestartFrameArguments, SetBreakpointsArguments, SetExceptionBreakpointsArguments,
-    StepArguments,
+    AttachRequestArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread,
+    ExceptionInfoArguments, PauseArguments, RestartFrameArguments, SetBreakpointsArguments,
+    SetExceptionBreakpointsArguments, StepArguments,
 };
 use crate::{DapRequest, DapResponse};
 
@@ -56,6 +56,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "hotRestart" => self.handle_hot_restart(request).await,
             "restartFrame" => self.handle_restart_frame(request).await,
             "callService" => self.handle_call_service(request).await,
+            "exceptionInfo" => self.handle_exception_info(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -1083,6 +1084,140 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
             Err(e) => DapResponse::error(request, format!("callService failed: {}", e)),
         }
+    }
+
+    /// Handle the `exceptionInfo` DAP request.
+    ///
+    /// Returns structured exception data when the debugger is paused at an
+    /// exception. Provides richer detail than the basic `stopped` event —
+    /// the IDE displays this in the exception details dialog.
+    ///
+    /// # Response fields
+    ///
+    /// | Field | Content |
+    /// |---|---|
+    /// | `exceptionId` | The VM object ID of the exception (e.g., `"objects/12345"`) |
+    /// | `description` | Result of `toString()` on the exception |
+    /// | `breakMode` | `"always"`, `"unhandled"`, or `"never"` based on the current pause mode |
+    /// | `details.typeName` | The Dart class name of the exception (e.g., `"FormatException"`) |
+    /// | `details.message` | Same as `description` (for IDE detail panels) |
+    /// | `details.stackTrace` | Result of `stackTrace?.toString()` if available |
+    /// | `details.evaluateName` | `"$_threadException"` for IDE expression evaluation |
+    ///
+    /// # Errors
+    ///
+    /// - No exception available for the given thread → DAP error response
+    /// - `toString()` evaluation failure → `description` falls back to the class name
+    /// - `stackTrace?.toString()` failure → `details.stackTrace` is absent
+    pub(super) async fn handle_exception_info(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: exceptionInfo");
+
+        let args = match parse_args::<ExceptionInfoArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        // Look up the stored exception reference for this thread.
+        let exc = match self.exception_refs.get(&args.thread_id) {
+            Some(e) => e.clone(),
+            None => {
+                return DapResponse::error(
+                    request,
+                    format!(
+                        "No exception available for thread {} — not paused at an exception",
+                        args.thread_id
+                    ),
+                )
+            }
+        };
+
+        let isolate_id = exc.isolate_id.clone();
+
+        // Extract the VM object ID from the InstanceRef.
+        let exception_id = exc
+            .instance_ref
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Extract the exception class name for `typeName`.
+        let type_name = exc
+            .instance_ref
+            .get("classRef")
+            .or_else(|| exc.instance_ref.get("class"))
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("Exception")
+            .to_string();
+
+        // Call toString() on the exception for the description.
+        let description = if !exception_id.is_empty() {
+            match self
+                .backend
+                .evaluate(&isolate_id, &exception_id, "toString()")
+                .await
+            {
+                Ok(result) => result
+                    .get("valueAsString")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&type_name)
+                    .to_string(),
+                Err(_) => type_name.clone(),
+            }
+        } else {
+            type_name.clone()
+        };
+
+        // Try to get the stack trace string via stackTrace?.toString().
+        let stack_trace_str = if !exception_id.is_empty() {
+            match self
+                .backend
+                .evaluate(&isolate_id, &exception_id, "stackTrace?.toString()")
+                .await
+            {
+                Ok(result) => result
+                    .get("valueAsString")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        // Map the current exception pause mode to the DAP breakMode string.
+        let break_mode = match self.exception_mode {
+            crate::adapter::types::DapExceptionPauseMode::All => "always",
+            crate::adapter::types::DapExceptionPauseMode::Unhandled => "unhandled",
+            crate::adapter::types::DapExceptionPauseMode::None => "never",
+        };
+
+        // Build the optional details object.
+        let mut details = serde_json::json!({
+            "typeName": type_name,
+            "message": description,
+            "evaluateName": "$_threadException",
+        });
+        if let Some(st) = stack_trace_str {
+            details["stackTrace"] = serde_json::Value::String(st);
+        }
+
+        let body = serde_json::json!({
+            "exceptionId": exception_id,
+            "description": description,
+            "breakMode": break_mode,
+            "details": details,
+        });
+
+        tracing::debug!(
+            "exceptionInfo: thread={} type={} breakMode={}",
+            args.thread_id,
+            type_name,
+            break_mode,
+        );
+
+        DapResponse::success(request, Some(body))
     }
 }
 

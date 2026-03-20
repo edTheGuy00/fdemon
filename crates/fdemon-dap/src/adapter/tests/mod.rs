@@ -14,6 +14,7 @@ mod conditional_breakpoints;
 mod custom_events;
 mod evaluate_name;
 mod events_logging;
+mod exception_info;
 mod exception_scope;
 mod execution;
 mod getter_evaluation;

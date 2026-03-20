@@ -708,6 +708,20 @@ pub struct DisconnectArguments {
     pub suspend_debuggee: Option<bool>,
 }
 
+/// Arguments for the `exceptionInfo` request.
+///
+/// Sent by the IDE when it needs structured exception details after the
+/// debugger pauses at an exception. The adapter looks up the stored
+/// exception reference for the given thread and returns rich exception
+/// data including the exception class name, `toString()` output, and
+/// optional stack trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExceptionInfoArguments {
+    /// The thread that is paused at the exception.
+    pub thread_id: i64,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Constructors
 // ─────────────────────────────────────────────────────────────────────────────
@@ -913,6 +927,7 @@ impl Capabilities {
             // Advertising it without a handler causes IDE errors when the restart button is used.
             supports_delayed_stack_trace_loading: Some(true),
             supports_loaded_sources_request: Some(true),
+            supports_exception_info_request: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
                     filter: "All".into(),
@@ -1168,7 +1183,8 @@ mod tests {
         assert_eq!(caps.supports_loaded_sources_request, Some(true));
         // Unimplemented capabilities remain None.
         assert!(caps.support_terminate_debuggee.is_none());
-        assert!(caps.supports_exception_info_request.is_none());
+        // exceptionInfo is implemented in Task 09 — capability is advertised.
+        assert_eq!(caps.supports_exception_info_request, Some(true));
         assert!(caps.supports_set_variable.is_none());
         assert!(caps.supports_value_formatting_options.is_none());
         assert!(caps.supports_breakpoint_locations_request.is_none());
@@ -1688,7 +1704,7 @@ mod tests {
         // supportsRestartRequest is NOT advertised until Task 10 implements the handler.
         // Advertising it without a handler causes IDE errors when the restart button is clicked.
         assert!(json.get("supportsRestartRequest").is_none());
-        // Not yet implemented capabilities are absent
-        assert!(json.get("supportsExceptionInfoRequest").is_none());
+        // exceptionInfo is implemented in Task 09 — capability is advertised.
+        assert_eq!(json["supportsExceptionInfoRequest"], true);
     }
 }
