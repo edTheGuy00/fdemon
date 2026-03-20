@@ -148,3 +148,39 @@ async fn test_set_expansion_uses_elements() {
 
 - `TypeParameter` and `TypeArguments` kinds should be filtered from variable expansion — they are internal VM details. If an `@TypeArguments` entry appears in a fields list, skip it.
 - For full-string viewing of truncated strings, `expand_object` should call `get_object` with no offset/count to get the complete `valueAsString`. This is a secondary concern — the truncation indicator is the priority.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/variables.rs` | Fixed String arm to check `valueAsStringIsTruncated` and show ellipsis; added `Record`, `WeakReference`, `Sentinel` match arms in `instance_ref_to_variable`; fixed `expand_object` to route `"Set"` through the `elements` path; added `"Record"` and `"WeakReference"` expansion arms; added `TypeArguments` field filtering in the generic `_` fields path |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Extended `is_expandable` to include `"Record"` and `"WeakReference"` |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered new `variable_type_rendering` test module |
+| `crates/fdemon-dap/src/adapter/tests/variable_type_rendering.rs` | New file with 20 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **WeakReference null target normalization**: When the `target` field from `get_object` is JSON null (absent or explicit null), the code normalises it to `{"kind": "Null"}` so that `instance_ref_to_variable` renders it as `"null"` rather than `"<unknown>"`. This matches the behavior the VM would exhibit when a WeakReference target has been GC'd.
+
+2. **TypeArguments filtering in `_` arm only**: The `@TypeArguments` filter is applied in the catch-all `_` arm of `expand_object`. The new `Record` arm does not filter them (records should not have TypeArguments entries in their fields per the VM spec).
+
+3. **Set display unchanged in `instance_ref_to_variable`**: The existing collection arm already covers `"Set"` for display. The only fix needed was routing `"Set"` to the `elements` expansion path in `expand_object`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (645 tests, 20 new from this task)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Record expansion**: The VM Service spec says Record fields use `$1`, `$2` names for positional fields. The implementation relies on the VM sending these names correctly in the `fields` array — no additional mapping is done.
+2. **Full-string viewing for truncated strings**: Per the task notes, this is a secondary concern. The truncation indicator and `variablesReference` allocation are implemented; the actual full-string retrieval in `expand_object` for truncated String objects falls through to the generic fields path which will return empty (no fields on a String instance). This can be improved in a future task by adding a special `"String"` arm in `expand_object` that calls `get_object` and reads `valueAsString`.

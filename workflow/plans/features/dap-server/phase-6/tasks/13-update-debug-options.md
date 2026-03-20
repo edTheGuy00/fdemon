@@ -120,3 +120,47 @@ async fn test_isolate_runnable_applies_library_debuggability() {
 
 - This is important for Flutter debugging — without it, stepping into framework code is an all-or-nothing experience.
 - The ordering constraint (library debuggability → exception mode → breakpoints → resume) on `IsolateRunnable` is critical. If breakpoints are set before library debuggability, breakpoints in SDK code may not be hit even after toggling SDK debugging on.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `debug_sdk_libraries`, `debug_external_package_libraries`, `app_package_name` fields to `DapAdapter`; initialized in `new_with_tx` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `updateDebugOptions` to dispatch; init fields in `handle_attach`; added `handle_update_debug_options`, `apply_library_debuggability`, `is_app_package` methods |
+| `crates/fdemon-dap/src/adapter/events.rs` | Restructured `IsolateRunnable` handler: apply library debuggability first, then exception mode, then breakpoints |
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `debug_sdk_libraries`, `debug_external_package_libraries`, `package_name` fields to `AttachRequestArguments`; updated existing struct-literal test |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `mod update_debug_options` |
+| `crates/fdemon-dap/src/adapter/tests/update_debug_options.rs` | New file: 20 unit tests |
+| `crates/fdemon-dap/src/adapter/tests/exception_info.rs` | Reformatted by `cargo fmt` (pre-existing style inconsistency) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`pub(super)` visibility for `apply_library_debuggability`**: The method is called from both `handlers.rs` and `events.rs`. Since both are submodules of `adapter/`, `pub(super)` correctly grants access to both.
+
+2. **`is_app_package` uses trailing-slash match**: `package:my_app/` prefix matching prevents false positives where a package named `my_app` would match `my_app_test`.
+
+3. **Ordering change in `IsolateRunnable`**: The existing exception-mode block (after breakpoints) was removed and replaced with the new order: library debuggability → exception mode → breakpoints. This is a functional improvement that satisfies the critical ordering constraint from the task spec.
+
+4. **`apply_library_debuggability` returns `Result<(), String>`**: Uses plain `String` error (not `BackendError`) since this method is called from `events.rs` which uses fire-and-forget error handling.
+
+5. **Empty `get_isolate` response**: When `get_isolate` returns an object without a `libraries` key, `unwrap_or(&empty_vec)` makes it a no-op. This is safe and avoids crashing on unexpected VM responses.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace` - Passed (all 4 library crates + binary)
+- `cargo test -p fdemon-dap` - Passed (750 unit tests, 20 new tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`apply_library_debuggability` in `IsolateRunnable`**: If `get_isolate` fails (e.g., VM not ready), the isolate's libraries won't have debuggability set. The failure is logged as a warning and breakpoints continue to be applied.
+
+2. **No `IsolateRunnable` resume step**: The task spec mentions "Resume isolate" as step 4, but the existing `IsolateRunnable` handler in `events.rs` does not resume the isolate. This is intentional — the isolate is resumed by the Flutter tooling after `configurationDone`. Adding an unsolicited resume here would break the attach flow.

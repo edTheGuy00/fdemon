@@ -152,3 +152,43 @@ async fn test_completions_empty_prefix_returns_all() {
 - This is a major differentiator — neither the Dart DDS adapter nor Dart-Code implement `completions`. fdemon will be the only Dart DAP adapter with debug console autocomplete.
 - The conservative approach (scope-only) guarantees accuracy — no false suggestions. A more sophisticated approach (parsing `obj.` for member access) can be added later.
 - Library top-level name enumeration requires `get_isolate` → `rootLib` → `get_object(libraryId)` → `variables + functions + classes`. This adds latency but provides richer completions. Consider making it optional or cached.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `CompletionItem` struct, `CompletionsArguments` struct, `supports_completions_request` field on `Capabilities`, `supports_completions_request: Some(true)` in `fdemon_defaults()` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `"completions"` to dispatch table, implemented `handle_completions` method, added `extract_last_identifier` free helper function; added `CompletionItem` and `CompletionsArguments` to imports |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered `mod completions` test module |
+| `crates/fdemon-dap/src/adapter/tests/completions.rs` | New file: 16 unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **Handler uses `most_recent_paused_isolate` / `primary_isolate_id` pattern**: The task spec referenced a non-existent `most_recent_isolate_id()` method. I used the established pattern from other handlers (fall through: paused isolate → primary isolate) but since the completions handler doesn't need an isolate at the adapter level (it uses the frame's isolate_id directly), I omitted the isolate selection entirely. The `get_stack` call uses `frame_ref.isolate_id` which is already stored in the `FrameRef`.
+
+2. **Graceful degradation on `get_stack` failure**: If `get_stack` fails (e.g., app resumed between frameId allocation and completions request), the handler skips locals but still returns keywords — consistent with the task spec's "works without frame context" requirement.
+
+3. **`extract_last_identifier` is `pub(crate)`**: This allows testing it directly from the test module without making it fully public. Consistent with `parse_args` and other helpers in the same file.
+
+4. **`CompletionItem` uses `#[derive(Default)]` and `Serialize` only (no `Deserialize`)**: The type is only ever constructed and serialized by the server, never deserialized from client input. This is correct per the DAP spec.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (786 tests, 16 new completions tests all pass)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Passed (no formatting changes needed beyond automatic sort)
+- `cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **Library top-level names not implemented**: The task spec explicitly marks this as optional ("can be deferred if it makes the response too slow"). Not implementing it keeps response latency minimal. Can be added as a follow-up.
+
+2. **No deduplication of locals**: If the same variable name appeared in multiple frames (unlikely but possible in edge cases), it would appear twice. The 50-item cap limits impact.

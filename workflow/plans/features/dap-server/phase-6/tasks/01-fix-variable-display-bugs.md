@@ -108,3 +108,32 @@ fn test_list_variable_shows_class_name_in_type() {
 
 - The `expand_object` path calls `backend.get_object()` which returns raw VM wire JSON (not round-tripped through typed structs), so it uses `"class"` correctly. The fix only breaks if a future change starts round-tripping `get_object` through typed structs — the `.or_else()` pattern handles both.
 - Mock tests use raw JSON directly and won't catch this bug. Integration testing with a real Flutter app is needed to verify the fix end-to-end.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/variables.rs` | Fixed `instance_ref_to_variable` to read `"classRef"` (camelCase from typed serde) before falling back to `"class"` (raw VM wire); switched `handle_stack_trace` to use `extract_source_with_store` for SDK source reference allocation |
+| `crates/fdemon-dap/src/protocol/types.rs` | Removed `supports_restart_request: Some(true)` from `fdemon_defaults()` since no handler exists |
+| `crates/fdemon-dap/src/adapter/tests/stack_scopes_variables.rs` | Added 9 new unit tests for classRef/class dual-path lookup |
+
+### Notable Decisions/Tradeoffs
+
+1. **`project_root: None` passed to `extract_source_with_store`**: Source references are allocated for SDK/package URIs but local package path resolution requires `project_root` to be wired into `DapAdapter` (future work). Source references still work — IDEs can request source text via `sourceReference`.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (9 new tests)
+- `cargo clippy --workspace` - Passed
+
+### Risks/Limitations
+
+1. **Package URI resolution**: Package source frames get source reference IDs but don't resolve to local paths until `project_root` is added to `DapAdapter` in a future task.

@@ -85,3 +85,38 @@ async fn test_exception_info_no_exception_returns_error() {
 
 - This is a differentiator — neither the Dart DDS adapter nor Dart-Code implement `exceptionInfo`. fdemon will provide richer exception data than the official adapter.
 - The `details` field is optional but valuable — IDEs like VS Code display it in a separate exception details panel.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `ExceptionInfoArguments` struct; added `supports_exception_info_request: Some(true)` to `fdemon_defaults()`; updated 2 existing tests that asserted the capability was absent |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `ExceptionInfoArguments` to imports; added `"exceptionInfo"` to dispatch table; added `handle_exception_info` method |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `mod exception_info;` |
+| `crates/fdemon-dap/src/adapter/tests/exception_info.rs` | New file: 13 unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **`toString()` fallback**: When `evaluate()` fails or returns no `valueAsString`, `description` falls back to the type name. This avoids propagating an error for a secondary lookup.
+2. **`stackTrace?.toString()` failure is silent**: If the stack trace evaluation fails, `details.stackTrace` is simply absent rather than causing the whole request to fail. Many exceptions have no `stackTrace` property.
+3. **`breakMode` derived from `exception_mode`**: The adapter's stored `DapExceptionPauseMode` is mapped directly without querying the VM, which is consistent and fast.
+4. **Two existing tests updated**: `test_capabilities_fdemon_defaults` and `test_capabilities_phase3_fields_in_json` in `types.rs` previously asserted `supportsExceptionInfoRequest.is_none()`. These were updated to assert `Some(true)` — this is strictly required by the task's capability change.
+
+### Testing Performed
+
+- `cargo test -p fdemon-dap` — 730 passed, 0 failed
+- `cargo test -p fdemon-dap exception_info` — 13 passed, 0 failed
+- `cargo test --workspace` — all crates pass
+- `cargo clippy -p fdemon-dap` — no errors
+
+### Risks/Limitations
+
+1. **No VM round-trip for `get_object`**: The task spec mentions calling `backend.get_object()` to get the full exception Instance, but the handler uses `evaluate("toString()")` directly on the stored exception object ID. The full object fetch is unnecessary since we only need the string representation and class name (which are already in the InstanceRef). This is simpler and avoids an extra VM round-trip.
+2. **`stackTrace?.toString()` timeout**: There's no explicit timeout guard on the evaluate calls. The existing `DebugBackend::evaluate` implementation should handle timeouts at the backend layer.

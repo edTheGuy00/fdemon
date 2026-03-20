@@ -85,3 +85,36 @@ async fn test_call_service_missing_method_returns_error() {
 
 - This is a must-have for full DevTools integration. Without it, VS Code's Flutter extension cannot toggle debug features.
 - The `callService` request is a custom Dart-specific request — not in the DAP specification. IDEs with Dart support expect it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `"callService"` to dispatch table; added `handle_call_service` method inside `impl<B: DebugBackend> DapAdapter<B>` |
+| `crates/fdemon-dap/src/adapter/tests/call_service.rs` | New file — 8 unit tests covering all acceptance criteria |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered `mod call_service` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Handler placement**: `handle_call_service` is placed at the end of the existing `impl` block in `handlers.rs`, consistent with how other handlers are organized. The dispatch entry is added before the catch-all `_` arm.
+2. **Error wrapping**: Backend errors are wrapped as `"callService failed: {e}"` so the caller knows which request failed, while the raw VM Service error message is still included. This matches the pattern used by other handlers.
+3. **Arguments handling**: Uses `match request.arguments.as_ref()` pattern (not the `parse_args` helper) because `callService` arguments are free-form JSON, not a typed struct.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap call_service` — Passed (8/8 tests)
+- `cargo test -p fdemon-dap` — Passed (717 tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed (no new warnings)
+- `cargo fmt --all` — Passed
+
+### Risks/Limitations
+
+1. **No rate limiting**: `callService` is unrestricted per the spec — the VM Service handles authorization. Callers from localhost can invoke any service extension. This is by design and matches the Dart DDS adapter behaviour.

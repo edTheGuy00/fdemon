@@ -114,3 +114,45 @@ async fn test_breakpoint_locations_empty_for_comment_line() {
 - This is a differentiator — neither the Dart DDS adapter nor Dart-Code implement `breakpointLocations`. fdemon will provide better breakpoint placement UX.
 - Token position to line/column mapping requires the script's `tokenPosTable`. This is a 2D array where each row is `[line, tokenPos, column, tokenPos, column, ...]`. Parsing this correctly is important for accuracy.
 - If the `tokenPosTable` parsing is too complex for this task, return breakpoints at the line level only (no column) as a first pass, and add column-level accuracy in a follow-up.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `BreakpointLocationsArguments` and `BreakpointLocation` types; set `supports_breakpoint_locations_request: Some(true)` in `fdemon_defaults()`; updated pre-existing test assertion |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `BreakpointLocation` and `BreakpointLocationsArguments` imports; added `"breakpointLocations"` to dispatch table; added `handle_breakpoint_locations` method; added `find_script_id_by_uri`, `build_token_pos_map`, and `extract_breakpoint_locations` free helper functions |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `mod breakpoint_locations` declaration |
+| `crates/fdemon-dap/src/adapter/tests/breakpoint_locations.rs` | New file: 7 unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **Token position mapping is fully implemented**: The `tokenPosTable` parsing (building a `HashMap<tokenPos → (line, col)>`) is included, providing column-level accuracy. Token positions not present in the map are silently skipped rather than falling back to line-level-only positions.
+
+2. **Script not found returns empty, not error**: When the requested source file is not in the isolate's script list, the handler returns `{ "breakpoints": [] }` with a success response. This is intentional — the file may not be loaded yet, and the IDE should not be shown an error in that case.
+
+3. **Isolate selection uses paused-first heuristic**: The handler prefers `most_recent_paused_isolate()` over `primary_isolate_id()` so that in multi-isolate sessions the most relevant context is used.
+
+4. **Sorted and deduped output**: Locations are sorted by `(line, column)` and deduplicated before being returned, ensuring deterministic, clean output for IDEs.
+
+5. **Pre-existing test updated**: `test_capabilities_fdemon_defaults` previously asserted `supports_breakpoint_locations_request.is_none()` as a "not yet implemented" marker. This was updated to `assert_eq!(..., Some(true))` to reflect the implemented state — a required change, not a violation of the additive constraint.
+
+### Testing Performed
+
+- `cargo fmt --all` — Passed
+- `cargo check --workspace` — Passed
+- `cargo test -p fdemon-dap` — Passed (770 tests, including 7 new)
+- `cargo test --workspace` — Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Token position mapping requires `tokenPosTable` in the source report**: The VM only includes `tokenPosTable` in the script objects embedded in the source report when the script is fully loaded. If the table is absent, all possible breakpoints for that range are silently excluded from the response (the positions exist in `possibleBreakpoints` but cannot be mapped to line/column).
+
+2. **No token position range filtering**: The implementation requests the full source report without `tokenPos`/`endTokenPos` bounds. This is the approach specified in the task's "Details" section (approach 2). A future optimization could pass token position bounds to reduce the RPC payload size.

@@ -126,3 +126,37 @@ async fn test_call_service_forwards_method_and_params() {
 
 - `get_source_report` wraps the VM Service's `getSourceReport` which takes `reports` as an array of `SourceReportKind` strings (e.g., `["PossibleBreakpoints"]`). The `forceCompile: true` parameter should be included for breakpoint location accuracy.
 - The `get_isolate` method replaces the fragile `get_vm()` → scan isolates heuristic used in `evaluate.rs:get_root_library_id`. Once this task is done, `get_root_library_id` should be updated to use `get_isolate` instead (can be done in a follow-up or as part of Task 03).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/backend.rs` | Added `get_isolate`, `call_service`, `set_library_debuggable`, `get_source_report` to `LocalDebugBackend` trait; added `_boxed` variants to `DynDebugBackendInner`; added delegation in `DynDebugBackend` |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Implemented all four methods in `VmServiceBackend` with correct RPC method names and params (including `forceCompile: true` for `get_source_report`); added `DynDebugBackendInner` impls |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Added four methods to internal test mock |
+| `crates/fdemon-dap/src/adapter/test_helpers.rs` | Added default implementations for all four methods in `MockTestBackend` |
+| `crates/fdemon-dap/src/adapter/tests/backend_phase6.rs` | New: 9 unit tests with `Phase6RecordingBackend` for method delegation verification |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `backend_phase6` module |
+| `crates/fdemon-dap/src/server/mod.rs` | Added four methods to `NoopBackend` and `DynDebugBackendInner` impl |
+| `crates/fdemon-dap/src/server/session.rs` | Added `DynDebugBackendInner` boxed forwarding for all four methods |
+
+### Notable Decisions/Tradeoffs
+
+1. **`Vec<String>` in `get_source_report_boxed`**: Used `Vec<String>` instead of `&[&str]` for `report_kinds` in the `DynDebugBackendInner` vtable to avoid lifetime conflicts across the async boundary. Conversion with `.iter().map(|s| s.to_string()).collect()` in the `DynDebugBackend` delegation.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (16 new tests: 9 in `backend_phase6.rs`, 7 in `dap_backend.rs`)
+- `cargo clippy --workspace` - Passed
+
+### Risks/Limitations
+
+1. **`Vec<String>` allocation**: Each `get_source_report` call through `DynDebugBackend` allocates a new `Vec<String>`. Negligible overhead for debug-time calls.

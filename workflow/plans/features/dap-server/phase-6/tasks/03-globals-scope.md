@@ -105,3 +105,35 @@ async fn test_globals_scope_uninitialized_field() {
 - The VM Service `Library` object has `variables`, `functions`, and `classes` arrays. Only `variables` (top-level fields/globals) should be returned in the Globals scope. Functions and classes are not variables.
 - Private fields (starting with `_`) should still be shown — the user may want to inspect them. Set `visibility: "private"` in presentation hint.
 - `const` fields should have `presentationHint.attributes: ["static", "readOnly", "constant"]`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/variables.rs` | Replaced `ScopeKind::Globals` stub with `get_globals_variables` implementation; added `resolve_library_id_for_frame` and `get_root_lib_from_isolate` helper methods |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Replaced fragile `get_vm()` loop in `get_root_library_id` with direct `get_isolate()` call |
+| `crates/fdemon-dap/src/adapter/tests/stack_scopes_variables.rs` | Added 13 new globals-scope tests covering all acceptance criteria |
+| `crates/fdemon-dap/src/adapter/tests/production_hardening.rs` | Updated count-capping test to use `VariableRef::Object` instead of `ScopeKind::Globals` (since globals now requires a registered frame) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Library resolution chain**: Frame → `code.owner` (direct Library or ClassRef→library) → fallback to `isolate.rootLib`. This handles closure frames and async gaps gracefully.
+2. **`get_root_library_id` migration**: Replaced the `get_vm()` scan loop with `get_isolate()` which is more reliable and was the intended usage once task 02 added the method.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (612 tests, 13 new)
+- `cargo test --workspace` - Passed
+- `cargo clippy --workspace` - Passed
+
+### Risks/Limitations
+
+1. **N+1 queries**: Fetching globals requires 1 `get_object` call for the library + N calls for each field. Performance is bounded by `MAX_VARIABLES_PER_REQUEST` and the scope is already marked `expensive: true`.

@@ -112,3 +112,41 @@ async fn test_hot_reload_emits_completion_event() {
 - The `progressStart` event has a `cancellable` field — set to `false` since hot reload/restart cannot be cancelled mid-operation.
 - If the reload fails, still emit `progressEnd` (the IDE expects the progress to be properly closed).
 - `dart.hotReloadComplete` and `dart.hotRestartComplete` are custom events expected by the Dart-Code extension for updating its internal state.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `client_supports_progress: bool` and `next_progress_id: u64` fields to `DapAdapter`; initialized to `false`/`0` in `new_with_tx`; added `set_client_supports_progress()` and `alloc_progress_id()` methods |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Rewrote `handle_hot_reload` and `handle_hot_restart` to emit `progressStart`/`progressEnd` events when progress is supported, and `dart.hotReloadComplete`/`dart.hotRestartComplete` on success |
+| `crates/fdemon-dap/src/server/session.rs` | Propagate `supportsProgressReporting` from stored `client_info` to adapter at lazy-creation time |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered `progress_reporting` test module |
+| `crates/fdemon-dap/src/adapter/tests/progress_reporting.rs` | New file: 13 unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option 1 (synchronous await) chosen**: The task offered Option 1 (await backend and return) or Option 2 (fire-and-forget then emit later). Since `backend.hot_reload()` already `await`s before returning, Option 1 was natural and requires no channel plumbing.
+
+2. **`progressEnd` on failure**: The DAP spec requires progress to be properly closed. `progressEnd` is emitted regardless of success/failure so the IDE never shows a stale spinner.
+
+3. **`dart.hotReloadComplete` only on success**: The completion event is only emitted on `Ok(())`, not on error, consistent with the Dart-Code extension's expectations.
+
+4. **Session propagation via `set_client_supports_progress`**: Since the adapter is created lazily (not at `initialize` time), the session sets the capability on the adapter immediately after construction. This keeps the capability-propagation path simple and colocated in `session.rs`.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (763 tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Progress events are adapter-side only**: The actual reload/restart happens in the backend (TEA message bus). If the backend is fire-and-forget in the real implementation, the progress indicator will close immediately after the message is dispatched rather than when the reload is fully complete. This is acceptable for Phase 6 scope.

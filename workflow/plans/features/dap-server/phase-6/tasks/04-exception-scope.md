@@ -151,3 +151,53 @@ async fn test_exception_cleared_on_resume() {
 
 - The `DebugEvent::Paused` struct must carry the `exception` field. Check if it's already there — if not, the event parsing in `debugger_types.rs` may need to be extended to extract `event.exception`.
 - The Dart VM Service returns the exception as an `InstanceRef` in the `PauseException` event's `exception` field. The `PauseBreakpoint` event does not have this field.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/types.rs` | Added `exception: Option<serde_json::Value>` field to `DebugEvent::Paused` variant |
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `ScopeKind::Exceptions` variant |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `ExceptionRef` struct and `exception_refs: HashMap<i64, ExceptionRef>` field to `DapAdapter`; initialized in constructor |
+| `crates/fdemon-dap/src/adapter/events.rs` | Store exception on `PauseException`, clear on `Resumed`; updated `Paused` destructuring to include `exception` |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Added `ScopeKind::Exceptions` arm in `get_scope_variables`; conditionally added Exceptions scope in `handle_scopes` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `$_threadException` intercept in `handle_evaluate`; added `handle_evaluate_thread_exception` method |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `exception_scope` module |
+| `crates/fdemon-dap/src/adapter/tests/exception_scope.rs` | New: 13 unit tests covering all acceptance criteria |
+| `crates/fdemon-dap/src/adapter/tests/adapter_core.rs` | Added `exception: None` to existing `DebugEvent::Paused` constructions |
+| `crates/fdemon-dap/src/adapter/tests/conditional_breakpoints.rs` | Added `exception: None` to existing `DebugEvent::Paused` constructions |
+| `crates/fdemon-dap/src/adapter/tests/execution.rs` | Added `exception: None` to existing `DebugEvent::Paused` constructions |
+| `crates/fdemon-dap/src/adapter/tests/logpoints.rs` | Added `exception: None` to existing `DebugEvent::Paused` constructions |
+| `crates/fdemon-app/src/handler/devtools/debug.rs` | Updated `PauseException` handler to serialize exception InstanceRef; added `exception: None` to all other `DapDebugEvent::Paused` constructions |
+
+### Notable Decisions/Tradeoffs
+
+1. **`exception` field on `DebugEvent::Paused`**: The cleanest way to pass the exception to the adapter was to add `exception: Option<serde_json::Value>` to the existing `Paused` variant rather than a new variant. This required updating all existing test construction sites (`exception: None`). The protected test files (`backend_phase6.rs`, `stack_scopes_variables.rs`) only use pattern matching with `..`, so they were unaffected.
+
+2. **Exception cleared per-thread**: Rather than clearing all exception refs in `on_resume()`, I clear only the specific thread's exception in the `Resumed` event handler (where the thread ID is available). This is more precise and handles multi-isolate scenarios correctly.
+
+3. **`$_threadException` intercepted in `handlers.rs`**: The magic expression is intercepted before the standard evaluation path in `handle_evaluate` (in handlers.rs), so no changes were needed to the free function `evaluate::handle_evaluate`. This avoids adding `exception_refs` to that function's signature.
+
+4. **Exception storage depends on `exception: Some(...)`**: When the Dart VM sends a `PauseException` event without an exception value (e.g., `exception: None`), the scope simply won't appear. This matches the task's note about the exception field.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (625 tests, 13 new in exception_scope)
+- `cargo test -p fdemon-app` - Passed (1861 tests)
+- `cargo test --workspace` - Passed (all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all` - Applied (no format changes needed after)
+
+### Risks/Limitations
+
+1. **Multi-isolate edge case**: `on_resume` clears only the resumed thread's exception. If multiple isolates are paused at exceptions simultaneously, each maintains its own exception ref correctly. This is intentional and correct behaviour.
+
+2. **Exception without class name**: If the exception InstanceRef has neither `classRef` nor `class` fields, the variable name falls back to `"Exception"`. This is a safe default.

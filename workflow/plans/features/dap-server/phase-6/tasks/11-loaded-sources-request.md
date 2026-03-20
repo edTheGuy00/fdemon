@@ -106,3 +106,42 @@ async fn test_loaded_sources_deemphasizes_sdk() {
 - `backend.get_scripts()` is already defined in the `DebugBackend` trait and implemented in `VmServiceBackend` — it just hasn't been called from any handler until now.
 - The `loadedSources` request does not take a thread ID — scripts are global to the isolate. Use the most recently active isolate.
 - This is a "should-have" feature that the Dart DDS adapter doesn't implement. It enables the "Loaded Scripts" explorer in VS Code.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `build_source_from_uri` free function: URI+script_id → `DapSource` with correct strategy for file://, package:, dart:, org-dartlang-sdk: |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Exported `build_source_from_uri` from the module's public API |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `"loadedSources"` to dispatch table; added `handle_loaded_sources` method; imported `build_source_from_uri` |
+| `crates/fdemon-dap/src/protocol/types.rs` | Set `supports_loaded_sources_request: Some(true)` in `fdemon_defaults()`; updated existing test that asserted `is_none()` |
+| `crates/fdemon-dap/src/adapter/tests/loaded_sources.rs` | New file: 9 unit tests covering all acceptance criteria |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `mod loaded_sources;` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`build_source_from_uri` vs reusing `extract_source_with_store`**: The existing `extract_source_with_store` takes a VM frame JSON object and extracts URI + script_id from it. For `loadedSources`, scripts are available directly as `{uri, id}` pairs (not nested inside frames). A new `build_source_from_uri(uri, script_id, store, isolate_id, project_root)` function was added to `stack.rs` with the same logic, keeping the original function untouched.
+
+2. **Isolate selection**: The task says "use the most recently active isolate." The adapter doesn't have a `most_recent_isolate_id()` method, so the handler tries `most_recent_paused_isolate()` first (a paused isolate has a valid script list) and falls back to `primary_isolate_id()` (the first registered isolate). This matches the intent without requiring new state.
+
+3. **`project_root` is `None`**: The `DapAdapter` struct doesn't store a `project_root`, same as `handle_stack_trace`. Package URIs without a resolvable path get a `sourceReference` instead, which is handled correctly by the `source` request handler.
+
+### Testing Performed
+
+- `cargo check -p fdemon-dap` — Passed
+- `cargo test -p fdemon-dap loaded_sources` — Passed (9 tests)
+- `cargo test --workspace` — Passed (all 709 fdemon-dap tests, 3,863+ total)
+- `cargo clippy -p fdemon-dap -- -D warnings` — Passed
+- `cargo fmt --all` — Applied (no functional changes)
+
+### Risks/Limitations
+
+1. **No project root**: Package URIs are never resolved to local paths in the `loadedSources` response since `DapAdapter` doesn't hold `project_root`. This is consistent with how `handle_stack_trace` works. IDEs will request source text via the `source` request using the assigned `sourceReference`.
+2. **All-or-nothing filtering**: Internal scripts are filtered by simple string matching (`eval:`, `dart:_`). If the Dart SDK introduces new internal URI patterns, they would appear in the loaded scripts list until explicitly filtered.

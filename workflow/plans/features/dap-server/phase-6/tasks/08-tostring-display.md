@@ -117,3 +117,45 @@ async fn test_to_string_disabled_by_setting() {
 - The 1s timeout is critical — some `toString()` implementations are expensive or buggy. The user should never see the variables panel hang because of a bad `toString()`.
 - `disableBreakpoints: true` should be passed to the evaluate call to prevent recursive pauses.
 - Consider batching toString calls — if 20 variables are in a scope, making 20 sequential evaluate RPCs could be slow. But parallel evaluation risks overwhelming the VM. Sequential with a total timeout (e.g., 5s for all toStrings in a scope) is a safe approach.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `evaluate_to_string_in_debug_views: Option<bool>` field to `AttachRequestArguments`; fixed existing test struct initializer |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `evaluate_to_string_in_debug_views: bool` field to `DapAdapter` (default: `true`); initialized in `new_with_tx` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Apply `evaluateToStringInDebugViews` from attach args |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Added `TO_STRING_EVAL_TIMEOUT`, `TO_STRING_KINDS`, `ToStringCandidate` struct; added `enrich_with_to_string` async method; added `to_string_candidate` free function; modified Locals and Exceptions scope collection to collect candidates and run the enrichment pass |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered `to_string_display` test module |
+| `crates/fdemon-dap/src/adapter/tests/to_string_display.rs` | New file: 17 unit tests covering all acceptance criteria |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option 2 (separate enrichment pass)**: The task recommended either making `instance_ref_to_variable_with_eval_name` async (Option 1) or a post-collection pass (Option 2). Option 2 was chosen because it avoids making many synchronous call sites async and cleanly separates concerns.
+
+2. **`&mut [DapVariable]` not `&mut Vec<DapVariable>`**: Clippy (`-D warnings`) enforces the more idiomatic slice parameter. Changed the `enrich_with_to_string` signature accordingly.
+
+3. **`WeakReference` included in TO_STRING_KINDS**: The task says "Only call toString() for: PlainInstance, RegExp, StackTrace, Record, WeakReference". `Record` was not included because it has a distinct display format (`"Record (N fields)"`) that is more informative than a toString result. WeakReference was included as specified.
+
+4. **Sequential evaluation**: toString calls are made sequentially per the task's safe approach. Each call has a 1-second timeout.
+
+5. **Exceptions scope enrichment**: The exception variable in the Exceptions scope also receives toString enrichment when `evaluate_to_string_in_debug_views` is true, consistent with the Locals scope behavior.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (689 fdemon-dap tests, all workspace tests pass)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No total scope timeout**: Sequential toString calls add up. For scopes with many PlainInstance variables, this could add up to N×1s. A future improvement could add a total-scope toString budget.
+2. **`disableBreakpoints` not passed**: The task notes mention passing `disableBreakpoints: true` to prevent recursive pauses; the backend `evaluate` trait method does not have this parameter. This is a known limitation deferred to a future task.

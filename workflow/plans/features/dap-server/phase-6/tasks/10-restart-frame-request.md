@@ -146,3 +146,56 @@ async fn test_restart_frame_allows_sync_frame() {
 - This is a killer feature for Flutter debugging — developers can rewind to re-execute a function without restarting the app.
 - The VM's `Rewind` step is only valid for frames below the first async suspension marker. Attempting to rewind above it will cause the VM to return an error.
 - After rewind, the existing `PauseInterrupted` or `PauseBreakpoint` event handler will naturally emit the `stopped` DAP event — no special handling needed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/vm_service/debugger_types.rs` | Add `StepOption::Rewind` variant with `"Rewind"` wire string |
+| `crates/fdemon-daemon/src/vm_service/debugger.rs` | Add `frame_index: Option<i32>` parameter to `resume()` function |
+| `crates/fdemon-dap/src/adapter/types.rs` | Add `StepMode::Rewind` variant to `StepMode` enum |
+| `crates/fdemon-dap/src/adapter/backend.rs` | Add `frame_index: Option<i32>` to `resume()` in trait, `DynDebugBackendInner`, and `DynDebugBackend` |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Add `first_async_marker_index: Option<i32>` field to `DapAdapter`; initialize in constructor |
+| `crates/fdemon-dap/src/adapter/events.rs` | Update all `resume()` call sites to pass `None` for frame_index; clear `first_async_marker_index` in `on_resume()` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Update `resume()` call sites; add `restartFrame` to dispatch; add `handle_restart_frame` handler |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Track first `AsyncSuspensionMarker` index in `handle_stack_trace` |
+| `crates/fdemon-dap/src/adapter/test_helpers.rs` | Update `MockTestBackend::resume` default and blanket impl; update 3 override impls |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Update 2 inline `DebugBackend` mock impls |
+| `crates/fdemon-dap/src/adapter/tests/backend_phase6.rs` | Update `resume_boxed` in `DynDebugBackendInner` test mock |
+| `crates/fdemon-dap/src/adapter/tests/production_hardening.rs` | Update `TrackingBackend::resume` override |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Register `restart_frame` test module |
+| `crates/fdemon-dap/src/adapter/tests/restart_frame.rs` | New file: 11 unit tests for `restartFrame` handler |
+| `crates/fdemon-dap/src/protocol/types.rs` | Add `supports_restart_frame: Option<bool>` to `Capabilities`; set `Some(true)` in `fdemon_defaults()`; add `RestartFrameArguments` type |
+| `crates/fdemon-dap/src/server/session.rs` | Update `NoopBackend::resume` and test `MockBackend::resume` |
+| `crates/fdemon-dap/src/server/mod.rs` | Update `DynDebugBackendInner::resume_boxed` in `BackendHandle` |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Add `StepMode::Rewind => StepOption::Rewind` match arm; add `frame_index` to `resume()` and `resume_boxed()` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`debugger::resume` extended, not replaced**: Added `frame_index: Option<i32>` as a new parameter to the daemon-level `resume` function rather than creating a separate `rewind` function. This keeps the API surface minimal.
+
+2. **`StepOption::Rewind` added to daemon**: Rather than handling `"Rewind"` as a string literal in `dap_backend.rs`, added the variant to `StepOption` to keep the mapping type-safe and consistent with the other step options.
+
+3. **Async boundary guard uses `>=` comparison**: Frame index >= first_async_marker_index is rejected. This matches the task specification ("frames at or above") — a frame at exactly the marker index is also an async boundary.
+
+4. **`on_resume()` clears `first_async_marker_index`**: The async marker state is per-stop, so it must be cleared when the debuggee resumes, matching the lifecycle of `frame_store` and `var_store`.
+
+### Testing Performed
+
+- `cargo check --workspace` — Passed
+- `cargo test --workspace --lib` — Passed (1861 + 372 + 734 + 700 + 867 = 4534 tests, 0 failed)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings from new code)
+- `cargo fmt --all` — Applied (no manual changes needed)
+- `cargo test -p fdemon-dap --lib restart_frame` — 11/11 passed
+
+### Risks/Limitations
+
+1. **VM-level rewind errors not tested**: Integration tests would be needed to verify that the Dart VM actually responds correctly to `resume` with `step: "Rewind"` and `frameIndex`. Unit tests only verify the adapter-level logic.
+2. **Async boundary detection relies on `stackTrace` being called first**: `first_async_marker_index` is only populated after the IDE sends a `stackTrace` request. If `restartFrame` is called before `stackTrace`, the guard will be `None` and allow all frames. This is acceptable since the VM will return an error if the frame is invalid.

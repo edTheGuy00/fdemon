@@ -63,24 +63,24 @@ Wave 6 (Integration + hardening — depend on all above)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-variable-display-bugs](tasks/01-fix-variable-display-bugs.md) | Not Started | - | 2–3h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/protocol/types.rs` |
-| 2 | [02-expand-backend-trait](tasks/02-expand-backend-trait.md) | Not Started | - | 3–4h | `fdemon-dap/adapter/backend.rs`, `fdemon-app/handler/dap_backend.rs` |
-| 3 | [03-globals-scope](tasks/03-globals-scope.md) | Not Started | 1, 2 | 3–5h | `fdemon-dap/adapter/variables.rs` |
-| 4 | [04-exception-scope](tasks/04-exception-scope.md) | Not Started | 1, 2 | 3–4h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/events.rs` |
-| 5 | [05-variable-type-rendering](tasks/05-variable-type-rendering.md) | Not Started | 1 | 3–4h | `fdemon-dap/adapter/variables.rs` |
-| 6 | [06-evaluate-name-construction](tasks/06-evaluate-name-construction.md) | Not Started | 1 | 2–3h | `fdemon-dap/adapter/variables.rs` |
-| 7 | [07-getter-evaluation](tasks/07-getter-evaluation.md) | Not Started | 3 | 4–6h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/backend.rs` |
-| 8 | [08-tostring-display](tasks/08-tostring-display.md) | Not Started | 3 | 3–4h | `fdemon-dap/adapter/variables.rs` |
-| 9 | [09-exception-info-request](tasks/09-exception-info-request.md) | Not Started | 2, 4 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
-| 10 | [10-restart-frame-request](tasks/10-restart-frame-request.md) | Not Started | 2 | 3–4h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/types.rs`, `fdemon-dap/protocol/types.rs` |
-| 11 | [11-loaded-sources-request](tasks/11-loaded-sources-request.md) | Not Started | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
-| 12 | [12-call-service-request](tasks/12-call-service-request.md) | Not Started | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs` |
-| 13 | [13-update-debug-options](tasks/13-update-debug-options.md) | Not Started | 2 | 4–6h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-dap/adapter/events.rs` |
-| 14 | [14-progress-reporting](tasks/14-progress-reporting.md) | Not Started | 2 | 3–4h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/events.rs`, `fdemon-dap/protocol/types.rs` |
-| 15 | [15-breakpoint-locations](tasks/15-breakpoint-locations.md) | Not Started | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
-| 16 | [16-completions-request](tasks/16-completions-request.md) | Not Started | 2 | 3–5h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
-| 17 | [17-request-timeouts-events](tasks/17-request-timeouts-events.md) | Not Started | 1–16 | 4–5h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/events.rs` |
-| 18 | [18-documentation-update](tasks/18-documentation-update.md) | Not Started | 1–17 | 2–3h | `docs/ARCHITECTURE.md` |
+| 1 | [01-fix-variable-display-bugs](tasks/01-fix-variable-display-bugs.md) | Done | - | 2–3h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/protocol/types.rs` |
+| 2 | [02-expand-backend-trait](tasks/02-expand-backend-trait.md) | Done | - | 3–4h | `fdemon-dap/adapter/backend.rs`, `fdemon-app/handler/dap_backend.rs` |
+| 3 | [03-globals-scope](tasks/03-globals-scope.md) | Done | 1, 2 | 3–5h | `fdemon-dap/adapter/variables.rs` |
+| 4 | [04-exception-scope](tasks/04-exception-scope.md) | Done | 1, 2 | 3–4h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/events.rs` |
+| 5 | [05-variable-type-rendering](tasks/05-variable-type-rendering.md) | Done | 1 | 3–4h | `fdemon-dap/adapter/variables.rs` |
+| 6 | [06-evaluate-name-construction](tasks/06-evaluate-name-construction.md) | Done | 1 | 2–3h | `fdemon-dap/adapter/variables.rs` |
+| 7 | [07-getter-evaluation](tasks/07-getter-evaluation.md) | Done | 3 | 4–6h | `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/backend.rs` |
+| 8 | [08-tostring-display](tasks/08-tostring-display.md) | Done | 3 | 3–4h | `fdemon-dap/adapter/variables.rs` |
+| 9 | [09-exception-info-request](tasks/09-exception-info-request.md) | Done | 2, 4 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
+| 10 | [10-restart-frame-request](tasks/10-restart-frame-request.md) | Done | 2 | 3–4h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/types.rs`, `fdemon-dap/protocol/types.rs` |
+| 11 | [11-loaded-sources-request](tasks/11-loaded-sources-request.md) | Done | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
+| 12 | [12-call-service-request](tasks/12-call-service-request.md) | Done | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs` |
+| 13 | [13-update-debug-options](tasks/13-update-debug-options.md) | Done | 2 | 4–6h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/mod.rs`, `fdemon-dap/adapter/events.rs` |
+| 14 | [14-progress-reporting](tasks/14-progress-reporting.md) | Done | 2 | 3–4h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/events.rs`, `fdemon-dap/protocol/types.rs` |
+| 15 | [15-breakpoint-locations](tasks/15-breakpoint-locations.md) | Done | 2 | 2–3h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
+| 16 | [16-completions-request](tasks/16-completions-request.md) | Done | 2 | 3–5h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/protocol/types.rs` |
+| 17 | [17-request-timeouts-events](tasks/17-request-timeouts-events.md) | Done | 1–16 | 4–5h | `fdemon-dap/adapter/handlers.rs`, `fdemon-dap/adapter/variables.rs`, `fdemon-dap/adapter/events.rs` |
+| 18 | [18-documentation-update](tasks/18-documentation-update.md) | Done | 1–17 | 2–3h | `docs/ARCHITECTURE.md` |
 
 ## File Overlap Analysis
 

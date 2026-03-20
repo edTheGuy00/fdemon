@@ -111,3 +111,47 @@ async fn test_lazy_getters_when_setting_false() {
 - The 1s timeout for getter evaluation matches the Dart DDS adapter's behavior. Use `tokio::time::timeout(Duration::from_secs(1), ...)`.
 - Getters can have side effects — the `hasSideEffects` attribute tells the IDE to show a warning icon. The `disableBreakpoints: true` parameter on the evaluate call prevents recursive pause.
 - Class hierarchy traversal is expensive but bounded. Cache the getter list per class ID within a single pause (clear on resume with `var_store`).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/variables.rs` | Added `GetterEval` handling in `handle_variables`, new `evaluate_lazy_getter` and `collect_getters_from_class` helpers, extended `expand_object` PlainInstance path with getter collection and evaluation, added module-level constants (`MAX_GETTER_EVALUATIONS`, `MAX_SUPERCLASS_DEPTH`, `GETTER_EVAL_TIMEOUT`, `FILTERED_GETTER_NAMES`), added `DapVariablePresentationHint` import |
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `GetterEval` variant to `VariableRef` enum |
+| `crates/fdemon-dap/src/adapter/mod.rs` | Added `evaluate_getters_in_debug_views: bool` field to `DapAdapter`, initialized to `true` in `new_with_tx` |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Updated `handle_attach` to read `evaluateGettersInDebugViews` from attach args and apply to adapter |
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `lazy: Option<bool>` to `DapVariablePresentationHint`, added `evaluate_getters_in_debug_views: Option<bool>` to `AttachRequestArguments`, fixed existing struct initializations to include new fields |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Added `getter_evaluation` to test module list |
+| `crates/fdemon-dap/src/adapter/tests/getter_evaluation.rs` | New file with 16 unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **`PlainInstance`-only getter evaluation**: Only `PlainInstance` objects get getter evaluation — not `Closure`, `RegExp`, etc. These types could technically have getters but they rarely appear in variable panels and adding getters to them could be confusing. The task spec focuses on `PlainInstance`.
+
+2. **Explicit `PlainInstance` arm in `expand_object`**: Added a new explicit `"PlainInstance"` match arm before the catch-all `_` arm. This is cleaner than modifying the catch-all to special-case PlainInstance and avoids affecting other kinds like Closure, RegExp, etc.
+
+3. **`collect_getters_from_class` is `async fn` on `&self`** (not `&mut self`): Getter collection only reads from the backend — it doesn't modify adapter state (no new variable references are allocated). This allows it to run before the mutable borrow needed for `evaluate` and `instance_ref_to_variable` in the eager path.
+
+4. **No caching**: The task notes suggest caching getter lists per class ID. This was deferred — the `var_store` is already cleared on resume, and the 50-getter limit + 10-depth limit prevent performance issues. Adding a class-getter cache would require another `HashMap` field in `DapAdapter`.
+
+5. **Timeout of exactly 1 second**: Matches the Dart DDS adapter's behavior as specified. Uses `tokio::time::timeout` which requires the multi-thread test flavor for tests where the timer actually fires.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (672 tests total, 16 new getter evaluation tests)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No getter caching**: Each `variables` request for an expanded PlainInstance will re-traverse the class hierarchy. For large hierarchies with many getters, this means many `get_object` calls per expansion. Acceptable for the current scope; can be addressed in a follow-up.
+
+2. **Sequential getter evaluation**: Getters are evaluated one by one as specified. For objects with many getters (up to 50), this can be slow on high-latency devices. Parallel evaluation could be added but was explicitly excluded from this task's scope.
