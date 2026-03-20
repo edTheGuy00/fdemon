@@ -5,7 +5,7 @@
 use crate::adapter::backend::DebugBackend;
 use crate::adapter::handlers::parse_args;
 use crate::adapter::stack::{
-    extract_line_column, extract_source, FrameRef, ScopeKind, VariableRef,
+    extract_line_column, extract_source_with_store, FrameRef, ScopeKind, VariableRef,
 };
 use crate::adapter::types::MAX_VARIABLES_PER_REQUEST;
 use crate::adapter::DapAdapter;
@@ -94,7 +94,12 @@ impl<B: DebugBackend> DapAdapter<B> {
                 (code_name, None)
             };
 
-            let source = extract_source(frame);
+            let source = extract_source_with_store(
+                frame,
+                &mut self.source_reference_store,
+                &isolate_id,
+                None, // project_root not available in DapAdapter; source reference allocation still works
+            );
             let (line, column) = extract_line_column(frame);
 
             dap_frames.push(DapStackFrame {
@@ -363,8 +368,11 @@ impl<B: DebugBackend> DapAdapter<B> {
             .get("kind")
             .and_then(|k| k.as_str())
             .unwrap_or("");
+        // Try "classRef" first (typed Stack serialization via serde camelCase rename),
+        // then fall back to "class" (raw VM wire format from get_object/expand_object path).
         let class_name = instance_ref
-            .get("class")
+            .get("classRef")
+            .or_else(|| instance_ref.get("class"))
             .and_then(|c| c.get("name"))
             .and_then(|n| n.as_str());
         let value_as_string = instance_ref.get("valueAsString").and_then(|v| v.as_str());

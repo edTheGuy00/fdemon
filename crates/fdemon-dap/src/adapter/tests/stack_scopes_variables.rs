@@ -959,3 +959,224 @@ async fn test_variables_unknown_object_type_returns_empty() {
         "Unknown object type should return empty list"
     );
 }
+
+// ── classRef / class dual-path lookup tests ────────────────────────────
+//
+// These tests verify Bug 1 fix: VmServiceBackend::get_stack() serializes
+// through typed Rust structs with #[serde(rename_all = "camelCase")], so
+// InstanceRef.class_ref becomes "classRef" in JSON. The old code read
+// ".get("class")" which always returned None for typed-stack responses.
+// The fix reads "classRef" first, falling back to "class" for raw VM wire.
+
+#[test]
+fn test_instance_ref_to_variable_uses_class_ref_camel_case() {
+    // Simulate typed Stack serialization (camelCase "classRef"):
+    // This is what get_stack() produces when the InstanceRef struct is
+    // serialized via serde with #[serde(rename_all = "camelCase")].
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "widget",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "MyWidget", "id": "classes/1"},
+            "id": "objects/123"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("MyWidget"),
+        "Expected 'MyWidget' from classRef, got: {:?}",
+        var.type_field
+    );
+    assert!(
+        var.value.contains("MyWidget"),
+        "Value should contain class name, got: {:?}",
+        var.value
+    );
+}
+
+#[test]
+fn test_instance_ref_to_variable_uses_class_raw_wire() {
+    // Simulate raw VM wire format (uses "class", not "classRef"):
+    // This is the format returned by get_object() (expand_object path).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "widget",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "class": {"name": "MyWidget", "id": "classes/1"},
+            "id": "objects/123"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("MyWidget"),
+        "Expected 'MyWidget' from class fallback, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_instance_ref_to_variable_class_ref_takes_priority_over_class() {
+    // When both "classRef" and "class" are present, "classRef" wins.
+    // This verifies the priority of the dual-path lookup.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "x",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "CorrectClass", "id": "classes/correct"},
+            "class": {"name": "WrongClass", "id": "classes/wrong"},
+            "id": "objects/1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("CorrectClass"),
+        "classRef should take priority over class"
+    );
+}
+
+#[test]
+fn test_list_variable_shows_class_ref_name_in_type() {
+    // {"kind": "List", "classRef": {"name": "List<int>"}, "length": 3, "id": "objects/456"}
+    // Verify variable.type == "List<int>", not just "List" (the kind fallback).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "numbers",
+        &serde_json::json!({
+            "kind": "List",
+            "classRef": {"name": "List<int>", "id": "classes/list_int"},
+            "length": 3,
+            "id": "objects/456"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("List<int>"),
+        "List should use classRef name, got: {:?}",
+        var.type_field
+    );
+    assert!(
+        var.value.contains("List<int>"),
+        "Value should contain class name, got: {:?}",
+        var.value
+    );
+    assert!(
+        var.value.contains("length: 3"),
+        "Value should show length, got: {:?}",
+        var.value
+    );
+}
+
+#[test]
+fn test_list_variable_shows_class_raw_wire_name_in_type() {
+    // Same as above but with raw wire "class" field.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "strings",
+        &serde_json::json!({
+            "kind": "List",
+            "class": {"name": "List<String>", "id": "classes/list_str"},
+            "length": 2,
+            "id": "objects/789"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("List<String>"),
+        "List should use class name from raw wire, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_plain_instance_without_either_class_field_falls_back_to_kind() {
+    // When neither "classRef" nor "class" is present, fall back to the kind.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "unknown",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "id": "objects/99"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("PlainInstance"),
+        "Should fall back to kind when no class info, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_map_variable_shows_class_ref_name_in_type() {
+    // Map with a parameterized type from classRef.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "dict",
+        &serde_json::json!({
+            "kind": "Map",
+            "classRef": {"name": "_Map<String, int>", "id": "classes/map_si"},
+            "length": 5,
+            "id": "objects/map1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("_Map<String, int>"),
+        "Map should use classRef name, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_plain_instance_class_ref_used_in_instance_value_display() {
+    // Verifies the display value for a PlainInstance uses the class name
+    // from classRef, not the kind string.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "counter",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "Counter", "id": "classes/counter"},
+            "id": "objects/c1"
+        }),
+        "isolates/1",
+    );
+    // Without valueAsString, display is "<ClassName> instance"
+    assert!(
+        var.value.contains("Counter"),
+        "PlainInstance value should contain class name, got: {:?}",
+        var.value
+    );
+    assert_eq!(var.type_field.as_deref(), Some("Counter"));
+}
+
+#[test]
+fn test_closure_uses_class_ref_when_present() {
+    // Closures can also have classRef providing a more descriptive type.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "fn",
+        &serde_json::json!({
+            "kind": "Closure",
+            "classRef": {"name": "_Closure@12345", "id": "classes/clos"},
+            "id": "objects/fn1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("_Closure@12345"),
+        "Closure should use classRef name, got: {:?}",
+        var.type_field
+    );
+}

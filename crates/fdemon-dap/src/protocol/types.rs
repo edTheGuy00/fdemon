@@ -866,7 +866,8 @@ impl Capabilities {
             supports_clipboard_context: Some(true),
             supports_log_points: Some(true),
             supports_terminate_request: Some(true),
-            supports_restart_request: Some(true),
+            // supports_restart_request is NOT advertised until Task 10 implements the handler.
+            // Advertising it without a handler causes IDE errors when the restart button is used.
             supports_delayed_stack_trace_loading: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
@@ -1636,8 +1637,9 @@ mod tests {
         assert_eq!(json["supportsLogPoints"], true);
         assert_eq!(json["supportsTerminateRequest"], true);
         assert_eq!(json["supportsDelayedStackTraceLoading"], true);
-        // Phase 4: supportsRestartRequest is now enabled for hotReload/hotRestart
-        assert_eq!(json["supportsRestartRequest"], true);
+        // supportsRestartRequest is NOT advertised until Task 10 implements the handler.
+        // Advertising it without a handler causes IDE errors when the restart button is clicked.
+        assert!(json.get("supportsRestartRequest").is_none());
         // Not yet implemented capabilities are absent
         assert!(json.get("supportsExceptionInfoRequest").is_none());
     }
