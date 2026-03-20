@@ -136,7 +136,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                     hit_cond,
                                     hit_count,
                                 );
-                                let _ = self.backend.resume(&isolate_id, None).await;
+                                let _ = self.backend.resume(&isolate_id, None, None).await;
                                 return;
                             }
                         }
@@ -157,7 +157,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                         "Condition '{}' evaluated to falsy — resuming silently",
                                         cond_expr,
                                     );
-                                    let _ = self.backend.resume(&isolate_id, None).await;
+                                    let _ = self.backend.resume(&isolate_id, None, None).await;
                                     return;
                                 }
                                 Err(e) => {
@@ -204,7 +204,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                             }
 
                             self.send_event("output", Some(body)).await;
-                            let _ = self.backend.resume(&isolate_id, None).await;
+                            let _ = self.backend.resume(&isolate_id, None, None).await;
                             return;
                         }
                     }
@@ -540,6 +540,8 @@ impl<B: DebugBackend> DapAdapter<B> {
         self.var_store.reset();
         self.frame_store.reset();
         self.evaluate_name_map.clear();
+        // Clear the async marker index — it is rebuilt on the next stackTrace request.
+        self.first_async_marker_index = None;
     }
 
     /// Invalidate source references after a hot restart.

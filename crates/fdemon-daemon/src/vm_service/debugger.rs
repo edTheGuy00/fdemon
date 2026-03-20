@@ -58,6 +58,11 @@ pub async fn pause(handle: &VmRequestHandle, isolate_id: &str) -> Result<()> {
 /// - [`StepOption::Over`] — step over the current line
 /// - [`StepOption::Out`] — step out of the current function
 /// - [`StepOption::OverAsyncSuspension`] — step over async suspension points
+/// - [`StepOption::Rewind`] — rewind to start of selected frame (requires `frame_index`)
+///
+/// The `frame_index` parameter is only used when `step` is
+/// [`StepOption::Rewind`]; it selects which frame to rewind to (0-based).
+/// For all other step modes, pass `None`.
 ///
 /// The isolate must be paused before calling this function.
 ///
@@ -69,10 +74,14 @@ pub async fn resume(
     handle: &VmRequestHandle,
     isolate_id: &str,
     step: Option<StepOption>,
+    frame_index: Option<i32>,
 ) -> Result<()> {
     let mut params = serde_json::json!({ "isolateId": isolate_id });
     if let Some(step) = step {
         params["step"] = serde_json::json!(step.as_str());
+    }
+    if let Some(fi) = frame_index {
+        params["frameIndex"] = serde_json::json!(fi);
     }
     handle.request("resume", Some(params)).await?;
     Ok(())

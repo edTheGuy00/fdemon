@@ -851,6 +851,7 @@ mod tests {
                 &'a self,
                 _isolate_id: &'a str,
                 _step: Option<crate::adapter::StepMode>,
+                _frame_index: Option<i32>,
             ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
                 Box::pin(async { Ok(()) })
             }

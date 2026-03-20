@@ -17,6 +17,12 @@ pub enum StepMode {
     Into,
     /// Step out of the current function.
     Out,
+    /// Rewind to the start of the selected stack frame.
+    ///
+    /// Maps to the VM Service `"Rewind"` step option. Used by the
+    /// `restartFrame` DAP request. Only valid for synchronous frames below
+    /// the first async suspension marker.
+    Rewind,
 }
 
 /// Result from adding a breakpoint via the VM Service.

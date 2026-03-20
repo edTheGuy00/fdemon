@@ -210,6 +210,18 @@ pub struct DapAdapter<B: DebugBackend> {
     ///
     /// Settable from the `attach` request args (`evaluateToStringInDebugViews`).
     pub(crate) evaluate_to_string_in_debug_views: bool,
+
+    /// The 0-based frame index of the first `AsyncSuspensionMarker` frame in
+    /// the current stopped state, or `None` if no async marker was seen.
+    ///
+    /// Populated during `handle_stack_trace` by scanning frames for
+    /// `kind: "AsyncSuspensionMarker"`. Cleared on every resume via
+    /// [`DapAdapter::on_resume`].
+    ///
+    /// Used by `handle_restart_frame` to reject rewind requests that target
+    /// frames at or above the first async suspension boundary. The VM does not
+    /// allow rewinding past an async suspension marker.
+    pub(crate) first_async_marker_index: Option<i32>,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -252,6 +264,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             evaluate_name_map: HashMap::new(),
             evaluate_getters_in_debug_views: true,
             evaluate_to_string_in_debug_views: true,
+            first_async_marker_index: None,
         };
         (adapter, ())
     }

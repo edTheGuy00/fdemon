@@ -31,8 +31,17 @@ pub trait LocalDebugBackend: Sync + 'static {
     /// Pause a running isolate.
     async fn pause(&self, isolate_id: &str) -> Result<(), BackendError>;
 
-    /// Resume a paused isolate, optionally with a step mode.
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError>;
+    /// Resume a paused isolate, optionally with a step mode and frame index.
+    ///
+    /// `frame_index` is only used when `step` is [`StepMode::Rewind`] (the
+    /// `restartFrame` DAP request). All other step modes must pass `None` for
+    /// `frame_index`.
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError>;
 
     // ── Breakpoints ───────────────────────────────────────────────────────
 
@@ -243,6 +252,7 @@ pub trait DynDebugBackendInner: Send + Sync + 'static {
         &'a self,
         isolate_id: &'a str,
         step: Option<StepMode>,
+        frame_index: Option<i32>,
     ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>>;
 
     fn add_breakpoint_boxed<'a>(
@@ -391,8 +401,13 @@ impl DebugBackend for DynDebugBackend {
         self.inner.pause_boxed(isolate_id).await
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
-        self.inner.resume_boxed(isolate_id, step).await
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
+        self.inner.resume_boxed(isolate_id, step, frame_index).await
     }
 
     async fn add_breakpoint(

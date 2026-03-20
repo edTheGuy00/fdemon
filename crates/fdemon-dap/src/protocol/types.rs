@@ -175,6 +175,13 @@ pub struct Capabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_clipboard_context: Option<bool>,
 
+    /// The debug adapter supports the `restartFrame` request.
+    ///
+    /// When `true`, IDEs show a "Restart Frame" action in the call stack view
+    /// that allows rewinding execution to the start of the selected frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_restart_frame: Option<bool>,
+
     /// Available exception filter options for the `setExceptionBreakpoints` request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_breakpoint_filters: Option<Vec<ExceptionBreakpointsFilter>>,
@@ -672,6 +679,18 @@ pub struct AttachRequestArguments {
     pub evaluate_to_string_in_debug_views: Option<bool>,
 }
 
+/// Arguments for the `restartFrame` request.
+///
+/// Sent by the IDE when the user chooses "Restart Frame" in the call stack.
+/// The `frameId` identifies which frame to rewind to using the VM Service
+/// `Rewind` step mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartFrameArguments {
+    /// The frame to restart (rewind to).
+    pub frame_id: i64,
+}
+
 /// Arguments for the `disconnect` request.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -889,7 +908,8 @@ impl Capabilities {
             supports_clipboard_context: Some(true),
             supports_log_points: Some(true),
             supports_terminate_request: Some(true),
-            // supports_restart_request is NOT advertised until Task 10 implements the handler.
+            supports_restart_frame: Some(true),
+            // supports_restart_request is NOT advertised until Task 13 implements the handler.
             // Advertising it without a handler causes IDE errors when the restart button is used.
             supports_delayed_stack_trace_loading: Some(true),
             exception_breakpoint_filters: Some(vec![

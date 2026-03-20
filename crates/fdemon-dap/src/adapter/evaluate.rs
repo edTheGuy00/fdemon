@@ -801,7 +801,12 @@ mod tests {
         async fn pause(&self, _: &str) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+        async fn resume(
+            &self,
+            _: &str,
+            _: Option<StepMode>,
+            _: Option<i32>,
+        ) -> Result<(), BackendError> {
             Ok(())
         }
         async fn add_breakpoint(
@@ -1240,7 +1245,12 @@ mod tests {
             async fn pause(&self, _: &str) -> Result<(), BackendError> {
                 Ok(())
             }
-            async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+            async fn resume(
+                &self,
+                _: &str,
+                _: Option<StepMode>,
+                _: Option<i32>,
+            ) -> Result<(), BackendError> {
                 Ok(())
             }
             async fn add_breakpoint(

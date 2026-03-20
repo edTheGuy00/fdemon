@@ -77,6 +77,7 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         &self,
         _isolate_id: &str,
         _step: Option<StepMode>,
+        _frame_index: Option<i32>,
     ) -> impl Future<Output = Result<(), BackendError>> + Send {
         future::ready(Ok(()))
     }
@@ -259,8 +260,13 @@ impl<T: MockTestBackend> DebugBackend for T {
         MockTestBackend::pause(self, isolate_id).await
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
-        MockTestBackend::resume(self, isolate_id, step).await
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
+        MockTestBackend::resume(self, isolate_id, step, frame_index).await
     }
 
     async fn add_breakpoint(
@@ -668,7 +674,12 @@ impl MockTestBackend for NotConnectedBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         Err(BackendError::NotConnected)
     }
 
@@ -796,7 +807,12 @@ impl CondMockBackend {
 }
 
 impl MockTestBackend for CondMockBackend {
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         *self.resume_calls.lock().unwrap() += 1;
         Ok(())
     }
@@ -872,7 +888,12 @@ impl LogpointMockBackend {
 }
 
 impl MockTestBackend for LogpointMockBackend {
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         *self.resume_calls.lock().unwrap() += 1;
         Ok(())
     }

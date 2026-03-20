@@ -138,13 +138,19 @@ impl DebugBackend for VmServiceBackend {
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
         let vm_step = step.map(|s| match s {
             StepMode::Over => StepOption::Over,
             StepMode::Into => StepOption::Into,
             StepMode::Out => StepOption::Out,
+            StepMode::Rewind => StepOption::Rewind,
         });
-        debugger::resume(&self.handle, isolate_id, vm_step)
+        debugger::resume(&self.handle, isolate_id, vm_step, frame_index)
             .await
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
@@ -411,8 +417,9 @@ impl DynDebugBackendInner for VmServiceBackend {
         &'a self,
         isolate_id: &'a str,
         step: Option<StepMode>,
+        frame_index: Option<i32>,
     ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
-        Box::pin(self.resume(isolate_id, step))
+        Box::pin(self.resume(isolate_id, step, frame_index))
     }
 
     fn add_breakpoint_boxed<'a>(

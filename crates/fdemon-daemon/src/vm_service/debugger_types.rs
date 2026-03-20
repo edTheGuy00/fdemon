@@ -221,6 +221,11 @@ pub enum StepOption {
     Out,
     /// Step over async suspension points.
     OverAsyncSuspension,
+    /// Rewind to the start of the selected frame (`restartFrame`).
+    ///
+    /// Only valid for synchronous frames below the first async suspension
+    /// marker. The VM will re-execute the frame from its entry point.
+    Rewind,
 }
 
 impl StepOption {
@@ -231,6 +236,7 @@ impl StepOption {
             StepOption::Over => "Over",
             StepOption::Out => "Out",
             StepOption::OverAsyncSuspension => "OverAsyncSuspension",
+            StepOption::Rewind => "Rewind",
         }
     }
 }

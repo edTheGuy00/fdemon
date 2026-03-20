@@ -162,6 +162,7 @@ impl crate::adapter::DebugBackend for NoopBackend {
         &self,
         _isolate_id: &str,
         _step: Option<crate::adapter::StepMode>,
+        _frame_index: Option<i32>,
     ) -> std::result::Result<(), crate::adapter::BackendError> {
         Err(crate::adapter::BackendError::NotConnected)
     }
@@ -1312,6 +1313,7 @@ mod tests {
             &self,
             _: &str,
             _: Option<crate::adapter::StepMode>,
+            _: Option<i32>,
         ) -> std::result::Result<(), crate::adapter::BackendError> {
             Ok(())
         }

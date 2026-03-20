@@ -139,6 +139,12 @@ impl<B: DebugBackend> DapAdapter<B> {
 
             let kind = frame.get("kind").and_then(|k| k.as_str()).unwrap_or("");
 
+            // Track the first async suspension marker index for restartFrame boundary checks.
+            // Only record the first one encountered (lowest-index boundary).
+            if kind == "AsyncSuspensionMarker" && self.first_async_marker_index.is_none() {
+                self.first_async_marker_index = Some(frame_index);
+            }
+
             // Async suspension markers are visual separators, not real frames.
             let (name, presentation_hint) = if kind == "AsyncSuspensionMarker" {
                 ("<asynchronous gap>".to_string(), Some("label".to_string()))

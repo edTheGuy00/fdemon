@@ -8,7 +8,8 @@ use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
     AttachRequestArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread, PauseArguments,
-    SetBreakpointsArguments, SetExceptionBreakpointsArguments, StepArguments,
+    RestartFrameArguments, SetBreakpointsArguments, SetExceptionBreakpointsArguments,
+    StepArguments,
 };
 use crate::{DapRequest, DapResponse};
 
@@ -51,6 +52,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "source" => self.handle_source(request).await,
             "hotReload" => self.handle_hot_reload(request).await,
             "hotRestart" => self.handle_hot_restart(request).await,
+            "restartFrame" => self.handle_restart_frame(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -512,7 +514,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, None).await {
+        match self.backend.resume(&isolate_id, None, None).await {
             Ok(()) => {
                 let body = serde_json::json!({ "allThreadsContinued": true });
                 DapResponse::success(request, Some(body))
@@ -571,7 +573,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, Some(mode)).await {
+        match self.backend.resume(&isolate_id, Some(mode), None).await {
             Ok(()) => DapResponse::success(request, None),
             Err(e) => DapResponse::error(request, format!("Step failed: {e}")),
         }
@@ -643,7 +645,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     "disconnect: resuming paused isolate {} (terminateDebuggee=false)",
                     isolate_id
                 );
-                if let Err(e) = self.backend.resume(isolate_id, None).await {
+                if let Err(e) = self.backend.resume(isolate_id, None, None).await {
                     tracing::warn!("resume({}) failed during disconnect: {}", isolate_id, e);
                 }
             }
@@ -870,6 +872,89 @@ impl<B: DebugBackend> DapAdapter<B> {
                 tracing::warn!("Hot restart failed: {}", e);
                 DapResponse::error(request, format!("Hot restart failed: {e}"))
             }
+        }
+    }
+
+    /// Handle the `restartFrame` DAP request.
+    ///
+    /// Rewinds execution to the start of a selected stack frame using the Dart
+    /// VM Service's `Rewind` step mode. This enables the "Restart Frame" action
+    /// in IDE debuggers, allowing developers to re-execute a function without
+    /// restarting the entire application.
+    ///
+    /// # Async boundary guard
+    ///
+    /// Frames at or above the first `AsyncSuspensionMarker` cannot be rewound.
+    /// The Dart VM only supports rewinding synchronous frames below the first
+    /// async suspension boundary. Attempting to rewind past it would cause the
+    /// VM to return an error. This handler rejects such requests with a clear
+    /// error message before making any backend call.
+    ///
+    /// # Post-rewind behaviour
+    ///
+    /// After a successful rewind, the VM pauses at the rewound frame and emits
+    /// a `PauseInterrupted` or `PauseBreakpoint` event. The existing
+    /// [`handle_debug_event`] handler translates this to a DAP `stopped` event
+    /// automatically — no special handling is needed here.
+    pub(super) async fn handle_restart_frame(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: restartFrame");
+
+        let args = match parse_args::<RestartFrameArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        // Look up the frame in the per-stop frame store.
+        let frame_ref = match self.frame_store.lookup(args.frame_id) {
+            Some(fr) => fr.clone(),
+            None => {
+                return DapResponse::error(
+                    request,
+                    format!(
+                        "Invalid or stale frame ID {} — did the program resume?",
+                        args.frame_id
+                    ),
+                )
+            }
+        };
+
+        // Guard: reject frames at or above the first async suspension boundary.
+        // The VM cannot rewind through async suspension markers.
+        if let Some(first_async_index) = self.first_async_marker_index {
+            if frame_ref.frame_index >= first_async_index {
+                tracing::debug!(
+                    "restartFrame: frame {} is at or above async marker at index {} — rejecting",
+                    frame_ref.frame_index,
+                    first_async_index,
+                );
+                return DapResponse::error(
+                    request,
+                    "Cannot restart frame: target frame is at or above an async suspension boundary",
+                );
+            }
+        }
+
+        // Invalidate stopped-state references before rewinding.
+        self.on_resume();
+
+        match self
+            .backend
+            .resume(
+                &frame_ref.isolate_id,
+                Some(StepMode::Rewind),
+                Some(frame_ref.frame_index),
+            )
+            .await
+        {
+            Ok(()) => {
+                tracing::debug!(
+                    "restartFrame: rewound to frame {} in isolate {}",
+                    frame_ref.frame_index,
+                    frame_ref.isolate_id,
+                );
+                DapResponse::success(request, Some(serde_json::json!({})))
+            }
+            Err(e) => DapResponse::error(request, format!("restartFrame failed: {e}")),
         }
     }
 }

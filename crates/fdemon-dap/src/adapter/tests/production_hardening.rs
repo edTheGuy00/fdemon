@@ -164,6 +164,7 @@ async fn test_disconnect_resumes_paused_isolates_when_terminate_false() {
             &self,
             isolate_id: &str,
             _step: Option<StepMode>,
+            _frame_index: Option<i32>,
         ) -> Result<(), BackendError> {
             self.resumed.lock().unwrap().push(isolate_id.to_string());
             Ok(())
