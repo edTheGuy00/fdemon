@@ -133,7 +133,9 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
         // so the unpause signals below are skipped — the
         // VmServicePerformanceMonitoringStarted handler adjusts initial pause
         // state based on ui_mode and active_panel after the task starts.
-        let session_id = state.session_manager.selected_id().unwrap();
+        let Some(session_id) = state.session_manager.selected_id() else {
+            return UpdateResult::none();
+        };
         let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
         let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
         let mode = state
@@ -156,7 +158,9 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
             state.devtools_view_state.inspector.loading = true;
             Some(crate::message::Message::RequestWidgetTree { session_id })
         } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
-            Some(crate::message::Message::SwitchDevToolsPanel(DevToolsPanel::Network))
+            Some(crate::message::Message::SwitchDevToolsPanel(
+                DevToolsPanel::Network,
+            ))
         } else {
             None
         };

@@ -1709,7 +1709,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 handle.perf_shutdown_tx = Some(perf_shutdown_tx);
                 // Take the JoinHandle out of the Arc<Mutex<Option<>>> so it is
                 // owned by the SessionHandle and can be awaited/aborted on close.
-                handle.perf_task_handle = perf_task_handle.lock().ok().and_then(|mut g| g.take());
+                handle.perf_task_handle = match perf_task_handle.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("perf task handle mutex poisoned: {e}");
+                        e.into_inner().take()
+                    }
+                };
                 // Store the allocation-pause sender so panel-switching handlers
                 // can pause/unpause `getAllocationProfile` polling without going
                 // through the full UpdateAction machinery.

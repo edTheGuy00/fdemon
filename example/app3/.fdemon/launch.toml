@@ -7,7 +7,7 @@
 
 [[configurations]]
 name = "Profile (Issue #25)"
-device = "ios"
+device = "auto"
 mode = "profile"
 auto_start = true
 

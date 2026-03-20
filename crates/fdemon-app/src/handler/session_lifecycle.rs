@@ -164,7 +164,9 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
         return UpdateResult::none();
     }
 
-    let session_id = state.session_manager.selected_id().unwrap();
+    let Some(session_id) = state.session_manager.selected_id() else {
+        return UpdateResult::none();
+    };
     let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
     let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
     let mode = state

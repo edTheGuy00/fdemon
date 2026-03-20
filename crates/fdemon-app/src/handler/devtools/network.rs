@@ -10,6 +10,7 @@ use crate::session::NetworkDetailTab;
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::network::{HttpProfileEntry, HttpProfileEntryDetail};
+use tracing::warn;
 
 /// Number of entries to skip per page-up or page-down navigation.
 const NETWORK_PAGE_STEP: usize = 10;
@@ -118,7 +119,13 @@ pub(crate) fn handle_network_monitoring_started(
         }
 
         handle.network_shutdown_tx = Some(shutdown_tx);
-        handle.network_task_handle = task_handle.lock().ok().and_then(|mut g| g.take());
+        handle.network_task_handle = match task_handle.lock() {
+            Ok(mut guard) => guard.take(),
+            Err(e) => {
+                warn!("network task handle mutex poisoned: {e}");
+                e.into_inner().take()
+            }
+        };
         handle.network_pause_tx = Some(pause_tx);
     }
     UpdateResult::none()
