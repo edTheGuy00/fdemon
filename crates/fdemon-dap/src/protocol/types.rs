@@ -1063,8 +1063,9 @@ impl Capabilities {
             supports_log_points: Some(true),
             supports_terminate_request: Some(true),
             supports_restart_frame: Some(true),
-            // supports_restart_request is NOT advertised until Task 13 implements the handler.
-            // Advertising it without a handler causes IDE errors when the restart button is used.
+            // supports_restart_request: the `restart` DAP request handler is implemented
+            // in Task 17, which performs a hot restart under the hood.
+            supports_restart_request: Some(true),
             supports_delayed_stack_trace_loading: Some(true),
             supports_loaded_sources_request: Some(true),
             supports_exception_info_request: Some(true),
@@ -1847,9 +1848,9 @@ mod tests {
         assert_eq!(json["supportsLogPoints"], true);
         assert_eq!(json["supportsTerminateRequest"], true);
         assert_eq!(json["supportsDelayedStackTraceLoading"], true);
-        // supportsRestartRequest is NOT advertised until Task 10 implements the handler.
-        // Advertising it without a handler causes IDE errors when the restart button is clicked.
-        assert!(json.get("supportsRestartRequest").is_none());
+        // supportsRestartRequest IS advertised: the `restart` handler was implemented in Task 17.
+        // It performs a hot restart under the hood.
+        assert_eq!(json["supportsRestartRequest"], true);
         // exceptionInfo is implemented in Task 09 — capability is advertised.
         assert_eq!(json["supportsExceptionInfoRequest"], true);
     }

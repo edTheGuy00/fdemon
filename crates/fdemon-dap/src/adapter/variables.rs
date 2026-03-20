@@ -3,7 +3,7 @@
 //! DapAdapter methods for stack traces, scopes, and variable inspection.
 
 use crate::adapter::backend::DebugBackend;
-use crate::adapter::handlers::parse_args;
+use crate::adapter::handlers::{parse_args, with_timeout};
 use crate::adapter::stack::{
     extract_line_column, extract_source_with_store, FrameRef, ScopeKind, VariableRef,
 };
@@ -112,7 +112,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Clamp the `levels` argument for the VM Service call.
         let limit = args.levels.map(|l| l as i32);
 
-        let stack_json = match self.backend.get_stack(&isolate_id, limit).await {
+        let stack_json = match with_timeout(self.backend.get_stack(&isolate_id, limit)).await {
             Ok(v) => v,
             Err(e) => return DapResponse::error(request, format!("Failed to get stack: {e}")),
         };
@@ -466,11 +466,9 @@ impl<B: DebugBackend> DapAdapter<B> {
                     })?;
 
                 // Fetch the stack up to frame_index + 1 to include our frame.
-                let stack = self
-                    .backend
-                    .get_stack(&isolate_id, Some(frame_index + 1))
-                    .await
-                    .map_err(|e| e.to_string())?;
+                let stack =
+                    with_timeout(self.backend.get_stack(&isolate_id, Some(frame_index + 1)))
+                        .await?;
 
                 let frames = stack
                     .get("frames")
@@ -605,11 +603,12 @@ impl<B: DebugBackend> DapAdapter<B> {
             .await?;
 
         // Step 3: fetch the full Library object.
-        let library = self
-            .backend
-            .get_object(&isolate_id, &library_id, None, None)
-            .await
-            .map_err(|e| format!("Failed to get library object '{}': {}", library_id, e))?;
+        let library = with_timeout(
+            self.backend
+                .get_object(&isolate_id, &library_id, None, None),
+        )
+        .await
+        .map_err(|e| format!("Failed to get library object '{}': {}", library_id, e))?;
 
         // Step 4: read library.variables — array of FieldRef.
         let field_refs: Vec<serde_json::Value> = library
@@ -641,11 +640,10 @@ impl<B: DebugBackend> DapAdapter<B> {
             };
 
             // Fetch the full Field object to read staticValue.
-            let field_obj = self
-                .backend
-                .get_object(&isolate_id, &field_id, None, None)
-                .await
-                .map_err(|e| format!("Failed to get field '{}': {}", field_id, e))?;
+            let field_obj =
+                with_timeout(self.backend.get_object(&isolate_id, &field_id, None, None))
+                    .await
+                    .map_err(|e| format!("Failed to get field '{}': {}", field_id, e))?;
 
             // Determine const/static attributes.
             let is_const = field_obj
@@ -732,9 +730,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         frame_index: i32,
     ) -> Result<String, String> {
         // Fetch the stack to examine code.owner for the target frame.
-        let stack = self
-            .backend
-            .get_stack(isolate_id, Some(frame_index + 1))
+        let stack = with_timeout(self.backend.get_stack(isolate_id, Some(frame_index + 1)))
             .await
             .map_err(|e| format!("Failed to get stack: {}", e))?;
 
@@ -778,9 +774,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Calls `get_isolate` and reads `isolate.rootLib.id`. This is the fallback
     /// used when the frame has no usable `code.owner`.
     async fn get_root_lib_from_isolate(&self, isolate_id: &str) -> Result<String, String> {
-        let isolate = self
-            .backend
-            .get_isolate(isolate_id)
+        let isolate = with_timeout(self.backend.get_isolate(isolate_id))
             .await
             .map_err(|e| format!("Failed to get isolate '{}': {}", isolate_id, e))?;
 
@@ -1122,10 +1116,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                 break;
             }
 
-            let class_obj = match self
-                .backend
-                .get_object(isolate_id, &current_class_id, None, None)
-                .await
+            let class_obj = match with_timeout(self.backend.get_object(
+                isolate_id,
+                &current_class_id,
+                None,
+                None,
+            ))
+            .await
             {
                 Ok(obj) => obj,
                 Err(_) => break,
@@ -1239,11 +1236,8 @@ impl<B: DebugBackend> DapAdapter<B> {
         count: Option<i64>,
         parent_evaluate_name: Option<&str>,
     ) -> Result<Vec<DapVariable>, String> {
-        let obj = self
-            .backend
-            .get_object(isolate_id, object_id, start, count)
-            .await
-            .map_err(|e| e.to_string())?;
+        let obj =
+            with_timeout(self.backend.get_object(isolate_id, object_id, start, count)).await?;
 
         let obj_type = obj.get("type").and_then(|t| t.as_str()).unwrap_or("");
 

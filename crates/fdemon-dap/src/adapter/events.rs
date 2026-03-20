@@ -468,6 +468,27 @@ impl<B: DebugBackend> DapAdapter<B> {
                 self.send_event("flutter.appStarted", Some(serde_json::json!({})))
                     .await;
             }
+
+            DebugEvent::ServiceExtensionAdded {
+                isolate_id,
+                extension_rpc,
+            } => {
+                // A Dart VM service extension was registered by an isolate.
+                // Emit the dart.serviceExtensionAdded custom event so that IDEs
+                // (VS Code Dart extension, etc.) know when extension methods such
+                // as DevTools RPCs are available to call via callService.
+                tracing::debug!(
+                    "Emitting dart.serviceExtensionAdded: {} (isolate: {})",
+                    extension_rpc,
+                    isolate_id,
+                );
+                let body = serde_json::json!({
+                    "extensionRPC": extension_rpc,
+                    "isolateId": isolate_id,
+                });
+                self.send_event("dart.serviceExtensionAdded", Some(body))
+                    .await;
+            }
         }
     }
 

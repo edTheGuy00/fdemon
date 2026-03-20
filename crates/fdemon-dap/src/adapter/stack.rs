@@ -216,6 +216,17 @@ pub enum ScopeKind {
 // VariableStore
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Maximum number of variable references that [`VariableStore`] will hold.
+///
+/// Prevents unbounded memory growth when debugging programs with very large
+/// object graphs (e.g., widget trees with thousands of children). When the
+/// store reaches this limit, [`VariableStore::allocate`] returns `0`
+/// (non-expandable) and logs a warning instead of inserting a new entry.
+///
+/// Most debug sessions never approach this limit; it is a safety cap for
+/// pathological cases.
+pub(crate) const MAX_VARIABLE_REFS: usize = 10_000;
+
 /// Allocates and looks up variable references for a single stopped state.
 ///
 /// Variable references are monotonically increasing integers starting at 1.
@@ -228,6 +239,7 @@ pub enum ScopeKind {
 /// - Uses a simple `HashMap` — cheap to create, cheap to clear.
 /// - No complex allocator needed: even large Dart programs have at most a few
 ///   hundred variables visible at any one time.
+/// - Capped at [`MAX_VARIABLE_REFS`] entries to prevent unbounded memory use.
 pub struct VariableStore {
     references: HashMap<i64, VariableRef>,
     next_ref: i64,
@@ -244,8 +256,20 @@ impl VariableStore {
 
     /// Allocate a new variable reference for the given target.
     ///
-    /// Returns the allocated reference integer (always >= 1).
+    /// Returns the allocated reference integer (>= 1) on success, or `0` when
+    /// the store has reached [`MAX_VARIABLE_REFS`] entries. A return value of
+    /// `0` tells the DAP client that the variable is not expandable.
+    ///
+    /// A [`tracing::warn`] is emitted the first time the cap is hit so that
+    /// unusual debug sessions can be identified in logs.
     pub fn allocate(&mut self, target: VariableRef) -> i64 {
+        if self.references.len() >= MAX_VARIABLE_REFS {
+            tracing::warn!(
+                "VariableStore full ({} entries) — returning 0 (non-expandable)",
+                MAX_VARIABLE_REFS,
+            );
+            return 0;
+        }
         let r = self.next_ref;
         self.next_ref += 1;
         self.references.insert(r, target);

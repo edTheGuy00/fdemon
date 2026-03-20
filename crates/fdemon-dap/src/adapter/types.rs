@@ -168,6 +168,18 @@ pub enum DebugEvent {
     /// emitted by the Engine integration layer when the session phase
     /// transitions to `Running`.
     AppStarted,
+
+    /// A Dart VM service extension was registered by an isolate.
+    ///
+    /// Triggers the `dart.serviceExtensionAdded` custom DAP event. IDEs use
+    /// this to know when extension methods (e.g., Flutter DevTools RPCs) are
+    /// available to call via `callService`.
+    ServiceExtensionAdded {
+        /// Dart VM isolate ID that registered the extension.
+        isolate_id: String,
+        /// The extension RPC name (e.g., `"ext.flutter.debugDumpApp"`).
+        extension_rpc: String,
+    },
 }
 
 /// Reason for a pause event.
@@ -238,10 +250,6 @@ pub(crate) const MAX_VARIABLES_PER_REQUEST: usize = 100;
 /// If a VM Service call does not return within this duration the adapter
 /// returns an error response rather than hanging indefinitely. Slow devices
 /// may require a longer timeout — future work can expose this via `DapSettings`.
-///
-/// Currently documented here; active wrapping of backend calls with this timeout
-/// is deferred to integration once tokio::time::timeout is wired in.
-#[allow(dead_code)]
 pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Numeric error code: VM Service not connected.

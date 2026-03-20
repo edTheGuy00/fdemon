@@ -2,6 +2,8 @@
 //!
 //! DapAdapter methods for dispatching and handling DAP protocol requests.
 
+use std::future::Future;
+
 use crate::adapter::backend::DebugBackend;
 use crate::adapter::breakpoints;
 use crate::adapter::stack::build_source_from_uri;
@@ -15,7 +17,7 @@ use crate::protocol::types::{
 };
 use crate::{DapRequest, DapResponse};
 
-use crate::adapter::types::ERR_VM_DISCONNECTED;
+use crate::adapter::types::{ERR_VM_DISCONNECTED, REQUEST_TIMEOUT};
 
 impl<B: DebugBackend> DapAdapter<B> {
     /// Handle a DAP request and return the response.
@@ -56,6 +58,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "hotReload" => self.handle_hot_reload(request).await,
             "hotRestart" => self.handle_hot_restart(request).await,
             "restartFrame" => self.handle_restart_frame(request).await,
+            "restart" => self.handle_restart(request).await,
             "callService" => self.handle_call_service(request).await,
             "exceptionInfo" => self.handle_exception_info(request).await,
             "updateDebugOptions" => self.handle_update_debug_options(request).await,
@@ -104,7 +107,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             self.app_package_name = pkg;
         }
 
-        match self.backend.get_vm().await {
+        match with_timeout(self.backend.get_vm()).await {
             Ok(vm_info) => {
                 // Discover pre-existing isolates from the VM object.
                 if let Some(isolates) = vm_info.get("isolates").and_then(|v| v.as_array()) {
@@ -278,7 +281,7 @@ impl<B: DebugBackend> DapAdapter<B> {
 
             if !still_wanted {
                 if let Some(isolate_id) = self.primary_isolate_id() {
-                    let _ = self.backend.remove_breakpoint(&isolate_id, vm_id).await;
+                    let _ = with_timeout(self.backend.remove_breakpoint(&isolate_id, vm_id)).await;
                 }
                 self.breakpoint_state.remove_by_dap_id(*dap_id);
                 tracing::debug!("Removed breakpoint {} (dap_id={})", vm_id, dap_id);
@@ -301,15 +304,13 @@ impl<B: DebugBackend> DapAdapter<B> {
             // New breakpoint: attempt to add via the VM Service backend.
             match self.primary_isolate_id() {
                 Some(isolate_id) => {
-                    match self
-                        .backend
-                        .add_breakpoint(
-                            &isolate_id,
-                            &uri,
-                            sbp.line as i32,
-                            sbp.column.map(|c| c as i32),
-                        )
-                        .await
+                    match with_timeout(self.backend.add_breakpoint(
+                        &isolate_id,
+                        &uri,
+                        sbp.line as i32,
+                        sbp.column.map(|c| c as i32),
+                    ))
+                    .await
                     {
                         Ok(result) => {
                             let actual_line = result.line.or(Some(sbp.line as i32));
@@ -533,7 +534,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, None, None).await {
+        match with_timeout(self.backend.resume(&isolate_id, None, None)).await {
             Ok(()) => {
                 let body = serde_json::json!({ "allThreadsContinued": true });
                 DapResponse::success(request, Some(body))
@@ -592,7 +593,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, Some(mode), None).await {
+        match with_timeout(self.backend.resume(&isolate_id, Some(mode), None)).await {
             Ok(()) => DapResponse::success(request, None),
             Err(e) => DapResponse::error(request, format!("Step failed: {e}")),
         }
@@ -621,7 +622,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
         };
 
-        match self.backend.pause(&isolate_id).await {
+        match with_timeout(self.backend.pause(&isolate_id)).await {
             Ok(()) => DapResponse::success(request, None),
             Err(e) => DapResponse::error(request, format!("Pause failed: {e}")),
         }
@@ -652,7 +653,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         if args.terminate_debuggee.unwrap_or(false) {
             // IDE wants the app stopped — terminate the Flutter process.
             tracing::debug!("disconnect: terminateDebuggee=true — stopping app");
-            if let Err(e) = self.backend.stop_app().await {
+            if let Err(e) = with_timeout(self.backend.stop_app()).await {
                 tracing::warn!("stop_app failed during disconnect: {}", e);
                 // Non-fatal: continue the disconnect sequence even if stop_app fails.
             }
@@ -664,7 +665,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     "disconnect: resuming paused isolate {} (terminateDebuggee=false)",
                     isolate_id
                 );
-                if let Err(e) = self.backend.resume(isolate_id, None, None).await {
+                if let Err(e) = with_timeout(self.backend.resume(isolate_id, None, None)).await {
                     tracing::warn!("resume({}) failed during disconnect: {}", isolate_id, e);
                 }
             }
@@ -830,11 +831,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         };
 
         // Fetch the source text from the VM Service.
-        match self
-            .backend
-            .get_source(&entry.isolate_id, &entry.script_id)
-            .await
-        {
+        match with_timeout(self.backend.get_source(&entry.isolate_id, &entry.script_id)).await {
             Ok(source_text) => {
                 let body = serde_json::json!({
                     "content": source_text,
@@ -885,7 +882,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
         };
 
-        let scripts_response = match self.backend.get_scripts(&isolate_id).await {
+        let scripts_response = match with_timeout(self.backend.get_scripts(&isolate_id)).await {
             Ok(v) => v,
             Err(e) => {
                 return DapResponse::error(
@@ -959,7 +956,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             None
         };
 
-        let result = self.backend.hot_reload().await;
+        let result = with_timeout(self.backend.hot_reload()).await;
 
         // Always close the progress indicator, even on failure, so the IDE
         // does not display a stale spinner indefinitely.
@@ -1020,7 +1017,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             None
         };
 
-        let result = self.backend.hot_restart().await;
+        let result = with_timeout(self.backend.hot_restart()).await;
 
         // Always close the progress indicator, even on failure, so the IDE
         // does not display a stale spinner indefinitely.
@@ -1107,14 +1104,12 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before rewinding.
         self.on_resume();
 
-        match self
-            .backend
-            .resume(
-                &frame_ref.isolate_id,
-                Some(StepMode::Rewind),
-                Some(frame_ref.frame_index),
-            )
-            .await
+        match with_timeout(self.backend.resume(
+            &frame_ref.isolate_id,
+            Some(StepMode::Rewind),
+            Some(frame_ref.frame_index),
+        ))
+        .await
         {
             Ok(()) => {
                 tracing::debug!(
@@ -1167,7 +1162,7 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         tracing::debug!("callService: method={}, params={:?}", method, params);
 
-        match self.backend.call_service(method, params).await {
+        match with_timeout(self.backend.call_service(method, params)).await {
             Ok(result) => {
                 DapResponse::success(request, Some(serde_json::json!({ "result": result })))
             }
@@ -1242,10 +1237,11 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         // Call toString() on the exception for the description.
         let description = if !exception_id.is_empty() {
-            match self
-                .backend
-                .evaluate(&isolate_id, &exception_id, "toString()")
-                .await
+            match with_timeout(
+                self.backend
+                    .evaluate(&isolate_id, &exception_id, "toString()"),
+            )
+            .await
             {
                 Ok(result) => result
                     .get("valueAsString")
@@ -1260,10 +1256,12 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         // Try to get the stack trace string via stackTrace?.toString().
         let stack_trace_str = if !exception_id.is_empty() {
-            match self
-                .backend
-                .evaluate(&isolate_id, &exception_id, "stackTrace?.toString()")
-                .await
+            match with_timeout(self.backend.evaluate(
+                &isolate_id,
+                &exception_id,
+                "stackTrace?.toString()",
+            ))
+            .await
             {
                 Ok(result) => result
                     .get("valueAsString")
@@ -1401,9 +1399,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Failures from individual `setLibraryDebuggable` calls are logged as
     /// warnings and do not abort processing of remaining libraries.
     pub(super) async fn apply_library_debuggability(&self, isolate_id: &str) -> Result<(), String> {
-        let isolate = self
-            .backend
-            .get_isolate(isolate_id)
+        let isolate = with_timeout(self.backend.get_isolate(isolate_id))
             .await
             .map_err(|e| format!("get_isolate failed: {e}"))?;
 
@@ -1431,17 +1427,19 @@ impl<B: DebugBackend> DapAdapter<B> {
                 true
             };
 
-            self.backend
-                .set_library_debuggable(isolate_id, lib_id, is_debuggable)
-                .await
-                .unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "Failed to set library debuggability for {} ({}): {}",
-                        uri,
-                        lib_id,
-                        e
-                    );
-                });
+            with_timeout(
+                self.backend
+                    .set_library_debuggable(isolate_id, lib_id, is_debuggable),
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to set library debuggability for {} ({}): {}",
+                    uri,
+                    lib_id,
+                    e
+                );
+            });
         }
 
         Ok(())
@@ -1509,7 +1507,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         let uri = path_to_dart_uri(&source_path);
 
         // Retrieve the script list to find the script ID for this URI.
-        let scripts_response = match self.backend.get_scripts(&isolate_id).await {
+        let scripts_response = match with_timeout(self.backend.get_scripts(&isolate_id)).await {
             Ok(v) => v,
             Err(e) => {
                 return DapResponse::error(
@@ -1538,16 +1536,14 @@ impl<B: DebugBackend> DapAdapter<B> {
         };
 
         // Call getSourceReport to get possible breakpoint positions for the script.
-        let report = match self
-            .backend
-            .get_source_report(
-                &isolate_id,
-                &script_id,
-                &["PossibleBreakpoints"],
-                None,
-                None,
-            )
-            .await
+        let report = match with_timeout(self.backend.get_source_report(
+            &isolate_id,
+            &script_id,
+            &["PossibleBreakpoints"],
+            None,
+            None,
+        ))
+        .await
         {
             Ok(v) => v,
             Err(e) => {
@@ -1672,6 +1668,34 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         let body = serde_json::json!({ "targets": items });
         DapResponse::success(request, Some(body))
+    }
+
+    /// Handle the DAP `restart` request.
+    ///
+    /// The standard DAP `restart` request is used by IDEs (VS Code, etc.) when
+    /// the user clicks the "Restart" button in the debug toolbar. For Flutter
+    /// debugging this is equivalent to a hot restart — it re-creates the main
+    /// Dart isolate while keeping the process alive.
+    ///
+    /// The adapter calls [`DebugBackend::hot_restart`] with the standard 10 s
+    /// [`REQUEST_TIMEOUT`] to prevent a hung VM Service from blocking the
+    /// debug session indefinitely.
+    ///
+    /// On success, returns an empty success response. On failure (including
+    /// timeout) returns a structured error so the IDE can surface the message.
+    pub(super) async fn handle_restart(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: restart");
+
+        match with_timeout(self.backend.hot_restart()).await {
+            Ok(()) => {
+                tracing::debug!("Restart (hot restart) dispatched successfully");
+                DapResponse::success(request, Some(serde_json::json!({})))
+            }
+            Err(e) => {
+                tracing::warn!("Restart (hot restart) failed: {}", e);
+                DapResponse::error(request, format!("Restart failed: {e}"))
+            }
+        }
     }
 
     /// Return `true` if the given `package:` URI belongs to the app's own package.
@@ -1878,6 +1902,26 @@ pub(crate) fn build_token_pos_map(
     }
 
     map
+}
+
+/// Wrap a fallible backend future with the standard [`REQUEST_TIMEOUT`].
+///
+/// Returns `Err(String)` with a human-readable message when either:
+/// - The timeout fires before the future resolves.
+/// - The future resolves to `Err(e)` (converted via `Display`).
+///
+/// # Usage
+///
+/// ```ignore
+/// let result = with_timeout(self.backend.get_stack(&isolate_id, limit)).await?;
+/// ```
+pub(crate) async fn with_timeout<T, E: std::fmt::Display>(
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    tokio::time::timeout(REQUEST_TIMEOUT, future)
+        .await
+        .map_err(|_| format!("Request timed out after {}s", REQUEST_TIMEOUT.as_secs()))?
+        .map_err(|e| e.to_string())
 }
 
 /// Extract [`BreakpointLocation`] objects from a `getSourceReport` response.
