@@ -17,6 +17,7 @@ mod exception_scope;
 mod execution;
 mod getter_evaluation;
 mod hot_operations;
+mod loaded_sources;
 mod logpoints;
 mod production_hardening;
 mod restart_frame;

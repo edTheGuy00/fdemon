@@ -48,9 +48,9 @@ pub use breakpoints::{
     LogSegment,
 };
 pub use stack::{
-    dart_uri_to_path, extract_line_column, extract_source, extract_source_with_store,
-    resolve_package_uri, FrameRef, FrameStore, ScopeKind, SourceRefInfo, SourceReferenceStore,
-    VariableRef, VariableStore,
+    build_source_from_uri, dart_uri_to_path, extract_line_column, extract_source,
+    extract_source_with_store, resolve_package_uri, FrameRef, FrameStore, ScopeKind, SourceRefInfo,
+    SourceReferenceStore, VariableRef, VariableStore,
 };
 pub use threads::{
     session_index_from_thread_id, session_thread_base, DapSessionId, MultiSessionThreadMap,

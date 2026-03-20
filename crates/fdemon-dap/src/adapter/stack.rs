@@ -595,6 +595,90 @@ pub fn resolve_package_uri(uri: &str, project_root: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Build a [`DapSource`] from a script URI and script ID.
+///
+/// This is the direct-URI variant of [`extract_source_with_store`]. It takes
+/// the URI and script ID directly (not wrapped in a frame JSON) and applies the
+/// same source resolution strategy:
+///
+/// | URI prefix              | Strategy                                              |
+/// |-------------------------|-------------------------------------------------------|
+/// | `file://`               | Local path via [`dart_uri_to_path`]; no source ref    |
+/// | `dart:`                 | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `org-dartlang-sdk:`     | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `package:`              | Try local path if `project_root` is provided; otherwise `sourceReference > 0` |
+///
+/// Used by `handle_loaded_sources` where scripts are available as URI + ID
+/// pairs rather than nested inside frame JSON.
+pub fn build_source_from_uri(
+    uri: &str,
+    script_id: &str,
+    store: &mut SourceReferenceStore,
+    isolate_id: &str,
+    project_root: Option<&Path>,
+) -> DapSource {
+    let name = uri.rsplit('/').next().unwrap_or(uri).to_string();
+
+    if uri.starts_with("file://") {
+        let path = dart_uri_to_path(uri);
+        return DapSource {
+            name: Some(name),
+            path,
+            source_reference: None,
+            presentation_hint: None,
+        };
+    }
+
+    if uri.starts_with("package:") {
+        let resolved = project_root.and_then(|root| resolve_package_uri(uri, root));
+        if let Some(local_path) = resolved {
+            let hint = if uri.starts_with("package:flutter/") {
+                Some("deemphasize".to_string())
+            } else {
+                None
+            };
+            return DapSource {
+                name: Some(name),
+                path: Some(local_path.to_string_lossy().into_owned()),
+                source_reference: None,
+                presentation_hint: hint,
+            };
+        }
+        // Not resolvable locally — assign a source reference.
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        let hint = if uri.starts_with("package:flutter/") {
+            Some("deemphasize".to_string())
+        } else {
+            None
+        };
+        return DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: hint,
+        };
+    }
+
+    // dart: and org-dartlang-sdk: — always fetch via VM Service.
+    if uri.starts_with("dart:") || uri.starts_with("org-dartlang-sdk:") {
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        return DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: Some("deemphasize".to_string()),
+        };
+    }
+
+    // Unknown URI scheme.
+    DapSource {
+        name: Some(name),
+        path: None,
+        source_reference: None,
+        presentation_hint: None,
+    }
+}
+
 /// Extract line and column numbers from a VM Service frame's `location` field.
 ///
 /// Both values are 1-based per the DAP specification. Returns `(None, None)`

@@ -912,6 +912,7 @@ impl Capabilities {
             // supports_restart_request is NOT advertised until Task 13 implements the handler.
             // Advertising it without a handler causes IDE errors when the restart button is used.
             supports_delayed_stack_trace_loading: Some(true),
+            supports_loaded_sources_request: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
                     filter: "All".into(),
@@ -1163,10 +1164,11 @@ mod tests {
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].filter, "All");
         assert_eq!(filters[1].filter, "Unhandled");
+        // loadedSources is now enabled (Task 11).
+        assert_eq!(caps.supports_loaded_sources_request, Some(true));
         // Unimplemented capabilities remain None.
         assert!(caps.support_terminate_debuggee.is_none());
         assert!(caps.supports_exception_info_request.is_none());
-        assert!(caps.supports_loaded_sources_request.is_none());
         assert!(caps.supports_set_variable.is_none());
         assert!(caps.supports_value_formatting_options.is_none());
         assert!(caps.supports_breakpoint_locations_request.is_none());

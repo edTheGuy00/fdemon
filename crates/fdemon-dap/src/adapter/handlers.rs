@@ -4,6 +4,7 @@
 
 use crate::adapter::backend::DebugBackend;
 use crate::adapter::breakpoints;
+use crate::adapter::stack::build_source_from_uri;
 use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
@@ -50,6 +51,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "variables" => self.handle_variables(request).await,
             "evaluate" => self.handle_evaluate(request).await,
             "source" => self.handle_source(request).await,
+            "loadedSources" => self.handle_loaded_sources(request).await,
             "hotReload" => self.handle_hot_reload(request).await,
             "hotRestart" => self.handle_hot_restart(request).await,
             "restartFrame" => self.handle_restart_frame(request).await,
@@ -828,6 +830,83 @@ impl<B: DebugBackend> DapAdapter<B> {
                 format!("Failed to fetch source for reference {source_ref}: {e}"),
             ),
         }
+    }
+
+    /// Handle the `loadedSources` DAP request.
+    ///
+    /// Returns all Dart scripts currently loaded in the most recently active
+    /// isolate as DAP `Source` objects. This enables the "Loaded Scripts"
+    /// explorer panel in VS Code and other IDEs.
+    ///
+    /// # Source categorization
+    ///
+    /// | URI prefix              | Treatment                                             |
+    /// |-------------------------|-------------------------------------------------------|
+    /// | `file://`               | Resolved to a local filesystem path                   |
+    /// | `package:`              | Local path if resolvable; `sourceReference` otherwise |
+    /// | `dart:`                 | `sourceReference > 0`; `presentationHint: "deemphasize"` |
+    /// | `org-dartlang-sdk:`     | `sourceReference > 0`; `presentationHint: "deemphasize"` |
+    /// | `eval:` or `dart:_*`   | Filtered out (generated / internal)                   |
+    ///
+    /// # Isolate selection
+    ///
+    /// Uses the most recently paused isolate if one is available, otherwise
+    /// falls back to the primary (first registered) isolate. Returns an error
+    /// if no isolate is known.
+    pub(super) async fn handle_loaded_sources(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: loadedSources");
+
+        // Prefer a paused isolate for script enumeration; fall back to primary.
+        let isolate_id = match self
+            .most_recent_paused_isolate()
+            .map(|s| s.to_string())
+            .or_else(|| self.primary_isolate_id())
+        {
+            Some(id) => id,
+            None => {
+                return DapResponse::error(request, "loadedSources: no active isolate available")
+            }
+        };
+
+        let scripts_response = match self.backend.get_scripts(&isolate_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("loadedSources: get_scripts failed: {e}"),
+                )
+            }
+        };
+
+        let empty_vec = Vec::new();
+        let scripts = scripts_response
+            .get("scripts")
+            .and_then(|s| s.as_array())
+            .unwrap_or(&empty_vec);
+
+        let sources: Vec<DapSource> = scripts
+            .iter()
+            .filter_map(|script| {
+                let uri = script.get("uri")?.as_str()?;
+                let script_id = script.get("id")?.as_str()?;
+
+                // Filter out generated `eval:` sources and Dart internal libraries.
+                if uri.starts_with("eval:") || uri.contains("dart:_") {
+                    return None;
+                }
+
+                Some(build_source_from_uri(
+                    uri,
+                    script_id,
+                    &mut self.source_reference_store,
+                    &isolate_id,
+                    None, // project_root not available in DapAdapter
+                ))
+            })
+            .collect();
+
+        tracing::debug!("loadedSources: returning {} sources", sources.len());
+        DapResponse::success(request, Some(serde_json::json!({ "sources": sources })))
     }
 
     /// Handle the `hotReload` custom DAP request.
