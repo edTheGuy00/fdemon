@@ -1,7 +1,9 @@
 # Flutter Demon Configuration — Example App 3
-# Demonstrates multi-config auto_start: the launch.toml has auto_start = true
-# on the "Staging" config, so fdemon should auto-launch that config.
-# The [behavior] auto_start below is false to rely solely on per-config auto_start.
+# Configured for profile mode lag reproduction (Issue #25).
+# Uses aggressive DevTools polling (minimum allowed intervals) to maximise VM
+# Service pressure, matching the reporter's environment.
+# The [behavior] auto_start is false — per-config auto_start in launch.toml
+# controls which configuration launches automatically.
 
 [behavior]
 auto_start = false      # Global auto_start disabled — per-config takes precedence
@@ -24,6 +26,31 @@ stack_trace_max_frames = 3
 [devtools]
 auto_open = false
 browser = ""
+default_panel = "performance"
+performance_refresh_ms = 500
+memory_history_size = 60
+tree_max_depth = 0
+inspector_fetch_timeout_secs = 60
+auto_repaint_rainbow = false
+auto_performance_overlay = false
+allocation_profile_interval_ms = 1000
+max_network_entries = 500
+network_auto_record = true
+network_poll_interval_ms = 1000
+
+[devtools.logging]
+hybrid_enabled = true
+prefer_vm_level = true
+show_source_indicator = true
+dedupe_threshold_ms = 100
+
+[dap]
+enabled = true
+auto_start_in_ide = false
+port = 33001
+bind_address = "127.0.0.1"
+suppress_reload_on_pause = true
+auto_configure_ide = false
 
 [editor]
 command = ""

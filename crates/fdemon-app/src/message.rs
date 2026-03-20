@@ -788,6 +788,28 @@ pub enum Message {
         /// storing it on `SessionHandle`, leaving `None` for any subsequent
         /// (unexpected) clone.
         perf_task_handle: SharedTaskHandle,
+        /// Pause sender for the `getAllocationProfile` polling arm.
+        ///
+        /// Sending `true` pauses allocation polling (Performance panel not visible).
+        /// Sending `false` unpauses it (Performance panel is visible).
+        ///
+        /// Initial channel value is `true` (paused) — allocation polling starts
+        /// paused because performance monitoring begins at VM connect time, often
+        /// before the user opens the Performance panel. The handler sends `false`
+        /// when the user enters the Performance panel.
+        alloc_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
+        /// Higher-level pause sender for the entire performance polling loop.
+        ///
+        /// Sending `true` pauses both memory and allocation polling (user not in
+        /// DevTools mode). Sending `false` unpauses both (user entered DevTools).
+        ///
+        /// Initial channel value is `true` (paused) — monitoring starts at VM
+        /// connect time, before the user opens DevTools. This prevents all
+        /// `getMemoryUsage` and `getIsolate` RPCs while viewing logs.
+        ///
+        /// The `alloc_tick` arm checks both `perf_pause_rx` and `alloc_pause_rx`;
+        /// the `memory_tick` arm checks only `perf_pause_rx`.
+        perf_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
     // ─────────────────────────────────────────────────────────
@@ -954,6 +976,13 @@ pub enum Message {
         session_id: SessionId,
         network_shutdown_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
         network_task_handle: SharedTaskHandle,
+        /// Pause sender for the network polling loop.
+        ///
+        /// `true` = paused (not on Network tab), `false` = active (polling).
+        ///
+        /// Initial value is `false` (active) — the task starts when the user is
+        /// already on the Network tab, so polling should begin immediately.
+        network_pause_tx: std::sync::Arc<tokio::sync::watch::Sender<bool>>,
     },
 
     /// Network extensions not available (e.g., release mode).

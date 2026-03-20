@@ -134,6 +134,48 @@ pub struct SessionHandle {
     /// cleared on session stop or capture exit.
     pub native_log_task_handle: Option<tokio::task::JoinHandle<()>>,
 
+    /// Pause sender for the allocation profile polling arm.
+    ///
+    /// When `true` is held by the channel, `getAllocationProfile` polling is
+    /// paused (the alloc tick arm is skipped). When `false`, polling is active.
+    ///
+    /// Initial value is `true` (paused) — allocation polling starts paused
+    /// because performance monitoring begins at VM connect time, typically
+    /// before the user opens the Performance panel.
+    ///
+    /// Set by `VmServicePerformanceMonitoringStarted`, cleared on disconnect.
+    /// Sending `false` unpauses; sending `true` pauses.
+    pub alloc_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// Higher-level pause sender for the entire performance polling loop.
+    ///
+    /// When `true`, both `memory_tick` and `alloc_tick` arms are skipped —
+    /// no `getMemoryUsage`, `getIsolate`, or `getAllocationProfile` RPCs fire.
+    /// When `false`, polling is active and subject to `alloc_pause_tx` for the
+    /// allocation arm.
+    ///
+    /// Initial value is `true` (paused) — monitoring starts at VM connect time,
+    /// before the user opens DevTools.
+    ///
+    /// Set by `VmServicePerformanceMonitoringStarted`, cleared on disconnect.
+    /// Sending `false` unpauses (user entered DevTools); `true` pauses (user left).
+    pub perf_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
+    /// Pause sender for the network monitoring polling loop.
+    ///
+    /// When `true`, the `poll_tick` arm of the network polling loop is skipped —
+    /// no `getHttpProfile` RPCs fire. When `false`, polling is active.
+    ///
+    /// Initial value is `false` (active) — unlike `perf_pause` and `alloc_pause`,
+    /// network monitoring only starts when the user is already on the Network tab,
+    /// so polling should begin immediately without a separate unpause signal.
+    ///
+    /// Set by `VmServiceNetworkMonitoringStarted`, cleared on disconnect.
+    /// Sending `true` pauses (user left Network tab or exited DevTools);
+    /// `false` unpauses (user switched back to Network tab or entered DevTools
+    /// with Network as the default panel).
+    pub network_pause_tx: Option<std::sync::Arc<tokio::sync::watch::Sender<bool>>>,
+
     /// Per-session native log tag discovery and visibility state.
     ///
     /// Tracks every distinct tag seen in this session's native log stream
@@ -171,6 +213,9 @@ impl std::fmt::Debug for SessionHandle {
                 "has_native_log_task",
                 &self.native_log_task_handle.is_some(),
             )
+            .field("has_alloc_pause", &self.alloc_pause_tx.is_some())
+            .field("has_perf_pause", &self.perf_pause_tx.is_some())
+            .field("has_network_pause", &self.network_pause_tx.is_some())
             .field("native_tag_count", &self.native_tag_state.tag_count())
             .field("custom_source_count", &self.custom_source_handles.len())
             .finish()
@@ -195,6 +240,9 @@ impl SessionHandle {
             debug_task_handle: None,
             native_log_shutdown_tx: None,
             native_log_task_handle: None,
+            alloc_pause_tx: None,
+            perf_pause_tx: None,
+            network_pause_tx: None,
             native_tag_state: NativeTagState::default(),
             custom_source_handles: Vec::new(),
         }

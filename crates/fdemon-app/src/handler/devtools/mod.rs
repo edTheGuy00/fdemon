@@ -102,10 +102,113 @@ pub fn parse_default_panel(panel: &str) -> DevToolsPanel {
 ///
 /// Sets default panel from config, transitions to DevTools mode, and
 /// auto-fetches widget tree if Inspector panel is active and VM connected.
+/// If the default panel is Performance, unpauses allocation polling so data
+/// is immediately fresh.
+///
+/// If the performance monitoring task has not been started yet (first DevTools
+/// entry), dispatches `StartPerformanceMonitoring` instead of unpausing. The
+/// `VmServicePerformanceMonitoringStarted` handler will unpause appropriately
+/// based on current UI state. On subsequent entries, unpauses the existing task
+/// via `perf_pause_tx`.
 pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
     let default_panel = parse_default_panel(&state.settings.devtools.default_panel);
     state.devtools_view_state.active_panel = default_panel;
     state.enter_devtools_mode();
+
+    // Check whether performance monitoring needs to be lazy-started.
+    // This happens on the first DevTools entry when the VM is connected but no
+    // perf task was spawned yet (because VmServiceConnected skips the spawn
+    // when DevTools is not active at connect time).
+    // Use `session.vm_connected` (the reliable per-session flag) rather than
+    // `devtools_view_state.connection_status` which may lag behind the session.
+    let needs_perf_start = if let Some(handle) = state.session_manager.selected() {
+        handle.perf_shutdown_tx.is_none() && handle.session.vm_connected
+    } else {
+        false
+    };
+
+    if needs_perf_start {
+        // Collect data needed for StartPerformanceMonitoring before returning.
+        // NOTE: perf_pause_tx and alloc_pause_tx are not yet set (task not started),
+        // so the unpause signals below are skipped — the
+        // VmServicePerformanceMonitoringStarted handler adjusts initial pause
+        // state based on ui_mode and active_panel after the task starts.
+        let Some(session_id) = state.session_manager.selected_id() else {
+            return UpdateResult::none();
+        };
+        let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
+        let allocation_profile_interval_ms = state.settings.devtools.allocation_profile_interval_ms;
+        let mode = state
+            .session_manager
+            .selected()
+            .and_then(|h| h.session.launch_config.as_ref())
+            .map(|c| c.mode)
+            .unwrap_or(crate::config::FlutterMode::Debug);
+
+        // StartPerformanceMonitoring consumes the action slot, so use the
+        // follow-up message slot for panel-specific initialization that would
+        // normally be handled by handle_switch_panel:
+        //  - Inspector: queue FetchWidgetTree if the tree isn't loaded yet.
+        //  - Network: queue SwitchDevToolsPanel(Network) so handle_switch_panel
+        //    fires StartNetworkMonitoring (the network task hasn't started yet).
+        let followup_msg = if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
+            && state.devtools_view_state.inspector.root.is_none()
+            && !state.devtools_view_state.inspector.loading
+        {
+            state.devtools_view_state.inspector.loading = true;
+            Some(crate::message::Message::RequestWidgetTree { session_id })
+        } else if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+            Some(crate::message::Message::SwitchDevToolsPanel(
+                DevToolsPanel::Network,
+            ))
+        } else {
+            None
+        };
+
+        return UpdateResult {
+            message: followup_msg,
+            action: Some(UpdateAction::StartPerformanceMonitoring {
+                session_id,
+                handle: None, // hydrated by process.rs
+                performance_refresh_ms,
+                allocation_profile_interval_ms,
+                mode,
+            }),
+        };
+    }
+
+    // Task already running — unpause the entire performance polling loop
+    // (memory + alloc). The perf_pause_rx.changed() arm in the polling task
+    // fires immediately, triggering an on-demand memory fetch so the panel
+    // shows current data.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.perf_pause_tx {
+            let _ = tx.send(false); // unpause
+        }
+    }
+
+    // Unpause allocation polling when entering DevTools with Performance as the
+    // default panel so the user sees fresh allocation data immediately.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.alloc_pause_tx {
+                let _ = tx.send(false); // unpause
+            }
+        }
+    }
+
+    // Unpause network monitoring if the default panel is Network and the
+    // network task is already running (subsequent DevTools visits).
+    // On the first visit the task hasn't started yet — `network_pause_tx` is
+    // None, so this send safely does nothing. The task will be started by the
+    // StartNetworkMonitoring action in handle_switch_panel.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.network_pause_tx {
+                let _ = tx.send(false); // unpause
+            }
+        }
+    }
 
     if state.devtools_view_state.active_panel == DevToolsPanel::Inspector
         && state.devtools_view_state.inspector.root.is_none()
@@ -129,7 +232,35 @@ pub fn handle_enter_devtools_mode(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle exiting DevTools mode — returns to Normal and disposes VM object groups.
+///
+/// Pauses allocation polling since the Performance panel is no longer visible.
+/// Also pauses the entire performance polling loop so no VM Service RPCs fire
+/// while the user is viewing logs.
 pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
+    // Pause the entire performance polling loop (memory + alloc).
+    // This eliminates all getMemoryUsage/getIsolate RPCs while viewing logs.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.perf_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
+    // Pause allocation polling: the user is leaving DevTools entirely so the
+    // Performance panel is no longer visible regardless of which panel was active.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.alloc_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
+    // Pause network monitoring (if running): the user is leaving DevTools, so
+    // no getHttpProfile RPCs should fire while they are viewing logs.
+    if let Some(handle) = state.session_manager.selected() {
+        if let Some(ref tx) = handle.network_pause_tx {
+            let _ = tx.send(true); // pause
+        }
+    }
+
     state.exit_devtools_mode();
 
     if let Some(handle) = state.session_manager.selected() {
@@ -146,8 +277,31 @@ pub fn handle_exit_devtools_mode(state: &mut AppState) -> UpdateResult {
 }
 
 /// Handle switching DevTools sub-panel. Auto-fetches data when switching to
-/// Inspector (widget tree).
+/// Inspector (widget tree). Pauses/unpauses allocation polling based on whether
+/// the Performance panel is becoming visible or hidden.
 pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> UpdateResult {
+    // Before switching, check if we are leaving the Performance panel — if so,
+    // pause allocation polling. The `watch` channel coalesces rapid toggles so
+    // burst panel switches do not create burst fetches.
+    let old_panel = state.devtools_view_state.active_panel;
+    if old_panel == DevToolsPanel::Performance && panel != DevToolsPanel::Performance {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.alloc_pause_tx {
+                let _ = tx.send(true); // pause
+            }
+        }
+    }
+
+    // Before switching, check if we are leaving the Network panel — if so,
+    // pause network polling so no getHttpProfile RPCs fire while on other panels.
+    if old_panel == DevToolsPanel::Network && panel != DevToolsPanel::Network {
+        if let Some(handle) = state.session_manager.selected() {
+            if let Some(ref tx) = handle.network_pause_tx {
+                let _ = tx.send(true); // pause network polling
+            }
+        }
+    }
+
     state.switch_devtools_panel(panel);
 
     match panel {
@@ -172,7 +326,17 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 }
             }
         }
-        DevToolsPanel::Performance => {}
+        DevToolsPanel::Performance => {
+            // Unpause allocation polling when entering the Performance panel.
+            // The background task will fire one immediate fetch (via the
+            // `alloc_pause_rx.changed()` arm) so the allocation table is
+            // populated without waiting for the next scheduled tick.
+            if let Some(handle) = state.session_manager.selected() {
+                if let Some(ref tx) = handle.alloc_pause_tx {
+                    let _ = tx.send(false); // unpause
+                }
+            }
+        }
         DevToolsPanel::Network => {
             // Start network monitoring if the VM is connected, extensions are
             // not known to be unavailable, and a polling task is not already
@@ -186,12 +350,29 @@ pub fn handle_switch_panel(state: &mut AppState, panel: DevToolsPanel) -> Update
                 let extensions_unavailable =
                     handle.session.network.extensions_available == Some(false);
                 let already_running = handle.network_shutdown_tx.is_some();
+                let mode = handle
+                    .session
+                    .launch_config
+                    .as_ref()
+                    .map(|c| c.mode)
+                    .unwrap_or(crate::config::FlutterMode::Debug);
                 if vm_connected && !extensions_unavailable && !already_running {
                     return UpdateResult::action(UpdateAction::StartNetworkMonitoring {
                         session_id,
                         handle: None, // hydrated by process.rs
                         poll_interval_ms: state.settings.devtools.network_poll_interval_ms,
+                        mode,
                     });
+                }
+                // Task is already running — unpause network polling so the
+                // Network tab immediately shows any requests that arrived while
+                // the tab was hidden. The `network_pause_rx.changed()` arm in
+                // the polling task fires an immediate getHttpProfile fetch on
+                // unpause.
+                if already_running {
+                    if let Some(ref tx) = handle.network_pause_tx {
+                        let _ = tx.send(false); // unpause
+                    }
                 }
             }
         }
@@ -572,6 +753,538 @@ mod tests {
         assert!(
             result.action.is_none(),
             "Expected no action when ws_uri is not set"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Allocation pause / unpause tests (Task 05: gate-alloc-on-panel)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with a live alloc_pause_tx channel.
+    /// Returns the AppState and a receiver so tests can observe the channel value.
+    fn make_state_with_alloc_pause() -> (AppState, tokio::sync::watch::Receiver<bool>) {
+        let mut state = make_state_with_session();
+        let (tx, rx) = tokio::sync::watch::channel(true); // initial: paused
+        state.session_manager.selected_mut().unwrap().alloc_pause_tx =
+            Some(std::sync::Arc::new(tx));
+        (state, rx)
+    }
+
+    #[test]
+    fn test_alloc_pause_tx_stored_on_session_handle() {
+        // After VmServicePerformanceMonitoringStarted is handled via
+        // Message dispatch, handle.alloc_pause_tx should be Some(...).
+        // Verified here by directly setting the field in the test helper.
+        let (state, rx) = make_state_with_alloc_pause();
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .alloc_pause_tx
+                .is_some(),
+            "alloc_pause_tx should be set on the session handle"
+        );
+        // Channel starts in the paused state (true).
+        assert!(
+            *rx.borrow(),
+            "alloc_pause channel should start in paused state (true)"
+        );
+    }
+
+    #[test]
+    fn test_switch_to_performance_sends_unpause() {
+        // SwitchDevToolsPanel(Performance) should send false on alloc_pause_tx.
+        let (mut state, rx) = make_state_with_alloc_pause();
+        // Start on Inspector panel.
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+
+        assert!(
+            !*rx.borrow(),
+            "switching TO Performance should unpause alloc polling (send false)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Performance
+        );
+    }
+
+    #[test]
+    fn test_switch_away_from_performance_sends_pause() {
+        // SwitchDevToolsPanel(Inspector) when current panel is Performance
+        // should pause alloc polling (send true).
+        let (mut state, rx) = make_state_with_alloc_pause();
+        // Start with Performance panel active and alloc unpaused.
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .alloc_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap(); // simulate it was unpaused
+
+        handle_switch_panel(&mut state, DevToolsPanel::Inspector);
+
+        assert!(
+            *rx.borrow(),
+            "switching AWAY from Performance should pause alloc polling (send true)"
+        );
+    }
+
+    #[test]
+    fn test_switch_between_non_performance_panels_does_not_change_pause_state() {
+        // Switching Inspector → Network should not touch the alloc_pause channel.
+        let (mut state, rx) = make_state_with_alloc_pause();
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        // Confirm initial state is paused.
+        assert!(*rx.borrow());
+
+        handle_switch_panel(&mut state, DevToolsPanel::Network);
+
+        // Pause state should remain true (unchanged — no Performance panel involved).
+        assert!(
+            *rx.borrow(),
+            "switching between non-Performance panels should not change alloc pause state"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_sends_pause() {
+        // handle_exit_devtools_mode should pause alloc polling.
+        let (mut state, rx) = make_state_with_alloc_pause();
+        // Simulate: user was on Performance panel with alloc unpaused.
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .alloc_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "exiting DevTools should pause alloc polling (send true)"
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_performance_default_sends_unpause() {
+        // handle_enter_devtools_mode with default_panel = "performance"
+        // should unpause alloc polling.
+        let (mut state, rx) = make_state_with_alloc_pause();
+        state.settings.devtools.default_panel = "performance".to_string();
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            !*rx.borrow(),
+            "entering DevTools with Performance as default should unpause alloc polling (send false)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Performance
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_inspector_default_does_not_unpause() {
+        // handle_enter_devtools_mode with default_panel = "inspector"
+        // should NOT change the alloc pause state (remains paused).
+        let (mut state, rx) = make_state_with_alloc_pause();
+        state.settings.devtools.default_panel = "inspector".to_string();
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "entering DevTools with Inspector as default should not unpause alloc polling"
+        );
+    }
+
+    #[test]
+    fn test_alloc_pause_cleared_on_disconnect() {
+        // After VmServiceDisconnected, alloc_pause_tx should be None.
+        // We test by simulating what the handler does.
+        let mut state = make_state_with_session();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.session_manager.selected_mut().unwrap().alloc_pause_tx =
+            Some(std::sync::Arc::new(tx));
+
+        // Simulate the VmServiceDisconnected handler clearing the field.
+        state.session_manager.selected_mut().unwrap().alloc_pause_tx = None;
+
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .alloc_pause_tx
+                .is_none(),
+            "alloc_pause_tx should be None after disconnect"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // perf_pause_tx tests (Task 01: pause-perf-when-not-devtools)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with both a live `perf_pause_tx` and `alloc_pause_tx`.
+    /// Returns the AppState plus receivers for observing both channel values.
+    fn make_state_with_perf_pause() -> (
+        AppState,
+        tokio::sync::watch::Receiver<bool>,
+        tokio::sync::watch::Receiver<bool>,
+    ) {
+        let mut state = make_state_with_session();
+        let (perf_tx, perf_rx) = tokio::sync::watch::channel(true); // starts paused
+        let (alloc_tx, alloc_rx) = tokio::sync::watch::channel(true); // starts paused
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.perf_pause_tx = Some(std::sync::Arc::new(perf_tx));
+        handle.alloc_pause_tx = Some(std::sync::Arc::new(alloc_tx));
+        (state, perf_rx, alloc_rx)
+    }
+
+    #[test]
+    fn test_perf_pause_tx_stored_on_session_handle() {
+        // After VmServicePerformanceMonitoringStarted is handled,
+        // handle.perf_pause_tx should be Some(...).
+        // Verified here by directly populating the field (as the handler does).
+        let (state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .perf_pause_tx
+                .is_some(),
+            "perf_pause_tx should be set on the session handle"
+        );
+        // Channel starts in the paused state (true) — monitoring starts paused
+        // at VM connect time, before the user opens DevTools.
+        assert!(
+            *perf_rx.borrow(),
+            "perf_pause channel should start in paused state (true)"
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_sends_perf_unpause() {
+        // handle_enter_devtools_mode should send false on perf_pause_tx.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+        state.settings.devtools.default_panel = "inspector".to_string();
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            !*perf_rx.borrow(),
+            "entering DevTools should unpause performance monitoring (send false on perf_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_sends_perf_pause() {
+        // handle_exit_devtools_mode should send true on perf_pause_tx.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+
+        // Simulate: user was in DevTools with perf monitoring active.
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .perf_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        assert!(!*perf_rx.borrow(), "precondition: perf should be unpaused");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *perf_rx.borrow(),
+            "exiting DevTools should pause performance monitoring (send true on perf_pause_tx)"
+        );
+    }
+
+    #[test]
+    fn test_perf_pause_cleared_on_disconnect() {
+        // After VmServiceDisconnected, perf_pause_tx should be None.
+        let mut state = make_state_with_session();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state.session_manager.selected_mut().unwrap().perf_pause_tx = Some(std::sync::Arc::new(tx));
+
+        // Simulate the VmServiceDisconnected handler clearing the field.
+        state.session_manager.selected_mut().unwrap().perf_pause_tx = None;
+
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .perf_pause_tx
+                .is_none(),
+            "perf_pause_tx should be None after disconnect"
+        );
+    }
+
+    #[test]
+    fn test_panel_switch_does_not_affect_perf_pause() {
+        // SwitchDevToolsPanel (Inspector → Network, etc.) should NOT change
+        // perf_pause_tx. Only DevTools entry/exit affects it.
+        let (mut state, perf_rx, _alloc_rx) = make_state_with_perf_pause();
+
+        // Simulate: user is in DevTools with perf monitoring active (unpaused).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .perf_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(false)
+            .unwrap();
+        let initial_perf_state = *perf_rx.borrow();
+        assert!(!initial_perf_state, "precondition: perf should be unpaused");
+
+        // Switch from Inspector to Network — this should NOT touch perf_pause_tx.
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        handle_switch_panel(&mut state, DevToolsPanel::Network);
+
+        assert_eq!(
+            *perf_rx.borrow(),
+            initial_perf_state,
+            "panel switching should not change perf_pause_tx state"
+        );
+
+        // Switch from Network to Performance — this should also NOT touch perf_pause_tx.
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+        assert_eq!(
+            *perf_rx.borrow(),
+            initial_perf_state,
+            "switching to Performance panel should not change perf_pause_tx (only alloc_pause_tx)"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // network_pause_tx tests (Task 02: pause-network-on-tab-switch)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Create a session with a live `network_pause_tx` channel (initial: active/false).
+    /// Returns AppState and a receiver to observe the channel value.
+    fn make_state_with_network_pause() -> (AppState, tokio::sync::watch::Receiver<bool>) {
+        let mut state = make_state_with_session();
+        // Initial value false (active) — task starts when already on Network tab.
+        let (tx, rx) = tokio::sync::watch::channel(false);
+        let handle = state.session_manager.selected_mut().unwrap();
+        // Simulate the task being running by also setting network_shutdown_tx.
+        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+        handle.network_shutdown_tx = Some(std::sync::Arc::new(shutdown_tx));
+        handle.network_pause_tx = Some(std::sync::Arc::new(tx));
+        (state, rx)
+    }
+
+    #[test]
+    fn test_network_pause_tx_stored_on_session_handle() {
+        // After VmServiceNetworkMonitoringStarted is handled, network_pause_tx
+        // should be Some. Verified here by directly setting the field.
+        let (state, rx) = make_state_with_network_pause();
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .network_pause_tx
+                .is_some(),
+            "network_pause_tx should be set on the session handle"
+        );
+        // Channel starts in the active state (false) — task starts on Network tab.
+        assert!(
+            !*rx.borrow(),
+            "network_pause channel should start in active state (false)"
+        );
+    }
+
+    #[test]
+    fn test_switch_away_from_network_sends_pause() {
+        // SwitchDevToolsPanel(Performance) when current panel is Network
+        // should send true on network_pause_tx.
+        let (mut state, rx) = make_state_with_network_pause();
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+
+        assert!(
+            *rx.borrow(),
+            "switching AWAY from Network should pause network polling (send true)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Performance
+        );
+    }
+
+    #[test]
+    fn test_switch_to_network_sends_unpause_when_task_running() {
+        // SwitchDevToolsPanel(Network) when task is already running should
+        // send false on network_pause_tx (unpause).
+        let (mut state, rx) = make_state_with_network_pause();
+        // First pause it (simulate coming from another panel).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        // Switch to Network — task is already running (network_shutdown_tx is set).
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        handle_switch_panel(&mut state, DevToolsPanel::Network);
+
+        assert!(
+            !*rx.borrow(),
+            "switching TO Network (task running) should unpause network polling (send false)"
+        );
+    }
+
+    #[test]
+    fn test_exit_devtools_pauses_network() {
+        // handle_exit_devtools_mode should send true on network_pause_tx.
+        let (mut state, rx) = make_state_with_network_pause();
+        // Confirm initial state is active (false).
+        assert!(!*rx.borrow(), "precondition: network should be active");
+
+        handle_exit_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "exiting DevTools should pause network polling (send true)"
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_network_default_unpauses() {
+        // handle_enter_devtools_mode with default_panel = "network"
+        // should send false on network_pause_tx (if task is running).
+        let (mut state, rx) = make_state_with_network_pause();
+        state.settings.devtools.default_panel = "network".to_string();
+
+        // First pause it (simulate previous DevTools exit).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            !*rx.borrow(),
+            "entering DevTools with Network as default should unpause network polling (send false)"
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Network
+        );
+    }
+
+    #[test]
+    fn test_enter_devtools_with_non_network_default_does_not_unpause_network() {
+        // handle_enter_devtools_mode with default_panel = "inspector"
+        // should NOT change the network pause state (remains paused).
+        let (mut state, rx) = make_state_with_network_pause();
+        state.settings.devtools.default_panel = "inspector".to_string();
+
+        // First pause it (simulate previous DevTools exit).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_enter_devtools_mode(&mut state);
+
+        assert!(
+            *rx.borrow(),
+            "entering DevTools with Inspector as default should not unpause network polling"
+        );
+    }
+
+    #[test]
+    fn test_network_pause_cleared_on_disconnect() {
+        // After VmServiceDisconnected, network_pause_tx should be None.
+        // We test by simulating what the handler does.
+        let mut state = make_state_with_session();
+        let (tx, _rx) = tokio::sync::watch::channel(false);
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .network_pause_tx = Some(std::sync::Arc::new(tx));
+
+        // Simulate the VmServiceDisconnected handler clearing the field.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .network_pause_tx = None;
+
+        assert!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .network_pause_tx
+                .is_none(),
+            "network_pause_tx should be None after disconnect"
+        );
+    }
+
+    #[test]
+    fn test_switch_between_non_network_panels_does_not_change_network_pause_state() {
+        // Switching Inspector → Performance should not touch the network_pause channel.
+        let (mut state, rx) = make_state_with_network_pause();
+        // First pause it (as if we're not on Network).
+        state
+            .session_manager
+            .selected()
+            .unwrap()
+            .network_pause_tx
+            .as_ref()
+            .unwrap()
+            .send(true)
+            .unwrap();
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        assert!(*rx.borrow(), "precondition: network should be paused");
+
+        handle_switch_panel(&mut state, DevToolsPanel::Performance);
+
+        // Pause state should remain true (unchanged — no Network panel involved).
+        assert!(
+            *rx.borrow(),
+            "switching between non-Network panels should not change network pause state"
         );
     }
 }

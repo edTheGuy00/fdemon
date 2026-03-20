@@ -1310,6 +1310,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
             let allocation_profile_interval_ms =
                 state.settings.devtools.allocation_profile_interval_ms;
+            let mode = state
+                .session_manager
+                .get(session_id)
+                .and_then(|h| h.session.launch_config.as_ref())
+                .map(|c| c.mode)
+                .unwrap_or(crate::config::FlutterMode::Debug);
             let auto_repaint_rainbow = state.settings.devtools.auto_repaint_rainbow;
             let auto_performance_overlay = state.settings.devtools.auto_performance_overlay;
 
@@ -1324,6 +1330,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.perf_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the old alloc-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.alloc_pause_tx = None;
+                // Clear the old perf-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.perf_pause_tx = None;
                 // Clean up any existing network monitoring task for the same reason.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1331,6 +1343,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.network_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the network-pause sender — a new one will arrive with
+                // the next VmServiceNetworkMonitoringStarted message.
+                handle.network_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1390,17 +1405,28 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             let follow_up_msg = widget_tree_follow_up.or(auto_overlay_follow_up);
 
-            // Start performance monitoring for this session.
+            // Start performance monitoring only when DevTools is already active.
+            // When the user is viewing logs (Normal mode), the monitoring task
+            // is not spawned at all — zero overhead until DevTools is opened.
+            // handle_enter_devtools_mode will start it lazily on first entry.
             // process.rs will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            UpdateResult {
-                message: follow_up_msg,
-                action: Some(UpdateAction::StartPerformanceMonitoring {
-                    session_id,
-                    handle: None, // hydrated by process.rs
-                    performance_refresh_ms,
-                    allocation_profile_interval_ms,
-                }),
+            if state.ui_mode == UiMode::DevTools {
+                UpdateResult {
+                    message: follow_up_msg,
+                    action: Some(UpdateAction::StartPerformanceMonitoring {
+                        session_id,
+                        handle: None, // hydrated by process.rs
+                        performance_refresh_ms,
+                        allocation_profile_interval_ms,
+                        mode,
+                    }),
+                }
+            } else {
+                UpdateResult {
+                    message: follow_up_msg,
+                    action: None,
+                }
             }
         }
 
@@ -1409,6 +1435,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             let performance_refresh_ms = state.settings.devtools.performance_refresh_ms;
             let allocation_profile_interval_ms =
                 state.settings.devtools.allocation_profile_interval_ms;
+            let mode = state
+                .session_manager
+                .get(session_id)
+                .and_then(|h| h.session.launch_config.as_ref())
+                .map(|c| c.mode)
+                .unwrap_or(crate::config::FlutterMode::Debug);
 
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 // Abort the old performance polling task before spawning a new one.
@@ -1421,6 +1453,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.perf_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the old alloc-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.alloc_pause_tx = None;
+                // Clear the old perf-pause sender — a new one will arrive with
+                // the next VmServicePerformanceMonitoringStarted message.
+                handle.perf_pause_tx = None;
                 // Abort the old network monitoring task for the same reason.
                 if let Some(h) = handle.network_task_handle.take() {
                     h.abort();
@@ -1428,6 +1466,9 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 if let Some(tx) = handle.network_shutdown_tx.take() {
                     let _ = tx.send(true);
                 }
+                // Clear the old network-pause sender — a new one will arrive
+                // if the user re-enters the Network tab after reconnect.
+                handle.network_pause_tx = None;
 
                 handle.session.vm_connected = true;
                 handle.session.add_log(fdemon_core::LogEntry::info(
@@ -1450,17 +1491,22 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     crate::state::VmConnectionStatus::Connected;
             }
 
-            // Re-subscribe to VM streams and restart performance monitoring.
-            // The old WebSocket connection's stream subscriptions are gone — the
-            // Dart VM Service requires re-subscription after a WebSocket reconnect.
+            // Re-subscribe to VM streams and restart performance monitoring only
+            // when DevTools is already active. If the user is viewing logs, the
+            // monitoring task will be started lazily when they open DevTools.
             // `process.rs` will hydrate `handle` with the VmRequestHandle from the
             // session before dispatching the action to handle_action.
-            UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
-                session_id,
-                handle: None, // hydrated by process.rs
-                performance_refresh_ms,
-                allocation_profile_interval_ms,
-            })
+            if state.ui_mode == UiMode::DevTools {
+                UpdateResult::action(UpdateAction::StartPerformanceMonitoring {
+                    session_id,
+                    handle: None, // hydrated by process.rs
+                    performance_refresh_ms,
+                    allocation_profile_interval_ms,
+                    mode,
+                })
+            } else {
+                UpdateResult::none()
+            }
         }
 
         Message::VmServiceConnectionFailed { session_id, error } => {
@@ -1519,6 +1565,15 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     let _ = tx.send(true);
                 }
                 handle.perf_shutdown_tx = None;
+                // Clear the allocation-pause sender. The polling task's
+                // alloc_pause_rx will see the sender drop and
+                // `changed()` will return an error — the shutdown arm handles
+                // the clean exit. Setting to None here signals that no
+                // Performance panel is open for this disconnected session.
+                handle.alloc_pause_tx = None;
+                // Clear the perf-pause sender. The polling task's perf_pause_rx
+                // will see the sender drop; the shutdown arm handles clean exit.
+                handle.perf_pause_tx = None;
                 handle.session.performance.monitoring_active = false;
                 // Abort the network monitoring polling task and signal it to stop.
                 if let Some(h) = handle.network_task_handle.take() {
@@ -1528,6 +1583,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                     let _ = tx.send(true);
                 }
                 handle.network_shutdown_tx = None;
+                // Clear the network-pause sender. The polling task's
+                // network_pause_rx will see the sender drop; the shutdown arm
+                // handles clean exit. Setting to None signals no Network tab
+                // is open for this disconnected session.
+                handle.network_pause_tx = None;
             }
             UpdateResult::none()
         }
@@ -1642,12 +1702,46 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             perf_shutdown_tx,
             perf_task_handle,
+            alloc_pause_tx,
+            perf_pause_tx,
         } => {
             if let Some(handle) = state.session_manager.get_mut(session_id) {
                 handle.perf_shutdown_tx = Some(perf_shutdown_tx);
                 // Take the JoinHandle out of the Arc<Mutex<Option<>>> so it is
                 // owned by the SessionHandle and can be awaited/aborted on close.
-                handle.perf_task_handle = perf_task_handle.lock().ok().and_then(|mut g| g.take());
+                handle.perf_task_handle = match perf_task_handle.lock() {
+                    Ok(mut guard) => guard.take(),
+                    Err(e) => {
+                        warn!("perf task handle mutex poisoned: {e}");
+                        e.into_inner().take()
+                    }
+                };
+                // Store the allocation-pause sender so panel-switching handlers
+                // can pause/unpause `getAllocationProfile` polling without going
+                // through the full UpdateAction machinery.
+                handle.alloc_pause_tx = Some(alloc_pause_tx);
+                // Store the higher-level perf-pause sender so DevTools entry/exit
+                // handlers can gate the entire polling loop (memory + alloc).
+                handle.perf_pause_tx = Some(perf_pause_tx);
+
+                // Adjust initial pause values based on current UI state.
+                // The polling task always starts with perf_pause = true (paused).
+                // If monitoring was lazy-started because the user entered DevTools,
+                // we must immediately unpause it so polling actually begins.
+                // Without this, the task would sit paused until the user leaves and
+                // re-enters DevTools.
+                if state.ui_mode == UiMode::DevTools {
+                    // Unpause the performance polling loop (memory + alloc timer).
+                    if let Some(ref tx) = handle.perf_pause_tx {
+                        let _ = tx.send(false);
+                    }
+                    // Unpause allocation polling only if the Performance panel is active.
+                    if state.devtools_view_state.active_panel == DevToolsPanel::Performance {
+                        if let Some(ref tx) = handle.alloc_pause_tx {
+                            let _ = tx.send(false);
+                        }
+                    }
+                }
             }
             UpdateResult::none()
         }
@@ -1854,11 +1948,13 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             session_id,
             network_shutdown_tx,
             network_task_handle,
+            network_pause_tx,
         } => devtools::network::handle_network_monitoring_started(
             state,
             session_id,
             network_shutdown_tx,
             network_task_handle,
+            network_pause_tx,
         ),
 
         Message::VmServiceNetworkExtensionsUnavailable { session_id } => {

@@ -8,3 +8,6 @@
 
 # IDE auto-generated debug configs
 **/.zed/
+
+# Claude Code worktrees
+.claude/worktrees/

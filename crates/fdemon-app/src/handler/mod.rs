@@ -38,7 +38,7 @@ pub(crate) mod update;
 #[cfg(test)]
 mod tests;
 
-use crate::config::{LaunchConfig, LoadedConfigs};
+use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::message::Message;
 use crate::session::SessionId;
 use fdemon_daemon::{Device, FlutterExecutable};
@@ -172,6 +172,10 @@ pub enum UpdateAction {
         /// Clamped to a minimum of 1000ms. `getAllocationProfile` is expensive
         /// (walks the entire Dart heap), so a lower frequency than memory polling is used.
         allocation_profile_interval_ms: u64,
+        /// Flutter build mode for this session (debug, profile, release).
+        /// Defaults to `FlutterMode::Debug` when the session has no `LaunchConfig`.
+        /// Used by the polling task to apply mode-aware interval scaling (task 04).
+        mode: FlutterMode,
     },
 
     /// Fetch the widget tree from the VM Service for the Inspector panel.
@@ -236,6 +240,10 @@ pub enum UpdateAction {
         handle: Option<fdemon_daemon::vm_service::VmRequestHandle>,
         /// Polling interval in milliseconds.
         poll_interval_ms: u64,
+        /// Flutter build mode for this session (debug, profile, release).
+        /// Defaults to `FlutterMode::Debug` when the session has no `LaunchConfig`.
+        /// Used by the polling task to apply mode-aware interval scaling (task 04).
+        mode: FlutterMode,
     },
 
     /// Fetch full detail for a specific HTTP request.
