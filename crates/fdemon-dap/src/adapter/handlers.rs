@@ -653,6 +653,12 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// `evaluateInFrame` (when a `frameId` is provided) or `evaluate` on the
     /// root library (when no `frameId` is given).
     ///
+    /// # Magic expressions
+    ///
+    /// `$_threadException` — Returns the current exception when the isolate is
+    /// paused at an exception. The returned value includes a `variablesReference`
+    /// so that the IDE can expand the exception's fields.
+    ///
     /// # Error Handling
     ///
     /// - No paused isolate → DAP error response
@@ -660,6 +666,20 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// - VM Service error → DAP error response with the error message
     pub(super) async fn handle_evaluate(&mut self, request: &DapRequest) -> DapResponse {
         tracing::debug!("DAP adapter: evaluate");
+
+        // Intercept the `$_threadException` magic expression before delegating
+        // to the standard evaluation path. The adapter resolves it directly from
+        // the stored exception ref so no VM round-trip is needed.
+        if let Some(args) = request.arguments.as_ref() {
+            let expression = args
+                .get("expression")
+                .and_then(|e| e.as_str())
+                .unwrap_or("");
+            if expression == "$_threadException" {
+                return self.handle_evaluate_thread_exception(request);
+            }
+        }
+
         let paused = self.most_recent_paused_isolate().map(|s| s.to_string());
         crate::adapter::evaluate::handle_evaluate(
             &self.backend,
@@ -669,6 +689,60 @@ impl<B: DebugBackend> DapAdapter<B> {
             request,
         )
         .await
+    }
+
+    /// Handle the `$_threadException` magic evaluate expression.
+    ///
+    /// Returns the current exception `InstanceRef` for the most recently
+    /// paused isolate. The result includes a non-zero `variablesReference`
+    /// so the IDE can expand the exception's fields.
+    ///
+    /// Returns an error response if no exception is currently stored
+    /// (i.e., the isolate is not paused at an exception).
+    fn handle_evaluate_thread_exception(&mut self, request: &DapRequest) -> DapResponse {
+        // Find the most recently paused isolate's thread ID.
+        let thread_id = self
+            .most_recent_paused_isolate()
+            .and_then(|iso| self.thread_map.thread_id_for(iso));
+
+        let thread_id = match thread_id {
+            Some(tid) => tid,
+            None => {
+                return DapResponse::error(
+                    request,
+                    "$_threadException: no paused isolate available",
+                )
+            }
+        };
+
+        let exc = match self.exception_refs.get(&thread_id) {
+            Some(e) => e,
+            None => {
+                return DapResponse::error(request, "$_threadException: not paused at an exception")
+            }
+        };
+
+        // Format the exception value using the instance_ref_to_variable helper.
+        let class_name = exc
+            .instance_ref
+            .get("classRef")
+            .or_else(|| exc.instance_ref.get("class"))
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("Exception")
+            .to_string();
+        let instance_ref = exc.instance_ref.clone();
+        let isolate_id = exc.isolate_id.clone();
+
+        // Convert to a DapVariable to get both display value and variablesReference.
+        let var = self.instance_ref_to_variable(&class_name, &instance_ref, &isolate_id);
+
+        let body = serde_json::json!({
+            "result": var.value,
+            "type": var.type_field,
+            "variablesReference": var.variables_reference,
+        });
+        DapResponse::success(request, Some(body))
     }
 
     /// Handle the `source` DAP request.

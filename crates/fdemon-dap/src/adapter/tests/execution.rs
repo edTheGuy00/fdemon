@@ -242,6 +242,7 @@ async fn test_paused_exception_emits_exception_reason() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Exception,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
     let msg = rx.try_recv().expect("Expected stopped event");
@@ -262,6 +263,7 @@ async fn test_paused_step_emits_step_reason() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Step,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
     let msg = rx.try_recv().expect("Expected stopped event");
@@ -280,6 +282,7 @@ async fn test_paused_interrupted_emits_pause_reason() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Interrupted,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
     let msg = rx.try_recv().expect("Expected stopped event");
@@ -317,6 +320,7 @@ async fn test_stopped_event_includes_all_threads_stopped() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
     let msg = rx.try_recv().expect("Expected stopped event");

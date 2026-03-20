@@ -12,6 +12,7 @@ mod breakpoints;
 mod conditional_breakpoints;
 mod custom_events;
 mod events_logging;
+mod exception_scope;
 mod execution;
 mod hot_operations;
 mod logpoints;

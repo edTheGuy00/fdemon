@@ -192,6 +192,12 @@ pub enum ScopeKind {
     Locals,
     /// Module-level (global) variables.
     Globals,
+    /// The current exception when paused at an exception.
+    ///
+    /// This scope appears only when the isolate is paused at a
+    /// `PauseException` event. It contains a single variable (the exception
+    /// object) that can be expanded to inspect its fields.
+    Exceptions,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

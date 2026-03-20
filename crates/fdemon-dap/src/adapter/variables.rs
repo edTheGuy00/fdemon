@@ -171,7 +171,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             scope_kind: ScopeKind::Globals,
         });
 
-        let scopes = vec![
+        let mut scopes = vec![
             DapScope {
                 name: "Locals".to_string(),
                 presentation_hint: Some("locals".to_string()),
@@ -191,6 +191,27 @@ impl<B: DebugBackend> DapAdapter<B> {
                 expensive: true, // Globals can be large — flag for lazy loading.
             },
         ];
+
+        // Conditionally add an "Exceptions" scope when the thread is paused
+        // at an exception. The scope contains a single variable (the exception
+        // object) that can be expanded to inspect its fields.
+        let thread_id = self.thread_map.thread_id_for(&frame_ref.isolate_id);
+        if let Some(tid) = thread_id {
+            if self.exception_refs.contains_key(&tid) {
+                let exc_ref = self.var_store.allocate(VariableRef::Scope {
+                    frame_index: frame_ref.frame_index,
+                    scope_kind: ScopeKind::Exceptions,
+                });
+                scopes.push(DapScope {
+                    name: "Exceptions".to_string(),
+                    presentation_hint: Some("locals".to_string()),
+                    variables_reference: exc_ref,
+                    named_variables: None,
+                    indexed_variables: None,
+                    expensive: false,
+                });
+            }
+        }
 
         let body = serde_json::json!({ "scopes": scopes });
         DapResponse::success(request, Some(body))
@@ -299,6 +320,45 @@ impl<B: DebugBackend> DapAdapter<B> {
         scope_kind: ScopeKind,
     ) -> Result<Vec<DapVariable>, String> {
         match scope_kind {
+            ScopeKind::Exceptions => {
+                // Look up the isolate ID and derive the thread ID for this frame.
+                let isolate_id = self
+                    .frame_store
+                    .lookup_by_index(frame_index)
+                    .map(|fr| fr.isolate_id.clone())
+                    .ok_or_else(|| {
+                        format!("Frame index {} not found in frame store", frame_index)
+                    })?;
+
+                let thread_id = self
+                    .thread_map
+                    .thread_id_for(&isolate_id)
+                    .ok_or_else(|| format!("No thread found for isolate '{}'", isolate_id))?;
+
+                if let Some(exc) = self.exception_refs.get(&thread_id) {
+                    // Extract the class name from the exception InstanceRef.
+                    // The VM wire format may use "classRef" (serde camelCase) or
+                    // "class" (raw get_object path); try both for resilience.
+                    let class_name = exc
+                        .instance_ref
+                        .get("classRef")
+                        .or_else(|| exc.instance_ref.get("class"))
+                        .and_then(|c| c.get("name"))
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("Exception")
+                        .to_string();
+                    let instance_ref = exc.instance_ref.clone();
+                    let isolate_id_clone = exc.isolate_id.clone();
+                    let var = self.instance_ref_to_variable(
+                        &class_name,
+                        &instance_ref,
+                        &isolate_id_clone,
+                    );
+                    Ok(vec![var])
+                } else {
+                    Ok(Vec::new())
+                }
+            }
             ScopeKind::Locals => {
                 // Look up the isolate ID for this frame.
                 let isolate_id = self

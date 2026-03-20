@@ -87,6 +87,13 @@ pub enum DebugEvent {
         ///
         /// `None` for non-breakpoint pauses (exceptions, steps, interrupts).
         breakpoint_id: Option<String>,
+        /// The exception `InstanceRef` when the pause reason is
+        /// [`PauseReason::Exception`]. The Dart VM Service includes this in
+        /// `PauseException` events so the adapter can surface it as an
+        /// "Exceptions" scope.
+        ///
+        /// `None` for non-exception pauses.
+        exception: Option<serde_json::Value>,
     },
     /// An isolate resumed execution.
     Resumed {

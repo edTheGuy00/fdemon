@@ -83,6 +83,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 isolate_id,
                 reason,
                 breakpoint_id,
+                exception,
             } => {
                 let thread_id = self.thread_map.get_or_create(&isolate_id);
                 let reason_str = pause_reason_to_dap_str(&reason);
@@ -213,7 +214,23 @@ impl<B: DebugBackend> DapAdapter<B> {
                 // Remove any prior entry for this isolate, then push to back
                 // so that the most recently paused isolate is last.
                 self.paused_isolates.retain(|id| id != &isolate_id);
-                self.paused_isolates.push(isolate_id);
+                self.paused_isolates.push(isolate_id.clone());
+
+                // Store the exception InstanceRef when paused at an exception.
+                // Cleared on resume via on_resume(). Used by handle_scopes to
+                // conditionally include an "Exceptions" scope.
+                if reason == PauseReason::Exception {
+                    if let Some(exc_value) = exception {
+                        self.exception_refs.insert(
+                            thread_id,
+                            crate::adapter::ExceptionRef {
+                                isolate_id: isolate_id.clone(),
+                                instance_ref: exc_value,
+                            },
+                        );
+                    }
+                }
+
                 let body = serde_json::json!({
                     "reason": reason_str,
                     "threadId": thread_id,
@@ -227,6 +244,9 @@ impl<B: DebugBackend> DapAdapter<B> {
                     tracing::debug!("Isolate resumed: {} (thread {})", isolate_id, thread_id);
                     // Remove the isolate from the paused set.
                     self.paused_isolates.retain(|id| id != &isolate_id);
+                    // Clear the exception ref for this thread — exception data is
+                    // only valid while the isolate is stopped.
+                    self.exception_refs.remove(&thread_id);
                     self.on_resume();
                     let body = serde_json::json!({
                         "threadId": thread_id,

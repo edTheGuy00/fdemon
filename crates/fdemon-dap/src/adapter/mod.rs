@@ -67,6 +67,18 @@ use types::EVENT_CHANNEL_CAPACITY;
 // DapAdapter
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Stores the exception `InstanceRef` captured when an isolate pauses at an
+/// exception (`PauseException` event).
+///
+/// Keyed by DAP thread ID. Cleared when the isolate resumes.
+#[derive(Debug, Clone)]
+pub struct ExceptionRef {
+    /// The Dart VM isolate ID that owns the exception.
+    pub isolate_id: String,
+    /// The raw `InstanceRef` JSON from the VM Service `PauseException` event.
+    pub instance_ref: serde_json::Value,
+}
+
 /// The core DAP adapter that translates between DAP protocol and VM Service.
 ///
 /// Each `DapAdapter` instance is bound to a single DAP client session and
@@ -150,6 +162,15 @@ pub struct DapAdapter<B: DebugBackend> {
     /// backend calls. This prevents spurious errors when the IDE continues
     /// sending requests after the app exits.
     vm_disconnected: bool,
+
+    /// Exception references keyed by DAP thread ID.
+    ///
+    /// Populated when an isolate pauses at a `PauseException` event and the
+    /// event carries an `exception` `InstanceRef`. Cleared when the isolate
+    /// resumes via [`DapAdapter::on_resume`]. Used by [`handle_scopes`] to
+    /// conditionally include an "Exceptions" scope, and by [`handle_evaluate`]
+    /// to support the `$_threadException` magic expression.
+    pub exception_refs: HashMap<i64, ExceptionRef>,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -188,6 +209,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             paused_isolates: Vec::new(),
             source_reference_store: SourceReferenceStore::new(),
             vm_disconnected: false,
+            exception_refs: HashMap::new(),
         };
         (adapter, ())
     }
