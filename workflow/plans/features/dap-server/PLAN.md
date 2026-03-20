@@ -67,17 +67,28 @@ The Debug Adapter Protocol is a JSON-based protocol with a `Content-Length` head
 | `pause` | `pause(isolateId)` |
 | `threads` | `getVM()` → map isolates to threads |
 | `stackTrace` | `getStack(isolateId)` |
-| `scopes` / `variables` | `getObject(isolateId, objectId)` |
+| `scopes` / `variables` | `getObject(isolateId, objectId)`, `evaluate` (for getters/toString) |
 | `evaluate` | `evaluateInFrame(isolateId, frameIndex, expression)` |
+| `exceptionInfo` | Read stored exception `InstanceRef` + `toString()` |
+| `restartFrame` | `resume(isolateId, step: kRewind, frameIndex: N)` |
+| `loadedSources` | `getScripts(isolateId)` → list all loaded Dart scripts |
+| `breakpointLocations` | `getSourceReport(isolateId, scriptId, [PossibleBreakpoints])` |
+| `completions` | Scope variable names + library names (no VM RPC needed) |
+| `restart` | Hot restart — `FlutterController::restart()` + re-apply breakpoints |
 | `disconnect` | Cleanup, optionally `resume` paused isolates |
 
 Custom DAP requests (Flutter-specific):
 - `hotReload` → `FlutterController::reload()`
 - `hotRestart` → `FlutterController::restart()`
+- `callService` → `vmService.callMethod(method, params)` (forward arbitrary VM Service RPCs)
+- `updateDebugOptions` → `setLibraryDebuggable()` per library (toggle SDK/package debugging)
 
 Custom DAP events (IDE-consumed):
 - `dart.debuggerUris` → VM Service URI for DevTools
 - `flutter.appStarted` → session startup complete
+- `dart.hotReloadComplete` / `dart.hotRestartComplete` → operation completion notification
+- `dart.serviceExtensionAdded` → VM service extension registered on isolate
+- Progress events (`progressStart`/`progressEnd`) → hot reload/restart progress
 
 ### References
 
@@ -430,12 +441,120 @@ fdemon launch
    - Handle async suspension markers (virtual frames)
    - Assign monotonic frame IDs per request
 
-6. **Variables and scopes** (`adapter/stack.rs`)
-   - `scopes` → derive from frame: "Locals" scope + "Globals" scope
-   - `variables` → `getObject(isolateId, objectId)` → expand instance fields, list elements, map entries
-   - Handle primitive types (int, double, string, bool, null) inline
-   - Handle collection types (List, Map, Set) with lazy expansion
-   - Assign monotonic `variablesReference` IDs, maintain lookup table per stopped state
+6. **Variables and scopes** (`adapter/variables.rs`, `adapter/stack.rs`)
+
+   **6a. Scope model — three scopes per frame:**
+
+   | Scope | Source | `expensive` | When present |
+   |---|---|---|---|
+   | Locals | `frame.vars` (`BoundVariable[]`) from `getStack` | `false` | Always |
+   | Globals | Library static fields via `getObject(libraryId)` on the frame's script library | `true` | Always |
+   | Exceptions | The `exception` `InstanceRef` from the `PauseException` event | `false` | Only when paused at exception (`PauseException` / `PauseExit`) |
+
+   - Locals scope: Extract `BoundVariable[]` from the stack frame at the given `frameIndex`. Each `BoundVariable` has `{ name, value: InstanceRef }`. Convert each to a DAP `Variable`.
+   - Globals scope: Obtain the frame's `code.owner` (a `LibraryRef`), call `getObject(isolateId, libraryId)` to get the full `Library` object, then read its `variables` field (list of `FieldRef`). For each field, call `getObject(isolateId, fieldId)` to get the `Field` object with its `staticValue: InstanceRef`. Convert to DAP `Variable`.
+   - Exceptions scope: When `PauseException` event fires, store the `exception: InstanceRef` on the thread state. Create an "Exceptions" scope with a single variable representing the exception object (expandable via its `variablesReference`). Name it by its class name (e.g., `"FormatException"`).
+
+   **6b. Variable reference management (`VariableStore`):**
+
+   - Monotonically increasing `i64` IDs starting at 1, allocated per `variables` / `scopes` response
+   - `HashMap<i64, VariableRef>` where `VariableRef` is:
+     - `Scope(ScopeKind, frame_index)` — for scope expansion
+     - `Object(isolate_id, object_id)` — for instance field/collection expansion
+     - `MapEntry(isolate_id, key_object_id, value_object_id)` — for map key/value pairs
+     - `GetterEval(isolate_id, instance_id, getter_name)` — for lazy getter evaluation
+   - **Cleared on every `Resume` event** — all references become invalid when execution continues. The `on_resume()` handler calls `var_store.reset()` and `frame_store.reset()`.
+   - **Cleared on `HotRestart`** — old isolate IDs and object IDs become stale. The `on_hot_restart()` handler invalidates all stores.
+
+   **6c. `InstanceRef` → DAP `Variable` conversion (`instance_ref_to_variable`):**
+
+   The VM Service returns `InstanceRef` objects with a polymorphic `kind` field. Each kind maps to a specific display strategy:
+
+   | `InstanceKind` | Display value | `variablesReference` | `type` field |
+   |---|---|---|---|
+   | `Null` | `"null"` | 0 | `"Null"` |
+   | `Bool` | `"true"` / `"false"` | 0 | `"bool"` |
+   | `Int` | `valueAsString` (e.g., `"42"`) | 0 | `"int"` |
+   | `Double` | `valueAsString` (e.g., `"3.14"`) | 0 | `"double"` |
+   | `String` | `"\"hello\""` (quoted). If `valueAsStringIsTruncated`, append `…` | ref (for full string) | `"String"` |
+   | `List` | `"List (3 items)"` using `length` field | ref → expand via indexed children | `classRef.name` (e.g., `"List<int>"`) |
+   | `Map` | `"Map (5 items)"` using `length` field | ref → expand via `associations` | `classRef.name` |
+   | `Set` | `"Set (2 items)"` using `length` field | ref → expand via `elements` | `classRef.name` |
+   | `PlainInstance` | `classRef.name` + optional `toString()` result in parens | ref → expand fields | `classRef.name` |
+   | `Closure` | `"Closure (functionName)"` using `closureFunction.name` | 0 | `"Closure"` |
+   | `Record` | `"Record (N fields)"` | ref → expand named/positional fields | `"Record"` |
+   | `Type` | `"Type (ClassName)"` using `name` field | 0 | `"Type"` |
+   | `TypeParameter` | Type parameter name | 0 | `"TypeParameter"` |
+   | `RegExp` | `classRef.name` | ref → expand fields | `"RegExp"` |
+   | `StackTrace` | `"StackTrace"` | ref → expand `valueAsString` | `"StackTrace"` |
+   | `Sentinel` | `valueAsString` or `"<optimized out>"` | 0 | `"Sentinel"` |
+   | `WeakReference` | `"WeakReference"` | ref → expand `target` | `"WeakReference"` |
+   | Other/unknown | `valueAsString` or `kind` | 0 | `kind` |
+
+   **Important serialization note:** When locals are fetched via `backend.get_stack()`, the typed `Stack` struct is round-tripped through `serde_json::to_value()` which applies `#[serde(rename_all = "camelCase")]`. This means `class_ref` serializes as `"classRef"` in the JSON. The variable converter must read `"classRef"` (not `"class"`) for locals. When objects are fetched via `backend.get_object()`, the raw VM wire JSON is returned directly, which uses `"class"` as the key. The converter must handle both field names: `.get("classRef").or_else(|| instance_ref.get("class"))`.
+
+   **6d. Collection expansion with pagination:**
+
+   - `variables` request supports `filter: "indexed" | "named"`, `start`, `count` parameters
+   - For `List`: report `indexedVariables: length` in parent variable. Client requests children with `filter: "indexed"`, `start: N`, `count: M`. Call `getObject(isolateId, listId, offset: start, count: count)` to get paginated elements. Name each `"[N]"`.
+   - For `Map`: report `namedVariables: length`. Each entry expands to a child variable showing `"key_display → value_display"`. For primitive keys, use `valueAsString`. For complex keys, call `toString()` on the key object (with 1s timeout). Assign each key-value pair its own `variablesReference` (type `MapEntry`) for further expansion of key and value objects.
+   - For `Set`: same as List — use `elements` with indexed access.
+   - Cap per-request items with `MAX_VARIABLES_PER_REQUEST` constant (e.g., 100).
+
+   **6e. Object field expansion (`expand_object`):**
+
+   When the IDE expands a `PlainInstance` variable (clicks the `▶` arrow):
+   1. Call `getObject(isolateId, objectId)` → returns full `Instance` object
+   2. Read `fields` array: each `BoundField` has `{ decl: FieldRef, value: InstanceRef }`
+   3. Convert each field's `value` to a DAP `Variable` with `name = decl.name`
+   4. If `evaluateGettersInDebugViews` setting is `true`:
+      - Traverse class hierarchy: `classRef` → `getObject(classId)` → `superClass` → repeat
+      - For each class in hierarchy, collect getter names (filter `functions` where `kind == "Getter"` and not `static` and not `_identityHashCode`)
+      - For each getter, call `evaluate(isolateId, objectId, getterName, disableBreakpoints: true)` with 1s timeout
+      - Convert result to DAP `Variable`. On error, show `"<error: message>"`. On timeout, show `"<timed out>"`
+      - Set `presentationHint.attributes: ["hasSideEffects"]` on getter variables
+   5. If `evaluateGettersInDebugViews` is `false`: show getters as expandable lazy variables with `presentationHint.lazy: true` and `presentationHint.attributes: ["readOnly", "hasSideEffects"]`. Evaluate only when user explicitly expands.
+   6. Filter out `@TypeArguments` from displayed variables (internal VM implementation detail)
+   7. For Record types: expand positional fields as `$1`, `$2`, etc., and named fields by name
+
+   **6f. `toString()` display for instances:**
+
+   When `evaluateToStringInDebugViews` setting is `true`:
+   - For `PlainInstance` and other non-primitive kinds, call `invoke(isolateId, objectId, "toString", [], disableBreakpoints: true)` with 1s timeout
+   - If successful, append result in parentheses: `"MyClass (custom string repr)"`
+   - If it fails or times out, show class name only (no error displayed — silent fallback)
+   - Never call `toString()` on primitives, collections, closures, types, or sentinels
+
+   **6g. `evaluateName` construction:**
+
+   Each DAP `Variable` should include an `evaluateName` field that allows the IDE to construct watch expressions for drilling into objects:
+   - Locals: `evaluateName = variableName` (e.g., `"myVar"`)
+   - Fields: `evaluateName = parentEvaluateName + "." + fieldName` (e.g., `"myVar.name"`)
+   - Nullable fields: `evaluateName = parentEvaluateName + "?." + fieldName` (when parent type is nullable)
+   - Indexed: `evaluateName = parentEvaluateName + "[" + index + "]"` (e.g., `"myList[0]"`)
+   - Map entries: `evaluateName = parentEvaluateName + "[" + keyExpression + "]"` (e.g., `'myMap["key"]'`)
+   - Exception: `evaluateName = "$_threadException"`
+
+   **6h. `VariablePresentationHint`:**
+
+   | Scenario | `kind` | `attributes` | `visibility` |
+   |---|---|---|---|
+   | Object field | `"property"` | `[]` | `"public"` or `"private"` |
+   | Getter (evaluated) | `"property"` | `["hasSideEffects"]` | `"public"` or `"private"` |
+   | Getter (lazy) | `"property"` | `["readOnly", "hasSideEffects"]` | visibility from decl |
+   | Const value | `"property"` | `["readOnly", "constant"]` | `"public"` |
+   | Static field (global) | `"property"` | `["static"]` | `"public"` or `"private"` |
+   | Closure | `"method"` | `[]` | `"public"` |
+   | Type parameter | `"class"` | `["readOnly"]` | `"public"` |
+   | Local variable | `"data"` | `[]` | `"public"` |
+
+   **6i. Format specifiers:**
+
+   The `evaluate` request `format` argument and trailing comma syntax in expressions support:
+   - `nq` — no quotes (strip surrounding quotes from strings)
+   - `h` — hex format for integers
+   - `d` — decimal format (default)
+   Parse format specifiers from the expression: if expression ends with `,nq` or `,h` or `,d`, strip the suffix and apply formatting to the result display.
 
 7. **Output events** (via `EngineEvent` subscription)
    - `EngineEvent::LogEntry` / `EngineEvent::LogBatch` → DAP `output` events
@@ -690,6 +809,221 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
 
 ---
 
+### Phase 6: Tier-1 Feature Completion & Variable System Overhaul
+
+**Goal**: Fix critical bugs in the existing implementation (issue #24 — empty variables panel), implement all missing features required for tier-1 parity with the official Dart DAP adapter, and add differentiating capabilities that go beyond what dart-code provides. After this phase, fdemon's DAP server can fully replace the built-in debugger for Flutter development in any IDE.
+
+#### Post-Implementation Gap Analysis
+
+The following issues and gaps were identified by comparing the current implementation against the official Dart DDS adapter (`pkg/dds`), the Dart-Code VS Code extension, and the full DAP specification:
+
+**Critical Bugs:**
+
+| Bug | Location | Impact |
+|---|---|---|
+| `"class"` vs `"classRef"` field name mismatch | `variables.rs:365-370` | Locals display wrong type names. `get_scope_variables` round-trips through typed `Stack` serialization (`serde(rename_all = "camelCase")`) producing `"classRef"`, but `instance_ref_to_variable` reads `"class"` (raw VM wire format). Class names are always `None` for locals. |
+| `extract_source` used instead of `extract_source_with_store` in stack traces | `variables.rs:97` calls `extract_source` | SDK/package source frames in stack trace lack `sourceReference`, so `source` request fails for them. `extract_source_with_store` exists in `stack.rs:444` but is unused in the live code path. |
+| `supportsRestartRequest: true` advertised but no handler | `types.rs:869` vs `handlers.rs:36-55` | IDE sends `restart` and gets `"unsupported command"` error. The capability claims support that doesn't exist. |
+
+**Missing Tier-1 Features (must-have for parity with dart-code):**
+
+| Feature | DAP Request/Event | VM Service Mapping | Current State |
+|---|---|---|---|
+| Globals scope | `variables` for Globals scope | `getObject(libraryId)` → `Library.variables` | Returns `Vec::new()` always (stub) |
+| Exception scope | `scopes` with Exceptions scope | Store `exception` from `PauseException` event | Not created — only Locals + Globals scopes returned |
+| `exceptionInfo` request | `exceptionInfo` | Read stored exception `InstanceRef` → structured data | Not implemented, capability not advertised |
+| `restartFrame` | `restartFrame` | `resume(isolateId, step: kRewind, frameIndex: N)` | Not implemented, `kRewind` step mode not modeled |
+| `callService` custom request | `callService` | `vmService.callMethod(method, params)` | Returns "unsupported command" |
+| `updateDebugOptions` custom request | `updateDebugOptions` | `setLibraryDebuggable` per library | Returns "unsupported command" |
+| `setLibraryDebuggable` integration | Implicit (via `updateDebugOptions`) | `setLibraryDebuggable(isolateId, libraryId, isDebuggable)` | Not implemented — SDK frames always deemphasized statically |
+| `loadedSources` request | `loadedSources` | `getScripts(isolateId)` | Backend method exists (`get_scripts()`) but no handler calls it |
+| `dart.hotReloadComplete` event | Custom event | After `reloadSources` completes | `hotReload` handler returns immediately, no completion event |
+| `dart.hotRestartComplete` event | Custom event | After restart completes | Same — fire-and-forget, no completion event |
+| `dart.serviceExtensionAdded` event | Custom event | `ServiceExtensionAdded` isolate event | Not forwarded to DAP client |
+| Getter evaluation in variables | Implicit (variables panel) | `evaluate(isolateId, objectId, getterName)` per getter | Not implemented — only raw fields shown |
+| `toString()` in variables panel | Implicit (variable value display) | `invoke(isolateId, objectId, "toString", [])` | Not implemented (only in hover evaluate context) |
+| `evaluateName` construction | `Variable.evaluateName` field | N/A (client-side watch expression aid) | Not set on any variables |
+| Record type expansion | `variables` for Record instances | `getObject` → positional + named fields | Falls to default `_` arm — flat string, no expansion |
+| String truncation indicator | `Variable.value` display | `valueAsStringIsTruncated` field on `InstanceRef` | Not checked — truncated strings show without `…` |
+| Complex map key display | `variables` for Map entries | `toString()` on key object | Shows `"?"` for non-primitive keys |
+| Request timeout | All backend calls | N/A | `REQUEST_TIMEOUT` constant defined but never applied — hung VM Service blocks session |
+
+**Should-have features (competitive differentiation):**
+
+| Feature | DAP Request/Event | VM Service Mapping | Current State |
+|---|---|---|---|
+| Progress reporting | `progressStart` / `progressUpdate` / `progressEnd` | N/A (timed around hot reload/restart) | Not implemented |
+| `breakpointLocations` request | `breakpointLocations` | `getSourceReport(PossibleBreakpoints)` | Not implemented |
+| `completions` request | `completions` | Partial expression evaluation via `evaluate` | Not implemented, field not in Capabilities struct |
+| `restart` request (session-level) | `restart` | Re-launch Flutter process | Capability advertised, no handler |
+| `dart.log` event | Custom event | Adapter diagnostic forwarding | Not implemented |
+| `dart.toolEvent` event | Custom event | Extension stream → ToolEvent | Not implemented |
+
+**Features NOT feasible with Dart VM (do not implement):**
+
+| Feature | Why |
+|---|---|
+| `setVariable` / `setExpression` | No VM Service API for mutating variable values |
+| `stepBack` / `reverseContinue` | No time-travel debug support in Dart VM |
+| `dataBreakpoints` | No watchpoint support in Dart VM |
+| `instructionBreakpoints` | No instruction-level access in Dart VM |
+| `readMemory` / `writeMemory` | No raw memory API in Dart VM |
+| `disassemble` | No disassembly API (Dart is a managed runtime) |
+| `gotoTargets` / `goto` | No arbitrary PC jump support |
+
+#### Steps
+
+1. **Fix critical variable display bugs** (`variables.rs`, `stack.rs`)
+   - Fix `"class"` vs `"classRef"` mismatch: change `instance_ref_to_variable` to read `.get("classRef").or_else(|| instance_ref.get("class"))` so it handles both typed-serialized and raw VM wire formats
+   - Switch `handle_stack_trace` to call `extract_source_with_store` instead of `extract_source`, enabling source references for SDK/package frames
+   - Remove `supportsRestartRequest: true` from `fdemon_defaults()` until the `restart` handler is implemented
+   - Wire `REQUEST_TIMEOUT` (10s) around all `backend.*()` calls using `tokio::time::timeout`
+
+2. **Implement globals scope** (`variables.rs`, `backend.rs`)
+   - Add `get_isolate(isolate_id) -> Result<Value>` to `DebugBackend` trait
+   - In `get_scope_variables(Globals)`:
+     1. Call `backend.get_stack()` to get the frame at `frame_index`
+     2. Extract the `code.owner` library reference from the frame
+     3. Call `backend.get_object(isolateId, libraryId)` to get the full `Library` object
+     4. Read `Library.variables` (list of `FieldRef`)
+     5. For each field, call `backend.get_object(isolateId, fieldId)` to get `Field.staticValue`
+     6. Convert each to a DAP `Variable` with `presentationHint.attributes: ["static"]`
+   - Mark globals scope as `expensive: true` (already done)
+   - Handle libraries with many fields by supporting `start`/`count` pagination
+
+3. **Implement exception scope** (`variables.rs`, `events.rs`, `stack.rs`)
+   - Add `exception_reference: Option<(String, String)>` (isolate_id, object_id) to per-thread state in `VariableStore`
+   - On `PauseException` event: store the exception's `InstanceRef` details
+   - In `handle_scopes`: when `exception_reference.is_some()`, add a third scope "Exceptions" with the exception object
+   - In `get_scope_variables(Exceptions)`: return a single variable named by the exception's class, with a `variablesReference` pointing to the exception object for field expansion
+   - Support `$_threadException` magic expression in `handle_evaluate` — return the stored exception object
+
+4. **Implement `exceptionInfo` request** (`handlers.rs`, `types.rs`)
+   - Add `supportsExceptionInfoRequest: true` to `fdemon_defaults()` capabilities
+   - Add `exceptionInfo` to the request dispatch table
+   - Handler: read the stored exception `InstanceRef` for the given thread, call `getObject` to get full exception details, call `toString()` for the description, return `ExceptionInfoResponse { exceptionId, description, breakMode, details: { message, typeName, stackTrace } }`
+   - `breakMode` maps from the current `ExceptionPauseMode`: `All` → `"always"`, `Unhandled` → `"unhandled"`, `None` → `"never"`
+
+5. **Implement `restartFrame` request** (`handlers.rs`, `types.rs`)
+   - Add `kRewind` variant to `StepMode` enum in `types.rs`
+   - Add `supportsRestartFrame` field to `Capabilities` struct, set `true` in `fdemon_defaults()`
+   - Add `restartFrame` to the request dispatch table
+   - Handler: validate `frameId`, look up the frame's isolate and index, call `backend.resume(isolateId, step: Rewind, frameIndex: frameIndex)`
+   - Reject frames above the first async suspension marker (cannot rewind async boundaries) — return error response with clear message
+   - On success, emit `StoppedEvent(reason: "restart")` when the isolate pauses at the rewound frame
+
+6. **Implement `loadedSources` request** (`handlers.rs`, `types.rs`)
+   - Add `supportsLoadedSourcesRequest: true` to `fdemon_defaults()`
+   - Add `loadedSources` to the request dispatch table
+   - Handler: call `backend.get_scripts(isolateId)` (already in `DebugBackend` trait), convert each `ScriptRef` to a DAP `Source` using `extract_source_with_store`, return all sources
+   - Filter out internal/generated scripts (those with `dart:_internal`, `eval:source`, etc.)
+
+7. **Implement `callService` custom request** (`handlers.rs`)
+   - Add `callService` to the request dispatch table
+   - Handler: read `method` and `params` from the request arguments, call `backend.call_service(method, params)` → forwards to `VmRequestHandle::request(method, params)`
+   - Add `call_service(method, params) -> Result<Value>` to `DebugBackend` trait
+   - Return the raw VM Service response as the DAP response body
+   - This enables DevTools integration — VS Code calls `callService("ext.flutter.debugDumpApp", {})` etc.
+
+8. **Implement `updateDebugOptions` custom request** (`handlers.rs`, `backend.rs`)
+   - Add `updateDebugOptions` to the request dispatch table
+   - Handler: read `debugSdkLibraries: bool` and `debugExternalPackageLibraries: bool` from arguments
+   - Store the settings on the adapter state
+   - Call `set_library_debuggable(isolateId, libraryId, isDebuggable)` for each library in each isolate:
+     - SDK libraries (`dart:*`): debuggable if `debugSdkLibraries == true`
+     - External package libraries: debuggable if `debugExternalPackageLibraries == true`
+     - App libraries: always debuggable
+   - Add `set_library_debuggable(isolate_id, library_id, is_debuggable) -> Result<()>` to `DebugBackend` trait
+   - Add `get_isolate(isolate_id) -> Result<Value>` to `DebugBackend` trait (needed to enumerate libraries)
+   - Re-apply on every `IsolateRunnable` event (new isolates must be configured)
+
+9. **Implement getter evaluation and `toString()` in variables** (`variables.rs`)
+   - Add `evaluateGettersInDebugViews: bool` and `evaluateToStringInDebugViews: bool` settings (from attach/launch args, default both `true`)
+   - In `expand_object` for `PlainInstance`:
+     - After fields, traverse class hierarchy to collect getter names
+     - For each getter (excluding `_identityHashCode`, `hashCode`, `runtimeType` for primitives):
+       - Call `backend.evaluate(isolateId, objectId, getterName)` with `disableBreakpoints: true` and 1s timeout
+       - On success: convert to DAP `Variable` with `presentationHint.attributes: ["hasSideEffects"]`
+       - On error/timeout: show `"<error: message>"` or `"<timed out>"` as value
+     - When `evaluateGettersInDebugViews == false`: show getters with `presentationHint.lazy: true` (expandable on demand)
+   - In `instance_ref_to_variable` for `PlainInstance`:
+     - If `evaluateToStringInDebugViews == true`: call `backend.evaluate(isolateId, objectId, "toString()")` with 1s timeout, append result in parentheses: `"MyClass (custom string repr)"`
+     - On failure: show class name only (silent fallback)
+
+10. **Implement `evaluateName` construction** (`variables.rs`)
+    - Thread an `evaluate_name: Option<String>` through the variable conversion pipeline
+    - Set `evaluateName` on every DAP `Variable` returned:
+      - Locals: `evaluateName = name`
+      - Fields: `evaluateName = parent_evaluate_name + "." + fieldName`
+      - Indexed: `evaluateName = parent_evaluate_name + "[" + index + "]"`
+      - Map entries: `evaluateName = parent_evaluate_name + "[" + keyExpression + "]"`
+      - Exception: `evaluateName = "$_threadException"`
+    - This enables watch expressions to drill into nested objects
+
+11. **Implement Record and additional type expansion** (`variables.rs`)
+    - Add `Record` to the match arms in `instance_ref_to_variable`:
+      - Display: `"Record (N fields)"`
+      - Expansion: positional fields as `$1`, `$2`, ..., named fields by name
+      - Call `getObject(objectId)` → read `fields` array
+    - Add `WeakReference`:
+      - Display: `"WeakReference"`
+      - Expansion: show `target` field (which may be `null` if collected)
+    - Add `Sentinel`:
+      - Display: `valueAsString` or `"<optimized out>"` / `"<not initialized>"`
+      - No expansion (`variablesReference: 0`)
+    - Fix string truncation: check `valueAsStringIsTruncated` field, append `…` when true
+
+12. **Implement progress reporting for hot reload/restart** (`handlers.rs`, `events.rs`)
+    - Check `client_capabilities.supports_progress_reporting` from the `initialize` request
+    - On `hotReload` request: emit `progressStart(title: "Hot Reload")`, then on completion emit `progressEnd`
+    - On `hotRestart` request: emit `progressStart(title: "Hot Restart")`, then on completion emit `progressEnd`
+    - Add `hot_reload` / `hot_restart` completion events:
+      - Modify `DebugBackend::hot_reload()` and `hot_restart()` to return a future that resolves when the operation completes (not fire-and-forget)
+      - On completion, emit `dart.hotReloadComplete` / `dart.hotRestartComplete` custom events
+    - Use a `DapProgressReporter` helper that tracks progress IDs and emits start/update/end events
+
+13. **Implement `restart` request (session-level)** (`handlers.rs`)
+    - Add `restart` to the request dispatch table (capability already advertised)
+    - Handler: perform a hot restart — `backend.hot_restart()`, re-apply breakpoints, invalidate variable stores
+    - This is distinct from `restartFrame` (single-frame rewind) — `restart` re-runs the entire Flutter app
+
+14. **Implement missing custom DAP events** (`events.rs`)
+    - `dart.serviceExtensionAdded`: on `ServiceExtensionAdded` isolate event, forward as custom DAP event with `{ extensionRPC, method }`
+    - `dart.log`: when `sendLogsToClient` setting is true, forward adapter diagnostic messages as `dart.log` events
+    - `flutter.forwardedEvent`: forward relevant `flutter run --machine` daemon events (e.g., `app.webLaunchUrl`, `app.warning`)
+
+15. **Implement `breakpointLocations` request** (`handlers.rs`, `backend.rs`)
+    - Add `supportsBreakpointLocationsRequest: true` to `fdemon_defaults()`
+    - Add `breakpointLocations` to the request dispatch table
+    - Handler: call `backend.get_source_report(isolateId, scriptId, ["PossibleBreakpoints"], tokenPos, endTokenPos)`
+    - Convert the source report ranges to DAP `BreakpointLocation` objects
+    - This enables the IDE to show valid breakpoint positions when the user hovers over the gutter
+
+16. **Implement `completions` request** (`handlers.rs`, `types.rs`)
+    - Add `supportsCompletionsRequest: true` to `fdemon_defaults()`
+    - Add `completions` to the request dispatch table
+    - Handler: use partial expression evaluation — attempt `evaluateInFrame` with the text up to the cursor, catch compilation errors, parse error messages for available identifiers
+    - Alternative simpler approach: enumerate `frame.vars` names + library top-level names + class field names for the current scope
+    - Return `CompletionItem[]` with `label`, `type` ("variable", "method", "property"), and `sortText`
+    - This is a differentiator — neither the Dart DDS adapter nor Dart-Code implement `completions`
+
+17. **Wire request timeouts** (`handlers.rs` or adapter layer)
+    - Wrap all `backend.*()` calls with `tokio::time::timeout(REQUEST_TIMEOUT, ...)` (10s)
+    - On timeout: return DAP error response `"Request timed out after 10s"`
+    - Prevents a hung VM Service from blocking the entire DAP session indefinitely
+    - Special case: `toString()` and getter evaluation use a shorter 1s timeout (they're side-effect calls that should be fast)
+
+18. **Fix map key display for complex objects** (`variables.rs`)
+    - In `expand_object` for Map entries:
+      - For primitive keys (`Int`, `Bool`, `String`, `Double`): use `valueAsString` directly
+      - For complex keys: call `toString()` on the key object with 1s timeout
+      - On failure: show the class name (e.g., `"MyKey instance"`) instead of `"?"`
+    - Set `evaluateName` for map entries using the key expression
+
+**Milestone**: Variables panel shows locals, globals, and exception values correctly. Getters and `toString()` display rich object representations. `restartFrame` enables frame rewind. `callService` and `updateDebugOptions` enable full DevTools integration. Progress reporting shows hot reload/restart status in IDE. `breakpointLocations` and `completions` differentiate fdemon above the official Dart adapter. The empty variables panel (issue #24) is fully resolved.
+
+---
+
 ## Edge Cases & Risks
 
 ### Protocol Compatibility
@@ -751,6 +1085,41 @@ fdemon already detects the parent IDE via environment variables in `detect_paren
 
 - **Risk:** `$INSIDE_EMACS` is not set in all Emacs terminal modes (e.g., some custom shell setups). `$HELIX_RUNTIME` may not be set in Helix's `:sh` command in all versions
 - **Mitigation:** These are best-effort detections. Document the expected environment variables. Users can always fall back to `fdemon --dap-config emacs` or `fdemon --dap-config helix` for manual generation.
+
+### Typed vs Raw JSON Serialization Mismatch (Phase 6)
+
+- **Risk:** The `VmServiceBackend::get_stack()` round-trips through `serde_json::to_value(&stack)` which applies `#[serde(rename_all = "camelCase")]`, producing `"classRef"`, `"valueAsString"`, etc. But `get_object()` returns raw VM wire JSON which uses `"class"`, `"valueAsString"`, etc. Any code consuming both paths must handle both field name conventions.
+- **Mitigation:** Use `.get("classRef").or_else(|| .get("class"))` for all polymorphic field lookups. Long-term: either always use raw JSON (skip typed deserialization for stack responses) or always use typed deserialization (add `getObject` typed parsing). Phase 6 Step 1 fixes the immediate bug.
+
+### Getter Evaluation Performance (Phase 6)
+
+- **Risk:** Evaluating all getters on a class hierarchy can trigger hundreds of `evaluate` RPCs per variable expansion, each potentially executing user code. A single variable click could cause multi-second delays.
+- **Mitigation:** (1) 1s timeout per getter evaluation. (2) Default to `evaluateGettersInDebugViews: false` — show getters as lazy expandable items. (3) Filter out `_identityHashCode` and `hashCode` (frequently expensive, rarely useful). (4) Show a maximum of 50 getter results per object. (5) Evaluate getters sequentially (not in parallel) to avoid overwhelming the VM.
+
+### `toString()` Side Effects in Variables Panel (Phase 6)
+
+- **Risk:** `toString()` calls execute arbitrary user code. A buggy `toString()` implementation could throw an exception, mutate state, or infinite-loop — all while the user is just looking at variables.
+- **Mitigation:** (1) Call with `disableBreakpoints: true` to prevent recursive pause. (2) 1s timeout. (3) Silent fallback on error — show class name only, never show error in the variable value. (4) Skip `toString()` for framework-internal types where the default `Instance of 'ClassName'` is adequate.
+
+### `restartFrame` Across Async Boundaries (Phase 6)
+
+- **Risk:** VM Service's `kRewind` step mode only works for synchronous frames. Attempting to rewind past an async suspension marker crashes the isolate or returns an error.
+- **Mitigation:** Track the index of the first async suspension marker in the stack. Reject `restartFrame` requests for frames at or above this index with a clear error: `"Cannot restart frame above an async suspension boundary"`. The IDE will gray out the restart option for those frames.
+
+### `callService` Security (Phase 6)
+
+- **Risk:** `callService` allows the IDE to invoke arbitrary VM Service RPCs, including `kill`, `requestHeapSnapshot`, or any service extension. A malicious or buggy IDE extension could disrupt the debug session.
+- **Mitigation:** (1) Only accept `callService` from authenticated DAP clients (localhost-only by default). (2) Log all `callService` invocations at `debug` level for auditability. (3) Reject `callService` calls to destructive RPCs (`kill`, `enableProfiler`) unless the `allow_destructive_call_service` config is `true` (default: `false`).
+
+### Variable Store Memory Growth (Phase 6)
+
+- **Risk:** Every `variablesReference` allocation adds an entry to the `HashMap`. Deep object graphs (e.g., widget trees with thousands of children) could grow the store unboundedly during a single pause.
+- **Mitigation:** (1) Cap `VariableStore` at 10,000 entries. Once exceeded, new allocations return `variablesReference: 0` (non-expandable) with a warning in the value string. (2) The store is already cleared on every resume, so growth is bounded to a single pause session.
+
+### `completions` Accuracy (Phase 6)
+
+- **Risk:** Debug console auto-completion based on frame variable names may suggest identifiers that don't exist in the current scope, or miss imported names.
+- **Mitigation:** Start with a conservative approach: only suggest `frame.vars` names + top-level library names. This guarantees accuracy at the cost of completeness. More sophisticated approaches (partial evaluation, AST parsing) can be added later if needed.
 
 ---
 
@@ -883,17 +1252,63 @@ The auto-assigned port is logged and emitted via `Message::DapServerStarted { po
 - [ ] `cargo clippy --workspace` clean
 - [ ] Tested end-to-end: run `fdemon` inside VS Code terminal → DAP auto-starts → launch.json generated → Debug panel shows config → connection succeeds
 
+### Phase 6 Complete When:
+
+**Critical bug fixes (must pass before any new features):**
+- [ ] `"classRef"` / `"class"` field name mismatch fixed — locals display correct type names (class name, not `kind`)
+- [ ] `extract_source_with_store` used in `handle_stack_trace` — SDK/package source frames have `sourceReference`, IDE can view source
+- [ ] `supportsRestartRequest` removed from capabilities until `restart` handler exists (or `restart` handler implemented)
+- [ ] `REQUEST_TIMEOUT` applied to all backend calls via `tokio::time::timeout` — hung VM Service no longer blocks session
+
+**Variable system (issue #24 resolution):**
+- [ ] Globals scope returns library static fields (not empty `Vec::new()`)
+- [ ] Exception scope appears when paused at exception with the exception object expandable
+- [ ] `$_threadException` magic expression works in evaluate/watch contexts
+- [ ] String truncation indicator (`…`) appended when `valueAsStringIsTruncated` is true
+- [ ] Record types expand with positional (`$1`, `$2`) and named fields
+- [ ] Map entries with complex keys show `toString()` result (not `"?"`)
+- [ ] `evaluateName` set on all variables (enables watch expression drill-down)
+- [ ] Getter evaluation works when `evaluateGettersInDebugViews` is true (with 1s timeout per getter)
+- [ ] `toString()` display appended to `PlainInstance` values when `evaluateToStringInDebugViews` is true
+- [ ] `VariablePresentationHint` set correctly for fields, getters, statics, closures, consts
+
+**New DAP requests:**
+- [ ] `exceptionInfo` — returns structured exception data with description, type, stack trace
+- [ ] `restartFrame` — rewinds to selected frame via VM Service `kRewind` step mode; rejects async frames
+- [ ] `loadedSources` — returns all scripts via `get_scripts()` backend method
+- [ ] `callService` — forwards arbitrary VM Service RPCs (for DevTools integration)
+- [ ] `updateDebugOptions` — toggles `debugSdkLibraries` and `debugExternalPackageLibraries` via `setLibraryDebuggable`
+- [ ] `breakpointLocations` — returns valid breakpoint positions via `getSourceReport(PossibleBreakpoints)`
+- [ ] `completions` — debug console auto-complete from scope variables and library names
+- [ ] `restart` — session-level restart (hot restart) with handler matching advertised capability
+
+**Custom events:**
+- [ ] `dart.hotReloadComplete` and `dart.hotRestartComplete` emitted after operations complete
+- [ ] `dart.serviceExtensionAdded` forwarded from `ServiceExtensionAdded` isolate events
+- [ ] Progress events (`progressStart` / `progressEnd`) emitted during hot reload/restart when client supports them
+
+**Quality gates:**
+- [ ] 200+ new unit tests for variable system (type rendering, pagination, getters, toString, edge cases)
+- [ ] `cargo test --workspace` passes
+- [ ] `cargo clippy --workspace` clean
+- [ ] Tested end-to-end with VS Code Dart extension: variables panel shows locals, globals, exception values, getters, and collections correctly
+- [ ] Tested with Neovim nvim-dap: same variable inspection works
+- [ ] Performance tested: expanding a 10,000-element List doesn't hang (pagination works)
+- [ ] Performance tested: `toString()` timeout prevents infinite-loop hang
+
 ---
 
 ## Future Enhancements
 
 - **Stdio transport**: Support DAP over stdin/stdout (in addition to TCP) for editors that prefer spawning the adapter as a subprocess
 - **Launch mode**: Support `launch` request (not just `attach`) — fdemon spawns the Flutter process when the IDE starts debugging
-- **Data breakpoints**: Break on field value changes (requires VM Service `addBreakpointOnActivation` or equivalent)
-- **Memory inspection**: Expose fdemon's memory profiling data through DAP's `readMemory` request
-- **Inline values**: Support DAP's `inlineValues` capability for showing variable values inline in the editor
+- **Inline values**: Support DAP's `supportsInlineValues` capability for showing variable values inline in the editor. Requires `evaluateInFrame` for every visible variable on every step — expensive, needs careful caching. Neither Dart DDS adapter nor Dart-Code implement this as of 2026.
 - **Dedicated IDE extensions**: Publish VS Code extension and Neovim plugin that auto-discover fdemon's DAP port and provide richer integration (Phase 5 handles config generation; dedicated extensions would add live port discovery, status bar indicators, and custom DAP views)
 - **Zed Dart debugger extension**: Write a Zed extension implementing `get_dap_binary` for Dart/Flutter so `.zed/debug.json` auto-config actually works (currently Dart is not in Zed's supported debugger languages)
 - **Remote debugging**: Support non-localhost bind addresses for remote Flutter device debugging
 - **Profiling integration**: Expose fdemon's performance data through DAP events for integrated perf views
 - **IntelliJ DAP via LSP4IJ**: If the LSP4IJ plugin gains wider adoption, add `.idea/runConfigurations/` XML generation for IntelliJ/Android Studio DAP support
+- **`functionBreakpoints`**: Map to `addBreakpointAtEntry(functionId)` VM Service RPC — requires resolving function names to IDs via library/class traversal. Not in the Dart DDS adapter.
+- **`modules` request**: Map Dart libraries/packages to DAP `Module` objects for navigating loaded code. Low priority — `loadedSources` covers the primary use case.
+- **`dart.toolEvent` forwarding**: Forward VM Service Extension stream `ToolEvent` data to IDE for Flutter DevTools integration. Enables embedded DevTools views.
+- **Format specifiers**: Support trailing comma format syntax in evaluate expressions (`expr,nq` for no quotes, `expr,h` for hex, `expr,d` for decimal). Matches Dart DDS adapter behavior.
