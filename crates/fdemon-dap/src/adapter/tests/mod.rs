@@ -15,6 +15,7 @@ mod evaluate_name;
 mod events_logging;
 mod exception_scope;
 mod execution;
+mod getter_evaluation;
 mod hot_operations;
 mod logpoints;
 mod production_hardening;

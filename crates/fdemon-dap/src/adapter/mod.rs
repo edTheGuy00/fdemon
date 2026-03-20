@@ -181,6 +181,20 @@ pub struct DapAdapter<B: DebugBackend> {
     /// Used by `expand_object` to look up the parent's evaluate expression and
     /// construct child evaluate expressions (e.g., `obj.field`, `list[0]`).
     pub(crate) evaluate_name_map: HashMap<i64, String>,
+
+    /// Whether to eagerly evaluate getter methods when expanding objects.
+    ///
+    /// When `true` (the default), getters on `PlainInstance` objects are
+    /// evaluated immediately with a 1-second timeout when the user expands the
+    /// object in the variables panel. Getter results appear alongside regular
+    /// fields with `presentationHint.attributes: ["hasSideEffects"]`.
+    ///
+    /// When `false`, getters appear as lazy items with `presentationHint.lazy:
+    /// true`. The user must explicitly expand the getter to evaluate it; the
+    /// expansion triggers a `GetterEval` variable reference lookup.
+    ///
+    /// Settable from the `attach` request args (`evaluateGettersInDebugViews`).
+    pub(crate) evaluate_getters_in_debug_views: bool,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -221,6 +235,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             vm_disconnected: false,
             exception_refs: HashMap::new(),
             evaluate_name_map: HashMap::new(),
+            evaluate_getters_in_debug_views: true,
         };
         (adapter, ())
     }

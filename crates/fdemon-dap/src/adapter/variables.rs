@@ -10,9 +10,39 @@ use crate::adapter::stack::{
 use crate::adapter::types::MAX_VARIABLES_PER_REQUEST;
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
-    DapScope, DapStackFrame, DapVariable, ScopesArguments, StackTraceArguments, VariablesArguments,
+    DapScope, DapStackFrame, DapVariable, DapVariablePresentationHint, ScopesArguments,
+    StackTraceArguments, VariablesArguments,
 };
 use crate::{DapRequest, DapResponse};
+
+/// Maximum number of getter evaluations per object expansion.
+///
+/// Prevents extremely large class hierarchies from hanging the debugger by
+/// limiting how many getters are collected and evaluated when expanding a
+/// `PlainInstance` object.
+const MAX_GETTER_EVALUATIONS: usize = 50;
+
+/// Maximum depth when traversing the superclass chain for getter collection.
+///
+/// Prevents infinite loops in malformed class hierarchies (e.g., circular
+/// super-class references) by stopping traversal at this depth.
+const MAX_SUPERCLASS_DEPTH: usize = 10;
+
+/// Timeout for a single getter evaluation.
+///
+/// Matches the Dart DDS adapter's 1-second timeout for getter evaluation.
+/// If the VM Service does not respond within this duration, the getter value
+/// is shown as `"<timed out>"` without crashing the adapter.
+const GETTER_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Internal getter names that are filtered out during getter collection.
+///
+/// These are VM-internal getters that are not useful to show in the debugger:
+/// - `_identityHashCode`: VM-internal object identity hash, always present.
+/// - `hashCode`: only meaningful for primitives; the default `Object.hashCode`
+///   is usually `_identityHashCode`, adding noise without value.
+/// - `runtimeType`: returns the Dart `Type` object; rarely useful in debugger.
+const FILTERED_GETTER_NAMES: &[&str] = &["_identityHashCode", "hashCode", "runtimeType"];
 
 impl<B: DebugBackend> DapAdapter<B> {
     /// Handle the `stackTrace` request.
@@ -303,6 +333,20 @@ impl<B: DebugBackend> DapAdapter<B> {
                 )
                 .await
             }
+            VariableRef::GetterEval {
+                isolate_id,
+                instance_id,
+                getter_name,
+            } => {
+                // Lazy getter evaluation: triggered when the user explicitly
+                // expands a getter that was deferred with `evaluateGettersInDebugViews == false`.
+                self.evaluate_lazy_getter(
+                    &isolate_id.clone(),
+                    &instance_id.clone(),
+                    &getter_name.clone(),
+                )
+                .await
+            }
         };
 
         match variables {
@@ -526,6 +570,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 kind: None,
                 attributes: Some(attributes),
                 visibility,
+                lazy: None,
             };
 
             // Read staticValue — may be absent (uninitialized sentinel).
@@ -902,6 +947,164 @@ impl<B: DebugBackend> DapAdapter<B> {
         }
     }
 
+    /// Evaluate a lazy getter on demand (for `GetterEval` variable references).
+    ///
+    /// Called when the user explicitly expands a getter that was deferred
+    /// because `evaluateGettersInDebugViews` was `false`. Returns a single
+    /// `DapVariable` with the getter's evaluated value.
+    ///
+    /// A 1-second timeout is applied. On timeout, the variable value is
+    /// `"<timed out>"`. On VM Service error, the value is `"<error: {message}>"`.
+    async fn evaluate_lazy_getter(
+        &mut self,
+        isolate_id: &str,
+        instance_id: &str,
+        getter_name: &str,
+    ) -> Result<Vec<DapVariable>, String> {
+        let result = tokio::time::timeout(
+            GETTER_EVAL_TIMEOUT,
+            self.backend.evaluate(isolate_id, instance_id, getter_name),
+        )
+        .await;
+
+        let var = match result {
+            Err(_timeout) => DapVariable {
+                name: getter_name.to_string(),
+                value: "<timed out>".to_string(),
+                variables_reference: 0,
+                presentation_hint: Some(DapVariablePresentationHint {
+                    attributes: Some(vec!["hasSideEffects".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Ok(Err(e)) => DapVariable {
+                name: getter_name.to_string(),
+                value: format!("<error: {}>", e),
+                variables_reference: 0,
+                presentation_hint: Some(DapVariablePresentationHint {
+                    attributes: Some(vec!["hasSideEffects".to_string()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Ok(Ok(instance_ref)) => {
+                let mut var = self.instance_ref_to_variable(getter_name, &instance_ref, isolate_id);
+                var.presentation_hint = Some(DapVariablePresentationHint {
+                    attributes: Some(vec!["hasSideEffects".to_string()]),
+                    ..Default::default()
+                });
+                var
+            }
+        };
+
+        Ok(vec![var])
+    }
+
+    /// Collect getter method names from a class and its superclass hierarchy.
+    ///
+    /// Traverses the class chain starting from `class_id` up to
+    /// [`MAX_SUPERCLASS_DEPTH`] levels, calling `get_object` for each class
+    /// and filtering its `functions` array for `ImplicitGetter` or `Getter`
+    /// kinds that are not static and not in [`FILTERED_GETTER_NAMES`].
+    ///
+    /// Returns at most [`MAX_GETTER_EVALUATIONS`] getter names to prevent
+    /// hanging when an object has an unusually large class hierarchy.
+    async fn collect_getters_from_class(&self, isolate_id: &str, class_id: &str) -> Vec<String> {
+        let mut getters: Vec<String> = Vec::new();
+        let mut current_class_id = class_id.to_string();
+
+        for _depth in 0..MAX_SUPERCLASS_DEPTH {
+            if getters.len() >= MAX_GETTER_EVALUATIONS {
+                break;
+            }
+
+            let class_obj = match self
+                .backend
+                .get_object(isolate_id, &current_class_id, None, None)
+                .await
+            {
+                Ok(obj) => obj,
+                Err(_) => break,
+            };
+
+            // Read functions array from the class object.
+            let functions: &[serde_json::Value] = class_obj
+                .get("functions")
+                .and_then(|f| f.as_array())
+                .map(|a| a.as_slice())
+                .unwrap_or(&[]);
+
+            for func in functions {
+                if getters.len() >= MAX_GETTER_EVALUATIONS {
+                    break;
+                }
+
+                let kind = func.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+                // Accept ImplicitGetter (auto-generated field getter) and
+                // explicit Getter functions.
+                if kind != "ImplicitGetter" && kind != "Getter" {
+                    continue;
+                }
+
+                // Skip static getters — they are not accessible on the instance.
+                let is_static = func
+                    .get("static")
+                    .and_then(|s| s.as_bool())
+                    .unwrap_or(false);
+                if is_static {
+                    continue;
+                }
+
+                let name = match func.get("name").and_then(|n| n.as_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                // Filter out internal getters.
+                if FILTERED_GETTER_NAMES.contains(&name) {
+                    continue;
+                }
+
+                // Avoid duplicates (same getter may appear from multiple
+                // traversal paths if the hierarchy is unusual).
+                if !getters.iter().any(|g| g == name) {
+                    getters.push(name.to_string());
+                }
+            }
+
+            // Traverse to superclass. Stop if super is absent or is "Object"
+            // (the root of all Dart class hierarchies — its getters are
+            // already covered by FILTERED_GETTER_NAMES).
+            let super_class = match class_obj.get("super") {
+                Some(s) => s,
+                None => break,
+            };
+
+            // If the super is JSON null, we've reached the root.
+            if super_class.is_null() {
+                break;
+            }
+
+            let super_name = super_class
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("");
+            if super_name == "Object" {
+                break;
+            }
+
+            let super_id = match super_class.get("id").and_then(|i| i.as_str()) {
+                Some(id) => id.to_string(),
+                None => break,
+            };
+
+            current_class_id = super_id;
+        }
+
+        getters
+    }
+
     /// Expand a VM Service object into a list of [`DapVariable`] children.
     ///
     /// Fetches the full object via `get_object` and dispatches based on the
@@ -909,7 +1112,11 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///
     /// - `List` / typed arrays — indexed elements `[0]`, `[1]`, …
     /// - `Map` — keyed entries `[key]`, …
-    /// - `PlainInstance` and others — named fields
+    /// - `PlainInstance` and others — named fields plus evaluated getters
+    ///
+    /// For `PlainInstance` objects, getter methods from the class hierarchy are
+    /// also collected and either eagerly evaluated (when
+    /// `evaluate_getters_in_debug_views` is `true`) or shown as lazy items.
     ///
     /// The `start` and `count` paging parameters are forwarded to the VM
     /// Service so that large collections can be fetched in chunks.
@@ -1080,8 +1287,140 @@ impl<B: DebugBackend> DapAdapter<B> {
                         Ok(vec![var])
                     }
 
+                    // PlainInstance: expand fields and optionally evaluate
+                    // getters from the class hierarchy.
+                    "PlainInstance" => {
+                        let fields: Vec<serde_json::Value> = obj
+                            .get("fields")
+                            .and_then(|f| f.as_array())
+                            .cloned()
+                            .unwrap_or_default();
+                        let isolate_id = isolate_id.to_string();
+                        let obj_id = object_id.to_string();
+
+                        let mut result = Vec::with_capacity(fields.len());
+                        for field in &fields {
+                            // Skip TypeArguments entries — they are internal VM
+                            // details not meaningful to the user.
+                            let field_type =
+                                field.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                            if field_type == "@TypeArguments" || field_type == "TypeArguments" {
+                                continue;
+                            }
+
+                            let name = field
+                                .get("name")
+                                .and_then(|n| n.as_str())
+                                .unwrap_or("?")
+                                .to_string();
+                            let value = field
+                                .get("value")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
+                            // Construct child evaluateName: parent.fieldName
+                            let child_eval_name: Option<String> =
+                                parent_evaluate_name.map(|p| format!("{}.{}", p, name));
+                            result.push(self.instance_ref_to_variable_with_eval_name(
+                                &name,
+                                &value,
+                                &isolate_id,
+                                child_eval_name.as_deref(),
+                            ));
+                        }
+
+                        // Collect getters from the class hierarchy and append them.
+                        // Read the class ID from the instance's "class" field.
+                        let class_id = obj
+                            .get("class")
+                            .and_then(|c| c.get("id"))
+                            .and_then(|i| i.as_str())
+                            .map(|s| s.to_string());
+
+                        if let Some(class_id) = class_id {
+                            let getter_names = self
+                                .collect_getters_from_class(&isolate_id, &class_id)
+                                .await;
+                            let evaluate_getters = self.evaluate_getters_in_debug_views;
+
+                            for getter_name in getter_names {
+                                if evaluate_getters {
+                                    // Eagerly evaluate the getter with a 1-second timeout.
+                                    let eval_result = tokio::time::timeout(
+                                        GETTER_EVAL_TIMEOUT,
+                                        self.backend.evaluate(&isolate_id, &obj_id, &getter_name),
+                                    )
+                                    .await;
+
+                                    let var = match eval_result {
+                                        Err(_timeout) => DapVariable {
+                                            name: getter_name,
+                                            value: "<timed out>".to_string(),
+                                            variables_reference: 0,
+                                            presentation_hint: Some(DapVariablePresentationHint {
+                                                attributes: Some(
+                                                    vec!["hasSideEffects".to_string()],
+                                                ),
+                                                ..Default::default()
+                                            }),
+                                            ..Default::default()
+                                        },
+                                        Ok(Err(e)) => DapVariable {
+                                            name: getter_name,
+                                            value: format!("<error: {}>", e),
+                                            variables_reference: 0,
+                                            presentation_hint: Some(DapVariablePresentationHint {
+                                                attributes: Some(
+                                                    vec!["hasSideEffects".to_string()],
+                                                ),
+                                                ..Default::default()
+                                            }),
+                                            ..Default::default()
+                                        },
+                                        Ok(Ok(instance_ref)) => {
+                                            let mut var = self.instance_ref_to_variable(
+                                                &getter_name,
+                                                &instance_ref,
+                                                &isolate_id,
+                                            );
+                                            var.presentation_hint =
+                                                Some(DapVariablePresentationHint {
+                                                    attributes: Some(vec![
+                                                        "hasSideEffects".to_string()
+                                                    ]),
+                                                    ..Default::default()
+                                                });
+                                            var
+                                        }
+                                    };
+                                    result.push(var);
+                                } else {
+                                    // Lazy getter: show a placeholder that the user can expand.
+                                    let getter_ref =
+                                        self.var_store.allocate(VariableRef::GetterEval {
+                                            isolate_id: isolate_id.clone(),
+                                            instance_id: obj_id.clone(),
+                                            getter_name: getter_name.clone(),
+                                        });
+                                    result.push(DapVariable {
+                                        name: getter_name,
+                                        value: String::new(),
+                                        variables_reference: getter_ref,
+                                        presentation_hint: Some(DapVariablePresentationHint {
+                                            lazy: Some(true),
+                                            ..Default::default()
+                                        }),
+                                        ..Default::default()
+                                    });
+                                }
+                            }
+                        }
+
+                        Ok(result)
+                    }
+
                     _ => {
-                        // Expand instance fields.
+                        // Expand instance fields (Closure, RegExp, Type,
+                        // StackTrace, and any other instance kind).
                         let fields: Vec<serde_json::Value> = obj
                             .get("fields")
                             .and_then(|f| f.as_array())

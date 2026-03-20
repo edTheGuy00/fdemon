@@ -67,10 +67,17 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///   tooling (VS Code DevTools, etc.)
     /// - `flutter.appStart` — device ID, build mode, and restart capability
     pub(super) async fn handle_attach(&mut self, request: &DapRequest) -> DapResponse {
-        let _args: AttachRequestArguments = match request.arguments.as_ref() {
+        let args: AttachRequestArguments = match request.arguments.as_ref() {
             Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
             None => AttachRequestArguments::default(),
         };
+
+        // Apply settings from attach args before making any backend calls.
+        // `evaluateGettersInDebugViews` defaults to `true` when absent, matching
+        // the Dart DDS adapter's default behaviour.
+        if let Some(eval_getters) = args.evaluate_getters_in_debug_views {
+            self.evaluate_getters_in_debug_views = eval_getters;
+        }
 
         match self.backend.get_vm().await {
             Ok(vm_info) => {

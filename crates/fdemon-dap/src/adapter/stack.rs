@@ -183,6 +183,18 @@ pub enum VariableRef {
         /// The VM Service object ID.
         object_id: String,
     },
+    /// A lazy getter evaluation on a specific object.
+    ///
+    /// Created when `evaluateGettersInDebugViews` is `false`. Expanding this
+    /// reference evaluates the getter on demand via `backend.evaluate`.
+    GetterEval {
+        /// The isolate the parent object belongs to.
+        isolate_id: String,
+        /// The VM Service object ID of the parent instance.
+        instance_id: String,
+        /// The getter method name to evaluate (e.g., `"name"`, `"age"`).
+        getter_name: String,
+    },
 }
 
 /// The kind of scope a [`VariableRef::Scope`] represents.

@@ -392,6 +392,12 @@ pub struct DapVariablePresentationHint {
     /// `"protected"`, `"internal"`, `"final"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
+    /// If `true`, the client should show the variable as lazy — its value is
+    /// not yet computed and the user must explicitly expand or click to evaluate
+    /// it. Used for getter evaluation when `evaluateGettersInDebugViews` is
+    /// `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lazy: Option<bool>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -647,6 +653,12 @@ pub struct AttachRequestArguments {
     /// existing session rather than spawning a new process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Whether to eagerly evaluate getter methods when expanding objects in
+    /// the variables panel. When `true` (the default), getters are evaluated
+    /// immediately with a 1-second timeout. When `false`, getters appear as
+    /// lazy items the user can expand on demand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluate_getters_in_debug_views: Option<bool>,
 }
 
 /// Arguments for the `disconnect` request.
@@ -1514,6 +1526,7 @@ mod tests {
         let args = AttachRequestArguments {
             vm_service_uri: Some("ws://127.0.0.1:8181/ws".into()),
             session_id: Some("abc-123".into()),
+            evaluate_getters_in_debug_views: None,
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["vmServiceUri"], "ws://127.0.0.1:8181/ws");
@@ -1589,6 +1602,7 @@ mod tests {
             kind: Some("property".into()),
             attributes: Some(vec!["readOnly".into()]),
             visibility: Some("public".into()),
+            lazy: None,
         };
         let serialized = serde_json::to_string(&hint).unwrap();
         let deserialized: DapVariablePresentationHint = serde_json::from_str(&serialized).unwrap();
