@@ -232,9 +232,44 @@ impl crate::adapter::DebugBackend for NoopBackend {
         Err(crate::adapter::BackendError::NotConnected)
     }
 
+    async fn get_isolate(
+        &self,
+        _isolate_id: &str,
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
     async fn get_scripts(
         &self,
         _isolate_id: &str,
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn call_service(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        _isolate_id: &str,
+        _library_id: &str,
+        _is_debuggable: bool,
+    ) -> std::result::Result<(), crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
+    }
+
+    async fn get_source_report(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+        _report_kinds: &[&str],
+        _token_pos: Option<i64>,
+        _end_token_pos: Option<i64>,
     ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
         Err(crate::adapter::BackendError::NotConnected)
     }
@@ -1350,11 +1385,46 @@ mod tests {
                 Ok(serde_json::json!({ "isolates": [] }))
             }
         }
+        async fn get_isolate(
+            &self,
+            _: &str,
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+            Ok(serde_json::json!({}))
+        }
+
         async fn get_scripts(
             &self,
             _: &str,
         ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
             Ok(serde_json::json!({ "scripts": [] }))
+        }
+
+        async fn call_service(
+            &self,
+            _: &str,
+            _: Option<serde_json::Value>,
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+            Ok(serde_json::json!({}))
+        }
+
+        async fn set_library_debuggable(
+            &self,
+            _: &str,
+            _: &str,
+            _: bool,
+        ) -> std::result::Result<(), crate::adapter::BackendError> {
+            Ok(())
+        }
+
+        async fn get_source_report(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[&str],
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> std::result::Result<serde_json::Value, crate::adapter::BackendError> {
+            Ok(serde_json::json!({}))
         }
 
         async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {

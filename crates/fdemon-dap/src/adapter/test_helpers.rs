@@ -162,9 +162,46 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         future::ready(Ok(serde_json::json!({})))
     }
 
+    fn get_isolate(
+        &self,
+        _isolate_id: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
     fn get_scripts(
         &self,
         _isolate_id: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
+    // ── Generic VM Service RPC ────────────────────────────────────────────
+
+    fn call_service(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
+    fn set_library_debuggable(
+        &self,
+        _isolate_id: &str,
+        _library_id: &str,
+        _is_debuggable: bool,
+    ) -> impl Future<Output = Result<(), BackendError>> + Send {
+        future::ready(Ok(()))
+    }
+
+    fn get_source_report(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+        _report_kinds: &[&str],
+        _token_pos: Option<i64>,
+        _end_token_pos: Option<i64>,
     ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
         future::ready(Ok(serde_json::json!({})))
     }
@@ -292,8 +329,48 @@ impl<T: MockTestBackend> DebugBackend for T {
         MockTestBackend::get_vm(self).await
     }
 
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::get_isolate(self, isolate_id).await
+    }
+
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
         MockTestBackend::get_scripts(self, isolate_id).await
+    }
+
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::call_service(self, method, params).await
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError> {
+        MockTestBackend::set_library_debuggable(self, isolate_id, library_id, is_debuggable).await
+    }
+
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::get_source_report(
+            self,
+            isolate_id,
+            script_id,
+            report_kinds,
+            token_pos,
+            end_token_pos,
+        )
+        .await
     }
 
     async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {

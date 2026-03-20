@@ -891,7 +891,39 @@ mod tests {
                 ]
             }))
         }
+        async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+
         async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+
+        async fn call_service(
+            &self,
+            _: &str,
+            _: Option<serde_json::Value>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+
+        async fn set_library_debuggable(
+            &self,
+            _: &str,
+            _: &str,
+            _: bool,
+        ) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        async fn get_source_report(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[&str],
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, BackendError> {
             Ok(json!({}))
         }
 

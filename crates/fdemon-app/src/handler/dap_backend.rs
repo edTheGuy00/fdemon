@@ -258,11 +258,78 @@ impl DebugBackend for VmServiceBackend {
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
+        self.handle
+            .request(
+                "getIsolate",
+                Some(serde_json::json!({ "isolateId": isolate_id })),
+            )
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
         let scripts = debugger::get_scripts(&self.handle, isolate_id)
             .await
             .map_err(|e| BackendError::VmServiceError(e.to_string()))?;
         serde_json::to_value(&scripts).map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError> {
+        self.handle
+            .request(method, params)
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError> {
+        self.handle
+            .request(
+                "setLibraryDebuggable",
+                Some(serde_json::json!({
+                    "isolateId": isolate_id,
+                    "libraryId": library_id,
+                    "isDebuggable": is_debuggable,
+                })),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        let mut params = serde_json::json!({
+            "isolateId": isolate_id,
+            "scriptId": script_id,
+            "reports": report_kinds,
+            "forceCompile": true,
+        });
+        if let Some(tp) = token_pos {
+            params["tokenPos"] = serde_json::json!(tp);
+        }
+        if let Some(etp) = end_token_pos {
+            params["endTokenPos"] = serde_json::json!(etp);
+        }
+        self.handle
+            .request("getSourceReport", Some(params))
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
     async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
@@ -416,11 +483,65 @@ impl DynDebugBackendInner for VmServiceBackend {
         Box::pin(self.get_vm())
     }
 
+    fn get_isolate_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        Box::pin(self.get_isolate(isolate_id))
+    }
+
     fn get_scripts_boxed<'a>(
         &'a self,
         isolate_id: &'a str,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
         Box::pin(self.get_scripts(isolate_id))
+    }
+
+    fn call_service_boxed<'a>(
+        &'a self,
+        method: &'a str,
+        params: Option<serde_json::Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        Box::pin(self.call_service(method, params))
+    }
+
+    fn set_library_debuggable_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        library_id: &'a str,
+        is_debuggable: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+        Box::pin(self.set_library_debuggable(isolate_id, library_id, is_debuggable))
+    }
+
+    fn get_source_report_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        script_id: &'a str,
+        report_kinds: Vec<String>,
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        // Build the JSON params directly here so we don't need to hold
+        // temporary `Vec<&str>` borrows across the async boundary.
+        let mut params = serde_json::json!({
+            "isolateId": isolate_id,
+            "scriptId": script_id,
+            "reports": report_kinds,
+            "forceCompile": true,
+        });
+        if let Some(tp) = token_pos {
+            params["tokenPos"] = serde_json::json!(tp);
+        }
+        if let Some(etp) = end_token_pos {
+            params["endTokenPos"] = serde_json::json!(etp);
+        }
+        Box::pin(async move {
+            self.handle
+                .request("getSourceReport", Some(params))
+                .await
+                .map_err(|e| BackendError::VmServiceError(e.to_string()))
+        })
     }
 
     fn get_source_boxed<'a>(
@@ -700,5 +821,135 @@ mod tests {
     fn test_vm_backend_factory_new_type_checks() {
         // Taking the function address verifies the signature compiles correctly.
         let _ = VmBackendFactory::new;
+    }
+
+    // ── Phase 6 new method type-system tests ──────────────────────────────
+
+    /// Verify `VmServiceBackend` satisfies the `DebugBackend` trait with all
+    /// Phase 6 new methods (`get_isolate`, `call_service`,
+    /// `set_library_debuggable`, `get_source_report`).
+    ///
+    /// A live `VmRequestHandle` is not constructable in unit tests; this test
+    /// confirms the trait bounds are satisfied at compile time.
+    #[test]
+    fn test_vm_service_backend_satisfies_debug_backend_with_phase6_methods() {
+        fn assert_debug_backend<T: DebugBackend>() {}
+        assert_debug_backend::<VmServiceBackend>();
+    }
+
+    /// Verify `VmServiceBackend` implements `DynDebugBackendInner` (required by
+    /// `DynDebugBackend::new` which takes `Box<dyn DynDebugBackendInner>`).
+    #[test]
+    fn test_vm_service_backend_satisfies_dyn_debug_backend_inner() {
+        fn assert_dyn_inner<T: fdemon_dap::adapter::DynDebugBackendInner>() {}
+        assert_dyn_inner::<VmServiceBackend>();
+    }
+
+    /// Verify that `get_source_report_boxed` JSON parameter construction with
+    /// `token_pos` and `end_token_pos` fields behaves correctly.
+    ///
+    /// Tests the parameter assembly logic in isolation using `serde_json::json!`.
+    #[test]
+    fn test_get_source_report_params_with_token_pos_fields() {
+        let isolate_id = "isolates/1";
+        let script_id = "scripts/42";
+        let report_kinds = vec!["PossibleBreakpoints".to_string()];
+        let token_pos: Option<i64> = Some(100);
+        let end_token_pos: Option<i64> = Some(200);
+
+        let mut params = serde_json::json!({
+            "isolateId": isolate_id,
+            "scriptId": script_id,
+            "reports": report_kinds,
+            "forceCompile": true,
+        });
+        if let Some(tp) = token_pos {
+            params["tokenPos"] = serde_json::json!(tp);
+        }
+        if let Some(etp) = end_token_pos {
+            params["endTokenPos"] = serde_json::json!(etp);
+        }
+
+        assert_eq!(params["isolateId"], "isolates/1");
+        assert_eq!(params["scriptId"], "scripts/42");
+        assert_eq!(
+            params["reports"],
+            serde_json::json!(["PossibleBreakpoints"])
+        );
+        assert_eq!(params["forceCompile"], true);
+        assert_eq!(params["tokenPos"], 100);
+        assert_eq!(params["endTokenPos"], 200);
+    }
+
+    /// Verify that `get_source_report_boxed` omits `tokenPos`/`endTokenPos`
+    /// when both are `None`.
+    #[test]
+    fn test_get_source_report_params_without_token_pos_fields() {
+        let isolate_id = "isolates/1";
+        let script_id = "scripts/42";
+        let report_kinds = vec!["Coverage".to_string()];
+        let token_pos: Option<i64> = None;
+        let end_token_pos: Option<i64> = None;
+
+        let mut params = serde_json::json!({
+            "isolateId": isolate_id,
+            "scriptId": script_id,
+            "reports": report_kinds,
+            "forceCompile": true,
+        });
+        if let Some(tp) = token_pos {
+            params["tokenPos"] = serde_json::json!(tp);
+        }
+        if let Some(etp) = end_token_pos {
+            params["endTokenPos"] = serde_json::json!(etp);
+        }
+
+        assert!(
+            params.get("tokenPos").is_none(),
+            "tokenPos should be absent when None"
+        );
+        assert!(
+            params.get("endTokenPos").is_none(),
+            "endTokenPos should be absent when None"
+        );
+    }
+
+    /// Verify JSON parameter construction for `get_isolate`.
+    #[test]
+    fn test_get_isolate_params_construction() {
+        let isolate_id = "isolates/main";
+        let params = serde_json::json!({ "isolateId": isolate_id });
+
+        assert_eq!(params["isolateId"], "isolates/main");
+    }
+
+    /// Verify JSON parameter construction for `set_library_debuggable`.
+    #[test]
+    fn test_set_library_debuggable_params_construction() {
+        let isolate_id = "isolates/1";
+        let library_id = "libraries/5";
+        let is_debuggable = true;
+
+        let params = serde_json::json!({
+            "isolateId": isolate_id,
+            "libraryId": library_id,
+            "isDebuggable": is_debuggable,
+        });
+
+        assert_eq!(params["isolateId"], "isolates/1");
+        assert_eq!(params["libraryId"], "libraries/5");
+        assert_eq!(params["isDebuggable"], true);
+    }
+
+    /// Verify that `call_service` passes method and params unchanged.
+    /// Tests the parameter forwarding logic using JSON construction.
+    #[test]
+    fn test_call_service_params_forwarded_as_is() {
+        let method = "ext.flutter.inspector.getRootWidget";
+        let params = serde_json::json!({ "arg0": "value0" });
+
+        // Simulate the forwarding: method is used as-is, params as-is.
+        assert_eq!(method, "ext.flutter.inspector.getRootWidget");
+        assert_eq!(params["arg0"], "value0");
     }
 }

@@ -6,6 +6,7 @@
 
 mod adapter_core;
 mod attach_threads;
+mod backend_phase6;
 mod breakpoint_persistence;
 mod breakpoints;
 mod conditional_breakpoints;

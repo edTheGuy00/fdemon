@@ -936,12 +936,50 @@ mod tests {
                 Box::pin(async { Ok(serde_json::json!({"isolates": []})) })
             }
 
+            fn get_isolate_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({})) })
+            }
+
             fn get_scripts_boxed<'a>(
                 &'a self,
                 _isolate_id: &'a str,
             ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
             {
                 Box::pin(async { Ok(serde_json::json!({"scripts": []})) })
+            }
+
+            fn call_service_boxed<'a>(
+                &'a self,
+                _method: &'a str,
+                _params: Option<serde_json::Value>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({})) })
+            }
+
+            fn set_library_debuggable_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _library_id: &'a str,
+                _is_debuggable: bool,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn get_source_report_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _script_id: &'a str,
+                _report_kinds: Vec<String>,
+                _token_pos: Option<i64>,
+                _end_token_pos: Option<i64>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"ranges": [], "scripts": []})) })
             }
 
             fn get_source_boxed<'a>(
