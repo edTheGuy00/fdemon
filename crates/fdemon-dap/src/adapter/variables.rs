@@ -290,8 +290,9 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// For `Locals`: calls `get_stack` on the backend and maps each frame
     /// variable's `InstanceRef` to a [`DapVariable`].
     ///
-    /// For `Globals`: returns an empty list in Phase 3 (globals are expensive
-    /// and deferred to Phase 4).
+    /// For `Globals`: enumerates library-level static fields from the current
+    /// frame's library. If the frame has no library context (e.g., async gap
+    /// frames), falls back to the isolate's root library.
     async fn get_scope_variables(
         &mut self,
         frame_index: i32,
@@ -344,12 +345,221 @@ impl<B: DebugBackend> DapAdapter<B> {
                 }
                 Ok(result)
             }
-            ScopeKind::Globals => {
-                // Globals are expensive — return empty for now.
-                // Phase 4 will add full support via the isolate's libraries.
-                Ok(Vec::new())
+            ScopeKind::Globals => self.get_globals_variables(frame_index).await,
+        }
+    }
+
+    /// Enumerate library-level static fields for the Globals scope.
+    ///
+    /// Attempts to find the library for the current frame by inspecting
+    /// `frame.code.owner`. If the owner is a `LibraryRef`, it is used directly.
+    /// If the owner is a `ClassRef`, the class's `library` field is used.
+    /// If neither is available (e.g., closure or async gap frames), falls back
+    /// to the isolate's `rootLib`.
+    ///
+    /// Each field in the library's `variables` array is resolved to its
+    /// `staticValue` via `get_object`, then converted to a [`DapVariable`] with
+    /// `presentationHint.attributes: ["static"]`. Uninitialized fields (no
+    /// `staticValue`) display `"<not initialized>"`.
+    ///
+    /// Private fields (names starting with `_`) are included with
+    /// `presentationHint.visibility: "private"`. `const` fields carry
+    /// `["static", "readOnly", "constant"]` attributes.
+    async fn get_globals_variables(
+        &mut self,
+        frame_index: i32,
+    ) -> Result<Vec<DapVariable>, String> {
+        // Step 1: resolve the isolate ID.
+        let isolate_id = self
+            .frame_store
+            .lookup_by_index(frame_index)
+            .map(|fr| fr.isolate_id.clone())
+            .ok_or_else(|| format!("Frame index {} not found in frame store", frame_index))?;
+
+        // Step 2: determine the library ID from the frame's code owner.
+        let library_id = self
+            .resolve_library_id_for_frame(&isolate_id, frame_index)
+            .await?;
+
+        // Step 3: fetch the full Library object.
+        let library = self
+            .backend
+            .get_object(&isolate_id, &library_id, None, None)
+            .await
+            .map_err(|e| format!("Failed to get library object '{}': {}", library_id, e))?;
+
+        // Step 4: read library.variables — array of FieldRef.
+        let field_refs: Vec<serde_json::Value> = library
+            .get("variables")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        // Step 5: for each field, fetch its static value and convert to DapVariable.
+        let mut result = Vec::with_capacity(field_refs.len().min(MAX_VARIABLES_PER_REQUEST));
+        for field_ref in field_refs.iter().take(MAX_VARIABLES_PER_REQUEST) {
+            let field_name = field_ref
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let field_id = match field_ref.get("id").and_then(|i| i.as_str()) {
+                Some(id) => id.to_string(),
+                None => {
+                    // No field ID — emit a placeholder.
+                    result.push(DapVariable {
+                        name: field_name,
+                        value: "<not initialized>".to_string(),
+                        variables_reference: 0,
+                        ..Default::default()
+                    });
+                    continue;
+                }
+            };
+
+            // Fetch the full Field object to read staticValue.
+            let field_obj = self
+                .backend
+                .get_object(&isolate_id, &field_id, None, None)
+                .await
+                .map_err(|e| format!("Failed to get field '{}': {}", field_id, e))?;
+
+            // Determine const/static attributes.
+            let is_const = field_obj
+                .get("isConst")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+
+            let attributes: Vec<String> = if is_const {
+                vec![
+                    "static".to_string(),
+                    "readOnly".to_string(),
+                    "constant".to_string(),
+                ]
+            } else {
+                vec!["static".to_string()]
+            };
+
+            let visibility = if field_name.starts_with('_') {
+                Some("private".to_string())
+            } else {
+                None
+            };
+
+            let hint = crate::protocol::types::DapVariablePresentationHint {
+                kind: None,
+                attributes: Some(attributes),
+                visibility,
+            };
+
+            // Read staticValue — may be absent (uninitialized sentinel).
+            let static_value = field_obj.get("staticValue").cloned();
+
+            let isolate_id_clone = isolate_id.clone();
+            let mut var = match static_value {
+                None => DapVariable {
+                    name: field_name,
+                    value: "<not initialized>".to_string(),
+                    variables_reference: 0,
+                    presentation_hint: Some(hint),
+                    ..Default::default()
+                },
+                Some(sv) => {
+                    // Check for the Sentinel type (uninitialized in VM Service).
+                    let sv_type = sv.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    if sv_type == "Sentinel" {
+                        DapVariable {
+                            name: field_name,
+                            value: "<not initialized>".to_string(),
+                            variables_reference: 0,
+                            presentation_hint: Some(hint),
+                            ..Default::default()
+                        }
+                    } else {
+                        let mut v =
+                            self.instance_ref_to_variable(&field_name, &sv, &isolate_id_clone);
+                        v.presentation_hint = Some(hint);
+                        v
+                    }
+                }
+            };
+            var.name = var.name.clone(); // ensure owned
+            result.push(var);
+        }
+
+        Ok(result)
+    }
+
+    /// Resolve the library ID for a given stack frame.
+    ///
+    /// Inspects `frame.code.owner`:
+    /// - If owner `type` is `"Library"`, returns `owner.id` directly.
+    /// - If owner `type` is `"Class"` (or `"ClassRef"`), follows `owner.library.id`.
+    /// - Otherwise, falls back to `isolate.rootLib.id` via `get_isolate`.
+    async fn resolve_library_id_for_frame(
+        &self,
+        isolate_id: &str,
+        frame_index: i32,
+    ) -> Result<String, String> {
+        // Fetch the stack to examine code.owner for the target frame.
+        let stack = self
+            .backend
+            .get_stack(isolate_id, Some(frame_index + 1))
+            .await
+            .map_err(|e| format!("Failed to get stack: {}", e))?;
+
+        let frames = stack
+            .get("frames")
+            .and_then(|f| f.as_array())
+            .map(|a| a.as_slice())
+            .unwrap_or(&[]);
+
+        if let Some(frame) = frames.get(frame_index as usize) {
+            // Try code.owner to find the library.
+            if let Some(owner) = frame.get("code").and_then(|c| c.get("owner")) {
+                let owner_type = owner.get("type").and_then(|t| t.as_str()).unwrap_or("");
+
+                // Direct library ref.
+                if owner_type == "Library" || owner_type == "@Library" {
+                    if let Some(lib_id) = owner.get("id").and_then(|i| i.as_str()) {
+                        return Ok(lib_id.to_string());
+                    }
+                }
+
+                // Class ref — the library is nested inside.
+                if owner_type == "Class" || owner_type == "@Class" || owner_type == "ClassRef" {
+                    if let Some(lib_id) = owner
+                        .get("library")
+                        .and_then(|l| l.get("id"))
+                        .and_then(|i| i.as_str())
+                    {
+                        return Ok(lib_id.to_string());
+                    }
+                }
             }
         }
+
+        // Fallback: use the isolate's rootLib.
+        self.get_root_lib_from_isolate(isolate_id).await
+    }
+
+    /// Fetch the root library ID from the isolate object.
+    ///
+    /// Calls `get_isolate` and reads `isolate.rootLib.id`. This is the fallback
+    /// used when the frame has no usable `code.owner`.
+    async fn get_root_lib_from_isolate(&self, isolate_id: &str) -> Result<String, String> {
+        let isolate = self
+            .backend
+            .get_isolate(isolate_id)
+            .await
+            .map_err(|e| format!("Failed to get isolate '{}': {}", isolate_id, e))?;
+
+        isolate
+            .get("rootLib")
+            .and_then(|lib| lib.get("id"))
+            .and_then(|id| id.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| format!("Isolate '{}' has no rootLib", isolate_id))
     }
 
     /// Convert a VM Service `InstanceRef` JSON value to a DAP [`DapVariable`].

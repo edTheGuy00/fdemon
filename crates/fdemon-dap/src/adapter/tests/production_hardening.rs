@@ -349,15 +349,15 @@ fn test_max_variables_per_request_constant_is_100() {
 
 #[tokio::test]
 async fn test_variables_count_capped_at_max() {
-    // Create an adapter and fake a scope with many variables.
-    // We exercise the count capping logic by passing count > MAX directly.
-    // The actual cap is applied in handle_variables before expand_object.
+    // Verify the count capping logic via an Object expansion, which respects
+    // the MAX_VARIABLES_PER_REQUEST cap without needing a live stack frame.
+    // This test exercises the path: handle_variables → expand_object → capped_count.
     let (mut adapter, _rx) = DapAdapter::new(MockBackend);
 
-    // Allocate a fake scope reference.
-    let var_ref = adapter.var_store.allocate(VariableRef::Scope {
-        frame_index: 0,
-        scope_kind: ScopeKind::Globals,
+    // Allocate a fake object reference to trigger the expand_object path.
+    let var_ref = adapter.var_store.allocate(VariableRef::Object {
+        isolate_id: "isolates/1".into(),
+        object_id: "objects/any".into(),
     });
 
     let req = DapRequest {
@@ -365,13 +365,13 @@ async fn test_variables_count_capped_at_max() {
         command: "variables".into(),
         arguments: Some(serde_json::json!({
             "variablesReference": var_ref,
-            "count": 10_000, // Request 10,000 items
+            "count": 10_000, // Request 10,000 items — should be capped to MAX
         })),
     };
     let resp = adapter.handle_request(&req).await;
 
-    // ScopeKind::Globals returns empty (not advertised but enum variant still exists).
-    // Verify the count capping logic doesn't panic and returns a success response.
+    // MockBackend returns {} for get_object, which yields empty expansion.
+    // The important check is that the count capping logic doesn't panic.
     assert!(resp.success, "variables request must succeed");
 }
 

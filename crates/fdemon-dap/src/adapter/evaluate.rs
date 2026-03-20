@@ -364,39 +364,25 @@ async fn evaluate_expression_raw<B: DebugBackend>(
 
 /// Resolve the root library ID for an isolate.
 ///
-/// This calls `get_vm()` on the backend and searches the isolate list for the
-/// matching isolate's `rootLib`. If the isolate is not found or has no
-/// `rootLib`, returns an error.
-///
-/// # Note
-///
-/// This is a best-effort implementation for Phase 3. If `get_vm()` doesn't
-/// include `rootLib` in the isolate refs, Phase 4 will add a `get_isolate()`
-/// backend call that always returns the full isolate object with `rootLib`.
+/// Calls `get_isolate()` on the backend and reads `isolate.rootLib.id`.
+/// This is the reliable approach: `getIsolate` always returns the full isolate
+/// object with `rootLib`, whereas the isolate refs embedded in `getVM()` may
+/// omit `rootLib` depending on the Dart VM version.
 pub async fn get_root_library_id<B: DebugBackend>(
     backend: &B,
     isolate_id: &str,
 ) -> Result<String, String> {
-    let vm_info = backend.get_vm().await.map_err(|e| e.to_string())?;
-    let isolates = vm_info
-        .get("isolates")
-        .and_then(|i| i.as_array())
-        .ok_or_else(|| "No isolates in VM info".to_string())?;
+    let isolate = backend
+        .get_isolate(isolate_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    for isolate in isolates {
-        if isolate.get("id").and_then(|i| i.as_str()) == Some(isolate_id) {
-            if let Some(root_lib) = isolate
-                .get("rootLib")
-                .and_then(|l| l.get("id"))
-                .and_then(|i| i.as_str())
-            {
-                return Ok(root_lib.to_string());
-            }
-            // Found the isolate but no rootLib — fall through to error.
-            break;
-        }
-    }
-    Err("Could not find root library for isolate".to_string())
+    isolate
+        .get("rootLib")
+        .and_then(|lib| lib.get("id"))
+        .and_then(|id| id.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Isolate has no rootLib".to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -880,19 +866,22 @@ mod tests {
             self.eval_result.clone()
         }
         async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            // Return an isolate with a rootLib so that frameless evaluation works.
             Ok(json!({
                 "isolates": [
                     {
                         "id": "isolates/1",
                         "name": "main",
-                        "rootLib": {"id": "libraries/1"}
                     }
                 ]
             }))
         }
         async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
-            Ok(json!({}))
+            // Return a full isolate object with rootLib so get_root_library_id works.
+            Ok(json!({
+                "id": "isolates/1",
+                "name": "main",
+                "rootLib": {"id": "libraries/1"}
+            }))
         }
 
         async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
@@ -1242,9 +1231,132 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_root_library_id_not_found() {
-        let backend = MockBackend::ok(json!({}));
-        let result = get_root_library_id(&backend, "isolates/999").await;
-        assert!(result.is_err());
+        // Use a backend that returns an isolate without rootLib to test the
+        // error path (get_isolate succeeds but rootLib is absent).
+        struct NoRootLibBackend;
+        impl crate::adapter::DebugBackend for NoRootLibBackend {
+            async fn pause(&self, _: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn add_breakpoint(
+                &self,
+                _: &str,
+                _: &str,
+                l: i32,
+                c: Option<i32>,
+            ) -> Result<BreakpointResult, BackendError> {
+                Ok(BreakpointResult {
+                    vm_id: format!("bp/{l}"),
+                    resolved: true,
+                    line: Some(l),
+                    column: c,
+                })
+            }
+            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn set_exception_pause_mode(
+                &self,
+                _: &str,
+                _: DapExceptionPauseMode,
+            ) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn get_stack(
+                &self,
+                _: &str,
+                _: Option<i32>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<i64>,
+                _: Option<i64>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn evaluate(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn evaluate_in_frame(
+                &self,
+                _: &str,
+                _: i32,
+                _: &str,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+                // Return isolate without rootLib — this triggers the error path.
+                Ok(json!({"id": "isolates/1", "name": "main"}))
+            }
+            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn call_service(
+                &self,
+                _: &str,
+                _: Option<serde_json::Value>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn set_library_debuggable(
+                &self,
+                _: &str,
+                _: &str,
+                _: bool,
+            ) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn get_source_report(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[&str],
+                _: Option<i64>,
+                _: Option<i64>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
+                Ok(String::new())
+            }
+            async fn hot_reload(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn hot_restart(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn stop_app(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn ws_uri(&self) -> Option<String> {
+                None
+            }
+            async fn device_id(&self) -> Option<String> {
+                None
+            }
+            async fn build_mode(&self) -> String {
+                "debug".to_string()
+            }
+        }
+        let backend = NoRootLibBackend;
+        let result = get_root_library_id(&backend, "isolates/1").await;
+        assert!(result.is_err(), "Should fail when isolate has no rootLib");
     }
 
     // ── Context-specific tests (Task 06) ──────────────────────────────────
