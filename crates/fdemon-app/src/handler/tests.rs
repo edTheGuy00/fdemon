@@ -10066,7 +10066,9 @@ fn test_enter_devtools_with_network_default_queues_switch_panel_message() {
     assert!(
         matches!(
             result.message,
-            Some(Message::SwitchDevToolsPanel(crate::state::DevToolsPanel::Network))
+            Some(Message::SwitchDevToolsPanel(
+                crate::state::DevToolsPanel::Network
+            ))
         ),
         "Lazy-start path with Network default should queue SwitchDevToolsPanel(Network)"
     );

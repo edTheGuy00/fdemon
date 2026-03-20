@@ -29,9 +29,9 @@ All three tasks are independent — no shared write files.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-mutex-poison](tasks/01-fix-mutex-poison.md) | Not started | — | 0.5h | `handler/update.rs`, `handler/devtools/network.rs` |
-| 2 | [02-fix-unwrap-selected-id](tasks/02-fix-unwrap-selected-id.md) | Not started | — | 0.5h | `handler/session_lifecycle.rs`, `handler/devtools/mod.rs` |
-| 3 | [03-fix-launch-device-mismatch](tasks/03-fix-launch-device-mismatch.md) | Not started | — | 0.5h | `example/app3/.fdemon/launch.toml`, `example/TESTING.md` |
+| 1 | [01-fix-mutex-poison](tasks/01-fix-mutex-poison.md) | Done | — | 0.5h | `handler/update.rs`, `handler/devtools/network.rs` |
+| 2 | [02-fix-unwrap-selected-id](tasks/02-fix-unwrap-selected-id.md) | Done | — | 0.5h | `handler/session_lifecycle.rs`, `handler/devtools/mod.rs` |
+| 3 | [03-fix-launch-device-mismatch](tasks/03-fix-launch-device-mismatch.md) | Done | — | 0.5h | `example/app3/.fdemon/launch.toml`, `example/TESTING.md` |
 
 ## File Overlap Analysis
 
@@ -55,9 +55,9 @@ All three tasks are independent — no shared write files.
 
 Phase 4 is complete when:
 
-- [ ] Both `.lock().ok()` transfer-slot sites log on poison and recover via `into_inner()` instead of silently producing `None`
-- [ ] Both `selected_id().unwrap()` sites use `let-else` with early return instead of bare unwrap
-- [ ] `example/app3/.fdemon/launch.toml` uses `device = "auto"` for the "Profile (Issue #25)" config
-- [ ] `example/TESTING.md` Test I snippet matches the actual launch.toml
-- [ ] All existing tests pass (`cargo test --workspace`)
-- [ ] `cargo clippy --workspace -- -D warnings` passes
+- [x] Both `.lock().ok()` transfer-slot sites log on poison and recover via `into_inner()` instead of silently producing `None`
+- [x] Both `selected_id().unwrap()` sites use `let-else` with early return instead of bare unwrap
+- [x] `example/app3/.fdemon/launch.toml` uses `device = "auto"` for the "Profile (Issue #25)" config
+- [x] `example/TESTING.md` Test I snippet matches the actual launch.toml
+- [x] All existing tests pass (`cargo test --workspace`)
+- [x] `cargo clippy --workspace -- -D warnings` passes
