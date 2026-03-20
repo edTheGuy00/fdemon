@@ -266,6 +266,41 @@ impl<B: DebugBackend> DapAdapter<B> {
                     isolate_id
                 );
 
+                // ── Step 1: Set library debuggability BEFORE breakpoints ─────
+                //
+                // Library debuggability MUST be applied before breakpoints are
+                // set on the new isolate. If breakpoints are set first,
+                // breakpoints in SDK code may not be hit even after enabling
+                // SDK debugging later. This ordering matches the Dart DDS
+                // adapter's behaviour.
+                if let Err(e) = self.apply_library_debuggability(&isolate_id).await {
+                    tracing::warn!(
+                        "IsolateRunnable: failed to apply library debuggability to {}: {}",
+                        isolate_id,
+                        e,
+                    );
+                } else {
+                    tracing::debug!(
+                        "IsolateRunnable: applied library debuggability to {}",
+                        isolate_id,
+                    );
+                }
+
+                // ── Step 2: Re-apply exception pause mode ────────────────────
+                if self.exception_mode != DapExceptionPauseMode::None {
+                    let _ = self
+                        .backend
+                        .set_exception_pause_mode(&isolate_id, self.exception_mode)
+                        .await;
+                    tracing::debug!(
+                        "IsolateRunnable: re-applied exception pause mode {:?} to {}",
+                        self.exception_mode,
+                        isolate_id,
+                    );
+                }
+
+                // ── Step 3: Re-apply breakpoints ─────────────────────────────
+
                 // Collect desired breakpoints first (avoid borrow conflict).
                 let to_apply: Vec<(String, crate::adapter::breakpoints::DesiredBreakpoint)> = self
                     .desired_breakpoints
@@ -339,19 +374,6 @@ impl<B: DebugBackend> DapAdapter<B> {
                             self.send_event("breakpoint", Some(body)).await;
                         }
                     }
-                }
-
-                // Re-apply exception pause mode to the new isolate.
-                if self.exception_mode != DapExceptionPauseMode::None {
-                    let _ = self
-                        .backend
-                        .set_exception_pause_mode(&isolate_id, self.exception_mode)
-                        .await;
-                    tracing::debug!(
-                        "Re-applied exception pause mode {:?} to new isolate {}",
-                        self.exception_mode,
-                        isolate_id,
-                    );
                 }
 
                 tracing::debug!(

@@ -222,6 +222,30 @@ pub struct DapAdapter<B: DebugBackend> {
     /// frames at or above the first async suspension boundary. The VM does not
     /// allow rewinding past an async suspension marker.
     pub(crate) first_async_marker_index: Option<i32>,
+
+    /// Whether stepping into Dart SDK libraries (`dart:` URIs) is allowed.
+    ///
+    /// When `false` (the default), SDK libraries are marked non-debuggable so
+    /// the debugger steps over them. Toggled by `updateDebugOptions` and
+    /// initialized from the `attach` request `debugSdkLibraries` argument.
+    pub(crate) debug_sdk_libraries: bool,
+
+    /// Whether stepping into external package libraries is allowed.
+    ///
+    /// External packages are `package:` URIs that do not match the app's own
+    /// package name. When `false` (the default), they are non-debuggable.
+    /// Toggled by `updateDebugOptions`.
+    pub(crate) debug_external_package_libraries: bool,
+
+    /// The name of the app's own package (e.g., `"my_app"` from `pubspec.yaml`).
+    ///
+    /// Used by `apply_library_debuggability` to distinguish the app's own
+    /// `package:my_app/` URIs (always debuggable) from external ones
+    /// (controlled by `debug_external_package_libraries`).
+    ///
+    /// Set during `handle_attach` from the `packageName` argument. Empty
+    /// string means "not set" — all `package:` URIs will be treated as external.
+    pub(crate) app_package_name: String,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -265,6 +289,9 @@ impl<B: DebugBackend> DapAdapter<B> {
             evaluate_getters_in_debug_views: true,
             evaluate_to_string_in_debug_views: true,
             first_async_marker_index: None,
+            debug_sdk_libraries: false,
+            debug_external_package_libraries: false,
+            app_package_name: String::new(),
         };
         (adapter, ())
     }

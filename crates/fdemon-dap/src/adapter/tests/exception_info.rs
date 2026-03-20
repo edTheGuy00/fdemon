@@ -133,12 +133,18 @@ async fn test_exception_info_returns_structured_data() {
         resp.message
     );
     let body = resp.body.unwrap();
-    assert!(!body["exceptionId"].as_str().unwrap_or("").is_empty(),
-        "exceptionId should be non-empty");
-    assert!(!body["description"].as_str().unwrap_or("").is_empty(),
-        "description should be non-empty");
-    assert!(!body["breakMode"].as_str().unwrap_or("").is_empty(),
-        "breakMode should be non-empty");
+    assert!(
+        !body["exceptionId"].as_str().unwrap_or("").is_empty(),
+        "exceptionId should be non-empty"
+    );
+    assert!(
+        !body["description"].as_str().unwrap_or("").is_empty(),
+        "description should be non-empty"
+    );
+    assert!(
+        !body["breakMode"].as_str().unwrap_or("").is_empty(),
+        "breakMode should be non-empty"
+    );
     assert!(body["details"].is_object(), "details should be an object");
 }
 
@@ -162,8 +168,7 @@ async fn test_exception_info_description_from_to_string() {
 
     let body = resp.body.unwrap();
     assert_eq!(
-        body["description"],
-        "FormatException: Unexpected character (at character 1)\n!@#$\n^",
+        body["description"], "FormatException: Unexpected character (at character 1)\n!@#$\n^",
         "description should match toString() output"
     );
 }
@@ -445,8 +450,7 @@ async fn test_exception_info_details_no_stack_trace_when_unavailable() {
 
     let body = resp.body.unwrap();
     assert!(
-        body["details"]["stackTrace"].is_null()
-            || body["details"].get("stackTrace").is_none(),
+        body["details"]["stackTrace"].is_null() || body["details"].get("stackTrace").is_none(),
         "details.stackTrace should be absent when evaluation fails, got: {:?}",
         body["details"]["stackTrace"]
     );

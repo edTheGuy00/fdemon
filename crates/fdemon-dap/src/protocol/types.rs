@@ -677,6 +677,28 @@ pub struct AttachRequestArguments {
     /// When `false`, no `toString()` calls are made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluate_to_string_in_debug_views: Option<bool>,
+    /// Whether to allow stepping into Dart SDK libraries (`dart:` URIs).
+    ///
+    /// When `true`, the debugger will step into SDK framework code. When
+    /// `false` (the default), SDK libraries are marked as non-debuggable and
+    /// the debugger skips over them during stepping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_sdk_libraries: Option<bool>,
+    /// Whether to allow stepping into external package libraries.
+    ///
+    /// When `true`, the debugger will step into code from external packages
+    /// (i.e., packages other than the app's own package). When `false` (the
+    /// default), external packages are marked as non-debuggable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_external_package_libraries: Option<bool>,
+    /// The name of the app's own package (from `pubspec.yaml`).
+    ///
+    /// When set, this is used to distinguish the app's own `package:` URIs
+    /// (which are always debuggable) from external package URIs (controlled by
+    /// `debug_external_package_libraries`). Defaults to using the session
+    /// directory name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
 }
 
 /// Arguments for the `restartFrame` request.
@@ -1577,6 +1599,9 @@ mod tests {
             session_id: Some("abc-123".into()),
             evaluate_getters_in_debug_views: None,
             evaluate_to_string_in_debug_views: None,
+            debug_sdk_libraries: None,
+            debug_external_package_libraries: None,
+            package_name: None,
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["vmServiceUri"], "ws://127.0.0.1:8181/ws");

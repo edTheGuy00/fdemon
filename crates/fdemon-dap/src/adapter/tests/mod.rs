@@ -25,6 +25,7 @@ mod production_hardening;
 mod restart_frame;
 mod stack_scopes_variables;
 mod to_string_display;
+mod update_debug_options;
 mod variable_type_rendering;
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -57,6 +57,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "restartFrame" => self.handle_restart_frame(request).await,
             "callService" => self.handle_call_service(request).await,
             "exceptionInfo" => self.handle_exception_info(request).await,
+            "updateDebugOptions" => self.handle_update_debug_options(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -87,6 +88,17 @@ impl<B: DebugBackend> DapAdapter<B> {
         // `evaluateToStringInDebugViews` defaults to `true` when absent.
         if let Some(eval_to_string) = args.evaluate_to_string_in_debug_views {
             self.evaluate_to_string_in_debug_views = eval_to_string;
+        }
+        // `debugSdkLibraries` defaults to `false` when absent — SDK libraries
+        // are non-debuggable by default so stepping stays in app code.
+        self.debug_sdk_libraries = args.debug_sdk_libraries.unwrap_or(false);
+        // `debugExternalPackageLibraries` defaults to `false` when absent.
+        self.debug_external_package_libraries =
+            args.debug_external_package_libraries.unwrap_or(false);
+        // `packageName` identifies the app's own package so its URIs are
+        // always treated as debuggable regardless of the external-package flag.
+        if let Some(pkg) = args.package_name {
+            self.app_package_name = pkg;
         }
 
         match self.backend.get_vm().await {
@@ -1218,6 +1230,170 @@ impl<B: DebugBackend> DapAdapter<B> {
         );
 
         DapResponse::success(request, Some(body))
+    }
+
+    /// Handle the `updateDebugOptions` custom DAP request.
+    ///
+    /// Toggles whether the debugger steps into Dart SDK libraries (`dart:`
+    /// URIs) and/or external package libraries. Changes are applied immediately
+    /// to all currently-known isolates via `setLibraryDebuggable` VM Service
+    /// RPC calls.
+    ///
+    /// # Arguments (in `request.arguments`)
+    ///
+    /// | Field | Type | Effect |
+    /// |---|---|---|
+    /// | `debugSdkLibraries` | `bool` | Allow stepping into `dart:` libraries |
+    /// | `debugExternalPackageLibraries` | `bool` | Allow stepping into external packages |
+    ///
+    /// Either field may be absent; absent fields leave the existing setting
+    /// unchanged.
+    ///
+    /// # App code
+    ///
+    /// Libraries whose URI matches `package:<app_package_name>/` are always
+    /// debuggable regardless of these settings.
+    pub(super) async fn handle_update_debug_options(
+        &mut self,
+        request: &DapRequest,
+    ) -> DapResponse {
+        tracing::debug!("DAP adapter: updateDebugOptions");
+
+        let args = match request.arguments.as_ref() {
+            Some(a) => a,
+            None => return DapResponse::error(request, "updateDebugOptions: missing arguments"),
+        };
+
+        // Update settings from the incoming arguments. Fields that are absent
+        // leave the existing setting unchanged.
+        if let Some(debug_sdk) = args.get("debugSdkLibraries").and_then(|v| v.as_bool()) {
+            self.debug_sdk_libraries = debug_sdk;
+        }
+        if let Some(debug_external) = args
+            .get("debugExternalPackageLibraries")
+            .and_then(|v| v.as_bool())
+        {
+            self.debug_external_package_libraries = debug_external;
+        }
+
+        // Collect all current isolate IDs before the async loop so we don't
+        // hold a borrow on `self` while calling async backend methods.
+        let isolate_ids: Vec<String> = self
+            .thread_map
+            .all_threads()
+            .map(|(_, iso)| iso.to_string())
+            .collect();
+
+        // Apply the current library-debuggability settings to every known isolate.
+        for isolate_id in &isolate_ids {
+            if let Err(e) = self.apply_library_debuggability(isolate_id).await {
+                tracing::warn!(
+                    "updateDebugOptions: failed to apply library debuggability to {}: {}",
+                    isolate_id,
+                    e,
+                );
+            }
+        }
+
+        tracing::debug!(
+            "updateDebugOptions applied to {} isolate(s): sdk={} external={}",
+            isolate_ids.len(),
+            self.debug_sdk_libraries,
+            self.debug_external_package_libraries,
+        );
+
+        DapResponse::success(request, Some(serde_json::json!({})))
+    }
+
+    /// Apply library debuggability settings to all libraries in an isolate.
+    ///
+    /// Fetches the isolate's library list via `getIsolate` and calls
+    /// `setLibraryDebuggable` for each library according to the current
+    /// `debug_sdk_libraries` and `debug_external_package_libraries` flags.
+    ///
+    /// # Classification
+    ///
+    /// | URI prefix | Debuggable? |
+    /// |---|---|
+    /// | `dart:` | `self.debug_sdk_libraries` |
+    /// | `package:<app>/` | Always `true` (app code) |
+    /// | `package:<other>/` | `self.debug_external_package_libraries` |
+    /// | `file://` | Always `true` (app code) |
+    /// | Other | Always `true` |
+    ///
+    /// Failures from individual `setLibraryDebuggable` calls are logged as
+    /// warnings and do not abort processing of remaining libraries.
+    pub(super) async fn apply_library_debuggability(&self, isolate_id: &str) -> Result<(), String> {
+        let isolate = self
+            .backend
+            .get_isolate(isolate_id)
+            .await
+            .map_err(|e| format!("get_isolate failed: {e}"))?;
+
+        let empty_vec = Vec::new();
+        let libraries = isolate
+            .get("libraries")
+            .and_then(|l| l.as_array())
+            .unwrap_or(&empty_vec);
+
+        for lib in libraries {
+            let lib_id = lib.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let uri = lib.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+
+            if lib_id.is_empty() {
+                continue;
+            }
+
+            let is_debuggable = if uri.starts_with("dart:") {
+                self.debug_sdk_libraries
+            } else if uri.starts_with("package:") && !self.is_app_package(uri) {
+                self.debug_external_package_libraries
+            } else {
+                // App code (file://, package:<app>/, or anything else) is
+                // always debuggable.
+                true
+            };
+
+            self.backend
+                .set_library_debuggable(isolate_id, lib_id, is_debuggable)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Failed to set library debuggability for {} ({}): {}",
+                        uri,
+                        lib_id,
+                        e
+                    );
+                });
+        }
+
+        Ok(())
+    }
+
+    /// Return `true` if the given `package:` URI belongs to the app's own package.
+    ///
+    /// A URI is an app package URI when it starts with
+    /// `package:<app_package_name>/`. If `app_package_name` is empty, no
+    /// `package:` URI is considered an app URI (they are all treated as
+    /// external).
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// app_package_name = "my_app"
+    /// "package:my_app/main.dart"         → true
+    /// "package:my_app/src/widget.dart"   → true
+    /// "package:flutter/material.dart"    → false
+    /// "dart:core"                        → false (not a package: URI)
+    /// ```
+    pub(super) fn is_app_package(&self, uri: &str) -> bool {
+        if self.app_package_name.is_empty() {
+            return false;
+        }
+        // Match "package:<name>/" exactly so that a package named "my_app"
+        // does not accidentally match "my_app_test".
+        let prefix = format!("package:{}/", self.app_package_name);
+        uri.starts_with(&prefix)
     }
 }
 
