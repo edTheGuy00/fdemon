@@ -744,6 +744,56 @@ pub struct ExceptionInfoArguments {
     pub thread_id: i64,
 }
 
+/// Arguments for the `breakpointLocations` request.
+///
+/// Sent by the IDE to discover valid breakpoint positions within a source
+/// file, typically when the user hovers over the gutter. The adapter
+/// queries the Dart VM Service `getSourceReport` RPC with the
+/// `PossibleBreakpoints` report kind and returns the matching positions
+/// filtered to the requested line range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointLocationsArguments {
+    /// The source file to query for valid breakpoint positions.
+    pub source: DapSource,
+    /// Start line of the range to query (1-based, inclusive).
+    pub line: i64,
+    /// Optional end line of the range to query (1-based, inclusive).
+    ///
+    /// When absent, only `line` is queried (a single-line range).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<i64>,
+    /// Optional start column of the range (1-based, inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<i64>,
+    /// Optional end column of the range (1-based, inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<i64>,
+}
+
+/// A valid breakpoint position within a source file.
+///
+/// Returned in the `breakpoints` array of a `breakpointLocations` response.
+/// Column information is included when available (column breakpoints).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointLocation {
+    /// The 1-based line number where a breakpoint can be placed.
+    pub line: i64,
+    /// The 1-based column number where a breakpoint can be placed.
+    ///
+    /// When `None`, the entire line is a valid breakpoint location and the
+    /// IDE may place the breakpoint at any column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<i64>,
+    /// The last line of the range covered by this breakpoint location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<i64>,
+    /// The last column of the range covered by this breakpoint location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<i64>,
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Constructors
 // ─────────────────────────────────────────────────────────────────────────────
@@ -950,6 +1000,7 @@ impl Capabilities {
             supports_delayed_stack_trace_loading: Some(true),
             supports_loaded_sources_request: Some(true),
             supports_exception_info_request: Some(true),
+            supports_breakpoint_locations_request: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
                     filter: "All".into(),
@@ -1209,7 +1260,8 @@ mod tests {
         assert_eq!(caps.supports_exception_info_request, Some(true));
         assert!(caps.supports_set_variable.is_none());
         assert!(caps.supports_value_formatting_options.is_none());
-        assert!(caps.supports_breakpoint_locations_request.is_none());
+        // breakpointLocations is implemented in Task 15 — capability is advertised.
+        assert_eq!(caps.supports_breakpoint_locations_request, Some(true));
     }
 
     #[test]

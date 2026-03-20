@@ -8,9 +8,10 @@ use crate::adapter::stack::build_source_from_uri;
 use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
-    AttachRequestArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread,
-    ExceptionInfoArguments, PauseArguments, RestartFrameArguments, SetBreakpointsArguments,
-    SetExceptionBreakpointsArguments, StepArguments,
+    AttachRequestArguments, BreakpointLocation, BreakpointLocationsArguments, ContinueArguments,
+    DapBreakpoint, DapSource, DapThread, ExceptionInfoArguments, PauseArguments,
+    RestartFrameArguments, SetBreakpointsArguments, SetExceptionBreakpointsArguments,
+    StepArguments,
 };
 use crate::{DapRequest, DapResponse};
 
@@ -58,6 +59,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "callService" => self.handle_call_service(request).await,
             "exceptionInfo" => self.handle_exception_info(request).await,
             "updateDebugOptions" => self.handle_update_debug_options(request).await,
+            "breakpointLocations" => self.handle_breakpoint_locations(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -1444,6 +1446,139 @@ impl<B: DebugBackend> DapAdapter<B> {
         Ok(())
     }
 
+    /// Handle the `breakpointLocations` DAP request.
+    ///
+    /// Returns valid breakpoint positions for a given source file and line range.
+    /// This enables IDEs to show valid breakpoint markers when the user hovers
+    /// over the editor gutter, and supports column breakpoints (multiple
+    /// breakpoints on a single line).
+    ///
+    /// ## Implementation
+    ///
+    /// 1. Resolves the source file path to a Dart `file://` URI.
+    /// 2. Finds the matching script in the isolate's script list.
+    /// 3. Calls `getSourceReport` with `PossibleBreakpoints` to get valid positions.
+    /// 4. Filters the positions to the requested line range.
+    ///
+    /// Token position → line/column mapping uses the script's `tokenPosTable`
+    /// when available. Each row is `[line, tokenPos, col, tokenPos, col, ...]`.
+    /// If the table is absent, positions are returned at line level only.
+    ///
+    /// ## Errors
+    ///
+    /// - No active isolate → error response
+    /// - Missing source path → error response
+    /// - Script not found for URI → returns empty breakpoints array (file may
+    ///   not be loaded yet — not a fatal error)
+    /// - `getSourceReport` failure → error response
+    pub(super) async fn handle_breakpoint_locations(
+        &mut self,
+        request: &DapRequest,
+    ) -> DapResponse {
+        tracing::debug!("DAP adapter: breakpointLocations");
+
+        let args = match parse_args::<BreakpointLocationsArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        let source_path = match args.source.path.as_deref() {
+            Some(p) if !p.is_empty() => p.to_string(),
+            _ => {
+                return DapResponse::error(request, "breakpointLocations: source path is required")
+            }
+        };
+
+        // Pick the best available isolate (most recently paused, or primary).
+        let isolate_id = match self
+            .most_recent_paused_isolate()
+            .map(|s| s.to_string())
+            .or_else(|| self.primary_isolate_id())
+        {
+            Some(id) => id,
+            None => {
+                return DapResponse::error(
+                    request,
+                    "breakpointLocations: no active isolate available",
+                )
+            }
+        };
+
+        // Convert the filesystem path to a Dart VM URI.
+        let uri = path_to_dart_uri(&source_path);
+
+        // Retrieve the script list to find the script ID for this URI.
+        let scripts_response = match self.backend.get_scripts(&isolate_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("breakpointLocations: get_scripts failed: {e}"),
+                )
+            }
+        };
+
+        // Find the script whose URI matches the requested file URI.
+        let script_id = find_script_id_by_uri(&scripts_response, &uri);
+        let script_id = match script_id {
+            Some(id) => id,
+            None => {
+                // Script not found — the file may not be loaded yet or may be
+                // outside the Dart source tree. Return an empty set rather than
+                // an error so the IDE does not treat this as a hard failure.
+                tracing::debug!(
+                    "breakpointLocations: script not found for URI '{}' — returning empty list",
+                    uri
+                );
+                let empty: Vec<BreakpointLocation> = Vec::new();
+                let body = serde_json::json!({ "breakpoints": empty });
+                return DapResponse::success(request, Some(body));
+            }
+        };
+
+        // Call getSourceReport to get possible breakpoint positions for the script.
+        let report = match self
+            .backend
+            .get_source_report(
+                &isolate_id,
+                &script_id,
+                &["PossibleBreakpoints"],
+                None,
+                None,
+            )
+            .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("breakpointLocations: getSourceReport failed: {e}"),
+                )
+            }
+        };
+
+        // Extract token-to-line/column mapping from the script object if available.
+        // The script's tokenPosTable is a 2D array where each row is:
+        //   [line, tokenPos, col, tokenPos, col, ...]
+        // We build a HashMap from tokenPos → (line, col) for fast lookup.
+        let token_pos_map = build_token_pos_map(&report);
+
+        // Extract breakpoint locations filtered to the requested line range.
+        let end_line = args.end_line.unwrap_or(args.line);
+        let locations = extract_breakpoint_locations(&report, &token_pos_map, args.line, end_line);
+
+        tracing::debug!(
+            "breakpointLocations: {} location(s) for {} lines {}-{}",
+            locations.len(),
+            source_path,
+            args.line,
+            end_line,
+        );
+
+        let body = serde_json::json!({ "breakpoints": locations });
+        DapResponse::success(request, Some(body))
+    }
+
     /// Return `true` if the given `package:` URI belongs to the app's own package.
     ///
     /// A URI is an app package URI when it starts with
@@ -1545,4 +1680,138 @@ pub(crate) fn exception_filter_to_mode(filters: &[String]) -> DapExceptionPauseM
     } else {
         DapExceptionPauseMode::None
     }
+}
+
+/// Find the script ID whose URI matches the given Dart URI in a `ScriptList` response.
+///
+/// The `scripts_response` is the JSON value returned by `get_scripts()`, which
+/// wraps an array under the `"scripts"` key. Each element has `"id"` and `"uri"` fields.
+///
+/// Returns `None` when no script matches.
+pub(crate) fn find_script_id_by_uri(
+    scripts_response: &serde_json::Value,
+    uri: &str,
+) -> Option<String> {
+    let scripts = scripts_response.get("scripts")?.as_array()?;
+    for script in scripts {
+        let script_uri = script.get("uri")?.as_str()?;
+        if script_uri == uri {
+            let id = script.get("id")?.as_str()?;
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+/// Build a map from VM token position → `(line, column)` from a `getSourceReport` response.
+///
+/// The Dart VM embeds the `tokenPosTable` inside the `scripts` array of the
+/// source report. Each script entry may have a `tokenPosTable` field which is a
+/// 2-dimensional array. Each row has the form:
+///
+/// ```text
+/// [line, tokenPos, column, tokenPos, column, ...]
+/// ```
+///
+/// where `line` is the 1-based source line number and each subsequent pair is a
+/// token position followed by its 1-based column offset.
+///
+/// Returns a `HashMap<i64, (i64, i64)>` mapping `tokenPos → (line, column)`.
+/// Returns an empty map when no `tokenPosTable` is present.
+pub(crate) fn build_token_pos_map(
+    report: &serde_json::Value,
+) -> std::collections::HashMap<i64, (i64, i64)> {
+    let mut map = std::collections::HashMap::new();
+
+    let scripts = match report.get("scripts").and_then(|s| s.as_array()) {
+        Some(s) => s,
+        None => return map,
+    };
+
+    for script in scripts {
+        let table = match script.get("tokenPosTable").and_then(|t| t.as_array()) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        for row in table {
+            let row = match row.as_array() {
+                Some(r) => r,
+                None => continue,
+            };
+            // row[0] is the line number; subsequent pairs are (tokenPos, column).
+            if row.len() < 3 {
+                continue;
+            }
+            let line = match row[0].as_i64() {
+                Some(l) => l,
+                None => continue,
+            };
+            // Iterate over (tokenPos, column) pairs starting at index 1.
+            let mut i = 1;
+            while i + 1 < row.len() {
+                if let (Some(token_pos), Some(col)) = (row[i].as_i64(), row[i + 1].as_i64()) {
+                    map.insert(token_pos, (line, col));
+                }
+                i += 2;
+            }
+        }
+    }
+
+    map
+}
+
+/// Extract [`BreakpointLocation`] objects from a `getSourceReport` response.
+///
+/// Iterates the `ranges` array and collects all `possibleBreakpoints` token
+/// positions. Each token position is looked up in `token_pos_map` to obtain
+/// a `(line, column)` pair. Only positions whose line falls within
+/// `[start_line, end_line]` (both inclusive, 1-based) are included.
+///
+/// When a token position is not present in `token_pos_map`, the position is
+/// skipped (column-level accuracy requires the `tokenPosTable`).
+pub(crate) fn extract_breakpoint_locations(
+    report: &serde_json::Value,
+    token_pos_map: &std::collections::HashMap<i64, (i64, i64)>,
+    start_line: i64,
+    end_line: i64,
+) -> Vec<BreakpointLocation> {
+    let mut locations: Vec<BreakpointLocation> = Vec::new();
+
+    let ranges = match report.get("ranges").and_then(|r| r.as_array()) {
+        Some(r) => r,
+        None => return locations,
+    };
+
+    for range in ranges {
+        let possible = match range.get("possibleBreakpoints").and_then(|p| p.as_array()) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        for token_pos_val in possible {
+            let token_pos = match token_pos_val.as_i64() {
+                Some(t) => t,
+                None => continue,
+            };
+
+            if let Some(&(line, col)) = token_pos_map.get(&token_pos) {
+                if line >= start_line && line <= end_line {
+                    locations.push(BreakpointLocation {
+                        line,
+                        column: Some(col),
+                        end_line: None,
+                        end_column: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by line then column for deterministic output.
+    locations.sort_by(|a, b| a.line.cmp(&b.line).then(a.column.cmp(&b.column)));
+    // Deduplicate identical positions.
+    locations.dedup_by(|a, b| a.line == b.line && a.column == b.column);
+
+    locations
 }
