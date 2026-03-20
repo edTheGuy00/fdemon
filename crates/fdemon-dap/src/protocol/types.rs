@@ -182,6 +182,13 @@ pub struct Capabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_restart_frame: Option<bool>,
 
+    /// The debug adapter supports the `completions` request.
+    ///
+    /// When `true`, IDEs send `completions` requests to provide IntelliSense-
+    /// like auto-complete suggestions in the debug console REPL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_completions_request: Option<bool>,
+
     /// Available exception filter options for the `setExceptionBreakpoints` request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_breakpoint_filters: Option<Vec<ExceptionBreakpointsFilter>>,
@@ -795,6 +802,67 @@ pub struct BreakpointLocation {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Completions Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Arguments for the `completions` request.
+///
+/// Sent by the IDE debug console when the user presses Tab or triggers
+/// auto-complete. The adapter returns a list of [`CompletionItem`]s that
+/// match the identifier fragment being typed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionsArguments {
+    /// The text of the debug console input up to (and including) the character
+    /// at `column - 1`. The adapter extracts the last identifier fragment from
+    /// this string and filters candidates by prefix.
+    pub text: String,
+
+    /// The 1-based column offset of the cursor within `text`.
+    ///
+    /// Only the portion of `text` up to `column - 1` is considered. This
+    /// allows the client to pass the full input line even when the cursor is
+    /// in the middle.
+    pub column: i64,
+
+    /// The stack frame in which to enumerate local variables.
+    ///
+    /// When present, the adapter includes local variable names from the
+    /// corresponding frame in the completion list. When absent, only keywords
+    /// are suggested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
+}
+
+/// A single auto-complete suggestion returned in a `completions` response.
+///
+/// Fields correspond to the DAP `CompletionItem` specification.
+///
+/// The `type` field is serialized as `"type"` on the wire (per DAP spec) but
+/// stored as `type_field` in Rust to avoid the reserved keyword.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    /// The text that is inserted when the completion is accepted.
+    pub label: String,
+
+    /// The category of this completion item.
+    ///
+    /// Common values: `"variable"`, `"keyword"`, `"function"`, `"class"`.
+    /// Maps to the `"type"` field in the DAP wire format.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
+    pub type_field: Option<String>,
+
+    /// An optional string used to sort this item relative to others.
+    ///
+    /// Items with a lexicographically earlier `sort_text` appear first. The
+    /// adapter uses a numeric prefix (`"0_"` for locals, `"2_"` for keywords)
+    /// so that locals sort before keywords in the IDE completion list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_text: Option<String>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Helper Constructors
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1001,6 +1069,7 @@ impl Capabilities {
             supports_loaded_sources_request: Some(true),
             supports_exception_info_request: Some(true),
             supports_breakpoint_locations_request: Some(true),
+            supports_completions_request: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
                     filter: "All".into(),

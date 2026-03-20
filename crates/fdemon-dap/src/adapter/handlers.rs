@@ -8,10 +8,10 @@ use crate::adapter::stack::build_source_from_uri;
 use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
-    AttachRequestArguments, BreakpointLocation, BreakpointLocationsArguments, ContinueArguments,
-    DapBreakpoint, DapSource, DapThread, ExceptionInfoArguments, PauseArguments,
-    RestartFrameArguments, SetBreakpointsArguments, SetExceptionBreakpointsArguments,
-    StepArguments,
+    AttachRequestArguments, BreakpointLocation, BreakpointLocationsArguments, CompletionItem,
+    CompletionsArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread,
+    ExceptionInfoArguments, PauseArguments, RestartFrameArguments, SetBreakpointsArguments,
+    SetExceptionBreakpointsArguments, StepArguments,
 };
 use crate::{DapRequest, DapResponse};
 
@@ -60,6 +60,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             "exceptionInfo" => self.handle_exception_info(request).await,
             "updateDebugOptions" => self.handle_update_debug_options(request).await,
             "breakpointLocations" => self.handle_breakpoint_locations(request).await,
+            "completions" => self.handle_completions(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -1579,6 +1580,100 @@ impl<B: DebugBackend> DapAdapter<B> {
         DapResponse::success(request, Some(body))
     }
 
+    /// Handle the `completions` DAP request.
+    ///
+    /// Provides IntelliSense-like auto-complete suggestions for the debug
+    /// console REPL. Candidates are sourced from:
+    ///
+    /// 1. **Local variables** — names of all `BoundVariable` entries in the
+    ///    current stack frame, when a `frameId` is provided.
+    /// 2. **Dart keywords** — `true`, `false`, `null`, `this`.
+    ///
+    /// All candidates are filtered by the identifier fragment the user is
+    /// currently typing (the suffix of `text[..column-1]` after the last
+    /// non-identifier character). An empty fragment returns all candidates.
+    ///
+    /// Locals are sorted before keywords (via `sort_text` prefix `"0_"` vs
+    /// `"2_"`). The result is capped at 50 items to keep response payloads
+    /// small.
+    ///
+    /// # Error handling
+    ///
+    /// - Missing arguments → DAP error response.
+    /// - `get_stack` failure → local variables are skipped; keywords are still
+    ///   returned so the response degrades gracefully.
+    pub(super) async fn handle_completions(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: completions");
+
+        let args = match parse_args::<CompletionsArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        let text = &args.text;
+        let column = args.column;
+
+        // Extract the prefix up to the cursor position (column is 1-based).
+        let prefix_len = ((column - 1) as usize).min(text.len());
+        let prefix = &text[..prefix_len];
+        // Find the last identifier fragment being typed (may be empty).
+        let fragment = extract_last_identifier(prefix);
+
+        let mut items: Vec<CompletionItem> = Vec::new();
+
+        // ── 1. Local variables from the current frame ─────────────────────────
+        if let Some(frame_id) = args.frame_id {
+            if let Some(frame_ref) = self.frame_store.lookup(frame_id).cloned() {
+                // Fetch the stack limited to the frame of interest.
+                let limit = frame_ref.frame_index + 1;
+                if let Ok(stack) = self
+                    .backend
+                    .get_stack(&frame_ref.isolate_id, Some(limit))
+                    .await
+                {
+                    // Navigate into frames[frame_index].vars.
+                    if let Some(vars) = stack
+                        .get("frames")
+                        .and_then(|f| f.as_array())
+                        .and_then(|f| f.get(frame_ref.frame_index as usize))
+                        .and_then(|f| f.get("vars"))
+                        .and_then(|v| v.as_array())
+                    {
+                        for var in vars {
+                            if let Some(name) = var.get("name").and_then(|n| n.as_str()) {
+                                if fragment.is_empty() || name.starts_with(fragment) {
+                                    items.push(CompletionItem {
+                                        label: name.to_string(),
+                                        type_field: Some("variable".to_string()),
+                                        // Locals first ("0_" sorts before "2_" for keywords).
+                                        sort_text: Some(format!("0_{}", name)),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 2. Dart keywords ──────────────────────────────────────────────────
+        for kw in &["true", "false", "null", "this"] {
+            if fragment.is_empty() || kw.starts_with(fragment) {
+                items.push(CompletionItem {
+                    label: kw.to_string(),
+                    type_field: Some("keyword".to_string()),
+                    sort_text: Some(format!("2_{}", kw)),
+                });
+            }
+        }
+
+        // Limit to 50 items to avoid oversized responses.
+        items.truncate(50);
+
+        let body = serde_json::json!({ "targets": items });
+        DapResponse::success(request, Some(body))
+    }
+
     /// Return `true` if the given `package:` URI belongs to the app's own package.
     ///
     /// A URI is an app package URI when it starts with
@@ -1609,6 +1704,30 @@ impl<B: DebugBackend> DapAdapter<B> {
 // ─────────────────────────────────────────────────────────────────────────────
 // Free helper functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Extract the last identifier fragment from a string.
+///
+/// An identifier character is `[a-zA-Z0-9_$]` (matching Dart identifier rules).
+/// Returns the longest trailing run of identifier characters in `text`, or
+/// an empty string if `text` ends with a non-identifier character or is empty.
+///
+/// # Examples
+///
+/// ```text
+/// "counter"       → "counter"
+/// "obj.field"     → "field"
+/// "myList["       → ""
+/// ""              → ""
+/// "tr"            → "tr"
+/// ```
+pub(crate) fn extract_last_identifier(text: &str) -> &str {
+    let end = text.len();
+    let start = text
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    &text[start..end]
+}
 
 /// Parse the `arguments` field of a [`DapRequest`] as `T`.
 ///
