@@ -44,6 +44,34 @@ const GETTER_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// - `runtimeType`: returns the Dart `Type` object; rarely useful in debugger.
 const FILTERED_GETTER_NAMES: &[&str] = &["_identityHashCode", "hashCode", "runtimeType"];
 
+/// Timeout for a single `toString()` evaluation when enriching variable display values.
+///
+/// A 1-second timeout is critical: some `toString()` implementations in user
+/// code can be expensive or buggy. The variables panel must never hang because
+/// of a bad `toString()`. On timeout, the variable displays just the class name.
+const TO_STRING_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Instance kinds for which `toString()` enrichment is applied.
+///
+/// Primitives, collections, closures, and sentinels already show their values
+/// inline; only complex object kinds benefit from calling `toString()`.
+const TO_STRING_KINDS: &[&str] = &["PlainInstance", "RegExp", "StackTrace", "WeakReference"];
+
+/// Metadata for a variable that requires `toString()` enrichment.
+///
+/// Collected during `get_scope_variables` and then used in the enrichment
+/// pass to call `evaluate(obj_id, "toString()")` on the VM Service.
+struct ToStringCandidate {
+    /// Index of the variable in the result vector that needs enrichment.
+    var_index: usize,
+    /// The Dart VM Service isolate ID for the `evaluate` call.
+    isolate_id: String,
+    /// The object ID to evaluate `toString()` on.
+    object_id: String,
+    /// The class display name (used to suppress default Dart toString output).
+    class_name: String,
+}
+
 impl<B: DebugBackend> DapAdapter<B> {
     /// Handle the `stackTrace` request.
     ///
@@ -407,7 +435,16 @@ impl<B: DebugBackend> DapAdapter<B> {
                         &isolate_id_clone,
                         Some("$_threadException"),
                     );
-                    Ok(vec![var])
+                    let mut result = vec![var];
+                    // Enrich exception with toString() if enabled.
+                    if self.evaluate_to_string_in_debug_views {
+                        let candidates: Vec<ToStringCandidate> =
+                            to_string_candidate(0, &isolate_id_clone, &instance_ref)
+                                .into_iter()
+                                .collect();
+                        self.enrich_with_to_string(&mut result, candidates).await;
+                    }
+                    Ok(result)
                 } else {
                     Ok(Vec::new())
                 }
@@ -447,6 +484,7 @@ impl<B: DebugBackend> DapAdapter<B> {
 
                 let isolate_id_clone = isolate_id.clone();
                 let mut result = Vec::with_capacity(vars.len());
+                let mut candidates: Vec<ToStringCandidate> = Vec::new();
                 for var in &vars {
                     let name = var
                         .get("name")
@@ -454,6 +492,14 @@ impl<B: DebugBackend> DapAdapter<B> {
                         .unwrap_or("?")
                         .to_string();
                     let value = var.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                    // Collect toString() enrichment candidate before converting.
+                    if self.evaluate_to_string_in_debug_views {
+                        if let Some(candidate) =
+                            to_string_candidate(result.len(), &isolate_id_clone, &value)
+                        {
+                            candidates.push(candidate);
+                        }
+                    }
                     // Pass the variable name as its evaluateName so the IDE can
                     // use it in "Add to Watch" and nested expression drill-down.
                     result.push(self.instance_ref_to_variable_with_eval_name(
@@ -463,9 +509,60 @@ impl<B: DebugBackend> DapAdapter<B> {
                         Some(&name),
                     ));
                 }
+                // Second pass: enrich PlainInstance variables with toString().
+                self.enrich_with_to_string(&mut result, candidates).await;
                 Ok(result)
             }
             ScopeKind::Globals => self.get_globals_variables(frame_index).await,
+        }
+    }
+
+    /// Enrich a list of variables with `toString()` display values.
+    ///
+    /// For each [`ToStringCandidate`] in `candidates`, calls `evaluate` on the
+    /// VM Service with the expression `"toString()"` and a
+    /// [`TO_STRING_EVAL_TIMEOUT`] timeout. If the result is non-empty and is
+    /// not the default Dart `"Instance of 'ClassName'"` output, it is appended
+    /// to the variable's display value: `"MyClass (custom string repr)"`.
+    ///
+    /// Errors and timeouts silently fall back to the current display value.
+    /// toString calls are made sequentially to avoid overwhelming the VM.
+    ///
+    /// This method is a no-op when `self.evaluate_to_string_in_debug_views` is
+    /// `false` (caller is responsible for checking before collecting candidates).
+    async fn enrich_with_to_string(
+        &self,
+        variables: &mut [DapVariable],
+        candidates: Vec<ToStringCandidate>,
+    ) {
+        for candidate in candidates {
+            let result = tokio::time::timeout(
+                TO_STRING_EVAL_TIMEOUT,
+                self.backend
+                    .evaluate(&candidate.isolate_id, &candidate.object_id, "toString()"),
+            )
+            .await;
+
+            let Ok(Ok(ref response)) = result else {
+                // Timeout or backend error — silently keep the existing value.
+                continue;
+            };
+
+            let str_val = response
+                .get("valueAsString")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            // Suppress the default Dart toString() output.
+            let default_output = format!("Instance of '{}'", candidate.class_name);
+            if str_val.is_empty() || str_val == default_output {
+                continue;
+            }
+
+            // Append the useful toString() output to the display value.
+            if let Some(var) = variables.get_mut(candidate.var_index) {
+                var.value = format!("{} ({})", candidate.class_name, str_val);
+            }
         }
     }
 
@@ -1464,4 +1561,39 @@ impl<B: DebugBackend> DapAdapter<B> {
             _ => Ok(Vec::new()),
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// toString() enrichment helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build a [`ToStringCandidate`] for an `InstanceRef` JSON value if it is a
+/// kind that benefits from `toString()` enrichment.
+///
+/// Returns `None` for primitives, collections, sentinels, and other kinds
+/// that already have useful display values without calling `toString()`.
+fn to_string_candidate(
+    var_index: usize,
+    isolate_id: &str,
+    instance_ref: &serde_json::Value,
+) -> Option<ToStringCandidate> {
+    let kind = instance_ref.get("kind").and_then(|k| k.as_str())?;
+    if !TO_STRING_KINDS.contains(&kind) {
+        return None;
+    }
+    let object_id = instance_ref.get("id").and_then(|i| i.as_str())?;
+    // Derive the class name the same way instance_ref_to_variable_with_eval_name does.
+    let class_name = instance_ref
+        .get("classRef")
+        .or_else(|| instance_ref.get("class"))
+        .and_then(|c| c.get("name"))
+        .and_then(|n| n.as_str())
+        .unwrap_or(kind)
+        .to_string();
+    Some(ToStringCandidate {
+        var_index,
+        isolate_id: isolate_id.to_string(),
+        object_id: object_id.to_string(),
+        class_name,
+    })
 }

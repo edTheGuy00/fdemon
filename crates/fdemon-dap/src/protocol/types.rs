@@ -659,6 +659,17 @@ pub struct AttachRequestArguments {
     /// lazy items the user can expand on demand.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluate_getters_in_debug_views: Option<bool>,
+    /// Whether to call `toString()` on `PlainInstance` objects and append the
+    /// result to the display value in the variables panel.
+    ///
+    /// When `true` (the default), `toString()` is called on `PlainInstance`,
+    /// `RegExp`, and `StackTrace` objects. If the result is useful (not the
+    /// default `"Instance of 'ClassName'"` pattern), it is appended:
+    /// `"MyClass (custom string repr)"`.
+    ///
+    /// When `false`, no `toString()` calls are made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluate_to_string_in_debug_views: Option<bool>,
 }
 
 /// Arguments for the `disconnect` request.
@@ -1527,6 +1538,7 @@ mod tests {
             vm_service_uri: Some("ws://127.0.0.1:8181/ws".into()),
             session_id: Some("abc-123".into()),
             evaluate_getters_in_debug_views: None,
+            evaluate_to_string_in_debug_views: None,
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["vmServiceUri"], "ws://127.0.0.1:8181/ws");

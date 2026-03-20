@@ -20,6 +20,7 @@ mod hot_operations;
 mod logpoints;
 mod production_hardening;
 mod stack_scopes_variables;
+mod to_string_display;
 mod variable_type_rendering;
 
 // ─────────────────────────────────────────────────────────────────────────────

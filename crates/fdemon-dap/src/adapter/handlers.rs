@@ -78,6 +78,10 @@ impl<B: DebugBackend> DapAdapter<B> {
         if let Some(eval_getters) = args.evaluate_getters_in_debug_views {
             self.evaluate_getters_in_debug_views = eval_getters;
         }
+        // `evaluateToStringInDebugViews` defaults to `true` when absent.
+        if let Some(eval_to_string) = args.evaluate_to_string_in_debug_views {
+            self.evaluate_to_string_in_debug_views = eval_to_string;
+        }
 
         match self.backend.get_vm().await {
             Ok(vm_info) => {

@@ -195,6 +195,21 @@ pub struct DapAdapter<B: DebugBackend> {
     ///
     /// Settable from the `attach` request args (`evaluateGettersInDebugViews`).
     pub(crate) evaluate_getters_in_debug_views: bool,
+
+    /// Whether to call `toString()` on `PlainInstance` objects and append the
+    /// result to the variable display value.
+    ///
+    /// When `true` (the default), a `toString()` call with a 1-second timeout
+    /// is issued for each `PlainInstance`, `RegExp`, and `StackTrace` variable
+    /// in a scope. If the result is not the default Dart `"Instance of
+    /// 'ClassName'"` pattern, it is appended to the display value:
+    /// `"MyClass (custom string repr)"`.
+    ///
+    /// When `false`, no `toString()` calls are made and the display value is
+    /// just the class name.
+    ///
+    /// Settable from the `attach` request args (`evaluateToStringInDebugViews`).
+    pub(crate) evaluate_to_string_in_debug_views: bool,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -236,6 +251,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             exception_refs: HashMap::new(),
             evaluate_name_map: HashMap::new(),
             evaluate_getters_in_debug_views: true,
+            evaluate_to_string_in_debug_views: true,
         };
         (adapter, ())
     }
