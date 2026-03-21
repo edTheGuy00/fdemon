@@ -121,3 +121,39 @@ async fn test_getter_evaluation_respects_total_budget() {
 - The 3s/5s budget values are chosen to feel responsive in an IDE. They can be adjusted based on user feedback.
 - Sequential evaluation is intentionally preserved (not switched to concurrent) to avoid overwhelming slow devices. The budget just caps the total time.
 - Consider adding the budget constants to `types.rs` alongside the existing timeout constants for consistency.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/variables.rs` | Added `TO_STRING_TOTAL_BUDGET` (3s) and `GETTER_EVAL_TOTAL_BUDGET` (5s) constants; modified `enrich_with_to_string` to check deadline before each call with debug log on exhaustion; modified PlainInstance getter loop to check deadline before each eager evaluation and convert remaining getters to lazy items on exhaustion |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered new `time_budgets` test module |
+| `crates/fdemon-dap/src/adapter/tests/time_budgets.rs` | New file: 5 tests covering toString budget exhaustion, variable preservation, getter budget exhaustion, remaining-as-lazy behavior, and lazy getter expandability |
+
+### Notable Decisions/Tradeoffs
+
+1. **Constants kept in variables.rs**: The task notes suggested putting budget constants in `types.rs`, but the existing per-call timeout constants (`GETTER_EVAL_TIMEOUT`, `TO_STRING_EVAL_TIMEOUT`) already live in `variables.rs`. Keeping all related constants together is more cohesive; they can be moved if desired.
+
+2. **Getter loop refactored to `iter().enumerate()`**: The original loop consumed `getter_names` by value. To enable slicing `&getter_names[getter_idx..]` for the budget-exhausted remainder, the loop was changed to iterate by reference with index. Clone calls were added where needed (`getter_name.clone()`).
+
+3. **`getter_deadline` is `Option<Instant>`**: The deadline is only meaningful when `evaluate_getters` is true (lazy mode makes no network calls). Using `Option` avoids creating an unused `Instant` for the lazy path and keeps the intent explicit.
+
+4. **Budget check is "before each call" not "after"**: The check fires at the top of each loop iteration, so the total elapsed time is bounded by `budget + one_per_call_timeout`. This is the correct pattern: we refuse to start a new call if the budget is already gone.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (838 tests, 5 new budget tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **Timing-sensitive tests**: The 5 new tests use `tokio::time::timeout` assertions with generous headroom (6s for 3s budget, 10s for 5s budget). On an exceptionally loaded CI machine these could fail; the headroom is intentionally large to minimize this risk.

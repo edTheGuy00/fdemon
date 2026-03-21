@@ -113,3 +113,40 @@ async fn test_attach_malformed_arguments_returns_error() {
 
 - The `.expect()` at `stack.rs:888` reported in the review is actually in a `#[test]` function, not production code. No fix needed there.
 - Scan confirmed: `handlers.rs:343` is the **only** production `.expect()` in the entire adapter directory.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6d463b7
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Fix 1: Replace `.expect()` with graceful error + `continue`; Fix 2: Add `column < 1` guard before prefix_len; Fix 3: Return parse error instead of `unwrap_or_default` for attach args |
+| `crates/fdemon-dap/src/adapter/tests/completions.rs` | Add tests: `test_completions_column_zero_returns_error`, `test_completions_column_negative_returns_error`, `test_completions_column_one_succeeds` |
+| `crates/fdemon-dap/src/adapter/tests/attach_threads.rs` | Add tests: `test_attach_malformed_arguments_returns_error`, `test_attach_no_arguments_uses_defaults` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fix 1 (expect -> match)**: The `continue` in the None arm skips just the malformed breakpoint rather than aborting the entire setBreakpoints request. This matches the pattern already used when `add_breakpoint` backend call fails.
+
+2. **Fix 2 (column guard)**: Placed before the subtraction so the error is returned immediately rather than clamping silently. This matches the task spec exactly.
+
+3. **Fix 3 (attach args)**: The `None` arm keeps the original `AttachRequestArguments::default()` behaviour (None is valid per DAP spec). Only the `Some` arm is changed to surface parse errors.
+
+4. **Worktree merge**: The worktree was based on `main` which predates all DAP code. A fast-forward merge from `feat/dap-phase-6-plan` was performed before implementing fixes.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (806 tests pass)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (no warnings)
+- `grep '\.expect(' handlers.rs | grep -v "// SAFETY"` - Confirmed zero results (no production .expect())
+
+### Risks/Limitations
+
+1. **None identified**: All three fixes are minimal surgical changes with no side effects on the surrounding logic.

@@ -116,3 +116,32 @@ fn test_source_ref_store_clear_resets_reverse_index() {
 
 - The existing test suite for `SourceReferenceStore` is in `stack.rs` under `#[cfg(test)]`. All existing tests should pass without modification since the external API doesn't change.
 - If `get_or_create` is ever called with different `uri` for the same `(isolate_id, script_id)`, the current behavior (returns existing ID, ignores new uri) is preserved.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a0230c4e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `by_script: HashMap<(String, String), i64>` reverse-index field; updated `new()`, `get_or_create()`, and `clear()` to maintain both maps in sync; added 3 new tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **test_source_ref_store_clear_resets_reverse_index assertion**: The task template uses `assert_eq!(id, 1)` with comment "first allocation after reset", implying next_id resets to 1 after clear. However, the existing `test_source_reference_store_clear_preserves_next_id` test explicitly verifies that `next_id` is NOT reset (to prevent stale DAP client cache hits). The new test uses `assert_eq!(id, 2)` which is the correct value given the preserved `next_id` behavior.
+2. **Key allocation on cache hit**: The implementation allocates two `String`s to form the lookup key even on cache hits. The task notes this is acceptable for expected cardinality (~100–500 scripts).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (584 tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Key allocation overhead**: `get_or_create` allocates two `String`s per call even on cache hits. For ~100–500 scripts this is negligible as noted in the task.

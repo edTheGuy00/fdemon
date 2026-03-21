@@ -97,3 +97,34 @@ For the resume error logging, the existing mock backend tests can be extended to
 ### Notes
 
 - These are small, low-risk changes. The error logging change is purely additive (no behavior change for the success path). The `exception_refs.clear()` aligns with the existing cleanup pattern.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1b6e918
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/events.rs` | Fix 1: Replaced three `let _ = self.backend.resume(...)` calls with `if let Err(e)` + `tracing::warn!`. Fix 2: Added `self.exception_refs.clear()` to `on_resume()` and updated doc comment. |
+| `crates/fdemon-dap/src/adapter/tests/events_logging.rs` | Added `test_on_resume_clears_exception_refs` test verifying the new cleanup. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Branch merge required**: The task file was on `feat/dap-phase-6-plan` while the worktree started from `main`. A fast-forward merge of `feat/dap-phase-6-plan` was needed before implementing since the fields (`exception_refs`, `evaluate_name_map`, `first_async_marker_index`) only exist in the phase-6 codebase.
+2. **Test placement**: Added the `test_on_resume_clears_exception_refs` test to the existing `events_logging.rs` module rather than creating a new file, since it tests `on_resume()` which lives in `events.rs`.
+3. **Doc comment updated**: Updated the `on_resume()` doc comment to mention `exception_refs` in the list of cleared state.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (802 tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **`exception_refs` double-clear**: The `DebugEvent::Resumed` handler still calls `self.exception_refs.remove(&thread_id)` per-thread before calling `on_resume()`. With `on_resume()` now also clearing all refs, this per-thread remove becomes redundant but harmless (it removes a single entry that `on_resume()` would clear anyway).

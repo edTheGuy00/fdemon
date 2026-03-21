@@ -126,3 +126,42 @@ fn test_variable_store_reset_clears_cap_flag() {
 - The simpler approach (check-after-allocate) is preferred over the enum return type to minimize changes to the `allocate()` call sites.
 - The output event should be emitted only once per stop (per `VariableStore::reset()` cycle), not once per session.
 - `evaluate_name_map` also has no capacity cap. Adding a cap there is out of scope for this task but is noted as future work.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `cap_hit` and `cap_warning_pending` fields to `VariableStore`; updated `new()`, `allocate()`, `reset()`; added `take_cap_warning()` method; added 4 new unit tests |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Added `take_cap_warning()` check and `send_event("output", ...)` call in `handle_variables` after variables are computed |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two-flag design over single flag**: Used `cap_hit` (permanent-per-stop) and `cap_warning_pending` (consumable) instead of a single flag. The single-flag approach had a bug: `take_cap_warning()` would reset the flag, allowing subsequent cap hits to re-arm it within the same stop cycle. The two-flag design ensures only one warning fires per stop cycle regardless of how many times the cap is hit or how many times `take_cap_warning()` is called.
+
+2. **Call site in `variables.rs`**: The task's scope constraint listed `events.rs` but the implementation location must be `variables.rs` because the event emission requires async context and must fire after `allocate()` calls in `handle_variables`. No changes to `events.rs` were needed since `send_event` is already callable from `variables.rs` via the existing `DapAdapter<B>` impl in `events.rs`.
+
+3. **Warning message**: The message is clear and actionable, mentioning the 10,000 entry limit and the root cause (deep object hierarchies).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (842 tests, up from 841)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (clean)
+
+New tests added in `stack.rs`:
+- `test_variable_store_take_cap_warning_returns_false_before_cap`
+- `test_variable_store_cap_signals_first_hit`
+- `test_variable_store_cap_subsequent_allocations_do_not_re_signal`
+- `test_variable_store_reset_clears_cap_flag`
+
+### Risks/Limitations
+
+1. **`handle_scopes` not checked**: The `handle_scopes` handler also calls `var_store.allocate()` for scope references but does not check `take_cap_warning()`. In practice, scope allocations (at most 3 per frame) are unlikely to exhaust the cap, and adding the check there would require async context. The warning will still fire correctly from `handle_variables` once the user tries to expand a variable. This is acceptable behavior.

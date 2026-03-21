@@ -142,3 +142,47 @@ async fn test_attached_session_not_affected_by_idle_timeout() {
 - The `authToken` field uses `Option<String>` for backward compatibility with older clients that don't send it.
 - Consider also returning the auth token in the server's startup output (e.g., as part of a JSON status line) so that IDE plugins can parse it automatically.
 - The idle timeout of 5 minutes is generous. It only catches truly abandoned sessions, not slow clients.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/Cargo.toml` | Added `rand.workspace = true` dependency; added `time` feature to dev tokio |
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `auth_token: Option<String>` field to `InitializeRequestArguments` |
+| `crates/fdemon-dap/src/server/mod.rs` | Added `require_auth: bool` to `DapServerConfig`; added `auth_token: Option<String>` to `DapServerHandle`; added `generate_auth_token()` function; updated `start()` to generate/log/print token when `require_auth=true`; updated `accept_loop` to pass token to sessions; added `auth_token()` accessor; updated all tests |
+| `crates/fdemon-dap/src/server/session.rs` | Added `IDLE_TIMEOUT` constant; added `auth_token` field to `DapClientSession`; updated `new()`, `with_backend()`, `run_on_with_backend()`, `run_on()`, `run()` to accept auth token; updated `handle_initialize()` to validate token; added idle timeout arm in `run_inner()`; added 6 new auth/idle timeout tests |
+| `crates/fdemon-dap/src/service.rs` | Updated `DapServerConfig` constructions to include `require_auth: false`; updated `DapServerHandle` construction to include `auth_token: None` in `start_stdio()` |
+| `crates/fdemon-dap/src/transport/stdio.rs` | Updated `DapClientSession::run_on()` calls to pass `None` auth token (stdio mode needs no auth) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Auth opt-in**: `require_auth` defaults to `false` to preserve backward compatibility. Existing users and IDE configs are unaffected. Auth must be explicitly enabled.
+
+2. **Idle timeout guards**: The idle timeout only fires for `Initializing` and `Configured` states. `Attached` sessions (actively debugging) and `Uninitialized` sessions (covered by the existing `INIT_TIMEOUT`) are excluded. `Disconnecting` state is also excluded to avoid races.
+
+3. **Token generation without `hex` crate**: Used manual `write!(s, "{:02x}", b)` hex encoding instead of the `hex` crate to avoid adding another dependency. `rand` was already in workspace dependencies.
+
+4. **`eprintln!` for token**: The task spec allows this for IDE integration. In stdio mode, no token is generated (auth is not applicable), so the `eprintln!` never fires in stdio mode where stdout is the DAP pipe.
+
+5. **Test design for idle timeout**: Used `tokio::test(start_paused = true)` with `tokio::time::advance()` to test the 300-second idle timeout without actually waiting.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (587 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+- `cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **`eprintln!` use**: The code standards say to never use `eprintln!`, but the task spec explicitly requires it for IDE integration (printing the auth token to stderr so IDE plugins can parse it). The `eprintln!` is conditional on `require_auth = true` which defaults to `false`, so existing workflows are unaffected.
+
+2. **Token not persisted**: The auth token is ephemeral — regenerated on each server start. IDE plugins must parse it fresh from stderr output on each launch.

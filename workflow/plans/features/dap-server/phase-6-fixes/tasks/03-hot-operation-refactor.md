@@ -112,3 +112,37 @@ async fn test_restart_error_still_emits_progress_end() {
 
 - The closure-based approach may need a `Pin<Box<dyn Future>>` wrapper depending on the trait object constraints of `DynDebugBackend`. If the generic approach is too complex, a simpler enum-based approach (e.g., `HotOp::Reload | HotOp::Restart`) with a match inside the helper also works.
 - The response body change (`Some(json!({}))` → `None`) for `handle_restart` is a minor behavioral change. DAP spec allows either for success responses.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `HotOp` enum; extracted `execute_hot_operation` async helper; refactored `handle_hot_reload`, `handle_hot_restart`, `handle_restart` to delegate to helper |
+| `crates/fdemon-dap/src/adapter/tests/progress_reporting.rs` | Added 5 new tests: `test_restart_emits_progress_events`, `test_restart_emits_hot_restart_complete_event`, `test_restart_error_still_emits_progress_end`, `test_restart_no_completion_event_on_failure`, `test_restart_progress_start_has_hot_restart_title` |
+| `crates/fdemon-dap/src/adapter/tests/request_timeouts_events.rs` | Updated `test_restart_response_body_is_empty_object` → `test_restart_response_body_is_none` to match new `None` body behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Enum-based dispatch over closures**: Used `HotOp` enum rather than a generic closure/`Pin<Box<dyn Future>>` approach. The closure approach would require splitting the borrow of `&self.backend` from `&mut self` for event emission, which Rust doesn't allow in a single method call. The enum approach is cleaner and has zero overhead.
+
+2. **Error message capitalization preserved**: The helper uses a separate `err_prefix` field (`"Hot reload"`, `"Hot restart"`) for error messages to preserve the existing lowercase style expected by tests. The `title` field (`"Hot Reload"`, `"Hot Restart"`) keeps proper title case for the progress event body.
+
+3. **Response body change accepted**: `handle_restart` now returns `None` body on success (was `Some(json!({}))`). DAP spec allows either; this makes `restart` consistent with `hotRestart`. The test was updated to reflect the new behavior.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (833 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **Error message format change**: The error prefix changed from `"Hot reload failed"` to still `"Hot reload failed"` (preserved), but note that `handle_restart` error messages changed from `"Restart failed: {e}"` to `"Hot restart failed: {e}"`. This is more descriptive and consistent.

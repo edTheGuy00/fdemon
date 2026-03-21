@@ -49,17 +49,17 @@ Wave 4 (Security hardening — parallel)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-handlers-critical-fixes](tasks/01-handlers-critical-fixes.md) | Not Started | - | 1–2h | `fdemon-dap/adapter/handlers.rs` |
-| 2 | [02-evaluate-injection-fix](tasks/02-evaluate-injection-fix.md) | Not Started | - | 1–2h | `fdemon-dap/adapter/evaluate.rs` |
-| 3 | [03-hot-operation-refactor](tasks/03-hot-operation-refactor.md) | Not Started | 1 | 1–2h | `fdemon-dap/adapter/handlers.rs` |
-| 4 | [04-source-ref-reverse-index](tasks/04-source-ref-reverse-index.md) | Not Started | - | 1–2h | `fdemon-dap/adapter/stack.rs` |
-| 5 | [05-variables-correctness](tasks/05-variables-correctness.md) | Not Started | - | 1–2h | `fdemon-dap/adapter/variables.rs` |
-| 6 | [06-events-error-handling](tasks/06-events-error-handling.md) | Not Started | - | 0.5–1h | `fdemon-dap/adapter/events.rs` |
-| 7 | [07-adapter-module-cleanup](tasks/07-adapter-module-cleanup.md) | Not Started | - | 1–2h | `fdemon-dap/adapter/mod.rs`, `types.rs`, `backend.rs`, `fdemon-app/handler/dap_backend.rs` |
-| 8 | [08-tostring-getter-budgets](tasks/08-tostring-getter-budgets.md) | Not Started | 5 | 1–2h | `fdemon-dap/adapter/variables.rs` |
-| 9 | [09-varstore-cap-feedback](tasks/09-varstore-cap-feedback.md) | Not Started | 4, 6 | 1–2h | `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/events.rs` |
-| 10 | [10-dap-server-auth](tasks/10-dap-server-auth.md) | Not Started | - | 2–3h | `fdemon-dap/server/mod.rs`, `fdemon-dap/server/session.rs` |
-| 11 | [11-callservice-security](tasks/11-callservice-security.md) | Not Started | 3 | 0.5–1h | `fdemon-dap/adapter/handlers.rs` |
+| 1 | [01-handlers-critical-fixes](tasks/01-handlers-critical-fixes.md) | Done | - | 1–2h | `fdemon-dap/adapter/handlers.rs` |
+| 2 | [02-evaluate-injection-fix](tasks/02-evaluate-injection-fix.md) | Done | - | 1–2h | `fdemon-dap/adapter/evaluate.rs` |
+| 3 | [03-hot-operation-refactor](tasks/03-hot-operation-refactor.md) | Done (concern: line count -3 not -35, but duplication eliminated) | 1 | 1–2h | `fdemon-dap/adapter/handlers.rs` |
+| 4 | [04-source-ref-reverse-index](tasks/04-source-ref-reverse-index.md) | Done | - | 1–2h | `fdemon-dap/adapter/stack.rs` |
+| 5 | [05-variables-correctness](tasks/05-variables-correctness.md) | Done | - | 1–2h | `fdemon-dap/adapter/variables.rs` |
+| 6 | [06-events-error-handling](tasks/06-events-error-handling.md) | Done | - | 0.5–1h | `fdemon-dap/adapter/events.rs` |
+| 7 | [07-adapter-module-cleanup](tasks/07-adapter-module-cleanup.md) | Done | - | 1–2h | `fdemon-dap/adapter/mod.rs`, `types.rs`, `backend.rs`, `fdemon-app/handler/dap_backend.rs` |
+| 8 | [08-tostring-getter-budgets](tasks/08-tostring-getter-budgets.md) | Done | 5 | 1–2h | `fdemon-dap/adapter/variables.rs` |
+| 9 | [09-varstore-cap-feedback](tasks/09-varstore-cap-feedback.md) | Done | 4, 6 | 1–2h | `fdemon-dap/adapter/stack.rs`, `fdemon-dap/adapter/events.rs` |
+| 10 | [10-dap-server-auth](tasks/10-dap-server-auth.md) | Done (concern: missing behavioral test for attached idle timeout) | - | 2–3h | `fdemon-dap/server/mod.rs`, `fdemon-dap/server/session.rs` |
+| 11 | [11-callservice-security](tasks/11-callservice-security.md) | Done | 3 | 0.5–1h | `fdemon-dap/adapter/handlers.rs` |
 
 ## File Overlap Analysis
 

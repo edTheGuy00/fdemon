@@ -94,3 +94,34 @@ async fn test_hover_evaluate_tostring_fallback_on_no_object_id() {
 
 - The first evaluate call at line 264 (`evaluate_expression_raw` with `args.expression`) is fine — the DAP spec explicitly allows arbitrary expression evaluation in the debug console. The injection is only a concern for the *secondary* toString wrapping, which should be read-only.
 - `TO_STRING_EVAL_TIMEOUT` is 1 second per call, matching the pattern in `variables.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Fixed `handle_evaluate_hover` to call `backend.evaluate(isolate_id, object_id, "toString()")` on the VM object reference instead of embedding user input in a Dart expression string. Added `HOVER_TO_STRING_TIMEOUT` constant (1s). Updated `MockBackend.evaluate` to dispatch `to_string_result` when expression is `"toString()"`. Added `RecordingBackend` and two new security regression tests. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local constant vs shared**: `TO_STRING_EVAL_TIMEOUT` lives in `variables.rs` (private). Rather than moving it to `types.rs` (touching out-of-scope files), a local `HOVER_TO_STRING_TIMEOUT` constant was defined in `evaluate.rs`. Both are `Duration::from_secs(1)`, maintaining consistent behaviour.
+2. **MockBackend evaluate dispatch**: The existing `MockBackend.evaluate` always returned `eval_result` regardless of expression. Since the new fix routes the toString call through `evaluate()` (not `evaluate_in_frame()`), the mock was updated to check `expression == "toString()"` and return `to_string_result` when configured. The `evaluate_in_frame` routing logic was simplified (no longer needed to detect `.toString()` suffix).
+3. **No-ID fallback**: When the initial evaluation result has no `"id"` field (e.g., some VM responses omit it for certain kinds), `toString()` is skipped entirely and `format_instance_value` is used directly — same safe fallback as the error/timeout path.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (828 tests, 0 failed)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Existing hover tests**: Tests `test_hover_context_object_calls_to_string`, `test_hover_context_to_string_failure_falls_back`, and `test_hover_context_long_string_is_truncated` all pass because the mock now correctly routes through `evaluate()` for the toString call. Behaviour is identical — only the internal call path changed.
+2. **Frame-based vs root-library toString**: Previously the toString call went through `evaluate_in_frame` when a frameId was present. Now it always goes through `backend.evaluate(isolate_id, object_id, ...)` regardless of frame context. This is correct because the object ID is a stable VM reference that can be evaluated without a frame context.

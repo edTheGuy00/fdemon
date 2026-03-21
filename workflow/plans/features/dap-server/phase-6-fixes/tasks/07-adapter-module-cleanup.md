@@ -135,3 +135,48 @@ No new tests needed — these are cleanup/refactoring changes. All existing test
 
 - Fix 3 (L7) touches both `fdemon-dap` and `fdemon-app` — ensure both crates compile. The `NoopBackend` in test helpers also needs updating.
 - Fix 5 (L11) is in `fdemon-app/handler/dap_backend.rs` — the helper function should be `fn` (not `async fn`) since it's pure parameter construction.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a955fcc0
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/mod.rs` | Fix 1: `exception_refs` changed to `pub(crate)`; Fix 4: updated module docs to list all 9 sub-modules |
+| `crates/fdemon-dap/src/adapter/types.rs` | Fix 2: removed 5 dead error constants (ERR_NOT_CONNECTED..ERR_TIMEOUT) and their `#[allow(dead_code)]` |
+| `crates/fdemon-dap/src/adapter/backend.rs` | Fix 3: changed `get_source` trait method and `DynDebugBackendInner::get_source_boxed` return type from `Result<String, String>` to `Result<String, BackendError>`; updated `DynDebugBackend::get_source` delegation |
+| `crates/fdemon-dap/src/adapter/test_helpers.rs` | Fix 3: updated `MockTestBackend::get_source`, blanket impl, `MockBackend`, `FailingVmBackend`, `NotConnectedBackend` to use `BackendError` |
+| `crates/fdemon-dap/src/adapter/evaluate.rs` | Fix 3: updated two inline test backends' `get_source` to use `BackendError` |
+| `crates/fdemon-dap/src/server/session.rs` | Fix 3: updated `NoopBackend::get_source` and test backend `get_source` to use `BackendError` |
+| `crates/fdemon-dap/src/server/mod.rs` | Fix 3: updated `MockBackendInner::get_source_boxed` to use `BackendError` |
+| `crates/fdemon-dap/src/adapter/tests/backend_phase6.rs` | Fix 3: updated `Phase6RecordingBackend::get_source_boxed` to use `BackendError` |
+| `crates/fdemon-dap/src/adapter/tests/production_hardening.rs` | Fix 2 follow-up: updated imports and tests to remove references to deleted constants |
+| `crates/fdemon-app/src/handler/dap_backend.rs` | Fix 3: `VmServiceBackend::get_source` and `DynDebugBackendInner::get_source_boxed` updated; Fix 5: extracted `build_source_report_params` helper; tests updated to use helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tests for removed constants**: `production_hardening.rs` had tests that imported and verified the deleted constants. These were updated to use literal integers (1000, 1004) since the values are now only documented in tests rather than as named constants.
+
+2. **build_source_report_params takes `&[String]`**: The helper takes `&[String]` as specified. `get_source_report` (which receives `&[&str]`) does a `map(|s| s.to_string()).collect()` to convert — this is a minor allocation but it's on an already-async code path and avoids the `Box<dyn Fn>` or generic complexity.
+
+3. **Six locations needed updating for `get_source` error type**: Beyond the three locations mentioned in the task spec (trait, `DynDebugBackendInner`, `NoopBackend`, `VmServiceBackend`), there were additional inline test backends in `evaluate.rs`, `session.rs` test code, `server/mod.rs` MockBackendInner, and `backend_phase6.rs` that all needed updating.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-dap` - Passed
+- `cargo test -p fdemon-dap` - Passed (801 unit tests + 2 integration tests)
+- `cargo clippy -p fdemon-dap -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-app` - Passed (1861 unit tests + 1 integration test)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **Semantic change in `get_source` errors**: `FailingVmBackend` previously returned `Err("not connected".to_string())` which was a `String`; it now returns `Err(BackendError::NotConnected)`. This is a semantically equivalent substitution but callers that pattern-matched on the specific string `"not connected"` would need updating (none found).
+
+2. **`build_source_report_params` visibility**: The helper is a private `fn` in the `fdemon-app::handler::dap_backend` module, only visible to the tests within the same module. This is correct since it's an implementation detail of `VmServiceBackend`.
