@@ -136,7 +136,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                                     hit_cond,
                                     hit_count,
                                 );
-                                let _ = self.backend.resume(&isolate_id, None, None).await;
+                                if let Err(e) = self.backend.resume(&isolate_id, None, None).await {
+                                    tracing::warn!(
+                                        "Failed to auto-resume isolate {} (hit condition not met): {}",
+                                        isolate_id,
+                                        e,
+                                    );
+                                }
                                 return;
                             }
                         }
@@ -157,7 +163,15 @@ impl<B: DebugBackend> DapAdapter<B> {
                                         "Condition '{}' evaluated to falsy — resuming silently",
                                         cond_expr,
                                     );
-                                    let _ = self.backend.resume(&isolate_id, None, None).await;
+                                    if let Err(e) =
+                                        self.backend.resume(&isolate_id, None, None).await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to auto-resume isolate {} (condition false): {}",
+                                            isolate_id,
+                                            e,
+                                        );
+                                    }
                                     return;
                                 }
                                 Err(e) => {
@@ -204,7 +218,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                             }
 
                             self.send_event("output", Some(body)).await;
-                            let _ = self.backend.resume(&isolate_id, None, None).await;
+                            if let Err(e) = self.backend.resume(&isolate_id, None, None).await {
+                                tracing::warn!(
+                                    "Failed to auto-resume isolate {} (logpoint): {}",
+                                    isolate_id,
+                                    e,
+                                );
+                            }
                             return;
                         }
                     }
@@ -570,11 +590,11 @@ impl<B: DebugBackend> DapAdapter<B> {
         result
     }
 
-    /// Invalidate per-stop state (variable references and frame IDs).
+    /// Invalidate per-stop state (variable references, frame IDs, and exception refs).
     ///
-    /// Must be called whenever the debuggee resumes. Variable references and
-    /// frame IDs are only valid while the debuggee is stopped; they must be
-    /// rebuilt from scratch on the next stop.
+    /// Must be called whenever the debuggee resumes. Variable references,
+    /// frame IDs, and exception refs are only valid while the debuggee is
+    /// stopped; they must be rebuilt from scratch on the next stop.
     ///
     /// Source references are **not** cleared here — they persist across
     /// stop/resume transitions and are only invalidated on hot restart via
@@ -583,6 +603,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         self.var_store.reset();
         self.frame_store.reset();
         self.evaluate_name_map.clear();
+        self.exception_refs.clear();
         // Clear the async marker index — it is rebuilt on the next stackTrace request.
         self.first_async_marker_index = None;
     }

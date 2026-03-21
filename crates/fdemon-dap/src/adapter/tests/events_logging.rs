@@ -279,6 +279,41 @@ async fn test_backend_error_not_connected_for_attach_produces_dap_error() {
     );
 }
 
+// ── on_resume state cleanup ────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_on_resume_clears_exception_refs() {
+    let (mut adapter, mut rx) = DapAdapter::new(MockBackend);
+
+    // Register an isolate so we have a valid thread ID.
+    let thread_id = super::register_isolate(&mut adapter, &mut rx, "isolates/1").await;
+
+    // Simulate an exception pause which inserts an exception ref.
+    adapter
+        .handle_debug_event(DebugEvent::Paused {
+            isolate_id: "isolates/1".into(),
+            reason: PauseReason::Exception,
+            breakpoint_id: None,
+            exception: Some(serde_json::json!({"kind": "PlainInstance", "id": "obj/1"})),
+        })
+        .await;
+    rx.try_recv().ok(); // drain the stopped event
+
+    // Verify the exception ref was inserted.
+    assert!(
+        adapter.exception_refs.contains_key(&thread_id),
+        "exception_refs should contain an entry after a pause-at-exception event"
+    );
+
+    // Call on_resume directly — it must clear exception_refs.
+    adapter.on_resume();
+
+    assert!(
+        adapter.exception_refs.is_empty(),
+        "on_resume() must clear exception_refs"
+    );
+}
+
 // ── emit_output helper ─────────────────────────────────────────────────
 
 #[tokio::test]
