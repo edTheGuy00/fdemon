@@ -196,9 +196,14 @@ async fn test_restart_calls_hot_restart() {
     );
 }
 
-/// `restart` returns an empty JSON object body on success.
+/// `restart` returns no body on success (consistent with `hotRestart`).
+///
+/// After the hot-operation refactor, `restart` delegates to
+/// `execute_hot_operation` which returns `None` body on success — matching
+/// the `hotRestart` handler. The DAP spec allows either `{}` or omitting the
+/// body for success responses.
 #[tokio::test]
-async fn test_restart_response_body_is_empty_object() {
+async fn test_restart_response_body_is_none() {
     let (backend, _flag) = HotRestartRecorder::new();
     let (mut adapter, _rx) = DapAdapter::new(backend);
     let req = make_request(1, "restart");
@@ -206,11 +211,10 @@ async fn test_restart_response_body_is_empty_object() {
     let resp = adapter.handle_request(&req).await;
 
     assert!(resp.success);
-    let body = resp.body.as_ref().expect("restart response must have body");
     assert!(
-        body.as_object().is_some_and(|o| o.is_empty()),
-        "restart body must be an empty object, got: {:?}",
-        body
+        resp.body.is_none(),
+        "restart success response should have no body (consistent with hotRestart), got: {:?}",
+        resp.body
     );
 }
 

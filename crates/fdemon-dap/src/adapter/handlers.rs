@@ -19,6 +19,21 @@ use crate::{DapRequest, DapResponse};
 
 use crate::adapter::types::{ERR_VM_DISCONNECTED, REQUEST_TIMEOUT};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// HotOp — discriminates which hot operation to run inside execute_hot_operation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Selects the backend call for [`DapAdapter::execute_hot_operation`].
+///
+/// Using an enum rather than a closure avoids lifetime conflicts that arise
+/// when passing `&self.backend` into a closure that also borrows `self` mutably
+/// for event emission.
+#[derive(Clone, Copy)]
+enum HotOp {
+    Reload,
+    Restart,
+}
+
 impl<B: DebugBackend> DapAdapter<B> {
     /// Handle a DAP request and return the response.
     ///
@@ -937,6 +952,78 @@ impl<B: DebugBackend> DapAdapter<B> {
         DapResponse::success(request, Some(serde_json::json!({ "sources": sources })))
     }
 
+    /// Execute a hot operation (reload or restart) with progress events.
+    ///
+    /// Shared implementation for [`handle_hot_reload`], [`handle_hot_restart`],
+    /// and [`handle_restart`]. Encapsulates the common pattern:
+    ///
+    /// 1. Allocate a progress ID and emit `progressStart` if the client supports
+    ///    progress reporting.
+    /// 2. Call the backend operation with the standard [`REQUEST_TIMEOUT`].
+    /// 3. Emit `progressEnd` always (even on error) so the IDE spinner closes.
+    /// 4. On success: emit the completion event and return an empty success
+    ///    response. On error: return a structured error response.
+    ///
+    /// [`handle_hot_reload`]: Self::handle_hot_reload
+    /// [`handle_hot_restart`]: Self::handle_hot_restart
+    /// [`handle_restart`]: Self::handle_restart
+    async fn execute_hot_operation(&mut self, request: &DapRequest, op: HotOp) -> DapResponse {
+        // title        — used in progressStart body (e.g. "Hot Reload")
+        // complete_event — custom DAP event name on success
+        // err_prefix   — prefix for the error message string, preserving the
+        //                original lowercase form expected by existing tests
+        let (title, complete_event, err_prefix) = match op {
+            HotOp::Reload => ("Hot Reload", "dart.hotReloadComplete", "Hot reload"),
+            HotOp::Restart => ("Hot Restart", "dart.hotRestartComplete", "Hot restart"),
+        };
+
+        tracing::debug!("DAP adapter: {} ({})", err_prefix, request.command);
+
+        let progress_id = if self.client_supports_progress {
+            let id = self.alloc_progress_id();
+            self.send_event(
+                "progressStart",
+                Some(serde_json::json!({
+                    "progressId": id,
+                    "title": title,
+                    "cancellable": false,
+                })),
+            )
+            .await;
+            Some(id)
+        } else {
+            None
+        };
+
+        let result = match op {
+            HotOp::Reload => with_timeout(self.backend.hot_reload()).await,
+            HotOp::Restart => with_timeout(self.backend.hot_restart()).await,
+        };
+
+        // Always close the progress indicator, even on failure, so the IDE
+        // does not display a stale spinner indefinitely.
+        if let Some(ref id) = progress_id {
+            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
+                .await;
+        }
+
+        match result {
+            Ok(()) => {
+                tracing::debug!("{} dispatched successfully", err_prefix);
+                // dart.hotReloadComplete / dart.hotRestartComplete are custom
+                // events expected by the Dart-Code extension to update its
+                // internal session state.
+                self.send_event(complete_event, Some(serde_json::json!({})))
+                    .await;
+                DapResponse::success(request, None)
+            }
+            Err(e) => {
+                tracing::warn!("{} failed: {}", err_prefix, e);
+                DapResponse::error(request, format!("{err_prefix} failed: {e}"))
+            }
+        }
+    }
+
     /// Handle the `hotReload` custom DAP request.
     ///
     /// Triggers a Flutter hot reload through the backend's TEA message bus.
@@ -952,47 +1039,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///
     /// Compatible with the VS Code Dart extension's `hotReload` custom request.
     pub(super) async fn handle_hot_reload(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: hotReload");
-
-        let progress_id = if self.client_supports_progress {
-            let id = self.alloc_progress_id();
-            self.send_event(
-                "progressStart",
-                Some(serde_json::json!({
-                    "progressId": id,
-                    "title": "Hot Reload",
-                    "cancellable": false,
-                })),
-            )
-            .await;
-            Some(id)
-        } else {
-            None
-        };
-
-        let result = with_timeout(self.backend.hot_reload()).await;
-
-        // Always close the progress indicator, even on failure, so the IDE
-        // does not display a stale spinner indefinitely.
-        if let Some(ref id) = progress_id {
-            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
-                .await;
-        }
-
-        match result {
-            Ok(()) => {
-                tracing::debug!("Hot reload dispatched successfully");
-                // dart.hotReloadComplete is a custom event expected by the
-                // Dart-Code extension to update its internal session state.
-                self.send_event("dart.hotReloadComplete", Some(serde_json::json!({})))
-                    .await;
-                DapResponse::success(request, None)
-            }
-            Err(e) => {
-                tracing::warn!("Hot reload failed: {}", e);
-                DapResponse::error(request, format!("Hot reload failed: {e}"))
-            }
-        }
+        self.execute_hot_operation(request, HotOp::Reload).await
     }
 
     /// Handle the `hotRestart` custom DAP request.
@@ -1013,47 +1060,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///
     /// Compatible with the VS Code Dart extension's `hotRestart` custom request.
     pub(super) async fn handle_hot_restart(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: hotRestart");
-
-        let progress_id = if self.client_supports_progress {
-            let id = self.alloc_progress_id();
-            self.send_event(
-                "progressStart",
-                Some(serde_json::json!({
-                    "progressId": id,
-                    "title": "Hot Restart",
-                    "cancellable": false,
-                })),
-            )
-            .await;
-            Some(id)
-        } else {
-            None
-        };
-
-        let result = with_timeout(self.backend.hot_restart()).await;
-
-        // Always close the progress indicator, even on failure, so the IDE
-        // does not display a stale spinner indefinitely.
-        if let Some(ref id) = progress_id {
-            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
-                .await;
-        }
-
-        match result {
-            Ok(()) => {
-                tracing::debug!("Hot restart dispatched successfully");
-                // dart.hotRestartComplete is a custom event expected by the
-                // Dart-Code extension to update its internal session state.
-                self.send_event("dart.hotRestartComplete", Some(serde_json::json!({})))
-                    .await;
-                DapResponse::success(request, None)
-            }
-            Err(e) => {
-                tracing::warn!("Hot restart failed: {}", e);
-                DapResponse::error(request, format!("Hot restart failed: {e}"))
-            }
-        }
+        self.execute_hot_operation(request, HotOp::Restart).await
     }
 
     /// Handle the `restartFrame` DAP request.
@@ -1696,25 +1703,15 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// debugging this is equivalent to a hot restart — it re-creates the main
     /// Dart isolate while keeping the process alive.
     ///
-    /// The adapter calls [`DebugBackend::hot_restart`] with the standard 10 s
-    /// [`REQUEST_TIMEOUT`] to prevent a hung VM Service from blocking the
-    /// debug session indefinitely.
+    /// Delegates to [`execute_hot_operation`] with [`HotOp::Restart`], so it
+    /// behaves identically to [`handle_hot_restart`]: it emits `progressStart`,
+    /// `progressEnd`, and `dart.hotRestartComplete` events and returns an empty
+    /// success body. On failure returns a structured error response.
     ///
-    /// On success, returns an empty success response. On failure (including
-    /// timeout) returns a structured error so the IDE can surface the message.
+    /// [`execute_hot_operation`]: Self::execute_hot_operation
+    /// [`handle_hot_restart`]: Self::handle_hot_restart
     pub(super) async fn handle_restart(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: restart");
-
-        match with_timeout(self.backend.hot_restart()).await {
-            Ok(()) => {
-                tracing::debug!("Restart (hot restart) dispatched successfully");
-                DapResponse::success(request, Some(serde_json::json!({})))
-            }
-            Err(e) => {
-                tracing::warn!("Restart (hot restart) failed: {}", e);
-                DapResponse::error(request, format!("Restart failed: {e}"))
-            }
-        }
+        self.execute_hot_operation(request, HotOp::Restart).await
     }
 
     /// Return `true` if the given `package:` URI belongs to the app's own package.

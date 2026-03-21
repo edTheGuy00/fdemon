@@ -412,3 +412,130 @@ async fn test_hot_restart_no_completion_event_on_failure() {
         names
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests for standard DAP `restart` request (Task 03: hot-operation refactor)
+//
+// After the refactor, `restart` delegates to `execute_hot_operation` and must
+// behave identically to `hotRestart`: it emits progress events and the
+// `dart.hotRestartComplete` custom event.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Standard DAP `restart` emits `progressStart` and `progressEnd` events
+/// when the client advertises `supportsProgressReporting`.
+#[tokio::test]
+async fn test_restart_emits_progress_events() {
+    let (mut adapter, mut rx) = DapAdapter::new(HotOpMockBackend::ok());
+    adapter.set_client_supports_progress(true);
+
+    let req = hot_request("restart");
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        resp.success,
+        "restart should succeed, got: {:?}",
+        resp.message
+    );
+
+    let names = drain_event_names(&mut rx);
+    assert!(
+        names.contains(&"progressStart".to_string()),
+        "restart should emit progressStart, got: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"progressEnd".to_string()),
+        "restart should emit progressEnd, got: {:?}",
+        names
+    );
+}
+
+/// Standard DAP `restart` emits `dart.hotRestartComplete` on success.
+#[tokio::test]
+async fn test_restart_emits_hot_restart_complete_event() {
+    let (mut adapter, mut rx) = DapAdapter::new(HotOpMockBackend::ok());
+
+    let req = hot_request("restart");
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        resp.success,
+        "restart should succeed, got: {:?}",
+        resp.message
+    );
+
+    let names = drain_event_names(&mut rx);
+    assert!(
+        names.contains(&"dart.hotRestartComplete".to_string()),
+        "restart should emit dart.hotRestartComplete on success, got: {:?}",
+        names
+    );
+}
+
+/// Standard DAP `restart` emits `progressEnd` even when the backend fails,
+/// so the IDE spinner always closes.
+#[tokio::test]
+async fn test_restart_error_still_emits_progress_end() {
+    let (mut adapter, mut rx) = DapAdapter::new(HotOpMockBackend::failing());
+    adapter.set_client_supports_progress(true);
+
+    let req = hot_request("restart");
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(!resp.success, "restart should fail with failing backend");
+
+    let names = drain_event_names(&mut rx);
+    assert!(
+        names.contains(&"progressStart".to_string()),
+        "restart should emit progressStart even on failure, got: {:?}",
+        names
+    );
+    assert!(
+        names.contains(&"progressEnd".to_string()),
+        "restart should emit progressEnd even on failure, got: {:?}",
+        names
+    );
+}
+
+/// Standard DAP `restart` does NOT emit `dart.hotRestartComplete` on failure.
+#[tokio::test]
+async fn test_restart_no_completion_event_on_failure() {
+    let (mut adapter, mut rx) = DapAdapter::new(HotOpMockBackend::failing());
+
+    let req = hot_request("restart");
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(!resp.success);
+    let names = drain_event_names(&mut rx);
+    assert!(
+        !names.contains(&"dart.hotRestartComplete".to_string()),
+        "restart should not emit dart.hotRestartComplete on failure, got: {:?}",
+        names
+    );
+}
+
+/// Standard DAP `restart` uses the `"Hot Restart"` title in `progressStart`.
+#[tokio::test]
+async fn test_restart_progress_start_has_hot_restart_title() {
+    let (mut adapter, mut rx) = DapAdapter::new(HotOpMockBackend::ok());
+    adapter.set_client_supports_progress(true);
+
+    let req = hot_request("restart");
+    adapter.handle_request(&req).await;
+    let events = drain_events_with_body(&mut rx);
+
+    let start_body = events
+        .iter()
+        .find(|(name, _)| name == "progressStart")
+        .and_then(|(_, body)| body.as_ref())
+        .expect("restart should emit a progressStart with body");
+
+    let title = start_body
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    assert_eq!(
+        title, "Hot Restart",
+        "restart progressStart title should be 'Hot Restart'"
+    );
+}
