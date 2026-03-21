@@ -70,6 +70,8 @@ pub struct SourceReferenceStore {
     next_id: i64,
     /// reference_id → script information
     references: HashMap<i64, SourceRefEntry>,
+    /// Reverse lookup: (isolate_id, script_id) → reference_id
+    by_script: HashMap<(String, String), i64>,
 }
 
 impl SourceReferenceStore {
@@ -78,6 +80,7 @@ impl SourceReferenceStore {
         Self {
             next_id: 1,
             references: HashMap::new(),
+            by_script: HashMap::new(),
         }
     }
 
@@ -87,11 +90,10 @@ impl SourceReferenceStore {
     /// ID stability: the same `(isolate_id, script_id)` always produces the
     /// same reference ID within a debug session.
     pub fn get_or_create(&mut self, isolate_id: &str, script_id: &str, uri: &str) -> i64 {
-        // Check for an existing reference for this script.
-        for (&id, entry) in &self.references {
-            if entry.script_id == script_id && entry.isolate_id == isolate_id {
-                return id;
-            }
+        // O(1) reverse-index lookup.
+        let key = (isolate_id.to_string(), script_id.to_string());
+        if let Some(&id) = self.by_script.get(&key) {
+            return id;
         }
         // Allocate a new reference.
         let id = self.next_id;
@@ -99,11 +101,12 @@ impl SourceReferenceStore {
         self.references.insert(
             id,
             SourceRefEntry {
-                isolate_id: isolate_id.to_string(),
-                script_id: script_id.to_string(),
+                isolate_id: key.0.clone(),
+                script_id: key.1.clone(),
                 uri: uri.to_string(),
             },
         );
+        self.by_script.insert(key, id);
         id
     }
 
@@ -127,6 +130,7 @@ impl SourceReferenceStore {
     /// old reference IDs. Reusing them would cause stale cache hits.
     pub fn clear(&mut self) {
         self.references.clear();
+        self.by_script.clear();
     }
 
     /// Return the number of currently allocated references.
@@ -840,6 +844,34 @@ mod tests {
             id2 > id1,
             "IDs must not be reused after clear (got id1={id1}, id2={id2})"
         );
+    }
+
+    // ── SourceReferenceStore reverse-index ────────────────────────────────
+
+    #[test]
+    fn test_source_ref_store_get_or_create_returns_same_id() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("iso1", "script1", "dart:core");
+        let id2 = store.get_or_create("iso1", "script1", "dart:core");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_source_ref_store_different_scripts_get_different_ids() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("iso1", "script1", "dart:core");
+        let id2 = store.get_or_create("iso1", "script2", "dart:async");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_source_ref_store_clear_resets_reverse_index() {
+        let mut store = SourceReferenceStore::new();
+        store.get_or_create("iso1", "script1", "dart:core");
+        store.clear();
+        // After clear, a new get_or_create should allocate a fresh ID
+        let id = store.get_or_create("iso1", "script1", "dart:core");
+        assert_eq!(id, 2); // next_id is preserved; second allocation gets id=2
     }
 
     // ── extract_source_with_store — file:// user code ─────────────────────
