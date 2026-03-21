@@ -923,7 +923,7 @@ mod tests {
             Ok(json!({}))
         }
 
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+        async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
             Ok(String::new())
         }
 
@@ -1344,7 +1344,7 @@ mod tests {
             ) -> Result<serde_json::Value, BackendError> {
                 Ok(json!({}))
             }
-            async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
+            async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
                 Ok(String::new())
             }
             async fn hot_reload(&self) -> Result<(), BackendError> {

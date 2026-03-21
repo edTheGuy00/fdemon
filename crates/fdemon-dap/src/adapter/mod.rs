@@ -13,10 +13,15 @@
 //!
 //! ## Sub-modules
 //!
-//! - [`threads`] — Thread/isolate ID mapping, `handle_threads`, `handle_attach`
-//! - [`breakpoints`] — Breakpoint state, `handle_set_breakpoints`
-//! - [`stack`] — Frame/variable stores, `handle_stack_trace`, `handle_scopes`, `handle_variables`
+//! - [`backend`] — `DebugBackend` trait and dynamic dispatch wrapper
+//! - [`breakpoints`] — Breakpoint state, conditional/logpoint handling
 //! - [`evaluate`] — Expression evaluation, `handle_evaluate`
+//! - [`events`] — Debug event handling, progress events, auto-resume
+//! - [`handlers`] — DAP request handlers (restart, loaded sources, completions, etc.)
+//! - [`stack`] — Frame/variable/source-reference stores, `handle_stack_trace`, `handle_scopes`
+//! - [`threads`] — Thread/isolate ID mapping, `handle_threads`, `handle_attach`
+//! - [`types`] — Constants, enums, timeout definitions
+//! - [`variables`] — Variable expansion, globals, exceptions, getters, toString enrichment
 
 pub mod backend;
 pub mod breakpoints;
@@ -170,7 +175,7 @@ pub struct DapAdapter<B: DebugBackend> {
     /// resumes via [`DapAdapter::on_resume`]. Used by [`handle_scopes`] to
     /// conditionally include an "Exceptions" scope, and by [`handle_evaluate`]
     /// to support the `$_threadException` magic expression.
-    pub exception_refs: HashMap<i64, ExceptionRef>,
+    pub(crate) exception_refs: HashMap<i64, ExceptionRef>,
 
     /// Maps variable references (i64) to their `evaluateName` expressions.
     ///

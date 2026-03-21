@@ -168,8 +168,8 @@ pub trait LocalDebugBackend: Sync + 'static {
     /// `getObject` RPC on a `Script` object returns a `source` field with the
     /// full source text.
     ///
-    /// Returns the source text on success, or an error string on failure.
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String>;
+    /// Returns the source text on success, or a [`BackendError`] on failure.
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError>;
 
     // ── Hot reload / restart ──────────────────────────────────────────────
 
@@ -343,7 +343,7 @@ pub trait DynDebugBackendInner: Send + Sync + 'static {
         &'a self,
         isolate_id: &'a str,
         script_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>>;
 
     fn hot_reload_boxed(
         &self,
@@ -534,7 +534,7 @@ impl DebugBackend for DynDebugBackend {
             .await
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         self.inner.get_source_boxed(isolate_id, script_id).await
     }
 

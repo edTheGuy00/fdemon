@@ -987,7 +987,7 @@ mod tests {
                 &'a self,
                 _isolate_id: &'a str,
                 _script_id: &'a str,
-            ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send + 'a>>
+            ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>>
             {
                 Box::pin(async { Ok(String::new()) })
             }

@@ -320,34 +320,27 @@ impl DebugBackend for VmServiceBackend {
         token_pos: Option<i64>,
         end_token_pos: Option<i64>,
     ) -> Result<serde_json::Value, BackendError> {
-        let mut params = serde_json::json!({
-            "isolateId": isolate_id,
-            "scriptId": script_id,
-            "reports": report_kinds,
-            "forceCompile": true,
-        });
-        if let Some(tp) = token_pos {
-            params["tokenPos"] = serde_json::json!(tp);
-        }
-        if let Some(etp) = end_token_pos {
-            params["endTokenPos"] = serde_json::json!(etp);
-        }
+        let kinds: Vec<String> = report_kinds.iter().map(|s| s.to_string()).collect();
+        let params =
+            build_source_report_params(isolate_id, script_id, &kinds, token_pos, end_token_pos);
         self.handle
             .request("getSourceReport", Some(params))
             .await
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         // getObject on a Script object returns a Script with a "source" field
         // containing the full source text.
         let result = debugger::get_object(&self.handle, isolate_id, script_id, None, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))?;
         result["source"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| format!("Script '{}' has no source field", script_id))
+            .ok_or_else(|| {
+                BackendError::VmServiceError(format!("Script '{}' has no source field", script_id))
+            })
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {
@@ -389,6 +382,38 @@ impl DebugBackend for VmServiceBackend {
     async fn build_mode(&self) -> String {
         self.build_mode.clone()
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Private helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build the JSON parameters for a `getSourceReport` VM Service RPC call.
+///
+/// Constructs the base `serde_json::Value` with `isolateId`, `scriptId`,
+/// `reports`, and `forceCompile: true`, then conditionally adds `tokenPos`
+/// and `endTokenPos` when present. Shared by [`DebugBackend::get_source_report`]
+/// and [`DynDebugBackendInner::get_source_report_boxed`] to avoid duplication.
+fn build_source_report_params(
+    isolate_id: &str,
+    script_id: &str,
+    report_kinds: &[String],
+    token_pos: Option<i64>,
+    end_token_pos: Option<i64>,
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "isolateId": isolate_id,
+        "scriptId": script_id,
+        "reports": report_kinds,
+        "forceCompile": true,
+    });
+    if let Some(tp) = token_pos {
+        params["tokenPos"] = serde_json::json!(tp);
+    }
+    if let Some(etp) = end_token_pos {
+        params["endTokenPos"] = serde_json::json!(etp);
+    }
+    params
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -529,20 +554,15 @@ impl DynDebugBackendInner for VmServiceBackend {
         token_pos: Option<i64>,
         end_token_pos: Option<i64>,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
-        // Build the JSON params directly here so we don't need to hold
+        // Build params using the shared helper so we don't need to hold
         // temporary `Vec<&str>` borrows across the async boundary.
-        let mut params = serde_json::json!({
-            "isolateId": isolate_id,
-            "scriptId": script_id,
-            "reports": report_kinds,
-            "forceCompile": true,
-        });
-        if let Some(tp) = token_pos {
-            params["tokenPos"] = serde_json::json!(tp);
-        }
-        if let Some(etp) = end_token_pos {
-            params["endTokenPos"] = serde_json::json!(etp);
-        }
+        let params = build_source_report_params(
+            isolate_id,
+            script_id,
+            &report_kinds,
+            token_pos,
+            end_token_pos,
+        );
         Box::pin(async move {
             self.handle
                 .request("getSourceReport", Some(params))
@@ -555,7 +575,7 @@ impl DynDebugBackendInner for VmServiceBackend {
         &'a self,
         isolate_id: &'a str,
         script_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>> {
         Box::pin(self.get_source(isolate_id, script_id))
     }
 
@@ -852,30 +872,18 @@ mod tests {
         assert_dyn_inner::<VmServiceBackend>();
     }
 
-    /// Verify that `get_source_report_boxed` JSON parameter construction with
-    /// `token_pos` and `end_token_pos` fields behaves correctly.
-    ///
-    /// Tests the parameter assembly logic in isolation using `serde_json::json!`.
+    /// Verify that `build_source_report_params` correctly includes `tokenPos`
+    /// and `endTokenPos` fields when they are `Some`.
     #[test]
     fn test_get_source_report_params_with_token_pos_fields() {
-        let isolate_id = "isolates/1";
-        let script_id = "scripts/42";
         let report_kinds = vec!["PossibleBreakpoints".to_string()];
-        let token_pos: Option<i64> = Some(100);
-        let end_token_pos: Option<i64> = Some(200);
-
-        let mut params = serde_json::json!({
-            "isolateId": isolate_id,
-            "scriptId": script_id,
-            "reports": report_kinds,
-            "forceCompile": true,
-        });
-        if let Some(tp) = token_pos {
-            params["tokenPos"] = serde_json::json!(tp);
-        }
-        if let Some(etp) = end_token_pos {
-            params["endTokenPos"] = serde_json::json!(etp);
-        }
+        let params = build_source_report_params(
+            "isolates/1",
+            "scripts/42",
+            &report_kinds,
+            Some(100),
+            Some(200),
+        );
 
         assert_eq!(params["isolateId"], "isolates/1");
         assert_eq!(params["scriptId"], "scripts/42");
@@ -888,28 +896,13 @@ mod tests {
         assert_eq!(params["endTokenPos"], 200);
     }
 
-    /// Verify that `get_source_report_boxed` omits `tokenPos`/`endTokenPos`
+    /// Verify that `build_source_report_params` omits `tokenPos`/`endTokenPos`
     /// when both are `None`.
     #[test]
     fn test_get_source_report_params_without_token_pos_fields() {
-        let isolate_id = "isolates/1";
-        let script_id = "scripts/42";
         let report_kinds = vec!["Coverage".to_string()];
-        let token_pos: Option<i64> = None;
-        let end_token_pos: Option<i64> = None;
-
-        let mut params = serde_json::json!({
-            "isolateId": isolate_id,
-            "scriptId": script_id,
-            "reports": report_kinds,
-            "forceCompile": true,
-        });
-        if let Some(tp) = token_pos {
-            params["tokenPos"] = serde_json::json!(tp);
-        }
-        if let Some(etp) = end_token_pos {
-            params["endTokenPos"] = serde_json::json!(etp);
-        }
+        let params =
+            build_source_report_params("isolates/1", "scripts/42", &report_kinds, None, None);
 
         assert!(
             params.get("tokenPos").is_none(),

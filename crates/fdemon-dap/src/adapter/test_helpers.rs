@@ -213,7 +213,7 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         &self,
         _isolate_id: &str,
         _script_id: &str,
-    ) -> impl Future<Output = Result<String, String>> + Send {
+    ) -> impl Future<Output = Result<String, BackendError>> + Send {
         future::ready(Ok(String::new()))
     }
 
@@ -379,7 +379,7 @@ impl<T: MockTestBackend> DebugBackend for T {
         .await
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         MockTestBackend::get_source(self, isolate_id, script_id).await
     }
 
@@ -420,7 +420,11 @@ impl<T: MockTestBackend> DebugBackend for T {
 pub(crate) struct MockBackend;
 
 impl MockTestBackend for MockBackend {
-    async fn get_source(&self, _isolate_id: &str, _script_id: &str) -> Result<String, String> {
+    async fn get_source(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+    ) -> Result<String, BackendError> {
         Ok("// Mock source text\nvoid main() {}".to_string())
     }
 }
@@ -527,8 +531,8 @@ impl MockTestBackend for FailingVmBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not connected".to_string())
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+        Err(BackendError::NotConnected)
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {
@@ -740,8 +744,8 @@ impl MockTestBackend for NotConnectedBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not connected".to_string())
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+        Err(BackendError::NotConnected)
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {

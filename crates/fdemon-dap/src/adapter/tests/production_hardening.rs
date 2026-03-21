@@ -3,10 +3,7 @@
 
 use super::make_request;
 use crate::adapter::test_helpers::*;
-use crate::adapter::types::{
-    ERR_EVAL_FAILED, ERR_NOT_CONNECTED, ERR_NO_DEBUG_SESSION, ERR_THREAD_NOT_FOUND, ERR_TIMEOUT,
-    ERR_VM_DISCONNECTED, MAX_VARIABLES_PER_REQUEST, REQUEST_TIMEOUT,
-};
+use crate::adapter::types::{ERR_VM_DISCONNECTED, MAX_VARIABLES_PER_REQUEST, REQUEST_TIMEOUT};
 use crate::adapter::*;
 use crate::DapMessage;
 use crate::DapRequest;
@@ -45,19 +42,16 @@ fn test_error_with_code_has_correct_fields() {
 fn test_error_with_code_1000_not_connected() {
     use crate::DapResponse;
     let req = make_request(2, "threads");
-    let resp = DapResponse::error_with_code(&req, ERR_NOT_CONNECTED, "not connected");
-    assert_eq!(
-        resp.body.as_ref().unwrap()["error"]["id"],
-        ERR_NOT_CONNECTED
-    );
+    let resp = DapResponse::error_with_code(&req, 1000, "not connected");
+    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], 1000);
 }
 
 #[test]
 fn test_error_with_code_1004_timeout() {
     use crate::DapResponse;
     let req = make_request(3, "stackTrace");
-    let resp = DapResponse::error_with_code(&req, ERR_TIMEOUT, "Request timed out");
-    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], ERR_TIMEOUT);
+    let resp = DapResponse::error_with_code(&req, 1004, "Request timed out");
+    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], 1004);
 }
 
 // ── vm_disconnected guard ──────────────────────────────────────────────
@@ -390,12 +384,9 @@ fn test_request_timeout_constant_is_10_seconds() {
 
 #[test]
 fn test_error_code_constants_are_defined() {
-    // Verify all error code constants are in the expected 1000-1005 range.
-    assert_eq!(ERR_NOT_CONNECTED, 1000);
-    assert_eq!(ERR_NO_DEBUG_SESSION, 1001);
-    assert_eq!(ERR_THREAD_NOT_FOUND, 1002);
-    assert_eq!(ERR_EVAL_FAILED, 1003);
-    assert_eq!(ERR_TIMEOUT, 1004);
+    // Verify the in-use error code constant has the expected value.
+    // The unused placeholder constants (1000–1004) were removed; only
+    // ERR_VM_DISCONNECTED (1005) is actively used by the adapter.
     assert_eq!(ERR_VM_DISCONNECTED, 1005);
 }
 

@@ -279,8 +279,8 @@ impl crate::adapter::DebugBackend for NoopBackend {
         &self,
         _isolate_id: &str,
         _script_id: &str,
-    ) -> std::result::Result<String, String> {
-        Err("not connected".to_string())
+    ) -> std::result::Result<String, crate::adapter::BackendError> {
+        Err(crate::adapter::BackendError::NotConnected)
     }
 
     async fn hot_reload(&self) -> std::result::Result<(), crate::adapter::BackendError> {
@@ -1440,7 +1440,11 @@ mod tests {
             Ok(serde_json::json!({}))
         }
 
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+        async fn get_source(
+            &self,
+            _: &str,
+            _: &str,
+        ) -> std::result::Result<String, crate::adapter::BackendError> {
             Ok(String::new())
         }
 

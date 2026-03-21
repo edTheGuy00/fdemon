@@ -193,7 +193,7 @@ impl DynDebugBackendInner for Phase6RecordingBackend {
         &'a self,
         _isolate_id: &'a str,
         _script_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>> {
         Box::pin(async { Ok(String::new()) })
     }
 

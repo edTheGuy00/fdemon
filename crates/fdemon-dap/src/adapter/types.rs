@@ -252,25 +252,5 @@ pub(crate) const MAX_VARIABLES_PER_REQUEST: usize = 100;
 /// may require a longer timeout — future work can expose this via `DapSettings`.
 pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Numeric error code: VM Service not connected.
-#[allow(dead_code)]
-pub(crate) const ERR_NOT_CONNECTED: i64 = 1000;
-
-/// Numeric error code: no active debug session (no paused isolate).
-#[allow(dead_code)]
-pub(crate) const ERR_NO_DEBUG_SESSION: i64 = 1001;
-
-/// Numeric error code: thread / isolate not found.
-#[allow(dead_code)]
-pub(crate) const ERR_THREAD_NOT_FOUND: i64 = 1002;
-
-/// Numeric error code: evaluation failed.
-#[allow(dead_code)]
-pub(crate) const ERR_EVAL_FAILED: i64 = 1003;
-
-/// Numeric error code: backend request timed out.
-#[allow(dead_code)]
-pub(crate) const ERR_TIMEOUT: i64 = 1004;
-
 /// Numeric error code: VM Service disconnected (app exited mid-session).
 pub(crate) const ERR_VM_DISCONNECTED: i64 = 1005;
