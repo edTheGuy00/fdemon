@@ -28,6 +28,7 @@ mod progress_reporting;
 mod request_timeouts_events;
 mod restart_frame;
 mod stack_scopes_variables;
+mod time_budgets;
 mod to_string_display;
 mod update_debug_options;
 mod variable_type_rendering;

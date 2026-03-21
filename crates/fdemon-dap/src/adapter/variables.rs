@@ -51,6 +51,26 @@ const FILTERED_GETTER_NAMES: &[&str] = &["_identityHashCode", "hashCode", "runti
 /// of a bad `toString()`. On timeout, the variable displays just the class name.
 const TO_STRING_EVAL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// Maximum total time for all `toString()` calls in a single variables response.
+///
+/// Even with a 1-second per-call timeout, 20 `PlainInstance` variables would
+/// take up to 20 seconds sequentially. This budget caps the entire enrichment
+/// pass so the IDE panel always responds within a bounded time.
+///
+/// When the budget is exhausted, remaining candidates are skipped and their
+/// variables keep the unenriched class-name display value.
+const TO_STRING_TOTAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Maximum total time for all getter evaluations on a single object expansion.
+///
+/// Even with a 1-second per-getter timeout, an object with 50 getters could
+/// take up to 50 seconds. This budget caps the total getter evaluation time so
+/// the variables panel remains responsive.
+///
+/// When the budget is exhausted, remaining getters are added as lazy (unexpanded)
+/// items so the user can still expand individual getters on demand.
+const GETTER_EVAL_TOTAL_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Instance kinds for which `toString()` enrichment is applied.
 ///
 /// Primitives, collections, closures, and sentinels already show their values
@@ -528,6 +548,10 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Errors and timeouts silently fall back to the current display value.
     /// toString calls are made sequentially to avoid overwhelming the VM.
     ///
+    /// A [`TO_STRING_TOTAL_BUDGET`] caps the entire enrichment pass: if the
+    /// budget is exhausted before all candidates are processed, remaining
+    /// candidates are skipped and their variables keep the unenriched display.
+    ///
     /// This method is a no-op when `self.evaluate_to_string_in_debug_views` is
     /// `false` (caller is responsible for checking before collecting candidates).
     async fn enrich_with_to_string(
@@ -535,7 +559,21 @@ impl<B: DebugBackend> DapAdapter<B> {
         variables: &mut [DapVariable],
         candidates: Vec<ToStringCandidate>,
     ) {
-        for candidate in candidates {
+        let deadline = tokio::time::Instant::now() + TO_STRING_TOTAL_BUDGET;
+        let total = candidates.len();
+
+        for (idx, candidate) in candidates.into_iter().enumerate() {
+            // Check the total budget before each call.
+            if tokio::time::Instant::now() >= deadline {
+                tracing::debug!(
+                    "toString enrichment budget exhausted ({:?}), skipping remaining {} of {} candidates",
+                    TO_STRING_TOTAL_BUDGET,
+                    total - idx,
+                    total,
+                );
+                break;
+            }
+
             let result = tokio::time::timeout(
                 TO_STRING_EVAL_TIMEOUT,
                 self.backend
@@ -1436,18 +1474,63 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 .await;
                             let evaluate_getters = self.evaluate_getters_in_debug_views;
 
-                            for getter_name in getter_names {
+                            // Set a total budget for eager getter evaluation so that
+                            // objects with many getters don't block the IDE panel.
+                            // Only applies when evaluate_getters is true; lazy mode
+                            // has no network calls so no budget is needed.
+                            let getter_deadline = if evaluate_getters {
+                                Some(tokio::time::Instant::now() + GETTER_EVAL_TOTAL_BUDGET)
+                            } else {
+                                None
+                            };
+
+                            for (getter_idx, getter_name) in getter_names.iter().enumerate() {
                                 if evaluate_getters {
+                                    // Check the total budget before each call.
+                                    if let Some(deadline) = getter_deadline {
+                                        if tokio::time::Instant::now() >= deadline {
+                                            tracing::debug!(
+                                                "Getter evaluation budget exhausted ({:?}), showing remaining {} getters as lazy",
+                                                GETTER_EVAL_TOTAL_BUDGET,
+                                                getter_names.len() - getter_idx,
+                                            );
+                                            // Add remaining getters as lazy items so the
+                                            // user can still expand them on demand.
+                                            for remaining_name in &getter_names[getter_idx..] {
+                                                let getter_ref = self.var_store.allocate(
+                                                    VariableRef::GetterEval {
+                                                        isolate_id: isolate_id.clone(),
+                                                        instance_id: obj_id.clone(),
+                                                        getter_name: remaining_name.clone(),
+                                                    },
+                                                );
+                                                result.push(DapVariable {
+                                                    name: remaining_name.clone(),
+                                                    value: String::new(),
+                                                    variables_reference: getter_ref,
+                                                    presentation_hint: Some(
+                                                        DapVariablePresentationHint {
+                                                            lazy: Some(true),
+                                                            ..Default::default()
+                                                        },
+                                                    ),
+                                                    ..Default::default()
+                                                });
+                                            }
+                                            break;
+                                        }
+                                    }
+
                                     // Eagerly evaluate the getter with a 1-second timeout.
                                     let eval_result = tokio::time::timeout(
                                         GETTER_EVAL_TIMEOUT,
-                                        self.backend.evaluate(&isolate_id, &obj_id, &getter_name),
+                                        self.backend.evaluate(&isolate_id, &obj_id, getter_name),
                                     )
                                     .await;
 
                                     let var = match eval_result {
                                         Err(_timeout) => DapVariable {
-                                            name: getter_name,
+                                            name: getter_name.clone(),
                                             value: "<timed out>".to_string(),
                                             variables_reference: 0,
                                             presentation_hint: Some(DapVariablePresentationHint {
@@ -1459,7 +1542,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                             ..Default::default()
                                         },
                                         Ok(Err(e)) => DapVariable {
-                                            name: getter_name,
+                                            name: getter_name.clone(),
                                             value: format!("<error: {}>", e),
                                             variables_reference: 0,
                                             presentation_hint: Some(DapVariablePresentationHint {
@@ -1472,7 +1555,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                         },
                                         Ok(Ok(instance_ref)) => {
                                             let mut var = self.instance_ref_to_variable(
-                                                &getter_name,
+                                                getter_name,
                                                 &instance_ref,
                                                 &isolate_id,
                                             );
@@ -1496,7 +1579,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                             getter_name: getter_name.clone(),
                                         });
                                     result.push(DapVariable {
-                                        name: getter_name,
+                                        name: getter_name.clone(),
                                         value: String::new(),
                                         variables_reference: getter_ref,
                                         presentation_hint: Some(DapVariablePresentationHint {
