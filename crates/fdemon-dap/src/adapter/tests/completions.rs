@@ -414,3 +414,62 @@ fn test_extract_last_identifier_spaces() {
     // Space is a non-identifier character.
     assert_eq!(extract_last_identifier("var x"), "x");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests: M5 — column=0 guard
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_completions_column_zero_returns_error() {
+    // column=0 is invalid (1-based); the handler must reject it.
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let (mut adapter, _rx2) = DapAdapter::new_with_tx(CompletionsMockBackend, tx);
+
+    let req = make_completions_request(1, "counter", 0, None);
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        !resp.success,
+        "completions with column=0 must return an error, got: {:?}",
+        resp
+    );
+    let msg = resp.message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("column") || msg.contains("1-based") || msg.contains(">= 1"),
+        "error message should mention the column constraint; got: {:?}",
+        msg
+    );
+}
+
+#[tokio::test]
+async fn test_completions_column_negative_returns_error() {
+    // Negative column values are also invalid.
+    let (tx, _rx) = tokio::sync::mpsc::channel(16);
+    let (mut adapter, _rx2) = DapAdapter::new_with_tx(CompletionsMockBackend, tx);
+
+    let req = make_completions_request(1, "counter", -3, None);
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        !resp.success,
+        "completions with column=-3 must return an error"
+    );
+}
+
+#[tokio::test]
+async fn test_completions_column_one_succeeds() {
+    // column=1 is the minimum valid value; should return success.
+    let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+    let (mut adapter, _rx2) = DapAdapter::new_with_tx(CompletionsMockBackend, tx);
+    register_isolate(&mut adapter, &mut rx, "isolates/1").await;
+
+    // Empty text at column 1 → empty prefix, returns all completions.
+    let req = make_completions_request(1, "", 1, None);
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        resp.success,
+        "completions with column=1 must succeed; got: {:?}",
+        resp
+    );
+}

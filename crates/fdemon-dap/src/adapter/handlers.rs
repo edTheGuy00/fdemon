@@ -81,7 +81,13 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// - `flutter.appStart` — device ID, build mode, and restart capability
     pub(super) async fn handle_attach(&mut self, request: &DapRequest) -> DapResponse {
         let args: AttachRequestArguments = match request.arguments.as_ref() {
-            Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!("Failed to parse attach arguments: {}", e);
+                    return DapResponse::error(request, format!("Invalid attach arguments: {e}"));
+                }
+            },
             None => AttachRequestArguments::default(),
         };
 
@@ -337,10 +343,18 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 sbp.hit_condition,
                                 sbp.log_message,
                             );
-                            let entry = self
-                                .breakpoint_state
-                                .lookup_by_dap_id(dap_id)
-                                .expect("entry was just inserted");
+                            let entry = match self.breakpoint_state.lookup_by_dap_id(dap_id) {
+                                Some(e) => e,
+                                None => {
+                                    // Invariant: entry was just inserted by add_with_condition.
+                                    // If this is ever reached, breakpoint_state has a bug.
+                                    tracing::error!(
+                                        "Breakpoint state inconsistency: dap_id {} not found after insert",
+                                        dap_id
+                                    );
+                                    continue; // Skip this breakpoint, don't crash the session
+                                }
+                            };
                             response_breakpoints.push(entry_to_dap_breakpoint(entry, &args.source));
                         }
                         Err(err) => {
@@ -1608,6 +1622,11 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         let text = &args.text;
         let column = args.column;
+
+        // Column is 1-based; reject values below 1 to prevent underflow.
+        if column < 1 {
+            return DapResponse::error(request, "completions: column must be >= 1 (1-based)");
+        }
 
         // Extract the prefix up to the cursor position (column is 1-based).
         let prefix_len = ((column - 1) as usize).min(text.len());

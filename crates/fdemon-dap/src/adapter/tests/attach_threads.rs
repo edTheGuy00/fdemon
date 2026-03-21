@@ -202,3 +202,50 @@ async fn test_isolate_exit_removes_thread_from_map() {
         "IsolateExit should remove the thread from the thread map"
     );
 }
+
+// ── M7: attach with malformed arguments ───────────────────────────────
+
+#[tokio::test]
+async fn test_attach_malformed_arguments_returns_error() {
+    // Send attach with arguments that cannot be parsed as AttachRequestArguments
+    // (wrong type for a known field).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+
+    let req = crate::DapRequest {
+        seq: 1,
+        command: "attach".into(),
+        // evaluateGettersInDebugViews expects bool; send a string to force parse error.
+        arguments: Some(serde_json::json!({
+            "evaluateGettersInDebugViews": "definitely-not-a-bool"
+        })),
+    };
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        !resp.success,
+        "attach with malformed arguments must return an error, not silent defaults"
+    );
+    let msg = resp.message.as_deref().unwrap_or("");
+    assert!(
+        msg.contains("Invalid attach arguments") || msg.contains("attach"),
+        "error message should mention attach arguments; got: {:?}",
+        msg
+    );
+}
+
+#[tokio::test]
+async fn test_attach_no_arguments_uses_defaults() {
+    // attach with None arguments must still succeed (None is allowed by DAP spec).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let req = crate::DapRequest {
+        seq: 1,
+        command: "attach".into(),
+        arguments: None,
+    };
+    let resp = adapter.handle_request(&req).await;
+
+    assert!(
+        resp.success,
+        "attach with no arguments must succeed (args are optional)"
+    );
+}
