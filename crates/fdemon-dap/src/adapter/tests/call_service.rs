@@ -256,7 +256,7 @@ async fn test_call_service_backend_error_returns_error_response() {
     );
     let msg = resp.message.as_deref().unwrap_or("");
     assert!(
-        msg.contains("callService failed"),
+        msg.contains("callService") && msg.contains("failed"),
         "error message should wrap the backend error, got: {:?}",
         msg
     );

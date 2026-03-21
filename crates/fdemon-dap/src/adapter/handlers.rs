@@ -1144,11 +1144,10 @@ impl<B: DebugBackend> DapAdapter<B> {
         }
     }
 
-    /// Handle the `callService` custom DAP request.
+    /// Handles the `callService` custom DAP request by forwarding an arbitrary
+    /// VM Service RPC call to the connected Dart VM.
     ///
-    /// Forwards an arbitrary VM Service RPC call to the backend's
-    /// `call_service` method. This is a Dart-specific custom request used by
-    /// the VS Code Dart extension to invoke service extensions such as:
+    /// The VS Code Dart extension uses this to invoke service extensions such as:
     ///
     /// | Method | Purpose |
     /// |---|---|
@@ -1162,12 +1161,16 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// The request body must include a `"method"` string field identifying the
     /// VM Service RPC. An optional `"params"` object is forwarded verbatim.
     ///
-    /// ## Security
+    /// # Security Model
     ///
-    /// All invocations are logged at `debug` level for auditability. No
-    /// method-level filtering is applied — the VM Service itself handles
-    /// authorization. The DAP server is already bound to `127.0.0.1` by
-    /// default so only local callers can reach this endpoint.
+    /// This handler intentionally does NOT filter or restrict the `method` parameter.
+    /// The VM Service itself validates method names and handles authorization.
+    /// The DAP server is bound to localhost by default (`127.0.0.1`), limiting access
+    /// to local processes. When the server is bound to a non-loopback address, a warning
+    /// is emitted at startup. All forwarded RPCs are logged at `info` level for audit.
+    ///
+    /// If stronger isolation is needed, enable `require_auth` in the DAP server
+    /// configuration to require an auth token in the `initialize` handshake.
     pub(super) async fn handle_call_service(&mut self, request: &DapRequest) -> DapResponse {
         let args = match request.arguments.as_ref() {
             Some(a) => a,
@@ -1181,13 +1184,21 @@ impl<B: DebugBackend> DapAdapter<B> {
 
         let params = args.get("params").cloned();
 
-        tracing::debug!("callService: method={}, params={:?}", method, params);
+        tracing::info!(
+            method = method,
+            has_params = params.is_some(),
+            "callService: forwarding VM Service RPC"
+        );
 
         match with_timeout(self.backend.call_service(method, params)).await {
             Ok(result) => {
+                tracing::debug!(method = method, "callService: success");
                 DapResponse::success(request, Some(serde_json::json!({ "result": result })))
             }
-            Err(e) => DapResponse::error(request, format!("callService failed: {}", e)),
+            Err(e) => {
+                tracing::warn!(method = method, error = %e, "callService: failed");
+                DapResponse::error(request, format!("callService '{}' failed: {}", method, e))
+            }
         }
     }
 
