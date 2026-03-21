@@ -247,6 +247,16 @@ pub(crate) const MAX_VARIABLE_REFS: usize = 10_000;
 pub struct VariableStore {
     references: HashMap<i64, VariableRef>,
     next_ref: i64,
+    /// Set permanently to `true` after the cap is first hit in a stop cycle.
+    ///
+    /// Prevents subsequent cap hits from re-arming [`cap_warning_pending`],
+    /// ensuring only one warning is issued per stop cycle.
+    cap_hit: bool,
+    /// Set to `true` when [`cap_hit`] transitions from `false` to `true`.
+    ///
+    /// Consumed (reset to `false`) by [`VariableStore::take_cap_warning`] so
+    /// the caller can emit an IDE `output` event exactly once per stop cycle.
+    cap_warning_pending: bool,
 }
 
 impl VariableStore {
@@ -255,6 +265,8 @@ impl VariableStore {
         Self {
             references: HashMap::new(),
             next_ref: 1,
+            cap_hit: false,
+            cap_warning_pending: false,
         }
     }
 
@@ -264,20 +276,46 @@ impl VariableStore {
     /// the store has reached [`MAX_VARIABLE_REFS`] entries. A return value of
     /// `0` tells the DAP client that the variable is not expandable.
     ///
-    /// A [`tracing::warn`] is emitted the first time the cap is hit so that
-    /// unusual debug sessions can be identified in logs.
+    /// The first time the cap is hit per stop cycle, a [`tracing::warn`] is
+    /// emitted and a pending-warning flag is armed. Call
+    /// [`VariableStore::take_cap_warning`] to consume the flag and emit a
+    /// one-shot IDE `output` event. Subsequent cap hits in the same stop cycle
+    /// are silent.
     pub fn allocate(&mut self, target: VariableRef) -> i64 {
         if self.references.len() >= MAX_VARIABLE_REFS {
-            tracing::warn!(
-                "VariableStore full ({} entries) — returning 0 (non-expandable)",
-                MAX_VARIABLE_REFS,
-            );
+            if !self.cap_hit {
+                // First cap hit this stop cycle — arm the warning signal.
+                self.cap_hit = true;
+                self.cap_warning_pending = true;
+                tracing::warn!(
+                    "VariableStore full ({} entries) — returning 0 (non-expandable)",
+                    MAX_VARIABLE_REFS,
+                );
+            }
             return 0;
         }
         let r = self.next_ref;
         self.next_ref += 1;
         self.references.insert(r, target);
         r
+    }
+
+    /// Consume the pending cap-reached warning.
+    ///
+    /// Returns `true` exactly once after the first time [`VariableStore::allocate`]
+    /// hits the capacity limit in the current stop cycle. All subsequent calls
+    /// in the same stop cycle return `false` regardless of how many more cap
+    /// hits occur. The warning is re-armed after the next [`VariableStore::reset`].
+    ///
+    /// Intended to be called by the DAP handler layer to emit a one-shot IDE
+    /// `output` event explaining why some variables appear non-expandable.
+    pub fn take_cap_warning(&mut self) -> bool {
+        if self.cap_warning_pending {
+            self.cap_warning_pending = false;
+            true
+        } else {
+            false
+        }
     }
 
     /// Look up what a variable reference points to.
@@ -291,10 +329,13 @@ impl VariableStore {
     /// Invalidate all variable references.
     ///
     /// Must be called when the debuggee resumes. After a reset, any previously
-    /// allocated reference will resolve to `None`.
+    /// allocated reference will resolve to `None`. Both cap-tracking flags are
+    /// reset so the warning can fire again on the next stop cycle.
     pub fn reset(&mut self) {
         self.references.clear();
         self.next_ref = 1;
+        self.cap_hit = false;
+        self.cap_warning_pending = false;
     }
 
     /// Return the number of currently allocated references.
@@ -1188,6 +1229,118 @@ mod tests {
     #[test]
     fn test_scope_kind_locals_and_globals_are_distinct() {
         assert_ne!(ScopeKind::Locals, ScopeKind::Globals);
+    }
+
+    // ── VariableStore cap warning ─────────────────────────────────────────
+
+    /// Helper: fill a [`VariableStore`] to exactly [`MAX_VARIABLE_REFS`] entries.
+    fn fill_store_to_cap(store: &mut VariableStore) {
+        for _ in 0..MAX_VARIABLE_REFS {
+            let r = store.allocate(VariableRef::Scope {
+                frame_index: 0,
+                scope_kind: ScopeKind::Locals,
+            });
+            assert_ne!(
+                r, 0,
+                "Should not hit cap while filling to exactly MAX_VARIABLE_REFS"
+            );
+        }
+        assert_eq!(store.len(), MAX_VARIABLE_REFS);
+    }
+
+    #[test]
+    fn test_variable_store_take_cap_warning_returns_false_before_cap() {
+        let mut store = VariableStore::new();
+        // No allocations yet — warning flag must be false.
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning must be false before any cap is hit"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_cap_signals_first_hit() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // Next allocation hits the cap and should set the flag.
+        let r = store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert_eq!(r, 0, "allocate should return 0 when at cap");
+
+        // take_cap_warning must return true exactly once.
+        assert!(
+            store.take_cap_warning(),
+            "take_cap_warning should be true after first cap hit"
+        );
+        // The flag is now consumed — subsequent calls must return false.
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning should be false after flag is consumed"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_cap_subsequent_allocations_do_not_re_signal() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // First cap hit — sets the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+
+        // Consume the flag.
+        let _ = store.take_cap_warning();
+
+        // Further cap hits should NOT re-set the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Globals,
+        });
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning must stay false after flag was already consumed"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_reset_clears_cap_flag() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // Hit the cap once — sets the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            store.take_cap_warning(),
+            "Flag should be set after first cap hit"
+        );
+
+        // Reset — clears allocations and the cap-warning flag.
+        store.reset();
+
+        // Fill again.
+        fill_store_to_cap(&mut store);
+
+        // Hit the cap again — should arm the flag for the new stop cycle.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            store.take_cap_warning(),
+            "take_cap_warning should be true again after reset and new cap hit"
+        );
     }
 
     // ── FrameStore ────────────────────────────────────────────────────────

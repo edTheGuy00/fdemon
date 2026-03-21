@@ -399,6 +399,22 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
         };
 
+        // Emit a one-shot IDE console warning the first time the variable store
+        // capacity limit is reached. Subsequent cap hits in the same stop are
+        // silent (take_cap_warning returns false after consuming the flag).
+        if self.var_store.take_cap_warning() {
+            self.send_event(
+                "output",
+                Some(serde_json::json!({
+                    "category": "console",
+                    "output": "Warning: Variable store capacity limit reached (10,000 entries). \
+                Some variables may appear non-expandable. This typically happens with very deep \
+                object hierarchies.\n",
+                })),
+            )
+            .await;
+        }
+
         match variables {
             Ok(vars) => {
                 let body = serde_json::json!({ "variables": vars });
