@@ -263,6 +263,17 @@ pub struct InitializeRequestArguments {
     /// Client supports the `memory` event.
     #[serde(default)]
     pub supports_memory_event: Option<bool>,
+
+    /// Optional authentication token sent by the client during initialization.
+    ///
+    /// When the DAP server is started with `require_auth: true`, the client
+    /// must provide the token that was printed to stderr/log at startup. If
+    /// the token is missing or incorrect, the `initialize` request fails.
+    ///
+    /// Older clients that do not know about this field will simply omit it
+    /// (`None`), which is fine when `require_auth` is disabled (the default).
+    #[serde(default, rename = "authToken")]
+    pub auth_token: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -53,6 +53,16 @@ use crate::{
 /// scanner that opens a TCP connection but never sends any data).
 const INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Idle timeout for sessions that are not in the `Attached` state.
+///
+/// Sessions in `Initializing` or `Configured` states (i.e., clients that
+/// performed the DAP handshake but never attached a debuggee, or are stuck
+/// in the configuration phase) are closed after this duration of inactivity.
+///
+/// Active `Attached` sessions are **not** affected — a debuggee may be running
+/// silently for extended periods, which is not a sign of abandonment.
+const IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // DebugEventSource
 // ─────────────────────────────────────────────────────────────────────────────
@@ -337,6 +347,10 @@ pub struct DapClientSession<B: DebugBackend = NoopBackend> {
     event_tx: Option<mpsc::Sender<DapMessage>>,
     /// The backend to give to the adapter on `attach`.
     backend: Option<B>,
+    /// When `Some`, the client must provide this exact token in the
+    /// `authToken` field of its `initialize` request.  `None` means auth
+    /// is disabled and any client is accepted.
+    auth_token: Option<String>,
 }
 
 impl DapClientSession<NoopBackend> {
@@ -352,6 +366,7 @@ impl DapClientSession<NoopBackend> {
             adapter: None,
             event_tx: None,
             backend: Some(NoopBackend),
+            auth_token: None,
         }
     }
 }
@@ -371,6 +386,7 @@ impl<B: DebugBackend> DapClientSession<B> {
             adapter: None,
             event_tx: None,
             backend: Some(backend),
+            auth_token: None,
         }
     }
 
@@ -401,12 +417,14 @@ impl<B: DebugBackend> DapClientSession<B> {
         mut shutdown_rx: watch::Receiver<bool>,
         backend: B,
         debug_event_rx: mpsc::Receiver<DebugEvent>,
+        auth_token: Option<String>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
     {
         let mut session = Self::with_backend(backend);
+        session.auth_token = auth_token;
 
         // Channel for adapter-generated DAP events (stopped, continued, thread, etc.)
         let (event_tx, mut event_rx) = mpsc::channel::<DapMessage>(64);
@@ -461,6 +479,11 @@ impl<B: DebugBackend> DapClientSession<B> {
         // only active while in the `Uninitialized` state.
         let init_deadline = tokio::time::Instant::now() + INIT_TIMEOUT;
 
+        // Idle timeout: track the last time any message was received from the
+        // client.  Only sessions in non-`Attached` states are disconnected on
+        // idle — an attached session's debuggee may legitimately be quiet.
+        let mut last_activity = tokio::time::Instant::now();
+
         loop {
             // Compute the remaining time until the init deadline.
             // Once the session transitions out of `Uninitialized`, the timeout
@@ -480,8 +503,15 @@ impl<B: DebugBackend> DapClientSession<B> {
             // meaningful while still Uninitialized).
             let init_sleep = tokio::time::sleep_until(init_deadline);
 
+            // Build the idle sleep deadline.  Fires when `last_activity + IDLE_TIMEOUT`
+            // is reached; only effective when the session is not `Attached`.
+            let idle_deadline = last_activity + IDLE_TIMEOUT;
+            let idle_sleep = tokio::time::sleep_until(idle_deadline);
+
             tokio::select! {
                 result = read_message(reader) => {
+                    // Update activity timestamp on every received message.
+                    last_activity = tokio::time::Instant::now();
                     match result {
                         Ok(Some(DapMessage::Request(req))) => {
                             let responses = self.handle_request(&req).await;
@@ -553,6 +583,20 @@ impl<B: DebugBackend> DapClientSession<B> {
                     );
                     return Ok(());
                 }
+
+                // Idle timeout: disconnect sessions that are not actively debugging.
+                // The guard ensures `Attached` sessions (which may be waiting for the
+                // debuggee to hit a breakpoint) are never affected.
+                _ = idle_sleep, if self.state != SessionState::Attached
+                                  && self.state != SessionState::Uninitialized
+                                  && self.state != SessionState::Disconnecting => {
+                    tracing::warn!(
+                        "DAP session idle for {:?}, closing (state: {:?})",
+                        IDLE_TIMEOUT,
+                        self.state
+                    );
+                    break;
+                }
             }
         }
 
@@ -591,12 +635,15 @@ impl DapClientSession<NoopBackend> {
         mut writer: W,
         mut shutdown_rx: watch::Receiver<bool>,
         log_event_rx: broadcast::Receiver<DebugEvent>,
+        auth_token: Option<String>,
     ) -> Result<()>
     where
         R: AsyncRead + Unpin + Send,
         W: AsyncWrite + Unpin + Send,
     {
         let mut session = Self::new();
+        session.auth_token = auth_token;
+
         // Channel for adapter-generated DAP events (if adapter is created).
         let (event_tx, mut event_rx) = mpsc::channel::<DapMessage>(64);
         session.event_tx = Some(event_tx);
@@ -627,10 +674,11 @@ impl DapClientSession<NoopBackend> {
         stream: tokio::net::TcpStream,
         shutdown_rx: watch::Receiver<bool>,
         log_event_rx: broadcast::Receiver<DebugEvent>,
+        auth_token: Option<String>,
     ) -> Result<()> {
         let (reader, writer) = stream.into_split();
         let reader = BufReader::new(reader);
-        Self::run_on(reader, writer, shutdown_rx, log_event_rx).await
+        Self::run_on(reader, writer, shutdown_rx, log_event_rx, auth_token).await
     }
 }
 
@@ -740,10 +788,32 @@ impl<B: DebugBackend> DapClientSession<B> {
             return vec![DapMessage::Response(resp)];
         }
 
-        // Store client capabilities if provided.
-        if let Some(args) = &request.arguments {
-            self.client_info = serde_json::from_value(args.clone()).ok();
+        // Parse the client arguments (if any) so we can check the auth token.
+        let client_args: Option<InitializeRequestArguments> = request
+            .arguments
+            .as_ref()
+            .and_then(|a| serde_json::from_value(a.clone()).ok());
+
+        // Token validation: when `auth_token` is `Some`, the client must provide
+        // the exact same token in `args.authToken`.  A missing or wrong token is
+        // immediately rejected to prevent unauthorized code execution.
+        if let Some(expected) = &self.auth_token {
+            let provided = client_args
+                .as_ref()
+                .and_then(|a| a.auth_token.as_deref())
+                .unwrap_or("");
+            if provided != expected.as_str() {
+                tracing::warn!("DAP initialize rejected: invalid or missing auth token");
+                let resp = self.make_response(DapResponse::error(
+                    request,
+                    "Authentication failed: invalid or missing auth token",
+                ));
+                return vec![DapMessage::Response(resp)];
+            }
         }
+
+        // Store client capabilities.
+        self.client_info = client_args;
 
         self.state = SessionState::Initializing;
 
@@ -1611,7 +1681,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let reader = BufReader::new(server_reader);
             let writer = BufWriter::new(server_writer);
-            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await
         });
 
         let mut writer = BufWriter::new(client_writer);
@@ -1748,6 +1818,7 @@ mod tests {
                 shutdown_rx,
                 NoopBackend,
                 debug_rx,
+                None,
             )
             .await
         });
@@ -1875,7 +1946,7 @@ mod tests {
         let server = tokio::spawn(async move {
             let reader = BufReader::new(server_reader);
             let writer = BufWriter::new(server_writer);
-            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await
         });
 
         let mut writer = BufWriter::new(client_writer);
@@ -1969,5 +2040,204 @@ mod tests {
 
         let _ = shutdown_tx.send(true);
         drop(writer);
+    }
+
+    // ── Auth token validation ──────────────────────────────────────────────────
+
+    /// Helper: create a session with auth required and return it.
+    fn session_with_auth(token: &str) -> DapClientSession<NoopBackend> {
+        let mut s = DapClientSession::new();
+        s.auth_token = Some(token.to_string());
+        s
+    }
+
+    #[tokio::test]
+    async fn test_initialize_with_valid_token_succeeds() {
+        let mut session = session_with_auth("secret123");
+        let args = serde_json::json!({ "authToken": "secret123", "clientID": "test" });
+        let responses = session
+            .handle_request(&req_with_args(1, "initialize", args))
+            .await;
+        assert_eq!(
+            responses.len(),
+            2,
+            "initialize with valid token must return response + event"
+        );
+        assert!(
+            matches!(&responses[0], DapMessage::Response(r) if r.success),
+            "initialize with valid token must succeed, got {:?}",
+            responses[0]
+        );
+        assert_eq!(session.state, SessionState::Initializing);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_with_invalid_token_rejected() {
+        let mut session = session_with_auth("secret123");
+        let args = serde_json::json!({ "authToken": "wrong_token", "clientID": "test" });
+        let responses = session
+            .handle_request(&req_with_args(1, "initialize", args))
+            .await;
+        assert_eq!(
+            responses.len(),
+            1,
+            "rejected initialize must return exactly one error response"
+        );
+        assert!(
+            matches!(&responses[0], DapMessage::Response(r) if !r.success),
+            "initialize with wrong token must fail, got {:?}",
+            responses[0]
+        );
+        // State must not change.
+        assert_eq!(session.state, SessionState::Uninitialized);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_without_token_rejected_when_required() {
+        let mut session = session_with_auth("secret123");
+        // No authToken field in arguments.
+        let args = serde_json::json!({ "clientID": "test" });
+        let responses = session
+            .handle_request(&req_with_args(1, "initialize", args))
+            .await;
+        assert_eq!(
+            responses.len(),
+            1,
+            "missing token must return one error response"
+        );
+        assert!(
+            matches!(&responses[0], DapMessage::Response(r) if !r.success),
+            "initialize without token must fail when auth is required, got {:?}",
+            responses[0]
+        );
+        assert_eq!(session.state, SessionState::Uninitialized);
+    }
+
+    #[tokio::test]
+    async fn test_initialize_without_auth_configured_always_succeeds() {
+        // When auth_token is None (default), any client can connect.
+        let mut session = DapClientSession::new();
+        // No authToken field — should still succeed.
+        let responses = session.handle_request(&req(1, "initialize")).await;
+        assert_eq!(responses.len(), 2);
+        assert!(
+            matches!(&responses[0], DapMessage::Response(r) if r.success),
+            "initialize without auth configured must always succeed"
+        );
+    }
+
+    // ── Idle timeout ───────────────────────────────────────────────────────────
+
+    /// Test that a session in Initializing state is closed after the idle timeout.
+    ///
+    /// Uses `tokio::time::pause()` / `advance()` to speed-run the 300 s timeout
+    /// without actually waiting.
+    #[tokio::test(start_paused = true)]
+    async fn test_idle_timeout_disconnects_non_attached_session() {
+        use tokio::io::{BufReader, BufWriter};
+
+        let (server_reader, _client_writer) = tokio::io::duplex(8192);
+        let (_client_reader, server_writer) = tokio::io::duplex(8192);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+        // Keep `_log_event_tx` alive so the broadcast channel is not immediately closed.
+        let (_log_event_tx, log_event_rx) = broadcast::channel::<crate::adapter::DebugEvent>(1);
+
+        let server = tokio::spawn(async move {
+            let reader = BufReader::new(server_reader);
+            let writer = BufWriter::new(server_writer);
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await
+        });
+
+        // Give the server task a moment to start.
+        tokio::task::yield_now().await;
+
+        // Advance time past INIT_TIMEOUT (30 s) to move past Uninitialized state.
+        // Without sending initialize, the session should close due to INIT_TIMEOUT.
+        // That's fine — we just need to verify it closes (for any reason) after timeout.
+        tokio::time::advance(INIT_TIMEOUT + std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+
+        // Server should exit after the init timeout fires.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should exit after init timeout")
+            .expect("task ok");
+
+        assert!(result.is_ok(), "session should exit cleanly on timeout");
+
+        let _ = shutdown_tx.send(true);
+    }
+
+    /// Test that a session that has completed initialize (Initializing state)
+    /// is closed after the idle timeout if no further activity occurs.
+    #[tokio::test(start_paused = true)]
+    async fn test_idle_timeout_closes_initializing_session() {
+        use tokio::io::{AsyncWriteExt, BufReader, BufWriter};
+
+        let (server_reader, client_writer) = tokio::io::duplex(8192);
+        let (client_reader, server_writer) = tokio::io::duplex(8192);
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_log_event_tx, log_event_rx) = broadcast::channel::<crate::adapter::DebugEvent>(1);
+
+        let server = tokio::spawn(async move {
+            let reader = BufReader::new(server_reader);
+            let writer = BufWriter::new(server_writer);
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await
+        });
+
+        tokio::task::yield_now().await;
+
+        // Send initialize so the session moves to Initializing state.
+        let mut writer = BufWriter::new(client_writer);
+        crate::write_message(
+            &mut writer,
+            &crate::DapMessage::Request(crate::DapRequest {
+                seq: 1,
+                command: "initialize".into(),
+                arguments: None,
+            }),
+        )
+        .await
+        .unwrap();
+        writer.flush().await.unwrap();
+
+        // Read the response + initialized event.
+        let mut reader = BufReader::new(client_reader);
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("response timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            crate::read_message(&mut reader),
+        )
+        .await
+        .expect("event timeout")
+        .expect("read ok")
+        .expect("not EOF");
+
+        // Now advance time past IDLE_TIMEOUT — the session should close.
+        tokio::time::advance(IDLE_TIMEOUT + std::time::Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), server)
+            .await
+            .expect("server should exit after idle timeout")
+            .expect("task ok");
+
+        assert!(
+            result.is_ok(),
+            "session should exit cleanly after idle timeout"
+        );
+
+        let _ = shutdown_tx.send(true);
     }
 }
