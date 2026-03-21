@@ -718,3 +718,213 @@ async fn test_nested_field_evaluate_name_chained() {
         "Nested field should have chained evaluateName 'outer.inner.value'"
     );
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Test 9: Map string keys with special characters are properly escaped
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Backend whose map has string keys containing `"`, `\`, `$`, and `\n`.
+struct SpecialKeyMapBackend;
+
+impl MockTestBackend for SpecialKeyMapBackend {
+    async fn get_stack(
+        &self,
+        _isolate_id: &str,
+        _limit: Option<i32>,
+    ) -> Result<serde_json::Value, BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": { "name": "test" },
+                "location": {
+                    "script": { "uri": "file:///app/lib/main.dart" },
+                    "line": 1,
+                    "column": 1
+                },
+                "vars": [{
+                    "name": "specialMap",
+                    "value": {
+                        "type": "InstanceRef",
+                        "kind": "Map",
+                        "id": "objects/specialMap",
+                        "length": 4
+                    }
+                }]
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _isolate_id: &str,
+        object_id: &str,
+        _offset: Option<i64>,
+        _count: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        match object_id {
+            "objects/specialMap" => Ok(serde_json::json!({
+                "type": "Instance",
+                "kind": "Map",
+                "associations": [
+                    {
+                        "key": { "kind": "String", "valueAsString": "hello \"world\"" },
+                        "value": { "kind": "Int", "valueAsString": "1", "id": "objects/v1" }
+                    },
+                    {
+                        "key": { "kind": "String", "valueAsString": "path\\to\\file" },
+                        "value": { "kind": "Int", "valueAsString": "2", "id": "objects/v2" }
+                    },
+                    {
+                        "key": { "kind": "String", "valueAsString": "cost: $100" },
+                        "value": { "kind": "Int", "valueAsString": "3", "id": "objects/v3" }
+                    },
+                    {
+                        "key": { "kind": "String", "valueAsString": "line1\nline2" },
+                        "value": { "kind": "Int", "valueAsString": "4", "id": "objects/v4" }
+                    }
+                ]
+            })),
+            _ => Ok(serde_json::json!({ "type": "Instance", "kind": "Null" })),
+        }
+    }
+}
+
+#[tokio::test]
+async fn test_map_evaluate_name_with_special_chars_in_key() {
+    let (mut adapter, mut rx) = DapAdapter::new(SpecialKeyMapBackend);
+    let thread_id = register_isolate(&mut adapter, &mut rx, "isolates/1").await;
+
+    adapter
+        .handle_debug_event(DebugEvent::Paused {
+            isolate_id: "isolates/1".into(),
+            reason: PauseReason::Breakpoint,
+            breakpoint_id: None,
+            exception: None,
+        })
+        .await;
+    rx.try_recv().ok();
+
+    // stackTrace
+    let st_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 1,
+            command: "stackTrace".into(),
+            arguments: Some(serde_json::json!({ "threadId": thread_id })),
+        })
+        .await;
+    let frame_id = st_resp.body.unwrap()["stackFrames"][0]["id"]
+        .as_i64()
+        .unwrap();
+
+    // scopes
+    let sc_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 2,
+            command: "scopes".into(),
+            arguments: Some(serde_json::json!({ "frameId": frame_id })),
+        })
+        .await;
+    let scopes = sc_resp.body.unwrap()["scopes"].as_array().unwrap().clone();
+    let locals_ref = scopes.iter().find(|s| s["name"] == "Locals").unwrap()["variablesReference"]
+        .as_i64()
+        .unwrap();
+
+    // variables (locals)
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 3,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": locals_ref })),
+        })
+        .await;
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+
+    let special_map = vars
+        .iter()
+        .find(|v| v["name"] == "specialMap")
+        .expect("specialMap missing");
+    let map_ref = special_map["variablesReference"].as_i64().unwrap();
+    assert_ne!(map_ref, 0, "specialMap should be expandable");
+
+    // Expand map entries
+    let map_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 10,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": map_ref })),
+        })
+        .await;
+    assert!(map_resp.success, "Expanding specialMap should succeed");
+    let entries = map_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(entries.len(), 4, "Should have 4 map entries");
+
+    // Key with quotes: hello "world" → specialMap["hello \"world\""]
+    let quote_entry = entries
+        .iter()
+        .find(|e| {
+            e["name"]
+                .as_str()
+                .map(|s| s.contains("hello"))
+                .unwrap_or(false)
+        })
+        .expect("quote entry missing");
+    assert_eq!(
+        quote_entry.get("evaluateName").and_then(|v| v.as_str()),
+        Some(r#"specialMap["hello \"world\""]"#),
+        "Quotes in map key must be escaped in evaluateName"
+    );
+
+    // Key with backslash: path\to\file → specialMap["path\\to\\file"]
+    let backslash_entry = entries
+        .iter()
+        .find(|e| {
+            e["name"]
+                .as_str()
+                .map(|s| s.contains("path"))
+                .unwrap_or(false)
+        })
+        .expect("backslash entry missing");
+    assert_eq!(
+        backslash_entry.get("evaluateName").and_then(|v| v.as_str()),
+        Some(r#"specialMap["path\\to\\file"]"#),
+        "Backslashes in map key must be escaped in evaluateName"
+    );
+
+    // Key with dollar: cost: $100 → specialMap["cost: \$100"]
+    let dollar_entry = entries
+        .iter()
+        .find(|e| {
+            e["name"]
+                .as_str()
+                .map(|s| s.contains("cost"))
+                .unwrap_or(false)
+        })
+        .expect("dollar entry missing");
+    assert_eq!(
+        dollar_entry.get("evaluateName").and_then(|v| v.as_str()),
+        Some(r#"specialMap["cost: \$100"]"#),
+        "Dollar signs in map key must be escaped in evaluateName"
+    );
+
+    // Key with newline: line1\nline2 → specialMap["line1\nline2"]
+    let newline_entry = entries
+        .iter()
+        .find(|e| {
+            e["name"]
+                .as_str()
+                .map(|s| s.contains("line1"))
+                .unwrap_or(false)
+        })
+        .expect("newline entry missing");
+    assert_eq!(
+        newline_entry.get("evaluateName").and_then(|v| v.as_str()),
+        Some(r#"specialMap["line1\nline2"]"#),
+        "Newlines in map key must be escaped in evaluateName"
+    );
+}

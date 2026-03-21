@@ -359,8 +359,8 @@ impl<B: DebugBackend> DapAdapter<B> {
                 // Object expansion: pass start/count to the backend so the VM
                 // Service returns only the requested slice (e.g., list elements).
                 self.expand_object(
-                    &isolate_id.clone(),
-                    &object_id.clone(),
+                    &isolate_id,
+                    &object_id,
                     args.start,
                     Some(capped_count),
                     parent_eval_name.as_deref(),
@@ -374,12 +374,8 @@ impl<B: DebugBackend> DapAdapter<B> {
             } => {
                 // Lazy getter evaluation: triggered when the user explicitly
                 // expands a getter that was deferred with `evaluateGettersInDebugViews == false`.
-                self.evaluate_lazy_getter(
-                    &isolate_id.clone(),
-                    &instance_id.clone(),
-                    &getter_name.clone(),
-                )
-                .await
+                self.evaluate_lazy_getter(&isolate_id, &instance_id, &getter_name)
+                    .await
             }
         };
 
@@ -678,7 +674,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             let static_value = field_obj.get("staticValue").cloned();
 
             let isolate_id_clone = isolate_id.clone();
-            let mut var = match static_value {
+            let var = match static_value {
                 None => DapVariable {
                     name: field_name,
                     value: "<not initialized>".to_string(),
@@ -711,7 +707,6 @@ impl<B: DebugBackend> DapAdapter<B> {
                     }
                 }
             };
-            var.name = var.name.clone(); // ensure owned
             result.push(var);
         }
 
@@ -1310,7 +1305,9 @@ impl<B: DebugBackend> DapAdapter<B> {
                             // Construct child evaluateName based on key kind.
                             let child_eval_name: Option<String> =
                                 parent_evaluate_name.map(|p| match key_kind {
-                                    "String" => format!("{}[\"{}\"]", p, key_str),
+                                    "String" => {
+                                        format!("{}[\"{}\"]", p, escape_dart_string(key_str))
+                                    }
                                     "Int" => format!("{}[{}]", p, key_str),
                                     _ => format!("{}[{}]", p, key_str),
                                 });
@@ -1567,6 +1564,26 @@ impl<B: DebugBackend> DapAdapter<B> {
 // toString() enrichment helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Escape a string for use inside a Dart double-quoted string literal.
+///
+/// Handles `"`, `\`, `$`, `\n`, `\r`, and `\t` so that the resulting
+/// expression (e.g., `myMap["hello \"world\""]`) is valid Dart.
+fn escape_dart_string(s: &str) -> String {
+    let mut escaped = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '$' => escaped.push_str("\\$"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(ch),
+        }
+    }
+    escaped
+}
+
 /// Build a [`ToStringCandidate`] for an `InstanceRef` JSON value if it is a
 /// kind that benefits from `toString()` enrichment.
 ///
@@ -1596,4 +1613,57 @@ fn to_string_candidate(
         object_id: object_id.to_string(),
         class_name,
     })
+}
+
+#[cfg(test)]
+mod escape_tests {
+    use super::escape_dart_string;
+
+    #[test]
+    fn test_escape_dart_string_quotes() {
+        assert_eq!(escape_dart_string(r#"hello "world""#), r#"hello \"world\""#);
+    }
+
+    #[test]
+    fn test_escape_dart_string_backslash() {
+        assert_eq!(escape_dart_string(r"path\to\file"), r"path\\to\\file");
+    }
+
+    #[test]
+    fn test_escape_dart_string_dollar() {
+        assert_eq!(escape_dart_string("cost: $100"), r"cost: \$100");
+    }
+
+    #[test]
+    fn test_escape_dart_string_newline() {
+        assert_eq!(escape_dart_string("line1\nline2"), r"line1\nline2");
+    }
+
+    #[test]
+    fn test_escape_dart_string_carriage_return() {
+        assert_eq!(escape_dart_string("line1\rline2"), r"line1\rline2");
+    }
+
+    #[test]
+    fn test_escape_dart_string_tab() {
+        assert_eq!(escape_dart_string("col1\tcol2"), r"col1\tcol2");
+    }
+
+    #[test]
+    fn test_escape_dart_string_no_special_chars() {
+        assert_eq!(escape_dart_string("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_escape_dart_string_empty() {
+        assert_eq!(escape_dart_string(""), "");
+    }
+
+    #[test]
+    fn test_escape_dart_string_multiple_escapes() {
+        assert_eq!(
+            escape_dart_string("say \"hello\" for $5\nbye"),
+            r#"say \"hello\" for \$5\nbye"#
+        );
+    }
 }
