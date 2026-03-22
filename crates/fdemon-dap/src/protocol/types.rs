@@ -717,6 +717,12 @@ pub struct AttachRequestArguments {
     /// directory name when absent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub package_name: Option<String>,
+    /// The working directory of the project.
+    ///
+    /// Sent by some IDEs (e.g., Zed sends `cwd` in attach args). Used to
+    /// resolve `package:` URIs to filesystem paths for stack frame sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
 }
 
 /// Arguments for the `restartFrame` request.
@@ -1735,6 +1741,7 @@ mod tests {
             debug_sdk_libraries: None,
             debug_external_package_libraries: None,
             package_name: None,
+            cwd: None,
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["vmServiceUri"], "ws://127.0.0.1:8181/ws");

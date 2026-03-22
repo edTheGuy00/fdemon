@@ -89,12 +89,14 @@ impl MockTestBackend for LibraryDebuggableMock {
 // Tests: is_app_package
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// When `app_package_name` is empty, no URI is an app package.
+/// When `app_package_name` is empty, ALL package: URIs are treated as app
+/// packages (debuggable). This prevents silently marking app code as
+/// non-debuggable when the IDE doesn't send packageName.
 #[tokio::test]
-async fn test_is_app_package_empty_name_returns_false() {
+async fn test_is_app_package_empty_name_returns_true() {
     let (adapter, _rx) = DapAdapter::new(super::super::test_helpers::MockBackend);
-    assert!(!adapter.is_app_package("package:anything/lib.dart"));
-    assert!(!adapter.is_app_package("package:my_app/main.dart"));
+    assert!(adapter.is_app_package("package:anything/lib.dart"));
+    assert!(adapter.is_app_package("package:my_app/main.dart"));
 }
 
 /// URIs matching `package:<name>/` are app packages.

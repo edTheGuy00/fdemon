@@ -256,6 +256,11 @@ impl<B: DebugBackend> DapAdapter<B> {
                     "threadId": thread_id,
                     "allThreadsStopped": true,
                 });
+                tracing::debug!(
+                    "DAP stopped event (reason={}, threadId={})",
+                    reason_str,
+                    thread_id
+                );
                 self.send_event("stopped", Some(body)).await;
             }
 

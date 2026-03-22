@@ -514,8 +514,30 @@ impl<B: DebugBackend> DapClientSession<B> {
                     last_activity = tokio::time::Instant::now();
                     match result {
                         Ok(Some(DapMessage::Request(req))) => {
+                            tracing::debug!(
+                                "DAP ← {} (seq={})",
+                                req.command,
+                                req.seq,
+                            );
                             let responses = self.handle_request(&req).await;
                             for msg in &responses {
+                                match msg {
+                                    DapMessage::Response(resp) => {
+                                        tracing::debug!(
+                                            "DAP → response {} (req_seq={}, success={})",
+                                            resp.command,
+                                            resp.request_seq,
+                                            resp.success,
+                                        );
+                                    }
+                                    DapMessage::Event(evt) => {
+                                        tracing::debug!(
+                                            "DAP → event {}",
+                                            evt.event,
+                                        );
+                                    }
+                                    _ => {}
+                                }
                                 write_message(writer, msg).await?;
                             }
                             if self.state == SessionState::Disconnecting {
@@ -548,6 +570,9 @@ impl<B: DebugBackend> DapClientSession<B> {
                         }
                         other => other,
                     };
+                    if let DapMessage::Event(ref ev) = stamped {
+                        tracing::debug!("DAP → async event {} (seq={})", ev.event, ev.seq);
+                    }
                     if let Err(e) = write_message(writer, &stamped).await {
                         tracing::warn!("Error writing DAP event: {}", e);
                         break;

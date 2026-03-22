@@ -557,7 +557,7 @@ impl MockTestBackend for StackMockBackend {
             "frames": [
                 {
                     "kind": "Regular",
-                    "code": { "name": "main" },
+                    "function": { "name": "main" },
                     "location": {
                         "script": { "uri": "file:///app/lib/main.dart" },
                         "line": 42,
@@ -566,7 +566,7 @@ impl MockTestBackend for StackMockBackend {
                 },
                 {
                     "kind": "Regular",
-                    "code": { "name": "runApp" },
+                    "function": { "name": "runApp" },
                     "location": {
                         "script": { "uri": "package:flutter/src/widgets/binding.dart" },
                         "line": 100
@@ -593,7 +593,7 @@ impl MockTestBackend for VarMockBackend {
             "frames": [
                 {
                     "kind": "Regular",
-                    "code": { "name": "main" },
+                    "function": { "name": "main" },
                     "location": {
                         "script": { "uri": "file:///app/lib/main.dart" },
                         "line": 42,

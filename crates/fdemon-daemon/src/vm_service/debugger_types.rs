@@ -98,10 +98,10 @@ impl<'de> Deserialize<'de> for FrameKind {
             "Regular" => Ok(FrameKind::Regular),
             "AsyncCausal" => Ok(FrameKind::AsyncCausal),
             "AsyncSuspensionMarker" => Ok(FrameKind::AsyncSuspensionMarker),
-            other => Err(serde::de::Error::unknown_variant(
-                other,
-                &["Regular", "AsyncCausal", "AsyncSuspensionMarker"],
-            )),
+            other => {
+                tracing::warn!("Unknown FrameKind '{}' — treating as Regular", other);
+                Ok(FrameKind::Regular)
+            }
         }
     }
 }
@@ -1243,10 +1243,14 @@ mod tests {
     }
 
     #[test]
-    fn test_frame_kind_deserialize_unknown_fails() {
-        let json = json!("regular"); // wrong casing
-        let result: Result<FrameKind, _> = serde_json::from_value(json);
-        assert!(result.is_err());
+    fn test_frame_kind_deserialize_unknown_falls_back_to_regular() {
+        let json = json!("regular"); // wrong casing — treated as Regular
+        let result: FrameKind = serde_json::from_value(json).unwrap();
+        assert!(matches!(result, FrameKind::Regular));
+
+        let json2 = json!("AsyncActivation"); // unknown variant
+        let result2: FrameKind = serde_json::from_value(json2).unwrap();
+        assert!(matches!(result2, FrameKind::Regular));
     }
 
     #[test]

@@ -42,6 +42,8 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Lifecycle requests (`initialize`, `configurationDone`) are handled by
     /// the session layer before this is called.
     pub async fn handle_request(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP request: {} (seq={})", request.command, request.seq);
+
         // If the VM Service disconnected mid-session (e.g., app exited), all
         // subsequent requests return a structured error. The `disconnect` command
         // is exempt so the IDE can still cleanly close the debug session.
@@ -127,6 +129,19 @@ impl<B: DebugBackend> DapAdapter<B> {
         if let Some(pkg) = args.package_name {
             self.app_package_name = pkg;
         }
+        // Use `cwd` from attach args to set project root if not already known.
+        if self.project_root.is_none() {
+            if let Some(ref cwd) = args.cwd {
+                let cwd_path = std::path::Path::new(cwd);
+                // The cwd might be the workspace root, not the Flutter project root.
+                // Check if it has a pubspec.yaml directly; if not, it will be
+                // resolved later from setBreakpoints paths.
+                if cwd_path.join("pubspec.yaml").exists() {
+                    tracing::debug!("Project root from attach cwd: {}", cwd);
+                    self.project_root = Some(cwd_path.to_path_buf());
+                }
+            }
+        }
 
         match with_timeout(self.backend.get_vm()).await {
             Ok(vm_info) => {
@@ -153,6 +168,45 @@ impl<B: DebugBackend> DapAdapter<B> {
                             "threadId": thread_id,
                         });
                         self.send_event("thread", Some(body)).await;
+                    }
+                }
+
+                // ── Auto-detect app_package_name if not provided ──────────
+                //
+                // When the IDE doesn't send packageName in the attach args,
+                // try to infer it from the first isolate's root library URI.
+                // For example, "package:my_app/main.dart" → "my_app".
+                if self.app_package_name.is_empty() {
+                    if let Some(isolates) = vm_info.get("isolates").and_then(|v| v.as_array()) {
+                        for isolate in isolates {
+                            let id = isolate.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            if id.is_empty() {
+                                continue;
+                            }
+                            // Try to get the isolate details for the root library URI.
+                            if let Ok(iso_detail) =
+                                with_timeout(self.backend.get_isolate(id)).await
+                            {
+                                if let Some(root_lib) = iso_detail
+                                    .get("rootLib")
+                                    .and_then(|rl| rl.get("uri"))
+                                    .and_then(|u| u.as_str())
+                                {
+                                    if let Some(pkg_name) = root_lib
+                                        .strip_prefix("package:")
+                                        .and_then(|rest| rest.split('/').next())
+                                    {
+                                        tracing::debug!(
+                                            "Auto-detected app package name: {} (from {})",
+                                            pkg_name,
+                                            root_lib
+                                        );
+                                        self.app_package_name = pkg_name.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -253,9 +307,9 @@ impl<B: DebugBackend> DapAdapter<B> {
             Err(e) => return DapResponse::error(request, e),
         };
 
-        // Convert the source path to a file:// URI for the VM Service.
+        // Convert the source path to a package: or file:// URI for the VM Service.
         let source_path = args.source.path.as_deref().unwrap_or("");
-        let uri = path_to_dart_uri(source_path);
+        let uri = self.resolve_source_uri(source_path);
 
         // Desired breakpoints from the request (empty = clear all for this source).
         let desired = args.breakpoints.unwrap_or_default();
@@ -418,22 +472,28 @@ impl<B: DebugBackend> DapAdapter<B> {
         // After the active state is built, we have the real DAP IDs. Update the
         // desired_breakpoints entry so that re-application after hot restart
         // uses the correct stable IDs.
+        //
+        // Important: preserve breakpoints even when `id` is `None` (pending
+        // breakpoints set before an isolate was available). These will be
+        // re-applied on `IsolateRunnable` from `desired_breakpoints`.
         {
             let synced: Vec<crate::adapter::breakpoints::DesiredBreakpoint> = desired
                 .iter()
                 .zip(response_breakpoints.iter())
-                .filter_map(|(sbp, dap_bp)| {
-                    // Only record desired breakpoints that have a DAP ID assigned.
-                    dap_bp
-                        .id
-                        .map(|dap_id| crate::adapter::breakpoints::DesiredBreakpoint {
-                            dap_id,
-                            line: sbp.line as i32,
-                            column: sbp.column.map(|c| c as i32),
-                            condition: sbp.condition.clone(),
-                            hit_condition: sbp.hit_condition.clone(),
-                            log_message: sbp.log_message.clone(),
-                        })
+                .enumerate()
+                .map(|(i, (sbp, dap_bp))| {
+                    // Use the real DAP ID if assigned, otherwise keep the
+                    // placeholder from Step 0 so that the entry survives for
+                    // re-application on IsolateRunnable.
+                    let dap_id = dap_bp.id.unwrap_or((i + 1) as i64);
+                    crate::adapter::breakpoints::DesiredBreakpoint {
+                        dap_id,
+                        line: sbp.line as i32,
+                        column: sbp.column.map(|c| c as i32),
+                        condition: sbp.condition.clone(),
+                        hit_condition: sbp.hit_condition.clone(),
+                        log_message: sbp.log_message.clone(),
+                    }
                 })
                 .collect();
             if synced.is_empty() {
@@ -1536,7 +1596,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         };
 
         // Convert the filesystem path to a Dart VM URI.
-        let uri = path_to_dart_uri(&source_path);
+        let uri = self.resolve_source_uri(&source_path);
 
         // Retrieve the script list to find the script ID for this URI.
         let scripts_response = match with_timeout(self.backend.get_scripts(&isolate_id)).await {
@@ -1743,12 +1803,112 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// ```
     pub(super) fn is_app_package(&self, uri: &str) -> bool {
         if self.app_package_name.is_empty() {
-            return false;
+            // When no package name is configured, treat ALL package: URIs as
+            // app code (debuggable). This prevents silently marking the app's
+            // own libraries as non-debuggable, which would cause breakpoints
+            // to never fire.
+            return true;
         }
         // Match "package:<name>/" exactly so that a package named "my_app"
         // does not accidentally match "my_app_test".
         let prefix = format!("package:{}/", self.app_package_name);
         uri.starts_with(&prefix)
+    }
+
+    /// Convert a filesystem path to the best URI for the Dart VM Service.
+    ///
+    /// Tries to resolve the path to a `package:` URI by reading
+    /// `.dart_tool/package_config.json` from the inferred project root.
+    /// Falls back to a `file://` URI if resolution fails.
+    ///
+    /// The package config is cached so subsequent calls for paths in the
+    /// same project do not re-read the file.
+    pub(super) fn resolve_source_uri(&mut self, path: &str) -> String {
+        // Pass-through for paths that already have a URI scheme.
+        if path.is_empty()
+            || path.starts_with("file://")
+            || path.starts_with("package:")
+            || path.starts_with("dart:")
+        {
+            return path_to_dart_uri(path);
+        }
+
+        // Try to convert to a package: URI using the cached mappings.
+        if let Some(pkg_uri) = self.try_path_to_package_uri(path) {
+            return pkg_uri;
+        }
+
+        // Populate cache if we haven't yet for this project root.
+        if let Some(project_root) = self.project_root.clone().or_else(|| Self::infer_project_root(path)) {
+            // Store the project root for use by handle_stack_trace (source path resolution).
+            if self.project_root.is_none() {
+                tracing::debug!("Detected project root: {}", project_root.display());
+                self.project_root = Some(project_root.clone());
+            }
+            let already_loaded = self
+                .package_lib_to_name
+                .iter()
+                .any(|(lib_dir, _)| path.starts_with(lib_dir.to_string_lossy().as_ref()));
+
+            if !already_loaded {
+                let entries = read_package_config(&project_root);
+                if !entries.is_empty() {
+                    tracing::debug!(
+                        "Loaded {} package URI mappings from {}",
+                        entries.len(),
+                        project_root.join(".dart_tool/package_config.json").display()
+                    );
+                    self.package_lib_to_name.extend(entries);
+                }
+
+                // Try again after loading.
+                if let Some(pkg_uri) = self.try_path_to_package_uri(path) {
+                    return pkg_uri;
+                }
+            }
+        }
+
+        // Fall back to file:// URI.
+        path_to_dart_uri(path)
+    }
+
+    /// Try to convert a filesystem path to a `package:` URI using the cached
+    /// `package_lib_to_name` mappings.
+    fn try_path_to_package_uri(&self, path: &str) -> Option<String> {
+        let canonical = std::path::Path::new(path).canonicalize().ok()?;
+        for (lib_dir, pkg_name) in &self.package_lib_to_name {
+            if let Ok(relative) = canonical.strip_prefix(lib_dir) {
+                let uri = format!("package:{}/{}", pkg_name, relative.display());
+                tracing::debug!("Resolved {} → {}", path, uri);
+                return Some(uri);
+            }
+        }
+        None
+    }
+
+    /// Infer the Dart/Flutter project root from a source file path.
+    ///
+    /// Looks for `/lib/` in the path and returns the parent directory.
+    /// For example, `/home/user/my_app/lib/src/widget.dart` → `/home/user/my_app`.
+    fn infer_project_root(path: &str) -> Option<std::path::PathBuf> {
+        // Walk up from the file looking for a pubspec.yaml to confirm the root.
+        // First, try the common case: file is under /lib/.
+        if let Some(lib_idx) = path.rfind("/lib/") {
+            let candidate = std::path::Path::new(&path[..lib_idx]);
+            if candidate.join("pubspec.yaml").exists() {
+                return Some(candidate.to_path_buf());
+            }
+        }
+
+        // Fallback: walk parent directories looking for pubspec.yaml.
+        let mut dir = std::path::Path::new(path).parent();
+        while let Some(d) = dir {
+            if d.join("pubspec.yaml").exists() {
+                return Some(d.to_path_buf());
+            }
+            dir = d.parent();
+        }
+        None
     }
 }
 
@@ -1798,12 +1958,8 @@ pub(crate) fn parse_args<T: serde::de::DeserializeOwned>(
 /// Convert an absolute filesystem path to a `file://` URI suitable for the
 /// Dart VM Service.
 ///
-/// # Phase 3 Note
-///
-/// This returns a plain `file://` URI. Full `package:` URI resolution (which
-/// requires reading `.dart_tool/package_config.json`) is deferred to Phase 4.
-/// The Dart VM Service accepts both `file://` and `package:` URIs for
-/// `addBreakpointWithScriptUri`.
+/// This is the fallback when `package:` URI resolution is not available.
+/// Prefer [`DapAdapter::resolve_source_uri`] which tries `package:` first.
 pub(crate) fn path_to_dart_uri(path: &str) -> String {
     if path.is_empty() {
         return String::new();
@@ -1813,6 +1969,72 @@ pub(crate) fn path_to_dart_uri(path: &str) -> String {
         return path.to_string();
     }
     format!("file://{}", path)
+}
+
+/// Read `.dart_tool/package_config.json` and return `(canonical_lib_dir, package_name)` pairs.
+///
+/// `project_root` is the directory containing `pubspec.yaml` (the parent of
+/// the directory containing `package_config.json`'s `.dart_tool/`).
+fn read_package_config(project_root: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    let config_path = project_root.join(".dart_tool/package_config.json");
+    let config_text = match std::fs::read_to_string(&config_path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let config: serde_json::Value = match serde_json::from_str(&config_text) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    let packages = match config["packages"].as_array() {
+        Some(p) => p,
+        None => return result,
+    };
+    let config_dir = match config_path.parent() {
+        Some(d) => d,
+        None => return result,
+    };
+
+    for pkg in packages {
+        let name = match pkg["name"].as_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let root_uri = match pkg["rootUri"].as_str() {
+            Some(u) => u,
+            None => continue,
+        };
+        let package_uri = pkg
+            .get("packageUri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("lib/");
+
+        // Resolve the package root to an absolute path.
+        let pkg_root: std::path::PathBuf = if root_uri.starts_with("file://") {
+            match url::Url::parse(root_uri)
+                .ok()
+                .and_then(|u| u.to_file_path().ok())
+            {
+                Some(p) => p,
+                None => continue,
+            }
+        } else {
+            // Relative to .dart_tool/ directory.
+            config_dir.join(root_uri)
+        };
+
+        // Build the canonical lib directory path.
+        let lib_dir = pkg_root.join(package_uri);
+        match lib_dir.canonicalize() {
+            Ok(canonical) => result.push((canonical, name)),
+            Err(_) => {
+                // Non-canonical (e.g., package not downloaded yet) — store as-is.
+                result.push((lib_dir, name));
+            }
+        }
+    }
+    result
 }
 
 /// Build a [`DapBreakpoint`] from a tracked [`BreakpointEntry`].

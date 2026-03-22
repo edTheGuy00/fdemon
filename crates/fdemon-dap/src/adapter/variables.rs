@@ -112,7 +112,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// `"<asynchronous gap>"` and `presentation_hint: "label"` to serve as
     /// visual separators, matching the behavior of the official Dart debugger.
     pub(super) async fn handle_stack_trace(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: stackTrace");
+        tracing::debug!("DAP stackTrace request: {:?}", request.arguments);
 
         let args = match parse_args::<StackTraceArguments>(request) {
             Ok(a) => a,
@@ -170,8 +170,8 @@ impl<B: DebugBackend> DapAdapter<B> {
                 ("<asynchronous gap>".to_string(), Some("label".to_string()))
             } else {
                 let code_name = frame
-                    .get("code")
-                    .and_then(|c| c.get("name"))
+                    .get("function")
+                    .and_then(|f| f.get("name"))
                     .and_then(|n| n.as_str())
                     .unwrap_or("<unknown>")
                     .to_string();
@@ -182,7 +182,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 frame,
                 &mut self.source_reference_store,
                 &isolate_id,
-                None, // project_root not available in DapAdapter; source reference allocation still works
+                self.project_root.as_deref(),
             );
             let (line, column) = extract_line_column(frame);
 
@@ -198,6 +198,11 @@ impl<B: DebugBackend> DapAdapter<B> {
             });
         }
 
+        tracing::debug!(
+            "DAP stackTrace returning {} frames (total={})",
+            dap_frames.len(),
+            total_frames
+        );
         let body = serde_json::json!({
             "stackFrames": dap_frames,
             "totalFrames": total_frames,
@@ -223,7 +228,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// the complete variable list when `variables` is called. The paging
     /// parameters (`start`, `count`) from `VariablesArguments` are ignored.
     pub(super) async fn handle_scopes(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: scopes");
+        tracing::debug!("DAP scopes request: {:?}", request.arguments);
 
         let args = match parse_args::<ScopesArguments>(request) {
             Ok(a) => a,
@@ -297,6 +302,11 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
         }
 
+        tracing::debug!(
+            "DAP scopes returning {} scopes for frame_id={}",
+            scopes.len(),
+            args.frame_id
+        );
         let body = serde_json::json!({ "scopes": scopes });
         DapResponse::success(request, Some(body))
     }
@@ -315,7 +325,7 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Stale or unknown references (i.e., those from a previous stop that were
     /// invalidated by [`DapAdapter::on_resume`]) return a clear error.
     pub(super) async fn handle_variables(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: variables");
+        tracing::debug!("DAP variables request: {:?}", request.arguments);
 
         let args = match parse_args::<VariablesArguments>(request) {
             Ok(a) => a,

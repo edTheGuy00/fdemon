@@ -40,6 +40,7 @@ mod variables;
 pub(crate) mod test_helpers;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
@@ -266,6 +267,25 @@ pub struct DapAdapter<B: DebugBackend> {
     /// progress sequence is started. The ID is embedded in `progressStart` /
     /// `progressEnd` events so the IDE can match them correctly.
     pub(crate) next_progress_id: u64,
+
+    /// Cached mapping from absolute lib directory paths to package names.
+    ///
+    /// Lazily populated from `.dart_tool/package_config.json` the first time
+    /// a `setBreakpoints` request provides a file path under a Flutter/Dart
+    /// project. Maps canonical lib directory → package name so that file
+    /// paths can be converted to `package:` URIs for the VM Service.
+    ///
+    /// Example: `/Users/ed/project/lib/` → `"my_app"`.
+    package_lib_to_name: Vec<(PathBuf, String)>,
+
+    /// The Flutter/Dart project root directory.
+    ///
+    /// Lazily detected from the first `setBreakpoints` source path or from
+    /// the `cwd` field in the `attach` request arguments. Used to resolve
+    /// `package:` URIs to filesystem paths in `handle_stack_trace` so that
+    /// stack frames include a `source.path` (required by Zed and other IDEs
+    /// to make frames selectable and enable variable inspection).
+    pub(crate) project_root: Option<PathBuf>,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -314,6 +334,8 @@ impl<B: DebugBackend> DapAdapter<B> {
             app_package_name: String::new(),
             client_supports_progress: false,
             next_progress_id: 0,
+            package_lib_to_name: Vec::new(),
+            project_root: None,
         };
         (adapter, ())
     }
