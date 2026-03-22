@@ -590,9 +590,9 @@ dependencies = [
 
 [[package]]
 name = "euclid"
-version = "0.22.13"
+version = "0.22.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df61bf483e837f88d5c2291dcf55c67be7e676b3a51acc48db3a7b163b91ed63"
+checksum = "f1a05365e3b1c6d1650318537c7460c6923f1abdd272ad6842baa2b509957a06"
 dependencies = [
  "num-traits",
 ]
@@ -637,7 +637,7 @@ checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
 name = "fdemon-app"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "color-eyre",
@@ -665,7 +665,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -681,7 +681,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-daemon"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -701,7 +701,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-dap"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fdemon-core",
  "rand 0.8.5",
@@ -716,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-tui"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "crossterm",
@@ -783,7 +783,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flutter-demon"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "clap",
@@ -1249,9 +1249,9 @@ dependencies = [
 
 [[package]]
 name = "itoa"
-version = "1.0.17"
+version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
+checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
 name = "js-sys"
@@ -3622,18 +3622,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.42"
+version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2578b716f8a7a858b7f02d5bd870c14bf4ddbbcf3a4c05414ba6503640505e3"
+checksum = "efbb2a062be311f2ba113ce66f697a4dc589f85e78a4aea276200804cea0ed87"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.42"
+version = "0.8.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e6cc098ea4d3bd6246687de65af3f920c430e236bee1e3bf2e441463f08a02f"
+checksum = "0e8bc7269b54418e7aeeef514aa68f8690b8c0489a06b0136e5f57c4c5ccab89"
 dependencies = [
  "proc-macro2",
  "quote",
