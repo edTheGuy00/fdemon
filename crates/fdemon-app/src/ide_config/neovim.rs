@@ -157,7 +157,7 @@ mod tests {
         assert_eq!(cfg["name"], "Flutter (fdemon)");
         assert_eq!(cfg["type"], "dart");
         assert_eq!(cfg["request"], "attach");
-        assert_eq!(cfg["fdemon-managed"], true);
+        assert!(cfg.get("fdemon-managed").is_none());
     }
 
     #[test]

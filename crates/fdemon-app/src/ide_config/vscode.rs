@@ -30,8 +30,7 @@ impl VSCodeGenerator {
             "type": "dart",
             "request": "attach",
             "debugServer": port,
-            "cwd": "${workspaceFolder}",
-            "fdemon-managed": true
+            "cwd": "${workspaceFolder}"
         })
     }
 }
@@ -115,7 +114,7 @@ mod tests {
         assert_eq!(configs[0]["debugServer"], 4711);
         assert_eq!(configs[0]["type"], "dart");
         assert_eq!(configs[0]["request"], "attach");
-        assert_eq!(configs[0]["fdemon-managed"], true);
+        assert!(configs[0].get("fdemon-managed").is_none());
     }
 
     #[test]

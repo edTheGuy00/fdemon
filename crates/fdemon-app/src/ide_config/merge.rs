@@ -4,13 +4,6 @@
 //! cleaning JSONC (JSON with comments), and consistent pretty-printing.
 //! These utilities are reused across per-IDE generator implementations.
 
-/// Marker field name used to identify fdemon-managed entries in JSON configs.
-///
-/// Reserved for generators that write a boolean marker field instead of matching by name.
-/// Currently unused in production code but retained as a named protocol constant.
-#[allow(dead_code)]
-pub(crate) const FDEMON_MARKER_FIELD: &str = "fdemon-managed";
-
 /// Marker value for the fdemon config entry name field.
 pub(crate) const FDEMON_CONFIG_NAME: &str = "Flutter (fdemon)";
 
@@ -374,7 +367,6 @@ mod tests {
 
     #[test]
     fn test_constants_have_expected_values() {
-        assert_eq!(FDEMON_MARKER_FIELD, "fdemon-managed");
         assert_eq!(FDEMON_CONFIG_NAME, "Flutter (fdemon)");
     }
 }
