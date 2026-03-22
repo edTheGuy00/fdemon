@@ -184,8 +184,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 continue;
                             }
                             // Try to get the isolate details for the root library URI.
-                            if let Ok(iso_detail) =
-                                with_timeout(self.backend.get_isolate(id)).await
+                            if let Ok(iso_detail) = with_timeout(self.backend.get_isolate(id)).await
                             {
                                 if let Some(root_lib) = iso_detail
                                     .get("rootLib")
@@ -1859,7 +1858,11 @@ impl<B: DebugBackend> DapAdapter<B> {
         }
 
         // Populate cache if we haven't yet for this project root.
-        if let Some(project_root) = self.project_root.clone().or_else(|| Self::infer_project_root(path)) {
+        if let Some(project_root) = self
+            .project_root
+            .clone()
+            .or_else(|| Self::infer_project_root(path))
+        {
             // Store the project root for use by handle_stack_trace (source path resolution).
             if self.project_root.is_none() {
                 tracing::debug!("Detected project root: {}", project_root.display());
@@ -1876,7 +1879,9 @@ impl<B: DebugBackend> DapAdapter<B> {
                     tracing::debug!(
                         "Loaded {} package URI mappings from {}",
                         entries.len(),
-                        project_root.join(".dart_tool/package_config.json").display()
+                        project_root
+                            .join(".dart_tool/package_config.json")
+                            .display()
                     );
                     self.package_lib_to_name.extend(entries);
                 }

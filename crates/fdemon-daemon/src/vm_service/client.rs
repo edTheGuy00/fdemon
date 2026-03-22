@@ -178,6 +178,7 @@ impl VmRequestHandle {
             cmd_tx,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::new(Mutex::new(isolate_id)),
+            ws_uri: String::new(),
         }
     }
 
@@ -1328,6 +1329,7 @@ mod tests {
             cmd_tx,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
         };
         // Drop the receiver to simulate disconnection
         drop(cmd_rx);
@@ -1341,6 +1343,7 @@ mod tests {
             cmd_tx: mpsc::channel::<ClientCommand>(1).0,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
         };
         let debug_str = format!("{:?}", handle);
         assert!(debug_str.contains("VmRequestHandle"));
@@ -1354,6 +1357,7 @@ mod tests {
             cmd_tx: mpsc::channel::<ClientCommand>(1).0,
             state: Arc::clone(&state),
             isolate_id_cache: Arc::new(Mutex::new(None)),
+            ws_uri: String::new(),
         };
         let cloned = handle.clone();
 
@@ -1388,6 +1392,7 @@ mod tests {
             cmd_tx: mpsc::channel::<ClientCommand>(1).0,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
         };
 
         // Confirm the cache has a value.
@@ -1416,6 +1421,7 @@ mod tests {
             cmd_tx: mpsc::channel::<ClientCommand>(1).0,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
         };
 
         handle.invalidate_isolate_cache();
@@ -1437,6 +1443,7 @@ mod tests {
             cmd_tx: mpsc::channel::<ClientCommand>(1).0,
             state: Arc::new(std::sync::RwLock::new(ConnectionState::Connected)),
             isolate_id_cache: Arc::clone(&isolate_id_cache),
+            ws_uri: String::new(),
         };
         let cloned = handle.clone();
 

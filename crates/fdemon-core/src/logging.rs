@@ -79,8 +79,8 @@ fn init_session_log(log_dir: PathBuf) -> Result<Option<PathBuf>> {
     let log_file = std::fs::File::create(&log_path)?;
 
     // Default to info for all crates when using --log-dir (includes fdemon_dap).
-    let env_filter = EnvFilter::try_from_env("FDEMON_LOG")
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let env_filter =
+        EnvFilter::try_from_env("FDEMON_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
 
     tracing_subscriber::registry()
         .with(env_filter)
