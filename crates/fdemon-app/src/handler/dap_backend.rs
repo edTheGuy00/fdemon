@@ -89,10 +89,11 @@ impl VmServiceBackend {
     /// Hot reload and hot restart will return [`BackendError::NotConnected`]
     /// until the backend is given a message sender via [`new_with_msg_tx`].
     pub fn new(handle: VmRequestHandle) -> Self {
+        let ws_uri = Some(handle.ws_uri().to_string());
         Self {
             handle,
             msg_tx: None,
-            ws_uri: None,
+            ws_uri,
             device_id: None,
             build_mode: "debug".to_string(),
         }
@@ -104,10 +105,11 @@ impl VmServiceBackend {
     /// `Message::HotRestart` through the existing Engine reload/restart
     /// lifecycle, avoiding direct VM Service RPC calls.
     pub fn new_with_msg_tx(handle: VmRequestHandle, msg_tx: mpsc::Sender<Message>) -> Self {
+        let ws_uri = Some(handle.ws_uri().to_string());
         Self {
             handle,
             msg_tx: Some(msg_tx),
-            ws_uri: None,
+            ws_uri,
             device_id: None,
             build_mode: "debug".to_string(),
         }

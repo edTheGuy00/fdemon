@@ -64,6 +64,8 @@ pub struct VmRequestHandle {
     state: Arc<std::sync::RwLock<ConnectionState>>,
     /// Cached main isolate ID. Cleared by the background task on reconnection.
     isolate_id_cache: Arc<Mutex<Option<String>>>,
+    /// The WebSocket URI this handle is connected to.
+    ws_uri: String,
 }
 
 impl std::fmt::Debug for VmRequestHandle {
@@ -76,6 +78,11 @@ impl std::fmt::Debug for VmRequestHandle {
 }
 
 impl VmRequestHandle {
+    /// The WebSocket URI this handle is connected to.
+    pub fn ws_uri(&self) -> &str {
+        &self.ws_uri
+    }
+
     /// Send a JSON-RPC request and wait for the response.
     ///
     /// Blocks (awaits) until the VM Service replies or the connection is
@@ -395,6 +402,7 @@ impl VmServiceClient {
                 cmd_tx,
                 state,
                 isolate_id_cache,
+                ws_uri: ws_uri.to_string(),
             },
             event_rx,
         })

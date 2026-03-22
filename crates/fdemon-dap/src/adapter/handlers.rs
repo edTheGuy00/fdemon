@@ -242,6 +242,26 @@ impl<B: DebugBackend> DapAdapter<B> {
                 self.send_event("flutter.appStart", Some(app_start_body))
                     .await;
 
+                // Emit flutter.appStarted to signal that the app is ready.
+                // Must be sent during attach because the Flutter daemon's
+                // app.started event typically arrives before the DAP client
+                // connects.
+                self.send_event("flutter.appStarted", Some(serde_json::json!({})))
+                    .await;
+
+                // Emit an output event to clear VS Code's "Starting debug
+                // session..." indicator. The Dart extension's
+                // DartDebugAdapterLaunchStatus clears its progress notification
+                // on receipt of any `output` or `dart.progress*` event.
+                self.send_event(
+                    "output",
+                    Some(serde_json::json!({
+                        "category": "console",
+                        "output": "Connected to Flutter session.\n"
+                    })),
+                )
+                .await;
+
                 DapResponse::success(request, None)
             }
             Err(e) => DapResponse::error(request, format!("Failed to attach: {e}")),
