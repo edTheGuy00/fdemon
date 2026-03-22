@@ -74,8 +74,9 @@ fn init_session_log(log_dir: PathBuf) -> Result<Option<PathBuf>> {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_secs();
-    let log_path = log_dir.join(format!("fdemon-{now}.log"));
+        .as_millis();
+    let pid = std::process::id();
+    let log_path = log_dir.join(format!("fdemon-{now}-{pid}.log"));
     let log_file = std::fs::File::create(&log_path)?;
 
     // Default to info for all crates when using --log-dir (includes fdemon_dap).
