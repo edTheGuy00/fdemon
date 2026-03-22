@@ -9,11 +9,11 @@
 name = "Profile (Issue #25)"
 device = "auto"
 mode = "profile"
-auto_start = true
 
 [[configurations]]
 name = "Development"
 device = "auto"
+mode = "debug"
 
 [[configurations]]
 name = "Staging"

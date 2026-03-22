@@ -1,0 +1,13 @@
+{
+  "configurations": [
+    {
+      "cwd": "${workspaceFolder}",
+      "debugServer": 33001,
+      "fdemon-managed": true,
+      "name": "Flutter (fdemon)",
+      "request": "attach",
+      "type": "dart"
+    }
+  ],
+  "version": "0.2.0"
+}
