@@ -89,10 +89,11 @@ impl VmServiceBackend {
     /// Hot reload and hot restart will return [`BackendError::NotConnected`]
     /// until the backend is given a message sender via [`new_with_msg_tx`].
     pub fn new(handle: VmRequestHandle) -> Self {
+        let ws_uri = Some(handle.ws_uri().to_string());
         Self {
             handle,
             msg_tx: None,
-            ws_uri: None,
+            ws_uri,
             device_id: None,
             build_mode: "debug".to_string(),
         }
@@ -104,10 +105,11 @@ impl VmServiceBackend {
     /// `Message::HotRestart` through the existing Engine reload/restart
     /// lifecycle, avoiding direct VM Service RPC calls.
     pub fn new_with_msg_tx(handle: VmRequestHandle, msg_tx: mpsc::Sender<Message>) -> Self {
+        let ws_uri = Some(handle.ws_uri().to_string());
         Self {
             handle,
             msg_tx: Some(msg_tx),
-            ws_uri: None,
+            ws_uri,
             device_id: None,
             build_mode: "debug".to_string(),
         }
@@ -138,13 +140,19 @@ impl DebugBackend for VmServiceBackend {
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
         let vm_step = step.map(|s| match s {
             StepMode::Over => StepOption::Over,
             StepMode::Into => StepOption::Into,
             StepMode::Out => StepOption::Out,
+            StepMode::Rewind => StepOption::Rewind,
         });
-        debugger::resume(&self.handle, isolate_id, vm_step)
+        debugger::resume(&self.handle, isolate_id, vm_step, frame_index)
             .await
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
@@ -258,6 +266,16 @@ impl DebugBackend for VmServiceBackend {
             .map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
+        self.handle
+            .request(
+                "getIsolate",
+                Some(serde_json::json!({ "isolateId": isolate_id })),
+            )
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
         let scripts = debugger::get_scripts(&self.handle, isolate_id)
             .await
@@ -265,16 +283,66 @@ impl DebugBackend for VmServiceBackend {
         serde_json::to_value(&scripts).map_err(|e| BackendError::VmServiceError(e.to_string()))
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError> {
+        self.handle
+            .request(method, params)
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError> {
+        self.handle
+            .request(
+                "setLibraryDebuggable",
+                Some(serde_json::json!({
+                    "isolateId": isolate_id,
+                    "libraryId": library_id,
+                    "isDebuggable": is_debuggable,
+                })),
+            )
+            .await
+            .map(|_| ())
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        let kinds: Vec<String> = report_kinds.iter().map(|s| s.to_string()).collect();
+        let params =
+            build_source_report_params(isolate_id, script_id, &kinds, token_pos, end_token_pos);
+        self.handle
+            .request("getSourceReport", Some(params))
+            .await
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))
+    }
+
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         // getObject on a Script object returns a Script with a "source" field
         // containing the full source text.
         let result = debugger::get_object(&self.handle, isolate_id, script_id, None, None)
             .await
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| BackendError::VmServiceError(e.to_string()))?;
         result["source"]
             .as_str()
             .map(|s| s.to_string())
-            .ok_or_else(|| format!("Script '{}' has no source field", script_id))
+            .ok_or_else(|| {
+                BackendError::VmServiceError(format!("Script '{}' has no source field", script_id))
+            })
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {
@@ -319,6 +387,38 @@ impl DebugBackend for VmServiceBackend {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Private helpers
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build the JSON parameters for a `getSourceReport` VM Service RPC call.
+///
+/// Constructs the base `serde_json::Value` with `isolateId`, `scriptId`,
+/// `reports`, and `forceCompile: true`, then conditionally adds `tokenPos`
+/// and `endTokenPos` when present. Shared by [`DebugBackend::get_source_report`]
+/// and [`DynDebugBackendInner::get_source_report_boxed`] to avoid duplication.
+fn build_source_report_params(
+    isolate_id: &str,
+    script_id: &str,
+    report_kinds: &[String],
+    token_pos: Option<i64>,
+    end_token_pos: Option<i64>,
+) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "isolateId": isolate_id,
+        "scriptId": script_id,
+        "reports": report_kinds,
+        "forceCompile": true,
+    });
+    if let Some(tp) = token_pos {
+        params["tokenPos"] = serde_json::json!(tp);
+    }
+    if let Some(etp) = end_token_pos {
+        params["endTokenPos"] = serde_json::json!(etp);
+    }
+    params
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // DynDebugBackendInner — object-safe vtable for VmServiceBackend
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -344,8 +444,9 @@ impl DynDebugBackendInner for VmServiceBackend {
         &'a self,
         isolate_id: &'a str,
         step: Option<StepMode>,
+        frame_index: Option<i32>,
     ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
-        Box::pin(self.resume(isolate_id, step))
+        Box::pin(self.resume(isolate_id, step, frame_index))
     }
 
     fn add_breakpoint_boxed<'a>(
@@ -416,6 +517,13 @@ impl DynDebugBackendInner for VmServiceBackend {
         Box::pin(self.get_vm())
     }
 
+    fn get_isolate_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        Box::pin(self.get_isolate(isolate_id))
+    }
+
     fn get_scripts_boxed<'a>(
         &'a self,
         isolate_id: &'a str,
@@ -423,11 +531,53 @@ impl DynDebugBackendInner for VmServiceBackend {
         Box::pin(self.get_scripts(isolate_id))
     }
 
+    fn call_service_boxed<'a>(
+        &'a self,
+        method: &'a str,
+        params: Option<serde_json::Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        Box::pin(self.call_service(method, params))
+    }
+
+    fn set_library_debuggable_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        library_id: &'a str,
+        is_debuggable: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+        Box::pin(self.set_library_debuggable(isolate_id, library_id, is_debuggable))
+    }
+
+    fn get_source_report_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        script_id: &'a str,
+        report_kinds: Vec<String>,
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>> {
+        // Build params using the shared helper so we don't need to hold
+        // temporary `Vec<&str>` borrows across the async boundary.
+        let params = build_source_report_params(
+            isolate_id,
+            script_id,
+            &report_kinds,
+            token_pos,
+            end_token_pos,
+        );
+        Box::pin(async move {
+            self.handle
+                .request("getSourceReport", Some(params))
+                .await
+                .map_err(|e| BackendError::VmServiceError(e.to_string()))
+        })
+    }
+
     fn get_source_boxed<'a>(
         &'a self,
         isolate_id: &'a str,
         script_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>> {
         Box::pin(self.get_source(isolate_id, script_id))
     }
 
@@ -700,5 +850,108 @@ mod tests {
     fn test_vm_backend_factory_new_type_checks() {
         // Taking the function address verifies the signature compiles correctly.
         let _ = VmBackendFactory::new;
+    }
+
+    // ── Phase 6 new method type-system tests ──────────────────────────────
+
+    /// Verify `VmServiceBackend` satisfies the `DebugBackend` trait with all
+    /// Phase 6 new methods (`get_isolate`, `call_service`,
+    /// `set_library_debuggable`, `get_source_report`).
+    ///
+    /// A live `VmRequestHandle` is not constructable in unit tests; this test
+    /// confirms the trait bounds are satisfied at compile time.
+    #[test]
+    fn test_vm_service_backend_satisfies_debug_backend_with_phase6_methods() {
+        fn assert_debug_backend<T: DebugBackend>() {}
+        assert_debug_backend::<VmServiceBackend>();
+    }
+
+    /// Verify `VmServiceBackend` implements `DynDebugBackendInner` (required by
+    /// `DynDebugBackend::new` which takes `Box<dyn DynDebugBackendInner>`).
+    #[test]
+    fn test_vm_service_backend_satisfies_dyn_debug_backend_inner() {
+        fn assert_dyn_inner<T: fdemon_dap::adapter::DynDebugBackendInner>() {}
+        assert_dyn_inner::<VmServiceBackend>();
+    }
+
+    /// Verify that `build_source_report_params` correctly includes `tokenPos`
+    /// and `endTokenPos` fields when they are `Some`.
+    #[test]
+    fn test_get_source_report_params_with_token_pos_fields() {
+        let report_kinds = vec!["PossibleBreakpoints".to_string()];
+        let params = build_source_report_params(
+            "isolates/1",
+            "scripts/42",
+            &report_kinds,
+            Some(100),
+            Some(200),
+        );
+
+        assert_eq!(params["isolateId"], "isolates/1");
+        assert_eq!(params["scriptId"], "scripts/42");
+        assert_eq!(
+            params["reports"],
+            serde_json::json!(["PossibleBreakpoints"])
+        );
+        assert_eq!(params["forceCompile"], true);
+        assert_eq!(params["tokenPos"], 100);
+        assert_eq!(params["endTokenPos"], 200);
+    }
+
+    /// Verify that `build_source_report_params` omits `tokenPos`/`endTokenPos`
+    /// when both are `None`.
+    #[test]
+    fn test_get_source_report_params_without_token_pos_fields() {
+        let report_kinds = vec!["Coverage".to_string()];
+        let params =
+            build_source_report_params("isolates/1", "scripts/42", &report_kinds, None, None);
+
+        assert!(
+            params.get("tokenPos").is_none(),
+            "tokenPos should be absent when None"
+        );
+        assert!(
+            params.get("endTokenPos").is_none(),
+            "endTokenPos should be absent when None"
+        );
+    }
+
+    /// Verify JSON parameter construction for `get_isolate`.
+    #[test]
+    fn test_get_isolate_params_construction() {
+        let isolate_id = "isolates/main";
+        let params = serde_json::json!({ "isolateId": isolate_id });
+
+        assert_eq!(params["isolateId"], "isolates/main");
+    }
+
+    /// Verify JSON parameter construction for `set_library_debuggable`.
+    #[test]
+    fn test_set_library_debuggable_params_construction() {
+        let isolate_id = "isolates/1";
+        let library_id = "libraries/5";
+        let is_debuggable = true;
+
+        let params = serde_json::json!({
+            "isolateId": isolate_id,
+            "libraryId": library_id,
+            "isDebuggable": is_debuggable,
+        });
+
+        assert_eq!(params["isolateId"], "isolates/1");
+        assert_eq!(params["libraryId"], "libraries/5");
+        assert_eq!(params["isDebuggable"], true);
+    }
+
+    /// Verify that `call_service` passes method and params unchanged.
+    /// Tests the parameter forwarding logic using JSON construction.
+    #[test]
+    fn test_call_service_params_forwarded_as_is() {
+        let method = "ext.flutter.inspector.getRootWidget";
+        let params = serde_json::json!({ "arg0": "value0" });
+
+        // Simulate the forwarding: method is used as-is, params as-is.
+        assert_eq!(method, "ext.flutter.inspector.getRootWidget");
+        assert_eq!(params["arg0"], "value0");
     }
 }

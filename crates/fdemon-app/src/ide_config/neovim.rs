@@ -14,13 +14,16 @@ use std::path::{Path, PathBuf};
 
 use fdemon_core::Result;
 
-use super::{vscode::VSCodeGenerator, IdeConfigGenerator};
+use super::{
+    vscode::{detect_workspace_root, VSCodeGenerator},
+    IdeConfigGenerator,
+};
 
 /// Generates DAP config for Neovim's nvim-dap plugin.
 ///
 /// The primary config target is `.vscode/launch.json` (same format as VS Code),
 /// because nvim-dap can load VS Code launch configs via `load_launchjs()`.
-/// Additionally writes a `.nvim-dap.lua` snippet in the project root as an
+/// Additionally writes a `.nvim-dap.lua` snippet at the workspace root as an
 /// informational alternative for users who prefer native nvim-dap configuration.
 pub struct NeovimGenerator;
 
@@ -61,12 +64,17 @@ table.insert(dap.configurations.dart, {{
         )
     }
 
-    /// Write `.nvim-dap.lua` to the project root.
+    /// Write `.nvim-dap.lua` to the workspace root.
     ///
     /// This is a best-effort operation — errors are logged as warnings but do
     /// not propagate to the caller. The file is always overwritten (fdemon-owned).
+    ///
+    /// The file is placed at the workspace root (detected via
+    /// [`detect_workspace_root`]) so that Neovim finds it when opened at the
+    /// same directory where VS Code would be opened.
     pub fn write_nvim_dap_lua(&self, port: u16, project_root: &Path) {
-        let path = project_root.join(".nvim-dap.lua");
+        let workspace_root = detect_workspace_root(project_root);
+        let path = workspace_root.join(".nvim-dap.lua");
         let content = self.generate_lua_snippet(port);
         match std::fs::write(&path, content) {
             Ok(()) => {
@@ -80,10 +88,14 @@ table.insert(dap.configurations.dart, {{
 }
 
 impl IdeConfigGenerator for NeovimGenerator {
-    /// Returns the path to `.vscode/launch.json` — the primary config target
-    /// for nvim-dap via `load_launchjs()`.
+    /// Returns the path to `.vscode/launch.json` at the workspace root — the
+    /// primary config target for nvim-dap via `load_launchjs()`.
+    ///
+    /// Delegates to [`VSCodeGenerator::config_path`] which detects the
+    /// workspace root internally.
     fn config_path(&self, project_root: &Path) -> PathBuf {
-        project_root.join(".vscode").join("launch.json")
+        let vscode = VSCodeGenerator;
+        vscode.config_path(project_root)
     }
 
     /// Generate a fresh `.vscode/launch.json`.
@@ -99,12 +111,12 @@ impl IdeConfigGenerator for NeovimGenerator {
     /// Merge the fdemon entry into an existing `.vscode/launch.json`.
     ///
     /// Delegates entirely to the VS Code generator's merge logic.
-    fn merge_config(&self, existing: &str, port: u16, _project_root: &Path) -> Result<String> {
+    fn merge_config(&self, existing: &str, port: u16, project_root: &Path) -> Result<String> {
         let vscode = VSCodeGenerator;
-        vscode.merge_config(existing, port, Path::new(""))
+        vscode.merge_config(existing, port, project_root)
     }
 
-    /// Write (or overwrite) the secondary `.nvim-dap.lua` file.
+    /// Write (or overwrite) the secondary `.nvim-dap.lua` file at the workspace root.
     ///
     /// Called by [`super::run_generator`] after both fresh creation and merging
     /// so the Lua snippet is kept in sync with `.vscode/launch.json` on every
@@ -126,15 +138,39 @@ impl IdeConfigGenerator for NeovimGenerator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
     use tempfile::tempdir;
 
     #[test]
     fn test_neovim_config_path_is_vscode_launch_json() {
+        // Single-project (no markers): config_path = project_root/.vscode/launch.json
+        let dir = tempdir().unwrap();
+        let project = dir.path().join("app");
+        std::fs::create_dir_all(&project).unwrap();
+
         let gen = NeovimGenerator;
+        let path = gen.config_path(&project);
+        assert!(path.ends_with(".vscode/launch.json"));
+    }
+
+    #[test]
+    fn test_neovim_config_path_monorepo_uses_workspace_root() {
+        // Layout: workspace/.vscode/  workspace/app/
+        let root = tempdir().unwrap();
+        let workspace = root.path();
+        let project = workspace.join("app");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(workspace.join(".vscode")).unwrap();
+
+        let gen = NeovimGenerator;
+        let path = gen.config_path(&project);
         assert_eq!(
-            gen.config_path(Path::new("/project")),
-            PathBuf::from("/project/.vscode/launch.json")
+            path,
+            workspace
+                .canonicalize()
+                .unwrap()
+                .join(".vscode")
+                .join("launch.json")
         );
     }
 
@@ -157,7 +193,7 @@ mod tests {
         assert_eq!(cfg["name"], "Flutter (fdemon)");
         assert_eq!(cfg["type"], "dart");
         assert_eq!(cfg["request"], "attach");
-        assert_eq!(cfg["fdemon-managed"], true);
+        assert!(cfg.get("fdemon-managed").is_none());
     }
 
     #[test]
@@ -168,7 +204,8 @@ mod tests {
         let dir = tempdir().unwrap();
         let gen = NeovimGenerator;
         gen.post_write(4711, dir.path()).unwrap();
-        let lua_path = dir.path().join(".nvim-dap.lua");
+        // .nvim-dap.lua is placed at workspace root (= dir.path() since no markers)
+        let lua_path = dir.path().canonicalize().unwrap().join(".nvim-dap.lua");
         assert!(lua_path.exists());
         let content = std::fs::read_to_string(&lua_path).unwrap();
         assert!(content.contains("port = 4711"));
@@ -187,6 +224,34 @@ mod tests {
         let content = std::fs::read_to_string(&old_lua_path).unwrap();
         assert!(content.contains("port = 5678"));
         assert!(!content.contains("old port"));
+    }
+
+    #[test]
+    fn test_neovim_post_write_places_lua_at_workspace_root() {
+        // Layout: workspace/.git/  workspace/app/
+        // post_write should write .nvim-dap.lua at workspace, not app.
+        let root = tempdir().unwrap();
+        let workspace = root.path();
+        let project = workspace.join("app");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(workspace.join(".git")).unwrap();
+
+        let gen = NeovimGenerator;
+        gen.post_write(4711, &project).unwrap();
+
+        // Should exist at workspace root
+        let workspace_lua = workspace.canonicalize().unwrap().join(".nvim-dap.lua");
+        assert!(
+            workspace_lua.exists(),
+            ".nvim-dap.lua should be at workspace root"
+        );
+
+        // Should NOT exist at project root
+        let project_lua = project.join(".nvim-dap.lua");
+        assert!(
+            !project_lua.exists(),
+            ".nvim-dap.lua should not be at project root"
+        );
     }
 
     #[test]
@@ -235,7 +300,8 @@ mod tests {
             ]
         }"#;
         let gen = NeovimGenerator;
-        let merged = gen.merge_config(existing, 4711, Path::new("")).unwrap();
+        let dir = tempdir().unwrap();
+        let merged = gen.merge_config(existing, 4711, dir.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         let configs = parsed["configurations"].as_array().unwrap();
         assert_eq!(configs.len(), 2);
@@ -250,7 +316,8 @@ mod tests {
             ]
         }"#;
         let gen = NeovimGenerator;
-        let merged = gen.merge_config(existing, 5678, Path::new("")).unwrap();
+        let dir = tempdir().unwrap();
+        let merged = gen.merge_config(existing, 5678, dir.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&merged).unwrap();
         assert_eq!(parsed["configurations"][0]["debugServer"], 5678);
     }
@@ -258,7 +325,8 @@ mod tests {
     #[test]
     fn test_neovim_merge_malformed_json_returns_error() {
         let gen = NeovimGenerator;
-        let result = gen.merge_config("not json {{{", 4711, Path::new(""));
+        let dir = tempdir().unwrap();
+        let result = gen.merge_config("not json {{{", 4711, dir.path());
         assert!(result.is_err());
     }
 
@@ -272,7 +340,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let gen = NeovimGenerator;
         gen.write_nvim_dap_lua(4711, dir.path());
-        assert!(dir.path().join(".nvim-dap.lua").exists());
+        // File placed at workspace root = canonical(dir.path()) since no markers
+        let lua_path = dir.path().canonicalize().unwrap().join(".nvim-dap.lua");
+        assert!(lua_path.exists());
     }
 
     #[test]

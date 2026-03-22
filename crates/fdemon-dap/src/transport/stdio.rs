@@ -96,7 +96,9 @@ pub async fn run_stdio_session(
     // immediately closed; an immediately-dropped sender causes the broadcast
     // receiver to return `Err(Closed)` on every poll, busy-spinning the loop.
     let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
-    let result = DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await;
+    // Stdio mode has no auth requirement — tokens are only relevant for TCP
+    // connections where the server prints the token on startup.
+    let result = DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await;
 
     match &result {
         Ok(()) => tracing::info!("DAP stdio session ended cleanly"),
@@ -144,7 +146,7 @@ mod tests {
             // Keep `_log_event_tx` alive so the channel remains open for the
             // session lifetime and does not immediately return `Err(Closed)`.
             let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
-            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await
+            DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await
         })
     }
 
@@ -504,7 +506,8 @@ mod tests {
             // Keep `_log_event_tx` alive so the channel remains open for the
             // session lifetime and does not immediately return `Err(Closed)`.
             let (_log_event_tx, log_event_rx) = tokio::sync::broadcast::channel(1);
-            let result = DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx).await;
+            let result =
+                DapClientSession::run_on(reader, writer, shutdown_rx, log_event_rx, None).await;
 
             event_tx
                 .send(DapServerEvent::ClientDisconnected {

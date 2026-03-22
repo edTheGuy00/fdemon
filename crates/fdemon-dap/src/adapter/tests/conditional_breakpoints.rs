@@ -62,6 +62,7 @@ async fn test_conditional_breakpoint_truthy_emits_stopped() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -90,6 +91,7 @@ async fn test_conditional_breakpoint_falsy_resumes_silently() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -118,6 +120,7 @@ async fn test_hit_condition_resumes_before_threshold() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id.clone()),
+            exception: None,
         })
         .await;
     assert!(rx.try_recv().is_err(), "Hit 1: should not emit stopped");
@@ -128,6 +131,7 @@ async fn test_hit_condition_resumes_before_threshold() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
     assert!(rx.try_recv().is_err(), "Hit 2: should not emit stopped");
@@ -152,6 +156,7 @@ async fn test_hit_condition_stops_at_threshold() {
                 isolate_id: "isolates/1".into(),
                 reason: PauseReason::Breakpoint,
                 breakpoint_id: Some(vm_id.clone()),
+                exception: None,
             })
             .await;
         rx.try_recv().ok(); // Discard (should be None for silent resumes).
@@ -164,6 +169,7 @@ async fn test_hit_condition_stops_at_threshold() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -240,6 +246,7 @@ async fn test_condition_error_causes_stop_safe_default() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some("bp/vm/err".to_string()),
+            exception: None,
         })
         .await;
 
@@ -277,6 +284,7 @@ async fn test_unconditional_breakpoint_emits_stopped_without_resume() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some("bp/unc/1".to_string()),
+            exception: None,
         })
         .await;
 
@@ -297,6 +305,7 @@ async fn test_no_breakpoint_id_emits_stopped_unconditionally() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: None, // No breakpoint ID → no condition lookup
+            exception: None,
         })
         .await;
 
@@ -322,6 +331,7 @@ async fn test_non_breakpoint_pause_emits_stopped_without_condition_check() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Exception,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
 
@@ -346,6 +356,7 @@ async fn test_combined_hit_and_expression_condition_both_must_pass() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id.clone()),
+            exception: None,
         })
         .await;
     assert!(rx.try_recv().is_err(), "Hit 1 should not stop");
@@ -357,6 +368,7 @@ async fn test_combined_hit_and_expression_condition_both_must_pass() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
     let msg = rx.try_recv().expect("Expected stopped event on hit 2");

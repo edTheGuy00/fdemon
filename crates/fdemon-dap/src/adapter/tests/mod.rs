@@ -6,16 +6,32 @@
 
 mod adapter_core;
 mod attach_threads;
+mod backend_phase6;
+mod breakpoint_locations;
 mod breakpoint_persistence;
 mod breakpoints;
+mod call_service;
+mod completions;
 mod conditional_breakpoints;
 mod custom_events;
+mod evaluate_name;
 mod events_logging;
+mod exception_info;
+mod exception_scope;
 mod execution;
+mod getter_evaluation;
 mod hot_operations;
+mod loaded_sources;
 mod logpoints;
 mod production_hardening;
+mod progress_reporting;
+mod request_timeouts_events;
+mod restart_frame;
 mod stack_scopes_variables;
+mod time_budgets;
+mod to_string_display;
+mod update_debug_options;
+mod variable_type_rendering;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Shared test helpers

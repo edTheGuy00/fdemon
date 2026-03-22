@@ -2,17 +2,37 @@
 //!
 //! DapAdapter methods for dispatching and handling DAP protocol requests.
 
+use std::future::Future;
+
 use crate::adapter::backend::DebugBackend;
 use crate::adapter::breakpoints;
+use crate::adapter::stack::build_source_from_uri;
 use crate::adapter::types::{DapExceptionPauseMode, StepMode};
 use crate::adapter::DapAdapter;
 use crate::protocol::types::{
-    AttachRequestArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread, PauseArguments,
-    SetBreakpointsArguments, SetExceptionBreakpointsArguments, StepArguments,
+    AttachRequestArguments, BreakpointLocation, BreakpointLocationsArguments, CompletionItem,
+    CompletionsArguments, ContinueArguments, DapBreakpoint, DapSource, DapThread,
+    ExceptionInfoArguments, PauseArguments, RestartFrameArguments, SetBreakpointsArguments,
+    SetExceptionBreakpointsArguments, StepArguments,
 };
 use crate::{DapRequest, DapResponse};
 
-use crate::adapter::types::ERR_VM_DISCONNECTED;
+use crate::adapter::types::{ERR_VM_DISCONNECTED, REQUEST_TIMEOUT};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HotOp — discriminates which hot operation to run inside execute_hot_operation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Selects the backend call for [`DapAdapter::execute_hot_operation`].
+///
+/// Using an enum rather than a closure avoids lifetime conflicts that arise
+/// when passing `&self.backend` into a closure that also borrows `self` mutably
+/// for event emission.
+#[derive(Clone, Copy)]
+enum HotOp {
+    Reload,
+    Restart,
+}
 
 impl<B: DebugBackend> DapAdapter<B> {
     /// Handle a DAP request and return the response.
@@ -22,6 +42,8 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// Lifecycle requests (`initialize`, `configurationDone`) are handled by
     /// the session layer before this is called.
     pub async fn handle_request(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP request: {} (seq={})", request.command, request.seq);
+
         // If the VM Service disconnected mid-session (e.g., app exited), all
         // subsequent requests return a structured error. The `disconnect` command
         // is exempt so the IDE can still cleanly close the debug session.
@@ -49,8 +71,16 @@ impl<B: DebugBackend> DapAdapter<B> {
             "variables" => self.handle_variables(request).await,
             "evaluate" => self.handle_evaluate(request).await,
             "source" => self.handle_source(request).await,
+            "loadedSources" => self.handle_loaded_sources(request).await,
             "hotReload" => self.handle_hot_reload(request).await,
             "hotRestart" => self.handle_hot_restart(request).await,
+            "restartFrame" => self.handle_restart_frame(request).await,
+            "restart" => self.handle_restart(request).await,
+            "callService" => self.handle_call_service(request).await,
+            "exceptionInfo" => self.handle_exception_info(request).await,
+            "updateDebugOptions" => self.handle_update_debug_options(request).await,
+            "breakpointLocations" => self.handle_breakpoint_locations(request).await,
+            "completions" => self.handle_completions(request).await,
             _ => DapResponse::error(request, format!("unsupported command: {}", request.command)),
         }
     }
@@ -67,12 +97,53 @@ impl<B: DebugBackend> DapAdapter<B> {
     ///   tooling (VS Code DevTools, etc.)
     /// - `flutter.appStart` — device ID, build mode, and restart capability
     pub(super) async fn handle_attach(&mut self, request: &DapRequest) -> DapResponse {
-        let _args: AttachRequestArguments = match request.arguments.as_ref() {
-            Some(v) => serde_json::from_value(v.clone()).unwrap_or_default(),
+        let args: AttachRequestArguments = match request.arguments.as_ref() {
+            Some(v) => match serde_json::from_value(v.clone()) {
+                Ok(a) => a,
+                Err(e) => {
+                    tracing::warn!("Failed to parse attach arguments: {}", e);
+                    return DapResponse::error(request, format!("Invalid attach arguments: {e}"));
+                }
+            },
             None => AttachRequestArguments::default(),
         };
 
-        match self.backend.get_vm().await {
+        // Apply settings from attach args before making any backend calls.
+        // `evaluateGettersInDebugViews` defaults to `true` when absent, matching
+        // the Dart DDS adapter's default behaviour.
+        if let Some(eval_getters) = args.evaluate_getters_in_debug_views {
+            self.evaluate_getters_in_debug_views = eval_getters;
+        }
+        // `evaluateToStringInDebugViews` defaults to `true` when absent.
+        if let Some(eval_to_string) = args.evaluate_to_string_in_debug_views {
+            self.evaluate_to_string_in_debug_views = eval_to_string;
+        }
+        // `debugSdkLibraries` defaults to `false` when absent — SDK libraries
+        // are non-debuggable by default so stepping stays in app code.
+        self.debug_sdk_libraries = args.debug_sdk_libraries.unwrap_or(false);
+        // `debugExternalPackageLibraries` defaults to `false` when absent.
+        self.debug_external_package_libraries =
+            args.debug_external_package_libraries.unwrap_or(false);
+        // `packageName` identifies the app's own package so its URIs are
+        // always treated as debuggable regardless of the external-package flag.
+        if let Some(pkg) = args.package_name {
+            self.app_package_name = pkg;
+        }
+        // Use `cwd` from attach args to set project root if not already known.
+        if self.project_root.is_none() {
+            if let Some(ref cwd) = args.cwd {
+                let cwd_path = std::path::Path::new(cwd);
+                // The cwd might be the workspace root, not the Flutter project root.
+                // Check if it has a pubspec.yaml directly; if not, it will be
+                // resolved later from setBreakpoints paths.
+                if cwd_path.join("pubspec.yaml").exists() {
+                    tracing::debug!("Project root from attach cwd: {}", cwd);
+                    self.project_root = Some(cwd_path.to_path_buf());
+                }
+            }
+        }
+
+        match with_timeout(self.backend.get_vm()).await {
             Ok(vm_info) => {
                 // Discover pre-existing isolates from the VM object.
                 if let Some(isolates) = vm_info.get("isolates").and_then(|v| v.as_array()) {
@@ -97,6 +168,44 @@ impl<B: DebugBackend> DapAdapter<B> {
                             "threadId": thread_id,
                         });
                         self.send_event("thread", Some(body)).await;
+                    }
+                }
+
+                // ── Auto-detect app_package_name if not provided ──────────
+                //
+                // When the IDE doesn't send packageName in the attach args,
+                // try to infer it from the first isolate's root library URI.
+                // For example, "package:my_app/main.dart" → "my_app".
+                if self.app_package_name.is_empty() {
+                    if let Some(isolates) = vm_info.get("isolates").and_then(|v| v.as_array()) {
+                        for isolate in isolates {
+                            let id = isolate.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            if id.is_empty() {
+                                continue;
+                            }
+                            // Try to get the isolate details for the root library URI.
+                            if let Ok(iso_detail) = with_timeout(self.backend.get_isolate(id)).await
+                            {
+                                if let Some(root_lib) = iso_detail
+                                    .get("rootLib")
+                                    .and_then(|rl| rl.get("uri"))
+                                    .and_then(|u| u.as_str())
+                                {
+                                    if let Some(pkg_name) = root_lib
+                                        .strip_prefix("package:")
+                                        .and_then(|rest| rest.split('/').next())
+                                    {
+                                        tracing::debug!(
+                                            "Auto-detected app package name: {} (from {})",
+                                            pkg_name,
+                                            root_lib
+                                        );
+                                        self.app_package_name = pkg_name.to_string();
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -131,6 +240,26 @@ impl<B: DebugBackend> DapAdapter<B> {
                 );
                 self.send_event("flutter.appStart", Some(app_start_body))
                     .await;
+
+                // Emit flutter.appStarted to signal that the app is ready.
+                // Must be sent during attach because the Flutter daemon's
+                // app.started event typically arrives before the DAP client
+                // connects.
+                self.send_event("flutter.appStarted", Some(serde_json::json!({})))
+                    .await;
+
+                // Emit an output event to clear VS Code's "Starting debug
+                // session..." indicator. The Dart extension's
+                // DartDebugAdapterLaunchStatus clears its progress notification
+                // on receipt of any `output` or `dart.progress*` event.
+                self.send_event(
+                    "output",
+                    Some(serde_json::json!({
+                        "category": "console",
+                        "output": "Connected to Flutter session.\n"
+                    })),
+                )
+                .await;
 
                 DapResponse::success(request, None)
             }
@@ -197,9 +326,9 @@ impl<B: DebugBackend> DapAdapter<B> {
             Err(e) => return DapResponse::error(request, e),
         };
 
-        // Convert the source path to a file:// URI for the VM Service.
+        // Convert the source path to a package: or file:// URI for the VM Service.
         let source_path = args.source.path.as_deref().unwrap_or("");
-        let uri = path_to_dart_uri(source_path);
+        let uri = self.resolve_source_uri(source_path);
 
         // Desired breakpoints from the request (empty = clear all for this source).
         let desired = args.breakpoints.unwrap_or_default();
@@ -246,7 +375,7 @@ impl<B: DebugBackend> DapAdapter<B> {
 
             if !still_wanted {
                 if let Some(isolate_id) = self.primary_isolate_id() {
-                    let _ = self.backend.remove_breakpoint(&isolate_id, vm_id).await;
+                    let _ = with_timeout(self.backend.remove_breakpoint(&isolate_id, vm_id)).await;
                 }
                 self.breakpoint_state.remove_by_dap_id(*dap_id);
                 tracing::debug!("Removed breakpoint {} (dap_id={})", vm_id, dap_id);
@@ -269,15 +398,13 @@ impl<B: DebugBackend> DapAdapter<B> {
             // New breakpoint: attempt to add via the VM Service backend.
             match self.primary_isolate_id() {
                 Some(isolate_id) => {
-                    match self
-                        .backend
-                        .add_breakpoint(
-                            &isolate_id,
-                            &uri,
-                            sbp.line as i32,
-                            sbp.column.map(|c| c as i32),
-                        )
-                        .await
+                    match with_timeout(self.backend.add_breakpoint(
+                        &isolate_id,
+                        &uri,
+                        sbp.line as i32,
+                        sbp.column.map(|c| c as i32),
+                    ))
+                    .await
                     {
                         Ok(result) => {
                             let actual_line = result.line.or(Some(sbp.line as i32));
@@ -304,10 +431,18 @@ impl<B: DebugBackend> DapAdapter<B> {
                                 sbp.hit_condition,
                                 sbp.log_message,
                             );
-                            let entry = self
-                                .breakpoint_state
-                                .lookup_by_dap_id(dap_id)
-                                .expect("entry was just inserted");
+                            let entry = match self.breakpoint_state.lookup_by_dap_id(dap_id) {
+                                Some(e) => e,
+                                None => {
+                                    // Invariant: entry was just inserted by add_with_condition.
+                                    // If this is ever reached, breakpoint_state has a bug.
+                                    tracing::error!(
+                                        "Breakpoint state inconsistency: dap_id {} not found after insert",
+                                        dap_id
+                                    );
+                                    continue; // Skip this breakpoint, don't crash the session
+                                }
+                            };
                             response_breakpoints.push(entry_to_dap_breakpoint(entry, &args.source));
                         }
                         Err(err) => {
@@ -356,22 +491,28 @@ impl<B: DebugBackend> DapAdapter<B> {
         // After the active state is built, we have the real DAP IDs. Update the
         // desired_breakpoints entry so that re-application after hot restart
         // uses the correct stable IDs.
+        //
+        // Important: preserve breakpoints even when `id` is `None` (pending
+        // breakpoints set before an isolate was available). These will be
+        // re-applied on `IsolateRunnable` from `desired_breakpoints`.
         {
             let synced: Vec<crate::adapter::breakpoints::DesiredBreakpoint> = desired
                 .iter()
                 .zip(response_breakpoints.iter())
-                .filter_map(|(sbp, dap_bp)| {
-                    // Only record desired breakpoints that have a DAP ID assigned.
-                    dap_bp
-                        .id
-                        .map(|dap_id| crate::adapter::breakpoints::DesiredBreakpoint {
-                            dap_id,
-                            line: sbp.line as i32,
-                            column: sbp.column.map(|c| c as i32),
-                            condition: sbp.condition.clone(),
-                            hit_condition: sbp.hit_condition.clone(),
-                            log_message: sbp.log_message.clone(),
-                        })
+                .enumerate()
+                .map(|(i, (sbp, dap_bp))| {
+                    // Use the real DAP ID if assigned, otherwise keep the
+                    // placeholder from Step 0 so that the entry survives for
+                    // re-application on IsolateRunnable.
+                    let dap_id = dap_bp.id.unwrap_or((i + 1) as i64);
+                    crate::adapter::breakpoints::DesiredBreakpoint {
+                        dap_id,
+                        line: sbp.line as i32,
+                        column: sbp.column.map(|c| c as i32),
+                        condition: sbp.condition.clone(),
+                        hit_condition: sbp.hit_condition.clone(),
+                        log_message: sbp.log_message.clone(),
+                    }
                 })
                 .collect();
             if synced.is_empty() {
@@ -501,7 +642,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, None).await {
+        match with_timeout(self.backend.resume(&isolate_id, None, None)).await {
             Ok(()) => {
                 let body = serde_json::json!({ "allThreadsContinued": true });
                 DapResponse::success(request, Some(body))
@@ -560,7 +701,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         // Invalidate stopped-state references before resuming.
         self.on_resume();
 
-        match self.backend.resume(&isolate_id, Some(mode)).await {
+        match with_timeout(self.backend.resume(&isolate_id, Some(mode), None)).await {
             Ok(()) => DapResponse::success(request, None),
             Err(e) => DapResponse::error(request, format!("Step failed: {e}")),
         }
@@ -589,7 +730,7 @@ impl<B: DebugBackend> DapAdapter<B> {
             }
         };
 
-        match self.backend.pause(&isolate_id).await {
+        match with_timeout(self.backend.pause(&isolate_id)).await {
             Ok(()) => DapResponse::success(request, None),
             Err(e) => DapResponse::error(request, format!("Pause failed: {e}")),
         }
@@ -620,7 +761,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         if args.terminate_debuggee.unwrap_or(false) {
             // IDE wants the app stopped — terminate the Flutter process.
             tracing::debug!("disconnect: terminateDebuggee=true — stopping app");
-            if let Err(e) = self.backend.stop_app().await {
+            if let Err(e) = with_timeout(self.backend.stop_app()).await {
                 tracing::warn!("stop_app failed during disconnect: {}", e);
                 // Non-fatal: continue the disconnect sequence even if stop_app fails.
             }
@@ -632,7 +773,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                     "disconnect: resuming paused isolate {} (terminateDebuggee=false)",
                     isolate_id
                 );
-                if let Err(e) = self.backend.resume(isolate_id, None).await {
+                if let Err(e) = with_timeout(self.backend.resume(isolate_id, None, None)).await {
                     tracing::warn!("resume({}) failed during disconnect: {}", isolate_id, e);
                 }
             }
@@ -653,6 +794,12 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// `evaluateInFrame` (when a `frameId` is provided) or `evaluate` on the
     /// root library (when no `frameId` is given).
     ///
+    /// # Magic expressions
+    ///
+    /// `$_threadException` — Returns the current exception when the isolate is
+    /// paused at an exception. The returned value includes a `variablesReference`
+    /// so that the IDE can expand the exception's fields.
+    ///
     /// # Error Handling
     ///
     /// - No paused isolate → DAP error response
@@ -660,6 +807,20 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// - VM Service error → DAP error response with the error message
     pub(super) async fn handle_evaluate(&mut self, request: &DapRequest) -> DapResponse {
         tracing::debug!("DAP adapter: evaluate");
+
+        // Intercept the `$_threadException` magic expression before delegating
+        // to the standard evaluation path. The adapter resolves it directly from
+        // the stored exception ref so no VM round-trip is needed.
+        if let Some(args) = request.arguments.as_ref() {
+            let expression = args
+                .get("expression")
+                .and_then(|e| e.as_str())
+                .unwrap_or("");
+            if expression == "$_threadException" {
+                return self.handle_evaluate_thread_exception(request);
+            }
+        }
+
         let paused = self.most_recent_paused_isolate().map(|s| s.to_string());
         crate::adapter::evaluate::handle_evaluate(
             &self.backend,
@@ -669,6 +830,60 @@ impl<B: DebugBackend> DapAdapter<B> {
             request,
         )
         .await
+    }
+
+    /// Handle the `$_threadException` magic evaluate expression.
+    ///
+    /// Returns the current exception `InstanceRef` for the most recently
+    /// paused isolate. The result includes a non-zero `variablesReference`
+    /// so the IDE can expand the exception's fields.
+    ///
+    /// Returns an error response if no exception is currently stored
+    /// (i.e., the isolate is not paused at an exception).
+    fn handle_evaluate_thread_exception(&mut self, request: &DapRequest) -> DapResponse {
+        // Find the most recently paused isolate's thread ID.
+        let thread_id = self
+            .most_recent_paused_isolate()
+            .and_then(|iso| self.thread_map.thread_id_for(iso));
+
+        let thread_id = match thread_id {
+            Some(tid) => tid,
+            None => {
+                return DapResponse::error(
+                    request,
+                    "$_threadException: no paused isolate available",
+                )
+            }
+        };
+
+        let exc = match self.exception_refs.get(&thread_id) {
+            Some(e) => e,
+            None => {
+                return DapResponse::error(request, "$_threadException: not paused at an exception")
+            }
+        };
+
+        // Format the exception value using the instance_ref_to_variable helper.
+        let class_name = exc
+            .instance_ref
+            .get("classRef")
+            .or_else(|| exc.instance_ref.get("class"))
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("Exception")
+            .to_string();
+        let instance_ref = exc.instance_ref.clone();
+        let isolate_id = exc.isolate_id.clone();
+
+        // Convert to a DapVariable to get both display value and variablesReference.
+        let var = self.instance_ref_to_variable(&class_name, &instance_ref, &isolate_id);
+
+        let body = serde_json::json!({
+            "result": var.value,
+            "type": var.type_field,
+            "variablesReference": var.variables_reference,
+        });
+        DapResponse::success(request, Some(body))
     }
 
     /// Handle the `source` DAP request.
@@ -724,11 +939,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         };
 
         // Fetch the source text from the VM Service.
-        match self
-            .backend
-            .get_source(&entry.isolate_id, &entry.script_id)
-            .await
-        {
+        match with_timeout(self.backend.get_source(&entry.isolate_id, &entry.script_id)).await {
             Ok(source_text) => {
                 let body = serde_json::json!({
                     "content": source_text,
@@ -743,25 +954,171 @@ impl<B: DebugBackend> DapAdapter<B> {
         }
     }
 
+    /// Handle the `loadedSources` DAP request.
+    ///
+    /// Returns all Dart scripts currently loaded in the most recently active
+    /// isolate as DAP `Source` objects. This enables the "Loaded Scripts"
+    /// explorer panel in VS Code and other IDEs.
+    ///
+    /// # Source categorization
+    ///
+    /// | URI prefix              | Treatment                                             |
+    /// |-------------------------|-------------------------------------------------------|
+    /// | `file://`               | Resolved to a local filesystem path                   |
+    /// | `package:`              | Local path if resolvable; `sourceReference` otherwise |
+    /// | `dart:`                 | `sourceReference > 0`; `presentationHint: "deemphasize"` |
+    /// | `org-dartlang-sdk:`     | `sourceReference > 0`; `presentationHint: "deemphasize"` |
+    /// | `eval:` or `dart:_*`   | Filtered out (generated / internal)                   |
+    ///
+    /// # Isolate selection
+    ///
+    /// Uses the most recently paused isolate if one is available, otherwise
+    /// falls back to the primary (first registered) isolate. Returns an error
+    /// if no isolate is known.
+    pub(super) async fn handle_loaded_sources(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: loadedSources");
+
+        // Prefer a paused isolate for script enumeration; fall back to primary.
+        let isolate_id = match self
+            .most_recent_paused_isolate()
+            .map(|s| s.to_string())
+            .or_else(|| self.primary_isolate_id())
+        {
+            Some(id) => id,
+            None => {
+                return DapResponse::error(request, "loadedSources: no active isolate available")
+            }
+        };
+
+        let scripts_response = match with_timeout(self.backend.get_scripts(&isolate_id)).await {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("loadedSources: get_scripts failed: {e}"),
+                )
+            }
+        };
+
+        let empty_vec = Vec::new();
+        let scripts = scripts_response
+            .get("scripts")
+            .and_then(|s| s.as_array())
+            .unwrap_or(&empty_vec);
+
+        let sources: Vec<DapSource> = scripts
+            .iter()
+            .filter_map(|script| {
+                let uri = script.get("uri")?.as_str()?;
+                let script_id = script.get("id")?.as_str()?;
+
+                // Filter out generated `eval:` sources and Dart internal libraries.
+                if uri.starts_with("eval:") || uri.contains("dart:_") {
+                    return None;
+                }
+
+                Some(build_source_from_uri(
+                    uri,
+                    script_id,
+                    &mut self.source_reference_store,
+                    &isolate_id,
+                    None, // project_root not available in DapAdapter
+                ))
+            })
+            .collect();
+
+        tracing::debug!("loadedSources: returning {} sources", sources.len());
+        DapResponse::success(request, Some(serde_json::json!({ "sources": sources })))
+    }
+
+    /// Execute a hot operation (reload or restart) with progress events.
+    ///
+    /// Shared implementation for [`handle_hot_reload`], [`handle_hot_restart`],
+    /// and [`handle_restart`]. Encapsulates the common pattern:
+    ///
+    /// 1. Allocate a progress ID and emit `progressStart` if the client supports
+    ///    progress reporting.
+    /// 2. Call the backend operation with the standard [`REQUEST_TIMEOUT`].
+    /// 3. Emit `progressEnd` always (even on error) so the IDE spinner closes.
+    /// 4. On success: emit the completion event and return an empty success
+    ///    response. On error: return a structured error response.
+    ///
+    /// [`handle_hot_reload`]: Self::handle_hot_reload
+    /// [`handle_hot_restart`]: Self::handle_hot_restart
+    /// [`handle_restart`]: Self::handle_restart
+    async fn execute_hot_operation(&mut self, request: &DapRequest, op: HotOp) -> DapResponse {
+        // title        — used in progressStart body (e.g. "Hot Reload")
+        // complete_event — custom DAP event name on success
+        // err_prefix   — prefix for the error message string, preserving the
+        //                original lowercase form expected by existing tests
+        let (title, complete_event, err_prefix) = match op {
+            HotOp::Reload => ("Hot Reload", "dart.hotReloadComplete", "Hot reload"),
+            HotOp::Restart => ("Hot Restart", "dart.hotRestartComplete", "Hot restart"),
+        };
+
+        tracing::debug!("DAP adapter: {} ({})", err_prefix, request.command);
+
+        let progress_id = if self.client_supports_progress {
+            let id = self.alloc_progress_id();
+            self.send_event(
+                "progressStart",
+                Some(serde_json::json!({
+                    "progressId": id,
+                    "title": title,
+                    "cancellable": false,
+                })),
+            )
+            .await;
+            Some(id)
+        } else {
+            None
+        };
+
+        let result = match op {
+            HotOp::Reload => with_timeout(self.backend.hot_reload()).await,
+            HotOp::Restart => with_timeout(self.backend.hot_restart()).await,
+        };
+
+        // Always close the progress indicator, even on failure, so the IDE
+        // does not display a stale spinner indefinitely.
+        if let Some(ref id) = progress_id {
+            self.send_event("progressEnd", Some(serde_json::json!({ "progressId": id })))
+                .await;
+        }
+
+        match result {
+            Ok(()) => {
+                tracing::debug!("{} dispatched successfully", err_prefix);
+                // dart.hotReloadComplete / dart.hotRestartComplete are custom
+                // events expected by the Dart-Code extension to update its
+                // internal session state.
+                self.send_event(complete_event, Some(serde_json::json!({})))
+                    .await;
+                DapResponse::success(request, None)
+            }
+            Err(e) => {
+                tracing::warn!("{} failed: {}", err_prefix, e);
+                DapResponse::error(request, format!("{err_prefix} failed: {e}"))
+            }
+        }
+    }
+
     /// Handle the `hotReload` custom DAP request.
     ///
     /// Triggers a Flutter hot reload through the backend's TEA message bus.
     /// The `arguments.reason` field is optional and informational — it does
     /// not change reload behavior.
     ///
+    /// When the client advertises `supportsProgressReporting`, emits:
+    /// - `progressStart` (title: `"Hot Reload"`, `cancellable: false`)
+    /// - `progressEnd` on completion (even on failure, per DAP spec)
+    ///
+    /// Always emits `dart.hotReloadComplete` on success, as expected by the
+    /// Dart-Code VS Code extension for updating its internal state.
+    ///
     /// Compatible with the VS Code Dart extension's `hotReload` custom request.
     pub(super) async fn handle_hot_reload(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: hotReload");
-        match self.backend.hot_reload().await {
-            Ok(()) => {
-                tracing::debug!("Hot reload dispatched successfully");
-                DapResponse::success(request, None)
-            }
-            Err(e) => {
-                tracing::warn!("Hot reload failed: {}", e);
-                DapResponse::error(request, format!("Hot reload failed: {e}"))
-            }
-        }
+        self.execute_hot_operation(request, HotOp::Reload).await
     }
 
     /// Handle the `hotRestart` custom DAP request.
@@ -773,25 +1130,840 @@ impl<B: DebugBackend> DapAdapter<B> {
     /// The `arguments.reason` field is optional and informational — it does
     /// not change restart behavior.
     ///
+    /// When the client advertises `supportsProgressReporting`, emits:
+    /// - `progressStart` (title: `"Hot Restart"`, `cancellable: false`)
+    /// - `progressEnd` on completion (even on failure, per DAP spec)
+    ///
+    /// Always emits `dart.hotRestartComplete` on success, as expected by the
+    /// Dart-Code VS Code extension for updating its internal state.
+    ///
     /// Compatible with the VS Code Dart extension's `hotRestart` custom request.
     pub(super) async fn handle_hot_restart(&mut self, request: &DapRequest) -> DapResponse {
-        tracing::debug!("DAP adapter: hotRestart");
-        match self.backend.hot_restart().await {
-            Ok(()) => {
-                tracing::debug!("Hot restart dispatched successfully");
-                DapResponse::success(request, None)
+        self.execute_hot_operation(request, HotOp::Restart).await
+    }
+
+    /// Handle the `restartFrame` DAP request.
+    ///
+    /// Rewinds execution to the start of a selected stack frame using the Dart
+    /// VM Service's `Rewind` step mode. This enables the "Restart Frame" action
+    /// in IDE debuggers, allowing developers to re-execute a function without
+    /// restarting the entire application.
+    ///
+    /// # Async boundary guard
+    ///
+    /// Frames at or above the first `AsyncSuspensionMarker` cannot be rewound.
+    /// The Dart VM only supports rewinding synchronous frames below the first
+    /// async suspension boundary. Attempting to rewind past it would cause the
+    /// VM to return an error. This handler rejects such requests with a clear
+    /// error message before making any backend call.
+    ///
+    /// # Post-rewind behaviour
+    ///
+    /// After a successful rewind, the VM pauses at the rewound frame and emits
+    /// a `PauseInterrupted` or `PauseBreakpoint` event. The existing
+    /// [`handle_debug_event`] handler translates this to a DAP `stopped` event
+    /// automatically — no special handling is needed here.
+    pub(super) async fn handle_restart_frame(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: restartFrame");
+
+        let args = match parse_args::<RestartFrameArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        // Look up the frame in the per-stop frame store.
+        let frame_ref = match self.frame_store.lookup(args.frame_id) {
+            Some(fr) => fr.clone(),
+            None => {
+                return DapResponse::error(
+                    request,
+                    format!(
+                        "Invalid or stale frame ID {} — did the program resume?",
+                        args.frame_id
+                    ),
+                )
             }
-            Err(e) => {
-                tracing::warn!("Hot restart failed: {}", e);
-                DapResponse::error(request, format!("Hot restart failed: {e}"))
+        };
+
+        // Guard: reject frames at or above the first async suspension boundary.
+        // The VM cannot rewind through async suspension markers.
+        if let Some(first_async_index) = self.first_async_marker_index {
+            if frame_ref.frame_index >= first_async_index {
+                tracing::debug!(
+                    "restartFrame: frame {} is at or above async marker at index {} — rejecting",
+                    frame_ref.frame_index,
+                    first_async_index,
+                );
+                return DapResponse::error(
+                    request,
+                    "Cannot restart frame: target frame is at or above an async suspension boundary",
+                );
             }
         }
+
+        // Invalidate stopped-state references before rewinding.
+        self.on_resume();
+
+        match with_timeout(self.backend.resume(
+            &frame_ref.isolate_id,
+            Some(StepMode::Rewind),
+            Some(frame_ref.frame_index),
+        ))
+        .await
+        {
+            Ok(()) => {
+                tracing::debug!(
+                    "restartFrame: rewound to frame {} in isolate {}",
+                    frame_ref.frame_index,
+                    frame_ref.isolate_id,
+                );
+                DapResponse::success(request, Some(serde_json::json!({})))
+            }
+            Err(e) => DapResponse::error(request, format!("restartFrame failed: {e}")),
+        }
+    }
+
+    /// Handles the `callService` custom DAP request by forwarding an arbitrary
+    /// VM Service RPC call to the connected Dart VM.
+    ///
+    /// The VS Code Dart extension uses this to invoke service extensions such as:
+    ///
+    /// | Method | Purpose |
+    /// |---|---|
+    /// | `ext.flutter.debugDumpApp` | Widget inspector dump |
+    /// | `ext.flutter.showPerformanceOverlay` | Toggle perf overlay |
+    /// | `ext.flutter.debugPaint` | Toggle debug painting |
+    /// | `ext.flutter.reassemble` | Trigger hot reload |
+    ///
+    /// ## Arguments
+    ///
+    /// The request body must include a `"method"` string field identifying the
+    /// VM Service RPC. An optional `"params"` object is forwarded verbatim.
+    ///
+    /// # Security Model
+    ///
+    /// This handler intentionally does NOT filter or restrict the `method` parameter.
+    /// The VM Service itself validates method names and handles authorization.
+    /// The DAP server is bound to localhost by default (`127.0.0.1`), limiting access
+    /// to local processes. When the server is bound to a non-loopback address, a warning
+    /// is emitted at startup. All forwarded RPCs are logged at `info` level for audit.
+    ///
+    /// If stronger isolation is needed, enable `require_auth` in the DAP server
+    /// configuration to require an auth token in the `initialize` handshake.
+    pub(super) async fn handle_call_service(&mut self, request: &DapRequest) -> DapResponse {
+        let args = match request.arguments.as_ref() {
+            Some(a) => a,
+            None => return DapResponse::error(request, "callService: missing arguments"),
+        };
+
+        let method = match args.get("method").and_then(|m| m.as_str()) {
+            Some(m) => m,
+            None => return DapResponse::error(request, "callService: missing 'method' argument"),
+        };
+
+        let params = args.get("params").cloned();
+
+        tracing::info!(
+            method = method,
+            has_params = params.is_some(),
+            "callService: forwarding VM Service RPC"
+        );
+
+        match with_timeout(self.backend.call_service(method, params)).await {
+            Ok(result) => {
+                tracing::debug!(method = method, "callService: success");
+                DapResponse::success(request, Some(serde_json::json!({ "result": result })))
+            }
+            Err(e) => {
+                tracing::warn!(method = method, error = %e, "callService: failed");
+                DapResponse::error(request, format!("callService '{}' failed: {}", method, e))
+            }
+        }
+    }
+
+    /// Handle the `exceptionInfo` DAP request.
+    ///
+    /// Returns structured exception data when the debugger is paused at an
+    /// exception. Provides richer detail than the basic `stopped` event —
+    /// the IDE displays this in the exception details dialog.
+    ///
+    /// # Response fields
+    ///
+    /// | Field | Content |
+    /// |---|---|
+    /// | `exceptionId` | The VM object ID of the exception (e.g., `"objects/12345"`) |
+    /// | `description` | Result of `toString()` on the exception |
+    /// | `breakMode` | `"always"`, `"unhandled"`, or `"never"` based on the current pause mode |
+    /// | `details.typeName` | The Dart class name of the exception (e.g., `"FormatException"`) |
+    /// | `details.message` | Same as `description` (for IDE detail panels) |
+    /// | `details.stackTrace` | Result of `stackTrace?.toString()` if available |
+    /// | `details.evaluateName` | `"$_threadException"` for IDE expression evaluation |
+    ///
+    /// # Errors
+    ///
+    /// - No exception available for the given thread → DAP error response
+    /// - `toString()` evaluation failure → `description` falls back to the class name
+    /// - `stackTrace?.toString()` failure → `details.stackTrace` is absent
+    pub(super) async fn handle_exception_info(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: exceptionInfo");
+
+        let args = match parse_args::<ExceptionInfoArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        // Look up the stored exception reference for this thread.
+        let exc = match self.exception_refs.get(&args.thread_id) {
+            Some(e) => e.clone(),
+            None => {
+                return DapResponse::error(
+                    request,
+                    format!(
+                        "No exception available for thread {} — not paused at an exception",
+                        args.thread_id
+                    ),
+                )
+            }
+        };
+
+        let isolate_id = exc.isolate_id.clone();
+
+        // Extract the VM object ID from the InstanceRef.
+        let exception_id = exc
+            .instance_ref
+            .get("id")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Extract the exception class name for `typeName`.
+        let type_name = exc
+            .instance_ref
+            .get("classRef")
+            .or_else(|| exc.instance_ref.get("class"))
+            .and_then(|c| c.get("name"))
+            .and_then(|n| n.as_str())
+            .unwrap_or("Exception")
+            .to_string();
+
+        // Call toString() on the exception for the description.
+        let description = if !exception_id.is_empty() {
+            match with_timeout(
+                self.backend
+                    .evaluate(&isolate_id, &exception_id, "toString()"),
+            )
+            .await
+            {
+                Ok(result) => result
+                    .get("valueAsString")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(&type_name)
+                    .to_string(),
+                Err(_) => type_name.clone(),
+            }
+        } else {
+            type_name.clone()
+        };
+
+        // Try to get the stack trace string via stackTrace?.toString().
+        let stack_trace_str = if !exception_id.is_empty() {
+            match with_timeout(self.backend.evaluate(
+                &isolate_id,
+                &exception_id,
+                "stackTrace?.toString()",
+            ))
+            .await
+            {
+                Ok(result) => result
+                    .get("valueAsString")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+
+        // Map the current exception pause mode to the DAP breakMode string.
+        let break_mode = match self.exception_mode {
+            crate::adapter::types::DapExceptionPauseMode::All => "always",
+            crate::adapter::types::DapExceptionPauseMode::Unhandled => "unhandled",
+            crate::adapter::types::DapExceptionPauseMode::None => "never",
+        };
+
+        // Build the optional details object.
+        let mut details = serde_json::json!({
+            "typeName": type_name,
+            "message": description,
+            "evaluateName": "$_threadException",
+        });
+        if let Some(st) = stack_trace_str {
+            details["stackTrace"] = serde_json::Value::String(st);
+        }
+
+        let body = serde_json::json!({
+            "exceptionId": exception_id,
+            "description": description,
+            "breakMode": break_mode,
+            "details": details,
+        });
+
+        tracing::debug!(
+            "exceptionInfo: thread={} type={} breakMode={}",
+            args.thread_id,
+            type_name,
+            break_mode,
+        );
+
+        DapResponse::success(request, Some(body))
+    }
+
+    /// Handle the `updateDebugOptions` custom DAP request.
+    ///
+    /// Toggles whether the debugger steps into Dart SDK libraries (`dart:`
+    /// URIs) and/or external package libraries. Changes are applied immediately
+    /// to all currently-known isolates via `setLibraryDebuggable` VM Service
+    /// RPC calls.
+    ///
+    /// # Arguments (in `request.arguments`)
+    ///
+    /// | Field | Type | Effect |
+    /// |---|---|---|
+    /// | `debugSdkLibraries` | `bool` | Allow stepping into `dart:` libraries |
+    /// | `debugExternalPackageLibraries` | `bool` | Allow stepping into external packages |
+    ///
+    /// Either field may be absent; absent fields leave the existing setting
+    /// unchanged.
+    ///
+    /// # App code
+    ///
+    /// Libraries whose URI matches `package:<app_package_name>/` are always
+    /// debuggable regardless of these settings.
+    pub(super) async fn handle_update_debug_options(
+        &mut self,
+        request: &DapRequest,
+    ) -> DapResponse {
+        tracing::debug!("DAP adapter: updateDebugOptions");
+
+        let args = match request.arguments.as_ref() {
+            Some(a) => a,
+            None => return DapResponse::error(request, "updateDebugOptions: missing arguments"),
+        };
+
+        // Update settings from the incoming arguments. Fields that are absent
+        // leave the existing setting unchanged.
+        if let Some(debug_sdk) = args.get("debugSdkLibraries").and_then(|v| v.as_bool()) {
+            self.debug_sdk_libraries = debug_sdk;
+        }
+        if let Some(debug_external) = args
+            .get("debugExternalPackageLibraries")
+            .and_then(|v| v.as_bool())
+        {
+            self.debug_external_package_libraries = debug_external;
+        }
+
+        // Collect all current isolate IDs before the async loop so we don't
+        // hold a borrow on `self` while calling async backend methods.
+        let isolate_ids: Vec<String> = self
+            .thread_map
+            .all_threads()
+            .map(|(_, iso)| iso.to_string())
+            .collect();
+
+        // Apply the current library-debuggability settings to every known isolate.
+        for isolate_id in &isolate_ids {
+            if let Err(e) = self.apply_library_debuggability(isolate_id).await {
+                tracing::warn!(
+                    "updateDebugOptions: failed to apply library debuggability to {}: {}",
+                    isolate_id,
+                    e,
+                );
+            }
+        }
+
+        tracing::debug!(
+            "updateDebugOptions applied to {} isolate(s): sdk={} external={}",
+            isolate_ids.len(),
+            self.debug_sdk_libraries,
+            self.debug_external_package_libraries,
+        );
+
+        DapResponse::success(request, Some(serde_json::json!({})))
+    }
+
+    /// Apply library debuggability settings to all libraries in an isolate.
+    ///
+    /// Fetches the isolate's library list via `getIsolate` and calls
+    /// `setLibraryDebuggable` for each library according to the current
+    /// `debug_sdk_libraries` and `debug_external_package_libraries` flags.
+    ///
+    /// # Classification
+    ///
+    /// | URI prefix | Debuggable? |
+    /// |---|---|
+    /// | `dart:` | `self.debug_sdk_libraries` |
+    /// | `package:<app>/` | Always `true` (app code) |
+    /// | `package:<other>/` | `self.debug_external_package_libraries` |
+    /// | `file://` | Always `true` (app code) |
+    /// | Other | Always `true` |
+    ///
+    /// Failures from individual `setLibraryDebuggable` calls are logged as
+    /// warnings and do not abort processing of remaining libraries.
+    pub(super) async fn apply_library_debuggability(&self, isolate_id: &str) -> Result<(), String> {
+        let isolate = with_timeout(self.backend.get_isolate(isolate_id))
+            .await
+            .map_err(|e| format!("get_isolate failed: {e}"))?;
+
+        let empty_vec = Vec::new();
+        let libraries = isolate
+            .get("libraries")
+            .and_then(|l| l.as_array())
+            .unwrap_or(&empty_vec);
+
+        for lib in libraries {
+            let lib_id = lib.get("id").and_then(|i| i.as_str()).unwrap_or("");
+            let uri = lib.get("uri").and_then(|u| u.as_str()).unwrap_or("");
+
+            if lib_id.is_empty() {
+                continue;
+            }
+
+            let is_debuggable = if uri.starts_with("dart:") {
+                self.debug_sdk_libraries
+            } else if uri.starts_with("package:") && !self.is_app_package(uri) {
+                self.debug_external_package_libraries
+            } else {
+                // App code (file://, package:<app>/, or anything else) is
+                // always debuggable.
+                true
+            };
+
+            with_timeout(
+                self.backend
+                    .set_library_debuggable(isolate_id, lib_id, is_debuggable),
+            )
+            .await
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    "Failed to set library debuggability for {} ({}): {}",
+                    uri,
+                    lib_id,
+                    e
+                );
+            });
+        }
+
+        Ok(())
+    }
+
+    /// Handle the `breakpointLocations` DAP request.
+    ///
+    /// Returns valid breakpoint positions for a given source file and line range.
+    /// This enables IDEs to show valid breakpoint markers when the user hovers
+    /// over the editor gutter, and supports column breakpoints (multiple
+    /// breakpoints on a single line).
+    ///
+    /// ## Implementation
+    ///
+    /// 1. Resolves the source file path to a Dart `file://` URI.
+    /// 2. Finds the matching script in the isolate's script list.
+    /// 3. Calls `getSourceReport` with `PossibleBreakpoints` to get valid positions.
+    /// 4. Filters the positions to the requested line range.
+    ///
+    /// Token position → line/column mapping uses the script's `tokenPosTable`
+    /// when available. Each row is `[line, tokenPos, col, tokenPos, col, ...]`.
+    /// If the table is absent, positions are returned at line level only.
+    ///
+    /// ## Errors
+    ///
+    /// - No active isolate → error response
+    /// - Missing source path → error response
+    /// - Script not found for URI → returns empty breakpoints array (file may
+    ///   not be loaded yet — not a fatal error)
+    /// - `getSourceReport` failure → error response
+    pub(super) async fn handle_breakpoint_locations(
+        &mut self,
+        request: &DapRequest,
+    ) -> DapResponse {
+        tracing::debug!("DAP adapter: breakpointLocations");
+
+        let args = match parse_args::<BreakpointLocationsArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        let source_path = match args.source.path.as_deref() {
+            Some(p) if !p.is_empty() => p.to_string(),
+            _ => {
+                return DapResponse::error(request, "breakpointLocations: source path is required")
+            }
+        };
+
+        // Pick the best available isolate (most recently paused, or primary).
+        let isolate_id = match self
+            .most_recent_paused_isolate()
+            .map(|s| s.to_string())
+            .or_else(|| self.primary_isolate_id())
+        {
+            Some(id) => id,
+            None => {
+                return DapResponse::error(
+                    request,
+                    "breakpointLocations: no active isolate available",
+                )
+            }
+        };
+
+        // Convert the filesystem path to a Dart VM URI.
+        let uri = self.resolve_source_uri(&source_path);
+
+        // Retrieve the script list to find the script ID for this URI.
+        let scripts_response = match with_timeout(self.backend.get_scripts(&isolate_id)).await {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("breakpointLocations: get_scripts failed: {e}"),
+                )
+            }
+        };
+
+        // Find the script whose URI matches the requested file URI.
+        let script_id = find_script_id_by_uri(&scripts_response, &uri);
+        let script_id = match script_id {
+            Some(id) => id,
+            None => {
+                // Script not found — the file may not be loaded yet or may be
+                // outside the Dart source tree. Return an empty set rather than
+                // an error so the IDE does not treat this as a hard failure.
+                tracing::debug!(
+                    "breakpointLocations: script not found for URI '{}' — returning empty list",
+                    uri
+                );
+                let empty: Vec<BreakpointLocation> = Vec::new();
+                let body = serde_json::json!({ "breakpoints": empty });
+                return DapResponse::success(request, Some(body));
+            }
+        };
+
+        // Call getSourceReport to get possible breakpoint positions for the script.
+        let report = match with_timeout(self.backend.get_source_report(
+            &isolate_id,
+            &script_id,
+            &["PossibleBreakpoints"],
+            None,
+            None,
+        ))
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                return DapResponse::error(
+                    request,
+                    format!("breakpointLocations: getSourceReport failed: {e}"),
+                )
+            }
+        };
+
+        // Extract token-to-line/column mapping from the script object if available.
+        // The script's tokenPosTable is a 2D array where each row is:
+        //   [line, tokenPos, col, tokenPos, col, ...]
+        // We build a HashMap from tokenPos → (line, col) for fast lookup.
+        let token_pos_map = build_token_pos_map(&report);
+
+        // Extract breakpoint locations filtered to the requested line range.
+        let end_line = args.end_line.unwrap_or(args.line);
+        let locations = extract_breakpoint_locations(&report, &token_pos_map, args.line, end_line);
+
+        tracing::debug!(
+            "breakpointLocations: {} location(s) for {} lines {}-{}",
+            locations.len(),
+            source_path,
+            args.line,
+            end_line,
+        );
+
+        let body = serde_json::json!({ "breakpoints": locations });
+        DapResponse::success(request, Some(body))
+    }
+
+    /// Handle the `completions` DAP request.
+    ///
+    /// Provides IntelliSense-like auto-complete suggestions for the debug
+    /// console REPL. Candidates are sourced from:
+    ///
+    /// 1. **Local variables** — names of all `BoundVariable` entries in the
+    ///    current stack frame, when a `frameId` is provided.
+    /// 2. **Dart keywords** — `true`, `false`, `null`, `this`.
+    ///
+    /// All candidates are filtered by the identifier fragment the user is
+    /// currently typing (the suffix of `text[..column-1]` after the last
+    /// non-identifier character). An empty fragment returns all candidates.
+    ///
+    /// Locals are sorted before keywords (via `sort_text` prefix `"0_"` vs
+    /// `"2_"`). The result is capped at 50 items to keep response payloads
+    /// small.
+    ///
+    /// # Error handling
+    ///
+    /// - Missing arguments → DAP error response.
+    /// - `get_stack` failure → local variables are skipped; keywords are still
+    ///   returned so the response degrades gracefully.
+    pub(super) async fn handle_completions(&mut self, request: &DapRequest) -> DapResponse {
+        tracing::debug!("DAP adapter: completions");
+
+        let args = match parse_args::<CompletionsArguments>(request) {
+            Ok(a) => a,
+            Err(e) => return DapResponse::error(request, e),
+        };
+
+        let text = &args.text;
+        let column = args.column;
+
+        // Column is 1-based; reject values below 1 to prevent underflow.
+        if column < 1 {
+            return DapResponse::error(request, "completions: column must be >= 1 (1-based)");
+        }
+
+        // Extract the prefix up to the cursor position (column is 1-based).
+        let prefix_len = ((column - 1) as usize).min(text.len());
+        let prefix = &text[..prefix_len];
+        // Find the last identifier fragment being typed (may be empty).
+        let fragment = extract_last_identifier(prefix);
+
+        let mut items: Vec<CompletionItem> = Vec::new();
+
+        // ── 1. Local variables from the current frame ─────────────────────────
+        if let Some(frame_id) = args.frame_id {
+            if let Some(frame_ref) = self.frame_store.lookup(frame_id).cloned() {
+                // Fetch the stack limited to the frame of interest.
+                let limit = frame_ref.frame_index + 1;
+                if let Ok(stack) = self
+                    .backend
+                    .get_stack(&frame_ref.isolate_id, Some(limit))
+                    .await
+                {
+                    // Navigate into frames[frame_index].vars.
+                    if let Some(vars) = stack
+                        .get("frames")
+                        .and_then(|f| f.as_array())
+                        .and_then(|f| f.get(frame_ref.frame_index as usize))
+                        .and_then(|f| f.get("vars"))
+                        .and_then(|v| v.as_array())
+                    {
+                        for var in vars {
+                            if let Some(name) = var.get("name").and_then(|n| n.as_str()) {
+                                if fragment.is_empty() || name.starts_with(fragment) {
+                                    items.push(CompletionItem {
+                                        label: name.to_string(),
+                                        type_field: Some("variable".to_string()),
+                                        // Locals first ("0_" sorts before "2_" for keywords).
+                                        sort_text: Some(format!("0_{}", name)),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ── 2. Dart keywords ──────────────────────────────────────────────────
+        for kw in &["true", "false", "null", "this"] {
+            if fragment.is_empty() || kw.starts_with(fragment) {
+                items.push(CompletionItem {
+                    label: kw.to_string(),
+                    type_field: Some("keyword".to_string()),
+                    sort_text: Some(format!("2_{}", kw)),
+                });
+            }
+        }
+
+        // Limit to 50 items to avoid oversized responses.
+        items.truncate(50);
+
+        let body = serde_json::json!({ "targets": items });
+        DapResponse::success(request, Some(body))
+    }
+
+    /// Handle the DAP `restart` request.
+    ///
+    /// The standard DAP `restart` request is used by IDEs (VS Code, etc.) when
+    /// the user clicks the "Restart" button in the debug toolbar. For Flutter
+    /// debugging this is equivalent to a hot restart — it re-creates the main
+    /// Dart isolate while keeping the process alive.
+    ///
+    /// Delegates to [`execute_hot_operation`] with [`HotOp::Restart`], so it
+    /// behaves identically to [`handle_hot_restart`]: it emits `progressStart`,
+    /// `progressEnd`, and `dart.hotRestartComplete` events and returns an empty
+    /// success body. On failure returns a structured error response.
+    ///
+    /// [`execute_hot_operation`]: Self::execute_hot_operation
+    /// [`handle_hot_restart`]: Self::handle_hot_restart
+    pub(super) async fn handle_restart(&mut self, request: &DapRequest) -> DapResponse {
+        self.execute_hot_operation(request, HotOp::Restart).await
+    }
+
+    /// Return `true` if the given `package:` URI belongs to the app's own package.
+    ///
+    /// A URI is an app package URI when it starts with
+    /// `package:<app_package_name>/`. If `app_package_name` is empty, no
+    /// `package:` URI is considered an app URI (they are all treated as
+    /// external).
+    ///
+    /// # Examples
+    ///
+    /// ```text
+    /// app_package_name = "my_app"
+    /// "package:my_app/main.dart"         → true
+    /// "package:my_app/src/widget.dart"   → true
+    /// "package:flutter/material.dart"    → false
+    /// "dart:core"                        → false (not a package: URI)
+    /// ```
+    pub(super) fn is_app_package(&self, uri: &str) -> bool {
+        if self.app_package_name.is_empty() {
+            // When no package name is configured, treat ALL package: URIs as
+            // app code (debuggable). This prevents silently marking the app's
+            // own libraries as non-debuggable, which would cause breakpoints
+            // to never fire.
+            return true;
+        }
+        // Match "package:<name>/" exactly so that a package named "my_app"
+        // does not accidentally match "my_app_test".
+        let prefix = format!("package:{}/", self.app_package_name);
+        uri.starts_with(&prefix)
+    }
+
+    /// Convert a filesystem path to the best URI for the Dart VM Service.
+    ///
+    /// Tries to resolve the path to a `package:` URI by reading
+    /// `.dart_tool/package_config.json` from the inferred project root.
+    /// Falls back to a `file://` URI if resolution fails.
+    ///
+    /// The package config is cached so subsequent calls for paths in the
+    /// same project do not re-read the file.
+    pub(super) fn resolve_source_uri(&mut self, path: &str) -> String {
+        // Pass-through for paths that already have a URI scheme.
+        if path.is_empty()
+            || path.starts_with("file://")
+            || path.starts_with("package:")
+            || path.starts_with("dart:")
+        {
+            return path_to_dart_uri(path);
+        }
+
+        // Try to convert to a package: URI using the cached mappings.
+        if let Some(pkg_uri) = self.try_path_to_package_uri(path) {
+            return pkg_uri;
+        }
+
+        // Populate cache if we haven't yet for this project root.
+        if let Some(project_root) = self
+            .project_root
+            .clone()
+            .or_else(|| Self::infer_project_root(path))
+        {
+            // Store the project root for use by handle_stack_trace (source path resolution).
+            if self.project_root.is_none() {
+                tracing::debug!("Detected project root: {}", project_root.display());
+                self.project_root = Some(project_root.clone());
+            }
+            let already_loaded = self
+                .package_lib_to_name
+                .iter()
+                .any(|(lib_dir, _)| path.starts_with(lib_dir.to_string_lossy().as_ref()));
+
+            if !already_loaded {
+                let entries = read_package_config(&project_root);
+                if !entries.is_empty() {
+                    tracing::debug!(
+                        "Loaded {} package URI mappings from {}",
+                        entries.len(),
+                        project_root
+                            .join(".dart_tool/package_config.json")
+                            .display()
+                    );
+                    self.package_lib_to_name.extend(entries);
+                }
+
+                // Try again after loading.
+                if let Some(pkg_uri) = self.try_path_to_package_uri(path) {
+                    return pkg_uri;
+                }
+            }
+        }
+
+        // Fall back to file:// URI.
+        path_to_dart_uri(path)
+    }
+
+    /// Try to convert a filesystem path to a `package:` URI using the cached
+    /// `package_lib_to_name` mappings.
+    fn try_path_to_package_uri(&self, path: &str) -> Option<String> {
+        let canonical = std::path::Path::new(path).canonicalize().ok()?;
+        for (lib_dir, pkg_name) in &self.package_lib_to_name {
+            if let Ok(relative) = canonical.strip_prefix(lib_dir) {
+                let uri = format!("package:{}/{}", pkg_name, relative.display());
+                tracing::debug!("Resolved {} → {}", path, uri);
+                return Some(uri);
+            }
+        }
+        None
+    }
+
+    /// Infer the Dart/Flutter project root from a source file path.
+    ///
+    /// Looks for `/lib/` in the path and returns the parent directory.
+    /// For example, `/home/user/my_app/lib/src/widget.dart` → `/home/user/my_app`.
+    fn infer_project_root(path: &str) -> Option<std::path::PathBuf> {
+        // Walk up from the file looking for a pubspec.yaml to confirm the root.
+        // First, try the common case: file is under /lib/.
+        if let Some(lib_idx) = path.rfind("/lib/") {
+            let candidate = std::path::Path::new(&path[..lib_idx]);
+            if candidate.join("pubspec.yaml").exists() {
+                return Some(candidate.to_path_buf());
+            }
+        }
+
+        // Fallback: walk parent directories looking for pubspec.yaml.
+        let mut dir = std::path::Path::new(path).parent();
+        while let Some(d) = dir {
+            if d.join("pubspec.yaml").exists() {
+                return Some(d.to_path_buf());
+            }
+            dir = d.parent();
+        }
+        None
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Free helper functions
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Extract the last identifier fragment from a string.
+///
+/// An identifier character is `[a-zA-Z0-9_$]` (matching Dart identifier rules).
+/// Returns the longest trailing run of identifier characters in `text`, or
+/// an empty string if `text` ends with a non-identifier character or is empty.
+///
+/// # Examples
+///
+/// ```text
+/// "counter"       → "counter"
+/// "obj.field"     → "field"
+/// "myList["       → ""
+/// ""              → ""
+/// "tr"            → "tr"
+/// ```
+pub(crate) fn extract_last_identifier(text: &str) -> &str {
+    let end = text.len();
+    let start = text
+        .rfind(|c: char| !c.is_alphanumeric() && c != '_' && c != '$')
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    &text[start..end]
+}
 
 /// Parse the `arguments` field of a [`DapRequest`] as `T`.
 ///
@@ -811,12 +1983,8 @@ pub(crate) fn parse_args<T: serde::de::DeserializeOwned>(
 /// Convert an absolute filesystem path to a `file://` URI suitable for the
 /// Dart VM Service.
 ///
-/// # Phase 3 Note
-///
-/// This returns a plain `file://` URI. Full `package:` URI resolution (which
-/// requires reading `.dart_tool/package_config.json`) is deferred to Phase 4.
-/// The Dart VM Service accepts both `file://` and `package:` URIs for
-/// `addBreakpointWithScriptUri`.
+/// This is the fallback when `package:` URI resolution is not available.
+/// Prefer [`DapAdapter::resolve_source_uri`] which tries `package:` first.
 pub(crate) fn path_to_dart_uri(path: &str) -> String {
     if path.is_empty() {
         return String::new();
@@ -826,6 +1994,72 @@ pub(crate) fn path_to_dart_uri(path: &str) -> String {
         return path.to_string();
     }
     format!("file://{}", path)
+}
+
+/// Read `.dart_tool/package_config.json` and return `(canonical_lib_dir, package_name)` pairs.
+///
+/// `project_root` is the directory containing `pubspec.yaml` (the parent of
+/// the directory containing `package_config.json`'s `.dart_tool/`).
+fn read_package_config(project_root: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
+    let config_path = project_root.join(".dart_tool/package_config.json");
+    let config_text = match std::fs::read_to_string(&config_path) {
+        Ok(t) => t,
+        Err(_) => return Vec::new(),
+    };
+    let config: serde_json::Value = match serde_json::from_str(&config_text) {
+        Ok(v) => v,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut result = Vec::new();
+    let packages = match config["packages"].as_array() {
+        Some(p) => p,
+        None => return result,
+    };
+    let config_dir = match config_path.parent() {
+        Some(d) => d,
+        None => return result,
+    };
+
+    for pkg in packages {
+        let name = match pkg["name"].as_str() {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let root_uri = match pkg["rootUri"].as_str() {
+            Some(u) => u,
+            None => continue,
+        };
+        let package_uri = pkg
+            .get("packageUri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("lib/");
+
+        // Resolve the package root to an absolute path.
+        let pkg_root: std::path::PathBuf = if root_uri.starts_with("file://") {
+            match url::Url::parse(root_uri)
+                .ok()
+                .and_then(|u| u.to_file_path().ok())
+            {
+                Some(p) => p,
+                None => continue,
+            }
+        } else {
+            // Relative to .dart_tool/ directory.
+            config_dir.join(root_uri)
+        };
+
+        // Build the canonical lib directory path.
+        let lib_dir = pkg_root.join(package_uri);
+        match lib_dir.canonicalize() {
+            Ok(canonical) => result.push((canonical, name)),
+            Err(_) => {
+                // Non-canonical (e.g., package not downloaded yet) — store as-is.
+                result.push((lib_dir, name));
+            }
+        }
+    }
+    result
 }
 
 /// Build a [`DapBreakpoint`] from a tracked [`BreakpointEntry`].
@@ -863,4 +2097,158 @@ pub(crate) fn exception_filter_to_mode(filters: &[String]) -> DapExceptionPauseM
     } else {
         DapExceptionPauseMode::None
     }
+}
+
+/// Find the script ID whose URI matches the given Dart URI in a `ScriptList` response.
+///
+/// The `scripts_response` is the JSON value returned by `get_scripts()`, which
+/// wraps an array under the `"scripts"` key. Each element has `"id"` and `"uri"` fields.
+///
+/// Returns `None` when no script matches.
+pub(crate) fn find_script_id_by_uri(
+    scripts_response: &serde_json::Value,
+    uri: &str,
+) -> Option<String> {
+    let scripts = scripts_response.get("scripts")?.as_array()?;
+    for script in scripts {
+        let script_uri = script.get("uri")?.as_str()?;
+        if script_uri == uri {
+            let id = script.get("id")?.as_str()?;
+            return Some(id.to_string());
+        }
+    }
+    None
+}
+
+/// Build a map from VM token position → `(line, column)` from a `getSourceReport` response.
+///
+/// The Dart VM embeds the `tokenPosTable` inside the `scripts` array of the
+/// source report. Each script entry may have a `tokenPosTable` field which is a
+/// 2-dimensional array. Each row has the form:
+///
+/// ```text
+/// [line, tokenPos, column, tokenPos, column, ...]
+/// ```
+///
+/// where `line` is the 1-based source line number and each subsequent pair is a
+/// token position followed by its 1-based column offset.
+///
+/// Returns a `HashMap<i64, (i64, i64)>` mapping `tokenPos → (line, column)`.
+/// Returns an empty map when no `tokenPosTable` is present.
+pub(crate) fn build_token_pos_map(
+    report: &serde_json::Value,
+) -> std::collections::HashMap<i64, (i64, i64)> {
+    let mut map = std::collections::HashMap::new();
+
+    let scripts = match report.get("scripts").and_then(|s| s.as_array()) {
+        Some(s) => s,
+        None => return map,
+    };
+
+    for script in scripts {
+        let table = match script.get("tokenPosTable").and_then(|t| t.as_array()) {
+            Some(t) => t,
+            None => continue,
+        };
+
+        for row in table {
+            let row = match row.as_array() {
+                Some(r) => r,
+                None => continue,
+            };
+            // row[0] is the line number; subsequent pairs are (tokenPos, column).
+            if row.len() < 3 {
+                continue;
+            }
+            let line = match row[0].as_i64() {
+                Some(l) => l,
+                None => continue,
+            };
+            // Iterate over (tokenPos, column) pairs starting at index 1.
+            let mut i = 1;
+            while i + 1 < row.len() {
+                if let (Some(token_pos), Some(col)) = (row[i].as_i64(), row[i + 1].as_i64()) {
+                    map.insert(token_pos, (line, col));
+                }
+                i += 2;
+            }
+        }
+    }
+
+    map
+}
+
+/// Wrap a fallible backend future with the standard [`REQUEST_TIMEOUT`].
+///
+/// Returns `Err(String)` with a human-readable message when either:
+/// - The timeout fires before the future resolves.
+/// - The future resolves to `Err(e)` (converted via `Display`).
+///
+/// # Usage
+///
+/// ```ignore
+/// let result = with_timeout(self.backend.get_stack(&isolate_id, limit)).await?;
+/// ```
+pub(crate) async fn with_timeout<T, E: std::fmt::Display>(
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    tokio::time::timeout(REQUEST_TIMEOUT, future)
+        .await
+        .map_err(|_| format!("Request timed out after {}s", REQUEST_TIMEOUT.as_secs()))?
+        .map_err(|e| e.to_string())
+}
+
+/// Extract [`BreakpointLocation`] objects from a `getSourceReport` response.
+///
+/// Iterates the `ranges` array and collects all `possibleBreakpoints` token
+/// positions. Each token position is looked up in `token_pos_map` to obtain
+/// a `(line, column)` pair. Only positions whose line falls within
+/// `[start_line, end_line]` (both inclusive, 1-based) are included.
+///
+/// When a token position is not present in `token_pos_map`, the position is
+/// skipped (column-level accuracy requires the `tokenPosTable`).
+pub(crate) fn extract_breakpoint_locations(
+    report: &serde_json::Value,
+    token_pos_map: &std::collections::HashMap<i64, (i64, i64)>,
+    start_line: i64,
+    end_line: i64,
+) -> Vec<BreakpointLocation> {
+    let mut locations: Vec<BreakpointLocation> = Vec::new();
+
+    let ranges = match report.get("ranges").and_then(|r| r.as_array()) {
+        Some(r) => r,
+        None => return locations,
+    };
+
+    for range in ranges {
+        let possible = match range.get("possibleBreakpoints").and_then(|p| p.as_array()) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        for token_pos_val in possible {
+            let token_pos = match token_pos_val.as_i64() {
+                Some(t) => t,
+                None => continue,
+            };
+
+            if let Some(&(line, col)) = token_pos_map.get(&token_pos) {
+                if line >= start_line && line <= end_line {
+                    locations.push(BreakpointLocation {
+                        line,
+                        column: Some(col),
+                        end_line: None,
+                        end_column: None,
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by line then column for deterministic output.
+    locations.sort_by(|a, b| a.line.cmp(&b.line).then(a.column.cmp(&b.column)));
+    // Deduplicate identical positions.
+    locations.dedup_by(|a, b| a.line == b.line && a.column == b.column);
+
+    locations
 }

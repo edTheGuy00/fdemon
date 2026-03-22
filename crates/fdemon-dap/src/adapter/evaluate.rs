@@ -62,6 +62,13 @@ use crate::{DapRequest, DapResponse};
 /// to this length with a `…` suffix so the IDE tooltip remains compact.
 const HOVER_MAX_LEN: usize = 100;
 
+/// Timeout for the secondary `toString()` evaluation during hover.
+///
+/// Matches the pattern used in `variables.rs` (`enrich_with_to_string`).
+/// If the VM does not respond within 1 second the hover falls back to the
+/// raw `format_instance_value` output rather than blocking indefinitely.
+const HOVER_TO_STRING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(1);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Evaluation context
 // ─────────────────────────────────────────────────────────────────────────────
@@ -274,19 +281,23 @@ async fn handle_evaluate_hover<B: DebugBackend>(
         // Primitives: use valueAsString directly (no toString() call needed).
         format_instance_value(&instance)
     } else {
-        // Non-primitives: call toString() for a readable hover tooltip.
-        let to_string_expr = format!("({}).toString()", args.expression);
-        let to_string_args = EvaluateArguments {
-            expression: to_string_expr,
-            frame_id: args.frame_id,
-            context: args.context.clone(),
-        };
-        match evaluate_expression_raw(backend, isolate_id, frame_ref.as_ref(), &to_string_args)
+        // Non-primitives: call toString() on the VM object reference so that
+        // no user-supplied text is embedded in a Dart expression string.
+        // This mirrors the pattern used in `variables.rs::enrich_with_to_string`.
+        if let Some(object_id) = instance.get("id").and_then(|v| v.as_str()) {
+            match tokio::time::timeout(
+                HOVER_TO_STRING_TIMEOUT,
+                backend.evaluate(isolate_id, object_id, "toString()"),
+            )
             .await
-        {
-            Ok(str_result) => format_instance_value(&str_result),
-            // If toString() fails, fall back to the type name/valueAsString.
-            Err(_) => format_instance_value(&instance),
+            {
+                Ok(Ok(str_result)) => format_instance_value(&str_result),
+                // Timeout or backend error — fall back to the raw instance value.
+                _ => format_instance_value(&instance),
+            }
+        } else {
+            // No object ID in the instance — fall back directly.
+            format_instance_value(&instance)
         }
     };
 
@@ -364,39 +375,25 @@ async fn evaluate_expression_raw<B: DebugBackend>(
 
 /// Resolve the root library ID for an isolate.
 ///
-/// This calls `get_vm()` on the backend and searches the isolate list for the
-/// matching isolate's `rootLib`. If the isolate is not found or has no
-/// `rootLib`, returns an error.
-///
-/// # Note
-///
-/// This is a best-effort implementation for Phase 3. If `get_vm()` doesn't
-/// include `rootLib` in the isolate refs, Phase 4 will add a `get_isolate()`
-/// backend call that always returns the full isolate object with `rootLib`.
+/// Calls `get_isolate()` on the backend and reads `isolate.rootLib.id`.
+/// This is the reliable approach: `getIsolate` always returns the full isolate
+/// object with `rootLib`, whereas the isolate refs embedded in `getVM()` may
+/// omit `rootLib` depending on the Dart VM version.
 pub async fn get_root_library_id<B: DebugBackend>(
     backend: &B,
     isolate_id: &str,
 ) -> Result<String, String> {
-    let vm_info = backend.get_vm().await.map_err(|e| e.to_string())?;
-    let isolates = vm_info
-        .get("isolates")
-        .and_then(|i| i.as_array())
-        .ok_or_else(|| "No isolates in VM info".to_string())?;
+    let isolate = backend
+        .get_isolate(isolate_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
-    for isolate in isolates {
-        if isolate.get("id").and_then(|i| i.as_str()) == Some(isolate_id) {
-            if let Some(root_lib) = isolate
-                .get("rootLib")
-                .and_then(|l| l.get("id"))
-                .and_then(|i| i.as_str())
-            {
-                return Ok(root_lib.to_string());
-            }
-            // Found the isolate but no rootLib — fall through to error.
-            break;
-        }
-    }
-    Err("Could not find root library for isolate".to_string())
+    isolate
+        .get("rootLib")
+        .and_then(|lib| lib.get("id"))
+        .and_then(|id| id.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Isolate has no rootLib".to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -456,6 +453,8 @@ pub fn is_expandable(instance: &serde_json::Value) -> bool {
             | "Uint8ClampedList"
             | "Int32List"
             | "Float64List"
+            | "Record"
+            | "WeakReference"
     )
 }
 
@@ -813,7 +812,12 @@ mod tests {
         async fn pause(&self, _: &str) -> Result<(), BackendError> {
             Ok(())
         }
-        async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+        async fn resume(
+            &self,
+            _: &str,
+            _: Option<StepMode>,
+            _: Option<i32>,
+        ) -> Result<(), BackendError> {
             Ok(())
         }
         async fn add_breakpoint(
@@ -860,42 +864,77 @@ mod tests {
             &self,
             _: &str,
             _: &str,
-            _: &str,
-        ) -> Result<serde_json::Value, BackendError> {
-            self.eval_result.clone()
-        }
-        async fn evaluate_in_frame(
-            &self,
-            _: &str,
-            _: i32,
             expression: &str,
         ) -> Result<serde_json::Value, BackendError> {
-            // If a to_string_result is configured and the expression ends with
-            // `.toString()`, return that result instead of the primary result.
-            if expression.ends_with(".toString()") {
+            // The secondary toString() call goes through evaluate() with
+            // expression = "toString()". Return to_string_result when configured.
+            if expression == "toString()" {
                 if let Some(ref r) = self.to_string_result {
                     return r.clone();
                 }
             }
             self.eval_result.clone()
         }
+        async fn evaluate_in_frame(
+            &self,
+            _: &str,
+            _: i32,
+            _: &str,
+        ) -> Result<serde_json::Value, BackendError> {
+            self.eval_result.clone()
+        }
         async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
-            // Return an isolate with a rootLib so that frameless evaluation works.
             Ok(json!({
                 "isolates": [
                     {
                         "id": "isolates/1",
                         "name": "main",
-                        "rootLib": {"id": "libraries/1"}
                     }
                 ]
             }))
         }
+        async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+            // Return a full isolate object with rootLib so get_root_library_id works.
+            Ok(json!({
+                "id": "isolates/1",
+                "name": "main",
+                "rootLib": {"id": "libraries/1"}
+            }))
+        }
+
         async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
             Ok(json!({}))
         }
 
-        async fn get_source(&self, _: &str, _: &str) -> std::result::Result<String, String> {
+        async fn call_service(
+            &self,
+            _: &str,
+            _: Option<serde_json::Value>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+
+        async fn set_library_debuggable(
+            &self,
+            _: &str,
+            _: &str,
+            _: bool,
+        ) -> Result<(), BackendError> {
+            Ok(())
+        }
+
+        async fn get_source_report(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[&str],
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+
+        async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
             Ok(String::new())
         }
 
@@ -1210,9 +1249,137 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_root_library_id_not_found() {
-        let backend = MockBackend::ok(json!({}));
-        let result = get_root_library_id(&backend, "isolates/999").await;
-        assert!(result.is_err());
+        // Use a backend that returns an isolate without rootLib to test the
+        // error path (get_isolate succeeds but rootLib is absent).
+        struct NoRootLibBackend;
+        impl crate::adapter::DebugBackend for NoRootLibBackend {
+            async fn pause(&self, _: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn resume(
+                &self,
+                _: &str,
+                _: Option<StepMode>,
+                _: Option<i32>,
+            ) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn add_breakpoint(
+                &self,
+                _: &str,
+                _: &str,
+                l: i32,
+                c: Option<i32>,
+            ) -> Result<BreakpointResult, BackendError> {
+                Ok(BreakpointResult {
+                    vm_id: format!("bp/{l}"),
+                    resolved: true,
+                    line: Some(l),
+                    column: c,
+                })
+            }
+            async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn set_exception_pause_mode(
+                &self,
+                _: &str,
+                _: DapExceptionPauseMode,
+            ) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn get_stack(
+                &self,
+                _: &str,
+                _: Option<i32>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_object(
+                &self,
+                _: &str,
+                _: &str,
+                _: Option<i64>,
+                _: Option<i64>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn evaluate(
+                &self,
+                _: &str,
+                _: &str,
+                _: &str,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn evaluate_in_frame(
+                &self,
+                _: &str,
+                _: i32,
+                _: &str,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+                // Return isolate without rootLib — this triggers the error path.
+                Ok(json!({"id": "isolates/1", "name": "main"}))
+            }
+            async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn call_service(
+                &self,
+                _: &str,
+                _: Option<serde_json::Value>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn set_library_debuggable(
+                &self,
+                _: &str,
+                _: &str,
+                _: bool,
+            ) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn get_source_report(
+                &self,
+                _: &str,
+                _: &str,
+                _: &[&str],
+                _: Option<i64>,
+                _: Option<i64>,
+            ) -> Result<serde_json::Value, BackendError> {
+                Ok(json!({}))
+            }
+            async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+                Ok(String::new())
+            }
+            async fn hot_reload(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn hot_restart(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn stop_app(&self) -> Result<(), BackendError> {
+                Ok(())
+            }
+            async fn ws_uri(&self) -> Option<String> {
+                None
+            }
+            async fn device_id(&self) -> Option<String> {
+                None
+            }
+            async fn build_mode(&self) -> String {
+                "debug".to_string()
+            }
+        }
+        let backend = NoRootLibBackend;
+        let result = get_root_library_id(&backend, "isolates/1").await;
+        assert!(result.is_err(), "Should fail when isolate has no rootLib");
     }
 
     // ── Context-specific tests (Task 06) ──────────────────────────────────
@@ -1715,6 +1882,270 @@ mod tests {
         assert!(resp.success);
         let body = resp.body.as_ref().unwrap();
         assert_eq!(body["result"], "List<double> (length: 10)");
+        assert_eq!(body["variablesReference"], 0);
+    }
+
+    // ── Security: expression injection fix ────────────────────────────────
+
+    /// A mock backend that records every call to `evaluate` so tests can
+    /// assert that no user-supplied text appeared in a Dart expression string.
+    struct RecordingBackend {
+        /// The primary result returned for the initial expression evaluation
+        /// (via `evaluate_in_frame` or `evaluate` when called with any
+        /// target other than an object ID / expression other than "toString()").
+        primary_result: serde_json::Value,
+        /// All (target_id, expression) pairs passed to `evaluate`.
+        recorded_calls: std::sync::Mutex<Vec<(String, String)>>,
+    }
+
+    impl RecordingBackend {
+        fn new(primary_result: serde_json::Value) -> Self {
+            Self {
+                primary_result,
+                recorded_calls: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn recorded_evaluate_calls(&self) -> Vec<(String, String)> {
+            self.recorded_calls.lock().unwrap().clone()
+        }
+    }
+
+    impl crate::adapter::DebugBackend for RecordingBackend {
+        async fn pause(&self, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn resume(
+            &self,
+            _: &str,
+            _: Option<StepMode>,
+            _: Option<i32>,
+        ) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn add_breakpoint(
+            &self,
+            _: &str,
+            _: &str,
+            l: i32,
+            c: Option<i32>,
+        ) -> Result<BreakpointResult, BackendError> {
+            Ok(BreakpointResult {
+                vm_id: format!("bp/{l}"),
+                resolved: true,
+                line: Some(l),
+                column: c,
+            })
+        }
+        async fn remove_breakpoint(&self, _: &str, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn set_exception_pause_mode(
+            &self,
+            _: &str,
+            _: DapExceptionPauseMode,
+        ) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn get_stack(
+            &self,
+            _: &str,
+            _: Option<i32>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+        async fn get_object(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+        async fn evaluate(
+            &self,
+            _isolate_id: &str,
+            target_id: &str,
+            expression: &str,
+        ) -> Result<serde_json::Value, BackendError> {
+            self.recorded_calls
+                .lock()
+                .unwrap()
+                .push((target_id.to_string(), expression.to_string()));
+            // Simulate a successful toString() result.
+            Ok(json!({"kind": "String", "valueAsString": "RecordedToString"}))
+        }
+        async fn evaluate_in_frame(
+            &self,
+            _: &str,
+            _: i32,
+            _: &str,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(self.primary_result.clone())
+        }
+        async fn get_vm(&self) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({"isolates": [{"id": "isolates/1", "name": "main"}]}))
+        }
+        async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({"id": "isolates/1", "name": "main", "rootLib": {"id": "libraries/1"}}))
+        }
+        async fn get_scripts(&self, _: &str) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+        async fn call_service(
+            &self,
+            _: &str,
+            _: Option<serde_json::Value>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+        async fn set_library_debuggable(
+            &self,
+            _: &str,
+            _: &str,
+            _: bool,
+        ) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn get_source_report(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[&str],
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, BackendError> {
+            Ok(json!({}))
+        }
+        async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+            Ok(String::new())
+        }
+        async fn hot_reload(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn hot_restart(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn stop_app(&self) -> Result<(), BackendError> {
+            Ok(())
+        }
+        async fn ws_uri(&self) -> Option<String> {
+            None
+        }
+        async fn device_id(&self) -> Option<String> {
+            None
+        }
+        async fn build_mode(&self) -> String {
+            "debug".to_string()
+        }
+    }
+
+    #[tokio::test]
+    async fn test_hover_evaluate_does_not_embed_expression_in_tostring() {
+        // Arrange: a PlainInstance with a known object ID.
+        // A crafted expression that would be dangerous if embedded in a Dart string.
+        let crafted_expression = "a) + sideEffect(";
+        let object_id = "objects/safe-ref-1";
+
+        let backend = RecordingBackend::new(json!({
+            "kind": "PlainInstance",
+            "id": object_id,
+            "class": {"name": "Dangerous"}
+        }));
+
+        let mut frame_store = FrameStore::new();
+        let mut var_store = VariableStore::new();
+        let frame_id = frame_store.allocate(FrameRef::new("isolates/1", 0));
+
+        let req = make_request_with_args(
+            1,
+            "evaluate",
+            json!({"expression": crafted_expression, "frameId": frame_id, "context": "hover"}),
+        );
+
+        // Act
+        let resp = handle_evaluate(
+            &backend,
+            &frame_store,
+            &mut var_store,
+            Some("isolates/1"),
+            &req,
+        )
+        .await;
+
+        assert!(resp.success, "hover should succeed: {:?}", resp.message);
+
+        // Assert: the toString() call must use the object ID as target, NOT a
+        // re-composed expression string containing the raw user input.
+        let calls = backend.recorded_evaluate_calls();
+        assert_eq!(
+            calls.len(),
+            1,
+            "exactly one evaluate() call expected for toString, got: {:?}",
+            calls
+        );
+        let (target, expression) = &calls[0];
+        assert_eq!(
+            target, object_id,
+            "toString() must be called on the object reference ID, not a composed expression"
+        );
+        assert_eq!(
+            expression, "toString()",
+            "expression must be exactly 'toString()'"
+        );
+        // Extra safety: the raw user-crafted input must NOT appear in the expression.
+        assert!(
+            !expression.contains(crafted_expression),
+            "user-supplied expression must not be embedded in the toString call"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_hover_evaluate_tostring_fallback_on_no_object_id() {
+        // When the instance has no "id" field, toString() should NOT be called.
+        // The fallback display value comes from format_instance_value(&instance).
+        let backend = RecordingBackend::new(json!({
+            "kind": "PlainInstance",
+            // No "id" field — object ID is absent
+            "class": {"name": "NoIdClass"}
+        }));
+
+        let mut frame_store = FrameStore::new();
+        let mut var_store = VariableStore::new();
+        let frame_id = frame_store.allocate(FrameRef::new("isolates/1", 0));
+
+        let req = make_request_with_args(
+            1,
+            "evaluate",
+            json!({"expression": "noIdVar", "frameId": frame_id, "context": "hover"}),
+        );
+
+        let resp = handle_evaluate(
+            &backend,
+            &frame_store,
+            &mut var_store,
+            Some("isolates/1"),
+            &req,
+        )
+        .await;
+
+        assert!(resp.success, "fallback should succeed: {:?}", resp.message);
+
+        // No evaluate() call should have been made (no object ID to use as target).
+        let calls = backend.recorded_evaluate_calls();
+        assert!(
+            calls.is_empty(),
+            "evaluate() must not be called when instance has no object ID, got: {:?}",
+            calls
+        );
+
+        // Display value should be the fallback format_instance_value output.
+        let body = resp.body.as_ref().unwrap();
+        assert_eq!(
+            body["result"], "NoIdClass instance",
+            "fallback value should be class name + ' instance'"
+        );
         assert_eq!(body["variablesReference"], 0);
     }
 }

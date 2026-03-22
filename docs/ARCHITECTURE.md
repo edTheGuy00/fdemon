@@ -381,14 +381,19 @@ flutter-demon/
 │       ├── lib.rs
 │       ├── protocol/             # DAP wire protocol
 │       │   ├── mod.rs
-│       │   ├── types.rs          # All DAP request/response/event types
+│       │   ├── types.rs          # All DAP request/response/event types (incl. Phase 6 types)
 │       │   └── codec.rs          # Content-Length framing encode/decode
 │       ├── adapter/              # DAP ↔ VM Service translation
-│       │   ├── mod.rs            # DapAdapter, DebugBackend trait, DebugEvent
+│       │   ├── mod.rs            # DapAdapter struct, ExceptionRef, re-exports
+│       │   ├── backend.rs        # DebugBackend / LocalDebugBackend trait, DynDebugBackend, BackendError
+│       │   ├── handlers.rs       # handle_request dispatch + all per-command handlers
 │       │   ├── breakpoints.rs    # BreakpointState, conditions, logpoints
+│       │   ├── variables.rs      # Variable expansion, type rendering, getter eval, toString enrichment
 │       │   ├── evaluate.rs       # Expression evaluation, EvalContext
-│       │   ├── stack.rs          # FrameStore, VariableStore, SourceReferenceStore
-│       │   └── threads.rs        # ThreadMap, MultiSessionThreadMap, ID namespacing
+│       │   ├── events.rs         # Event emission helpers (progress, custom events)
+│       │   ├── stack.rs          # FrameStore, VariableStore (MAX_VARIABLE_REFS), SourceReferenceStore
+│       │   ├── threads.rs        # ThreadMap, MultiSessionThreadMap, ID namespacing
+│       │   └── types.rs          # StepMode (incl. Rewind), DapExceptionPauseMode, DebugEvent, REQUEST_TIMEOUT
 │       ├── server/               # TCP listener + session lifecycle
 │       │   ├── mod.rs            # DapServer, TCP accept loop
 │       │   └── session.rs        # DapClientSession, NoopBackend (test helper)
@@ -581,13 +586,18 @@ The services layer provides trait-based abstractions for Flutter control operati
 
 | Module | Purpose |
 |--------|---------|
-| `protocol/types.rs` | All DAP request, response, and event types |
+| `protocol/types.rs` | All DAP request, response, and event types — includes `RestartFrameArguments`, `ExceptionInfoArguments`, `BreakpointLocationsArguments`, `BreakpointLocation`, `CompletionsArguments`, `CompletionItem` |
 | `protocol/codec.rs` | Content-Length framing encoder/decoder |
-| `adapter/mod.rs` | `DapAdapter` struct, `DebugBackend` trait, `DebugEvent` enum |
+| `adapter/mod.rs` | `DapAdapter` struct, `ExceptionRef` type; re-exports from sub-modules |
+| `adapter/backend.rs` | `DebugBackend` / `LocalDebugBackend` trait, `DynDebugBackend` wrapper, `BackendError` |
+| `adapter/handlers.rs` | `handle_request` dispatch and all per-command handler methods |
 | `adapter/breakpoints.rs` | `BreakpointState` — DAP ID ↔ VM ID mapping, conditional breakpoints, logpoints |
+| `adapter/variables.rs` | Variable expansion, type rendering (Record, WeakReference, Sentinel, truncated strings, Set), getter evaluation, `toString()` display enrichment, `evaluateName` construction |
 | `adapter/evaluate.rs` | Expression evaluation handler, `EvalContext` (hover/watch/repl/clipboard) |
-| `adapter/stack.rs` | `FrameStore`, `VariableStore`, `SourceReferenceStore` |
+| `adapter/events.rs` | Event emission helpers — progress start/end, custom event forwarding |
+| `adapter/stack.rs` | `FrameStore`, `VariableStore` (with `MAX_VARIABLE_REFS` cap), `SourceReferenceStore`, scope kinds (Locals, Globals, Exception) |
 | `adapter/threads.rs` | `ThreadMap`, `MultiSessionThreadMap`, session ID namespacing |
+| `adapter/types.rs` | `StepMode` (including `Rewind`), `DapExceptionPauseMode`, `BreakpointResult`, `DebugEvent`, `PauseReason`, `REQUEST_TIMEOUT` |
 | `server/mod.rs` | `DapServer` — TCP accept loop, client session spawning |
 | `server/session.rs` | `DapClientSession`, `NoopBackend` (test-only backend) |
 | `transport/stdio.rs` | Stdio transport for IDE integration testing |
@@ -990,6 +1000,140 @@ flutter.appStarted
     AppStarted VM event)
 ```
 
+Phase 6 adds further custom events:
+
+```
+dart.hotReloadComplete
+  body: {}
+  → Emitted after a successful hot reload completes (sourced from EngineEvent)
+
+dart.hotRestartComplete
+  body: {}
+  → Emitted after a successful hot restart completes (sourced from EngineEvent)
+
+dart.serviceExtensionAdded
+  body: { "extensionRPC": "ext.flutter.xxx", "isolateId": "..." }
+  → Forwarded from the VM Service ServiceExtensionAdded stream event; lets
+    the IDE discover available extension methods dynamically
+
+progressStart / progressEnd  (standard DAP events)
+  → Emitted around hot reload and hot restart when the connected client
+    declared supportsProgressReporting: true in its initialize arguments.
+    The adapter generates monotonically increasing progress IDs to pair events.
+```
+
+### DAP Request Inventory
+
+The following DAP requests are handled by `DapAdapter::handle_request`. Requests
+introduced or completed in Phase 6 are marked *(Phase 6)*.
+
+| Request | Purpose |
+|---------|---------|
+| `attach` | Bind to an active Flutter session, discover isolates, emit session-start custom events |
+| `disconnect` | Detach from the debug session; optionally terminate the Flutter app |
+| `threads` | Return all known Dart isolates as DAP thread objects |
+| `setBreakpoints` | Sync desired breakpoints to the VM; supports conditions, hit-conditions, logpoints |
+| `setExceptionBreakpoints` | Configure `None` / `Unhandled` / `All` pause-on-exception mode |
+| `continue` | Resume a paused isolate |
+| `next` | Step over one statement |
+| `stepIn` | Step into a call |
+| `stepOut` | Step out of the current frame |
+| `pause` | Interrupt a running isolate |
+| `stackTrace` | Return call frames for a paused isolate; marks async suspension boundaries |
+| `scopes` | Return variable scopes for a frame — Locals, Globals, Exceptions |
+| `variables` | Expand a variable reference; handles Record, WeakReference, Sentinel, Set, truncated strings |
+| `evaluate` | Evaluate an expression in a frame or target context; supports `$_threadException` |
+| `source` | Serve SDK / unresolvable source text via VM Service `getObject` |
+| `hotReload` | Trigger Flutter hot reload via the TEA pipeline |
+| `hotRestart` | Trigger Flutter hot restart via the TEA pipeline |
+| `restart` | *(Phase 6)* Maps to `hot_restart()` — the standard DAP restart request |
+| `restartFrame` | *(Phase 6)* Rewind execution to a previous stack frame using `StepMode::Rewind`; guarded against async suspension boundaries |
+| `loadedSources` | *(Phase 6)* Return all Dart script URIs currently loaded in the isolate |
+| `callService` | *(Phase 6)* Forward an arbitrary VM Service RPC; used by IDE extensions for custom DevTools integration |
+| `exceptionInfo` | *(Phase 6)* Return full exception details (type, message, stack trace) for the thread stopped at an exception |
+| `updateDebugOptions` | *(Phase 6)* Toggle SDK library and external package library debuggability; applies `setLibraryDebuggable` to all known libraries |
+| `breakpointLocations` | *(Phase 6)* Return valid breakpoint positions within a source range using `getSourceReport(PossibleBreakpoints)` |
+| `completions` | *(Phase 6)* Return auto-complete suggestions (local variables + Dart keywords) for the debug console |
+
+### Variable System (Phase 6 Overhaul)
+
+The variable system — implemented in `adapter/variables.rs` — was significantly
+expanded in Phase 6. Key design decisions:
+
+**Variable type rendering:**
+
+| Dart VM type | Display strategy |
+|--------------|-----------------|
+| `Instance` (PlainInstance) | Class name; optional `toString()` suffix; fields + evaluated getters |
+| `Record` | `(field1, field2, ...)` positional + named fields |
+| `WeakReference` | Shows `target` field; labeled `WeakReference<T>` |
+| `Sentinel` | Displays sentinel reason (`expired`, `collected`, etc.) directly as value |
+| `String` (truncated) | Shows truncated preview; expands via `getObject` with offset/count |
+| `List` / `Set` | Index-keyed children; page-based expansion; Set items are fetched via `getObject` |
+| `Map` | Key-value pairs from association list |
+
+**`evaluateName` construction:**
+
+Each expanded variable is assigned an `evaluateName` expression — a
+syntactically valid Dart expression that can re-evaluate to the same value. The
+`evaluate_name_map` on `DapAdapter` (keyed by variable reference) stores the
+parent expression so that child expressions can be composed:
+
+- Struct field: `parent.fieldName`
+- List element: `parent[index]`
+- Map value: `parent[keyExpr]`
+- Getter: same as the field expression
+
+**Getter evaluation:**
+
+When `evaluate_getters_in_debug_views` is `true` (default), getter methods on
+`PlainInstance` objects are eagerly evaluated with a 1-second per-getter timeout.
+Getter results appear with `presentationHint.attributes: ["hasSideEffects"]`.
+When `false`, getters appear as lazy nodes the user must explicitly expand.
+
+**`toString()` display enrichment:**
+
+When `evaluate_to_string_in_debug_views` is `true` (default), a `toString()`
+call is issued for each `PlainInstance`, `RegExp`, and `StackTrace` variable. If
+the result is not the default `"Instance of 'ClassName'"` pattern, it is appended
+to the display value: `"MyClass (custom repr)"`.
+
+**Globals scope:**
+
+A `Globals` scope is conditionally added to `scopes` for frames in the root
+library. The adapter calls `get_isolate()` to retrieve `rootLib`, then lists all
+top-level variables from that library object.
+
+**Exception scope:**
+
+A `Exceptions` scope is added when the isolate paused at a `PauseException`
+event. The adapter stores the `InstanceRef` in `exception_refs` (keyed by DAP
+thread ID). The `exceptionInfo` request uses the same stored ref to serve full
+exception details. Both the scope and the stored ref are cleared on resume.
+
+**Safety cap:**
+
+`MAX_VARIABLE_REFS` (10,000) limits the total number of variable references that
+can be allocated in a single stop cycle. Expansion requests beyond this cap return
+an error response to prevent unbounded memory growth.
+
+### DapAdapter State Fields (Phase 6 Additions)
+
+New per-session state added to `DapAdapter` in Phase 6:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `exception_refs` | `HashMap<i64, ExceptionRef>` | Stores the exception `InstanceRef` for each thread paused at a `PauseException`; cleared on resume |
+| `evaluate_name_map` | `HashMap<i64, String>` | Maps variable refs to their evaluatable Dart expressions; cleared on resume |
+| `evaluate_getters_in_debug_views` | `bool` | Eagerly evaluate getters on expand (default: `true`); set from `attach` args |
+| `evaluate_to_string_in_debug_views` | `bool` | Append `toString()` result to display value (default: `true`); set from `attach` args |
+| `first_async_marker_index` | `Option<i32>` | Frame index of the first `AsyncSuspensionMarker`; used to guard `restartFrame` against async boundaries |
+| `debug_sdk_libraries` | `bool` | Allow stepping into Dart SDK libraries (default: `false`) |
+| `debug_external_package_libraries` | `bool` | Allow stepping into external package libraries (default: `false`) |
+| `app_package_name` | `String` | The app's own package name; distinguishes app code from external packages |
+| `client_supports_progress` | `bool` | Set from `initialize` args; enables `progressStart`/`progressEnd` events |
+| `next_progress_id` | `u64` | Monotonic counter for progress event ID generation |
+
 ### `DebugBackend` Trait
 
 `fdemon-dap` defines the `DebugBackend` trait so it does not depend on
@@ -1001,23 +1145,42 @@ fdemon-dap (defines trait)              fdemon-app (implements trait)
 ┌───────────────────────────┐          ┌──────────────────────────┐
 │ pub trait DebugBackend {  │          │ pub struct VmServiceBackend {
 │   pause(isolate_id)       │◄─────────│   handle: VmRequestHandle │
-│   resume(isolate_id, step)│          │   msg_tx: mpsc::Sender     │
-│   add_breakpoint(...)     │          │   ws_uri: Option<String>   │
-│   evaluate_in_frame(...)  │          │   device_id: Option<String>│
-│   hot_reload()            │          │   build_mode: String       │
-│   hot_restart()           │          │ }                          │
-│   ws_uri()                │          │                            │
-│   get_source(...)         │          │ // hot_reload / hot_restart│
-│   ...                     │          │ // send Message::HotReload │
-│ }                         │          │ // into TEA pipeline       │
+│   resume(isolate_id, step,│          │   msg_tx: mpsc::Sender     │
+│          frame_index)     │          │   ws_uri: Option<String>   │
+│   add_breakpoint(...)     │          │   device_id: Option<String>│
+│   evaluate_in_frame(...)  │          │   build_mode: String       │
+│   hot_reload()            │          │ }                          │
+│   hot_restart()           │          │                            │
+│   ws_uri()                │          │ // hot_reload / hot_restart│
+│   get_source(...)         │          │ // send Message::HotReload │
+│   get_isolate(isolate_id) │          │ // into TEA pipeline       │
+│   call_service(method,..) │          │                            │
+│   set_library_debuggable()│          │                            │
+│   get_source_report(...)  │          │                            │
+│   ...                     │          │                            │
+│ }                         │          │                            │
 └───────────────────────────┘          └──────────────────────────┘
 ```
+
+**Phase 6 additions to `DebugBackend`:**
+
+| Method | Purpose |
+|--------|---------|
+| `get_isolate(isolate_id)` | Get full isolate object — `rootLib`, `libraries[]`, `pauseEvent`. Used for globals scope enumeration and `updateDebugOptions`. |
+| `call_service(method, params)` | Forward arbitrary VM Service RPC calls. Used by the `callService` custom DAP request to expose extension methods without dedicated trait methods. |
+| `set_library_debuggable(isolate_id, library_id, is_debuggable)` | Call `setLibraryDebuggable` VM RPC — controls SDK/external library stepping. |
+| `get_source_report(isolate_id, script_id, kinds, ...)` | Call `getSourceReport` VM RPC for `PossibleBreakpoints` ranges. Used by `breakpointLocations`. |
+| `resume(isolate_id, step, frame_index)` | Extended signature — `frame_index` carries the target frame for `StepMode::Rewind` (`restartFrame`). |
 
 `hot_reload()` and `hot_restart()` on `VmServiceBackend` send
 `Message::HotReload` / `Message::HotRestart` into the TEA pipeline rather than
 calling VM Service RPCs directly. This ensures reload lifecycle, phase tracking,
 and EngineEvent broadcasting all work consistently whether reload is triggered
 from the TUI, file watcher, or IDE.
+
+All `DebugBackend` calls in the adapter are wrapped with a `REQUEST_TIMEOUT`
+(10 seconds) so that a stalled VM Service connection does not block the DAP
+session indefinitely.
 
 ---
 
@@ -1380,16 +1543,20 @@ Each crate in the workspace has a clearly defined public API. Only items exporte
 - `DapServer`, `DapServerHandle` — TCP server lifecycle
 - `DapClientSession`, `NoopBackend` — Session and test backend
 - `DapMessage`, `DapRequest`, `DapResponse` — Protocol message types
-- `DebugBackend`, `DebugEvent`, `StepMode`, `BackendError` — Backend trait and types
+- `DebugBackend`, `DebugEvent`, `StepMode` (including `Rewind`), `BackendError` — Backend trait and types
+- `DapExceptionPauseMode`, `PauseReason` — Pause state enums
 - `BreakpointState`, `BreakpointCondition`, `BreakpointResult` — Breakpoint tracking
-- `FrameStore`, `VariableStore`, `SourceReferenceStore` — Reference stores
+- `FrameStore`, `VariableStore`, `SourceReferenceStore`, `ScopeKind` — Reference stores and scope kinds
 - `ThreadMap`, `MultiSessionThreadMap` — Thread ID mapping
+- `ExceptionRef` — Stored exception reference for `exceptionInfo` and exception scope
 - `parse_log_message`, `LogSegment` — Logpoint interpolation
 - `run_dap_stdio()` — Stdio transport entry point
 
 **Internal** (`pub(crate)`):
 - Protocol codec (Content-Length framing)
 - Adapter handler methods
+- Variable expansion logic (`adapter/variables.rs`)
+- Event emission helpers (`adapter/events.rs`)
 
 #### `fdemon-tui` — Terminal UI
 

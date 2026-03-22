@@ -76,6 +76,7 @@ async fn test_handle_evaluate_after_paused_event_succeeds() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
 
@@ -108,6 +109,7 @@ async fn test_handle_evaluate_clears_paused_on_resume() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Step,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
     adapter
@@ -196,6 +198,7 @@ async fn test_paused_sends_stopped_event() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: None,
+            exception: None,
         })
         .await;
 

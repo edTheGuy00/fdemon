@@ -83,6 +83,7 @@ impl<B: DebugBackend> DapAdapter<B> {
                 isolate_id,
                 reason,
                 breakpoint_id,
+                exception,
             } => {
                 let thread_id = self.thread_map.get_or_create(&isolate_id);
                 let reason_str = pause_reason_to_dap_str(&reason);
@@ -135,7 +136,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                                     hit_cond,
                                     hit_count,
                                 );
-                                let _ = self.backend.resume(&isolate_id, None).await;
+                                if let Err(e) = self.backend.resume(&isolate_id, None, None).await {
+                                    tracing::warn!(
+                                        "Failed to auto-resume isolate {} (hit condition not met): {}",
+                                        isolate_id,
+                                        e,
+                                    );
+                                }
                                 return;
                             }
                         }
@@ -156,7 +163,15 @@ impl<B: DebugBackend> DapAdapter<B> {
                                         "Condition '{}' evaluated to falsy — resuming silently",
                                         cond_expr,
                                     );
-                                    let _ = self.backend.resume(&isolate_id, None).await;
+                                    if let Err(e) =
+                                        self.backend.resume(&isolate_id, None, None).await
+                                    {
+                                        tracing::warn!(
+                                            "Failed to auto-resume isolate {} (condition false): {}",
+                                            isolate_id,
+                                            e,
+                                        );
+                                    }
                                     return;
                                 }
                                 Err(e) => {
@@ -203,7 +218,13 @@ impl<B: DebugBackend> DapAdapter<B> {
                             }
 
                             self.send_event("output", Some(body)).await;
-                            let _ = self.backend.resume(&isolate_id, None).await;
+                            if let Err(e) = self.backend.resume(&isolate_id, None, None).await {
+                                tracing::warn!(
+                                    "Failed to auto-resume isolate {} (logpoint): {}",
+                                    isolate_id,
+                                    e,
+                                );
+                            }
                             return;
                         }
                     }
@@ -213,12 +234,33 @@ impl<B: DebugBackend> DapAdapter<B> {
                 // Remove any prior entry for this isolate, then push to back
                 // so that the most recently paused isolate is last.
                 self.paused_isolates.retain(|id| id != &isolate_id);
-                self.paused_isolates.push(isolate_id);
+                self.paused_isolates.push(isolate_id.clone());
+
+                // Store the exception InstanceRef when paused at an exception.
+                // Cleared on resume via on_resume(). Used by handle_scopes to
+                // conditionally include an "Exceptions" scope.
+                if reason == PauseReason::Exception {
+                    if let Some(exc_value) = exception {
+                        self.exception_refs.insert(
+                            thread_id,
+                            crate::adapter::ExceptionRef {
+                                isolate_id: isolate_id.clone(),
+                                instance_ref: exc_value,
+                            },
+                        );
+                    }
+                }
+
                 let body = serde_json::json!({
                     "reason": reason_str,
                     "threadId": thread_id,
                     "allThreadsStopped": true,
                 });
+                tracing::debug!(
+                    "DAP stopped event (reason={}, threadId={})",
+                    reason_str,
+                    thread_id
+                );
                 self.send_event("stopped", Some(body)).await;
             }
 
@@ -227,6 +269,9 @@ impl<B: DebugBackend> DapAdapter<B> {
                     tracing::debug!("Isolate resumed: {} (thread {})", isolate_id, thread_id);
                     // Remove the isolate from the paused set.
                     self.paused_isolates.retain(|id| id != &isolate_id);
+                    // Clear the exception ref for this thread — exception data is
+                    // only valid while the isolate is stopped.
+                    self.exception_refs.remove(&thread_id);
                     self.on_resume();
                     let body = serde_json::json!({
                         "threadId": thread_id,
@@ -245,6 +290,41 @@ impl<B: DebugBackend> DapAdapter<B> {
                     "IsolateRunnable: re-applying desired breakpoints to {}",
                     isolate_id
                 );
+
+                // ── Step 1: Set library debuggability BEFORE breakpoints ─────
+                //
+                // Library debuggability MUST be applied before breakpoints are
+                // set on the new isolate. If breakpoints are set first,
+                // breakpoints in SDK code may not be hit even after enabling
+                // SDK debugging later. This ordering matches the Dart DDS
+                // adapter's behaviour.
+                if let Err(e) = self.apply_library_debuggability(&isolate_id).await {
+                    tracing::warn!(
+                        "IsolateRunnable: failed to apply library debuggability to {}: {}",
+                        isolate_id,
+                        e,
+                    );
+                } else {
+                    tracing::debug!(
+                        "IsolateRunnable: applied library debuggability to {}",
+                        isolate_id,
+                    );
+                }
+
+                // ── Step 2: Re-apply exception pause mode ────────────────────
+                if self.exception_mode != DapExceptionPauseMode::None {
+                    let _ = self
+                        .backend
+                        .set_exception_pause_mode(&isolate_id, self.exception_mode)
+                        .await;
+                    tracing::debug!(
+                        "IsolateRunnable: re-applied exception pause mode {:?} to {}",
+                        self.exception_mode,
+                        isolate_id,
+                    );
+                }
+
+                // ── Step 3: Re-apply breakpoints ─────────────────────────────
 
                 // Collect desired breakpoints first (avoid borrow conflict).
                 let to_apply: Vec<(String, crate::adapter::breakpoints::DesiredBreakpoint)> = self
@@ -319,19 +399,6 @@ impl<B: DebugBackend> DapAdapter<B> {
                             self.send_event("breakpoint", Some(body)).await;
                         }
                     }
-                }
-
-                // Re-apply exception pause mode to the new isolate.
-                if self.exception_mode != DapExceptionPauseMode::None {
-                    let _ = self
-                        .backend
-                        .set_exception_pause_mode(&isolate_id, self.exception_mode)
-                        .await;
-                    tracing::debug!(
-                        "Re-applied exception pause mode {:?} to new isolate {}",
-                        self.exception_mode,
-                        isolate_id,
-                    );
                 }
 
                 tracing::debug!(
@@ -426,6 +493,27 @@ impl<B: DebugBackend> DapAdapter<B> {
                 self.send_event("flutter.appStarted", Some(serde_json::json!({})))
                     .await;
             }
+
+            DebugEvent::ServiceExtensionAdded {
+                isolate_id,
+                extension_rpc,
+            } => {
+                // A Dart VM service extension was registered by an isolate.
+                // Emit the dart.serviceExtensionAdded custom event so that IDEs
+                // (VS Code Dart extension, etc.) know when extension methods such
+                // as DevTools RPCs are available to call via callService.
+                tracing::debug!(
+                    "Emitting dart.serviceExtensionAdded: {} (isolate: {})",
+                    extension_rpc,
+                    isolate_id,
+                );
+                let body = serde_json::json!({
+                    "extensionRPC": extension_rpc,
+                    "isolateId": isolate_id,
+                });
+                self.send_event("dart.serviceExtensionAdded", Some(body))
+                    .await;
+            }
         }
     }
 
@@ -507,11 +595,11 @@ impl<B: DebugBackend> DapAdapter<B> {
         result
     }
 
-    /// Invalidate per-stop state (variable references and frame IDs).
+    /// Invalidate per-stop state (variable references, frame IDs, and exception refs).
     ///
-    /// Must be called whenever the debuggee resumes. Variable references and
-    /// frame IDs are only valid while the debuggee is stopped; they must be
-    /// rebuilt from scratch on the next stop.
+    /// Must be called whenever the debuggee resumes. Variable references,
+    /// frame IDs, and exception refs are only valid while the debuggee is
+    /// stopped; they must be rebuilt from scratch on the next stop.
     ///
     /// Source references are **not** cleared here — they persist across
     /// stop/resume transitions and are only invalidated on hot restart via
@@ -519,6 +607,10 @@ impl<B: DebugBackend> DapAdapter<B> {
     pub fn on_resume(&mut self) {
         self.var_store.reset();
         self.frame_store.reset();
+        self.evaluate_name_map.clear();
+        self.exception_refs.clear();
+        // Clear the async marker index — it is rebuilt on the next stackTrace request.
+        self.first_async_marker_index = None;
     }
 
     /// Invalidate source references after a hot restart.
@@ -536,6 +628,7 @@ impl<B: DebugBackend> DapAdapter<B> {
         self.source_reference_store.clear();
         self.var_store.reset();
         self.frame_store.reset();
+        self.evaluate_name_map.clear();
         // Active VM-tracked breakpoints are cleared here. Re-application happens
         // on IsolateRunnable via handle_debug_event.
         self.breakpoint_state.drain_all();

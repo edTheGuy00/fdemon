@@ -61,6 +61,7 @@ async fn test_logpoint_emits_output_event_not_stopped() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -103,6 +104,7 @@ async fn test_logpoint_auto_resumes_isolate() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -130,6 +132,7 @@ async fn test_logpoint_literal_only_message() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -162,6 +165,7 @@ async fn test_logpoint_expression_evaluation_error_produces_error_placeholder() 
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -192,6 +196,7 @@ async fn test_logpoint_output_includes_source_location() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -230,6 +235,7 @@ async fn test_logpoint_multiple_expressions_interpolated() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 
@@ -273,6 +279,7 @@ async fn test_regular_breakpoint_is_not_affected_by_logpoint_logic() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some("bp/regular".to_string()),
+            exception: None,
         })
         .await;
 
@@ -364,6 +371,7 @@ async fn test_logpoint_with_condition_falsy_does_not_log() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some("bp/cond_lp".to_string()),
+            exception: None,
         })
         .await;
 
@@ -392,6 +400,7 @@ async fn test_logpoint_output_ends_with_newline() {
             isolate_id: "isolates/1".into(),
             reason: PauseReason::Breakpoint,
             breakpoint_id: Some(vm_id),
+            exception: None,
         })
         .await;
 

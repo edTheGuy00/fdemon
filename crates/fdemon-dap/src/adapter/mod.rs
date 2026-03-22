@@ -13,10 +13,15 @@
 //!
 //! ## Sub-modules
 //!
-//! - [`threads`] — Thread/isolate ID mapping, `handle_threads`, `handle_attach`
-//! - [`breakpoints`] — Breakpoint state, `handle_set_breakpoints`
-//! - [`stack`] — Frame/variable stores, `handle_stack_trace`, `handle_scopes`, `handle_variables`
+//! - [`backend`] — `DebugBackend` trait and dynamic dispatch wrapper
+//! - [`breakpoints`] — Breakpoint state, conditional/logpoint handling
 //! - [`evaluate`] — Expression evaluation, `handle_evaluate`
+//! - [`events`] — Debug event handling, progress events, auto-resume
+//! - [`handlers`] — DAP request handlers (restart, loaded sources, completions, etc.)
+//! - [`stack`] — Frame/variable/source-reference stores, `handle_stack_trace`, `handle_scopes`
+//! - [`threads`] — Thread/isolate ID mapping, `handle_threads`, `handle_attach`
+//! - [`types`] — Constants, enums, timeout definitions
+//! - [`variables`] — Variable expansion, globals, exceptions, getters, toString enrichment
 
 pub mod backend;
 pub mod breakpoints;
@@ -35,6 +40,7 @@ mod variables;
 pub(crate) mod test_helpers;
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
@@ -48,9 +54,9 @@ pub use breakpoints::{
     LogSegment,
 };
 pub use stack::{
-    dart_uri_to_path, extract_line_column, extract_source, extract_source_with_store,
-    resolve_package_uri, FrameRef, FrameStore, ScopeKind, SourceRefInfo, SourceReferenceStore,
-    VariableRef, VariableStore,
+    build_source_from_uri, dart_uri_to_path, extract_line_column, extract_source,
+    extract_source_with_store, resolve_package_uri, FrameRef, FrameStore, ScopeKind, SourceRefInfo,
+    SourceReferenceStore, VariableRef, VariableStore,
 };
 pub use threads::{
     session_index_from_thread_id, session_thread_base, DapSessionId, MultiSessionThreadMap,
@@ -66,6 +72,18 @@ use types::EVENT_CHANNEL_CAPACITY;
 // ─────────────────────────────────────────────────────────────────────────────
 // DapAdapter
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Stores the exception `InstanceRef` captured when an isolate pauses at an
+/// exception (`PauseException` event).
+///
+/// Keyed by DAP thread ID. Cleared when the isolate resumes.
+#[derive(Debug, Clone)]
+pub struct ExceptionRef {
+    /// The Dart VM isolate ID that owns the exception.
+    pub isolate_id: String,
+    /// The raw `InstanceRef` JSON from the VM Service `PauseException` event.
+    pub instance_ref: serde_json::Value,
+}
 
 /// The core DAP adapter that translates between DAP protocol and VM Service.
 ///
@@ -150,6 +168,124 @@ pub struct DapAdapter<B: DebugBackend> {
     /// backend calls. This prevents spurious errors when the IDE continues
     /// sending requests after the app exits.
     vm_disconnected: bool,
+
+    /// Exception references keyed by DAP thread ID.
+    ///
+    /// Populated when an isolate pauses at a `PauseException` event and the
+    /// event carries an `exception` `InstanceRef`. Cleared when the isolate
+    /// resumes via [`DapAdapter::on_resume`]. Used by [`handle_scopes`] to
+    /// conditionally include an "Exceptions" scope, and by [`handle_evaluate`]
+    /// to support the `$_threadException` magic expression.
+    pub(crate) exception_refs: HashMap<i64, ExceptionRef>,
+
+    /// Maps variable references (i64) to their `evaluateName` expressions.
+    ///
+    /// Populated when a variable reference is allocated by
+    /// `instance_ref_to_variable_with_eval_name` and an `evaluate_name` is
+    /// provided. Cleared on every resume alongside `var_store`.
+    ///
+    /// Used by `expand_object` to look up the parent's evaluate expression and
+    /// construct child evaluate expressions (e.g., `obj.field`, `list[0]`).
+    pub(crate) evaluate_name_map: HashMap<i64, String>,
+
+    /// Whether to eagerly evaluate getter methods when expanding objects.
+    ///
+    /// When `true` (the default), getters on `PlainInstance` objects are
+    /// evaluated immediately with a 1-second timeout when the user expands the
+    /// object in the variables panel. Getter results appear alongside regular
+    /// fields with `presentationHint.attributes: ["hasSideEffects"]`.
+    ///
+    /// When `false`, getters appear as lazy items with `presentationHint.lazy:
+    /// true`. The user must explicitly expand the getter to evaluate it; the
+    /// expansion triggers a `GetterEval` variable reference lookup.
+    ///
+    /// Settable from the `attach` request args (`evaluateGettersInDebugViews`).
+    pub(crate) evaluate_getters_in_debug_views: bool,
+
+    /// Whether to call `toString()` on `PlainInstance` objects and append the
+    /// result to the variable display value.
+    ///
+    /// When `true` (the default), a `toString()` call with a 1-second timeout
+    /// is issued for each `PlainInstance`, `RegExp`, and `StackTrace` variable
+    /// in a scope. If the result is not the default Dart `"Instance of
+    /// 'ClassName'"` pattern, it is appended to the display value:
+    /// `"MyClass (custom string repr)"`.
+    ///
+    /// When `false`, no `toString()` calls are made and the display value is
+    /// just the class name.
+    ///
+    /// Settable from the `attach` request args (`evaluateToStringInDebugViews`).
+    pub(crate) evaluate_to_string_in_debug_views: bool,
+
+    /// The 0-based frame index of the first `AsyncSuspensionMarker` frame in
+    /// the current stopped state, or `None` if no async marker was seen.
+    ///
+    /// Populated during `handle_stack_trace` by scanning frames for
+    /// `kind: "AsyncSuspensionMarker"`. Cleared on every resume via
+    /// [`DapAdapter::on_resume`].
+    ///
+    /// Used by `handle_restart_frame` to reject rewind requests that target
+    /// frames at or above the first async suspension boundary. The VM does not
+    /// allow rewinding past an async suspension marker.
+    pub(crate) first_async_marker_index: Option<i32>,
+
+    /// Whether stepping into Dart SDK libraries (`dart:` URIs) is allowed.
+    ///
+    /// When `false` (the default), SDK libraries are marked non-debuggable so
+    /// the debugger steps over them. Toggled by `updateDebugOptions` and
+    /// initialized from the `attach` request `debugSdkLibraries` argument.
+    pub(crate) debug_sdk_libraries: bool,
+
+    /// Whether stepping into external package libraries is allowed.
+    ///
+    /// External packages are `package:` URIs that do not match the app's own
+    /// package name. When `false` (the default), they are non-debuggable.
+    /// Toggled by `updateDebugOptions`.
+    pub(crate) debug_external_package_libraries: bool,
+
+    /// The name of the app's own package (e.g., `"my_app"` from `pubspec.yaml`).
+    ///
+    /// Used by `apply_library_debuggability` to distinguish the app's own
+    /// `package:my_app/` URIs (always debuggable) from external ones
+    /// (controlled by `debug_external_package_libraries`).
+    ///
+    /// Set during `handle_attach` from the `packageName` argument. Empty
+    /// string means "not set" — all `package:` URIs will be treated as external.
+    pub(crate) app_package_name: String,
+
+    /// Whether the connected DAP client supports progress reporting.
+    ///
+    /// Set from the `supportsProgressReporting` field of the `initialize`
+    /// request arguments. When `true`, the adapter emits `progressStart` and
+    /// `progressEnd` events around hot reload/restart operations so the IDE
+    /// can show a progress indicator.
+    pub(crate) client_supports_progress: bool,
+
+    /// Monotonic counter used to generate unique progress IDs.
+    ///
+    /// Incremented by [`DapAdapter::alloc_progress_id`] each time a new
+    /// progress sequence is started. The ID is embedded in `progressStart` /
+    /// `progressEnd` events so the IDE can match them correctly.
+    pub(crate) next_progress_id: u64,
+
+    /// Cached mapping from absolute lib directory paths to package names.
+    ///
+    /// Lazily populated from `.dart_tool/package_config.json` the first time
+    /// a `setBreakpoints` request provides a file path under a Flutter/Dart
+    /// project. Maps canonical lib directory → package name so that file
+    /// paths can be converted to `package:` URIs for the VM Service.
+    ///
+    /// Example: `/Users/ed/project/lib/` → `"my_app"`.
+    package_lib_to_name: Vec<(PathBuf, String)>,
+
+    /// The Flutter/Dart project root directory.
+    ///
+    /// Lazily detected from the first `setBreakpoints` source path or from
+    /// the `cwd` field in the `attach` request arguments. Used to resolve
+    /// `package:` URIs to filesystem paths in `handle_stack_trace` so that
+    /// stack frames include a `source.path` (required by Zed and other IDEs
+    /// to make frames selectable and enable variable inspection).
+    pub(crate) project_root: Option<PathBuf>,
 }
 
 impl<B: DebugBackend> DapAdapter<B> {
@@ -188,8 +324,40 @@ impl<B: DebugBackend> DapAdapter<B> {
             paused_isolates: Vec::new(),
             source_reference_store: SourceReferenceStore::new(),
             vm_disconnected: false,
+            exception_refs: HashMap::new(),
+            evaluate_name_map: HashMap::new(),
+            evaluate_getters_in_debug_views: true,
+            evaluate_to_string_in_debug_views: true,
+            first_async_marker_index: None,
+            debug_sdk_libraries: false,
+            debug_external_package_libraries: false,
+            app_package_name: String::new(),
+            client_supports_progress: false,
+            next_progress_id: 0,
+            package_lib_to_name: Vec::new(),
+            project_root: None,
         };
         (adapter, ())
+    }
+
+    /// Set whether the connected client supports DAP progress reporting.
+    ///
+    /// Must be called before the first `hotReload` or `hotRestart` request if
+    /// the client advertises `supportsProgressReporting: true` in its
+    /// `initialize` arguments. Called by the session layer immediately after
+    /// the adapter is constructed.
+    pub fn set_client_supports_progress(&mut self, supported: bool) {
+        self.client_supports_progress = supported;
+    }
+
+    /// Allocate a monotonically increasing progress ID.
+    ///
+    /// Each `progressStart`/`progressEnd` pair must use the same unique ID.
+    /// The ID is formatted as a string for the DAP wire format.
+    pub(crate) fn alloc_progress_id(&mut self) -> String {
+        let id = self.next_progress_id;
+        self.next_progress_id += 1;
+        format!("fdemon-progress-{id}")
     }
 }
 

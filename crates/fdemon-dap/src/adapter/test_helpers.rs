@@ -77,6 +77,7 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         &self,
         _isolate_id: &str,
         _step: Option<StepMode>,
+        _frame_index: Option<i32>,
     ) -> impl Future<Output = Result<(), BackendError>> + Send {
         future::ready(Ok(()))
     }
@@ -162,9 +163,46 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         future::ready(Ok(serde_json::json!({})))
     }
 
+    fn get_isolate(
+        &self,
+        _isolate_id: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
     fn get_scripts(
         &self,
         _isolate_id: &str,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
+    // ── Generic VM Service RPC ────────────────────────────────────────────
+
+    fn call_service(
+        &self,
+        _method: &str,
+        _params: Option<serde_json::Value>,
+    ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
+        future::ready(Ok(serde_json::json!({})))
+    }
+
+    fn set_library_debuggable(
+        &self,
+        _isolate_id: &str,
+        _library_id: &str,
+        _is_debuggable: bool,
+    ) -> impl Future<Output = Result<(), BackendError>> + Send {
+        future::ready(Ok(()))
+    }
+
+    fn get_source_report(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+        _report_kinds: &[&str],
+        _token_pos: Option<i64>,
+        _end_token_pos: Option<i64>,
     ) -> impl Future<Output = Result<serde_json::Value, BackendError>> + Send {
         future::ready(Ok(serde_json::json!({})))
     }
@@ -175,7 +213,7 @@ pub(crate) trait MockTestBackend: Send + Sync + 'static {
         &self,
         _isolate_id: &str,
         _script_id: &str,
-    ) -> impl Future<Output = Result<String, String>> + Send {
+    ) -> impl Future<Output = Result<String, BackendError>> + Send {
         future::ready(Ok(String::new()))
     }
 
@@ -222,8 +260,13 @@ impl<T: MockTestBackend> DebugBackend for T {
         MockTestBackend::pause(self, isolate_id).await
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
-        MockTestBackend::resume(self, isolate_id, step).await
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
+        MockTestBackend::resume(self, isolate_id, step, frame_index).await
     }
 
     async fn add_breakpoint(
@@ -292,11 +335,51 @@ impl<T: MockTestBackend> DebugBackend for T {
         MockTestBackend::get_vm(self).await
     }
 
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::get_isolate(self, isolate_id).await
+    }
+
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
         MockTestBackend::get_scripts(self, isolate_id).await
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::call_service(self, method, params).await
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError> {
+        MockTestBackend::set_library_debuggable(self, isolate_id, library_id, is_debuggable).await
+    }
+
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        MockTestBackend::get_source_report(
+            self,
+            isolate_id,
+            script_id,
+            report_kinds,
+            token_pos,
+            end_token_pos,
+        )
+        .await
+    }
+
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         MockTestBackend::get_source(self, isolate_id, script_id).await
     }
 
@@ -337,7 +420,11 @@ impl<T: MockTestBackend> DebugBackend for T {
 pub(crate) struct MockBackend;
 
 impl MockTestBackend for MockBackend {
-    async fn get_source(&self, _isolate_id: &str, _script_id: &str) -> Result<String, String> {
+    async fn get_source(
+        &self,
+        _isolate_id: &str,
+        _script_id: &str,
+    ) -> Result<String, BackendError> {
         Ok("// Mock source text\nvoid main() {}".to_string())
     }
 }
@@ -444,8 +531,8 @@ impl MockTestBackend for FailingVmBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not connected".to_string())
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+        Err(BackendError::NotConnected)
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {
@@ -470,7 +557,7 @@ impl MockTestBackend for StackMockBackend {
             "frames": [
                 {
                     "kind": "Regular",
-                    "code": { "name": "main" },
+                    "function": { "name": "main" },
                     "location": {
                         "script": { "uri": "file:///app/lib/main.dart" },
                         "line": 42,
@@ -479,7 +566,7 @@ impl MockTestBackend for StackMockBackend {
                 },
                 {
                     "kind": "Regular",
-                    "code": { "name": "runApp" },
+                    "function": { "name": "runApp" },
                     "location": {
                         "script": { "uri": "package:flutter/src/widgets/binding.dart" },
                         "line": 100
@@ -506,7 +593,7 @@ impl MockTestBackend for VarMockBackend {
             "frames": [
                 {
                     "kind": "Regular",
-                    "code": { "name": "main" },
+                    "function": { "name": "main" },
                     "location": {
                         "script": { "uri": "file:///app/lib/main.dart" },
                         "line": 42,
@@ -591,7 +678,12 @@ impl MockTestBackend for NotConnectedBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         Err(BackendError::NotConnected)
     }
 
@@ -652,8 +744,8 @@ impl MockTestBackend for NotConnectedBackend {
         Err(BackendError::NotConnected)
     }
 
-    async fn get_source(&self, _: &str, _: &str) -> Result<String, String> {
-        Err("not connected".to_string())
+    async fn get_source(&self, _: &str, _: &str) -> Result<String, BackendError> {
+        Err(BackendError::NotConnected)
     }
 
     async fn hot_reload(&self) -> Result<(), BackendError> {
@@ -719,7 +811,12 @@ impl CondMockBackend {
 }
 
 impl MockTestBackend for CondMockBackend {
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         *self.resume_calls.lock().unwrap() += 1;
         Ok(())
     }
@@ -795,7 +892,12 @@ impl LogpointMockBackend {
 }
 
 impl MockTestBackend for LogpointMockBackend {
-    async fn resume(&self, _: &str, _: Option<StepMode>) -> Result<(), BackendError> {
+    async fn resume(
+        &self,
+        _: &str,
+        _: Option<StepMode>,
+        _: Option<i32>,
+    ) -> Result<(), BackendError> {
         *self.resume_calls.lock().unwrap() += 1;
         Ok(())
     }

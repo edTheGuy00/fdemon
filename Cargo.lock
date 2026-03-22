@@ -704,6 +704,7 @@ name = "fdemon-dap"
 version = "0.3.0"
 dependencies = [
  "fdemon-core",
+ "rand 0.8.5",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

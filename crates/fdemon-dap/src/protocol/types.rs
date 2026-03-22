@@ -175,6 +175,20 @@ pub struct Capabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub supports_clipboard_context: Option<bool>,
 
+    /// The debug adapter supports the `restartFrame` request.
+    ///
+    /// When `true`, IDEs show a "Restart Frame" action in the call stack view
+    /// that allows rewinding execution to the start of the selected frame.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_restart_frame: Option<bool>,
+
+    /// The debug adapter supports the `completions` request.
+    ///
+    /// When `true`, IDEs send `completions` requests to provide IntelliSense-
+    /// like auto-complete suggestions in the debug console REPL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub supports_completions_request: Option<bool>,
+
     /// Available exception filter options for the `setExceptionBreakpoints` request.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub exception_breakpoint_filters: Option<Vec<ExceptionBreakpointsFilter>>,
@@ -249,6 +263,17 @@ pub struct InitializeRequestArguments {
     /// Client supports the `memory` event.
     #[serde(default)]
     pub supports_memory_event: Option<bool>,
+
+    /// Optional authentication token sent by the client during initialization.
+    ///
+    /// When the DAP server is started with `require_auth: true`, the client
+    /// must provide the token that was printed to stderr/log at startup. If
+    /// the token is missing or incorrect, the `initialize` request fails.
+    ///
+    /// Older clients that do not know about this field will simply omit it
+    /// (`None`), which is fine when `require_auth` is disabled (the default).
+    #[serde(default, rename = "authToken")]
+    pub auth_token: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -392,6 +417,12 @@ pub struct DapVariablePresentationHint {
     /// `"protected"`, `"internal"`, `"final"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
+    /// If `true`, the client should show the variable as lazy — its value is
+    /// not yet computed and the user must explicitly expand or click to evaluate
+    /// it. Used for getter evaluation when `evaluateGettersInDebugViews` is
+    /// `false`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lazy: Option<bool>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -647,6 +678,63 @@ pub struct AttachRequestArguments {
     /// existing session rather than spawning a new process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Whether to eagerly evaluate getter methods when expanding objects in
+    /// the variables panel. When `true` (the default), getters are evaluated
+    /// immediately with a 1-second timeout. When `false`, getters appear as
+    /// lazy items the user can expand on demand.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluate_getters_in_debug_views: Option<bool>,
+    /// Whether to call `toString()` on `PlainInstance` objects and append the
+    /// result to the display value in the variables panel.
+    ///
+    /// When `true` (the default), `toString()` is called on `PlainInstance`,
+    /// `RegExp`, and `StackTrace` objects. If the result is useful (not the
+    /// default `"Instance of 'ClassName'"` pattern), it is appended:
+    /// `"MyClass (custom string repr)"`.
+    ///
+    /// When `false`, no `toString()` calls are made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluate_to_string_in_debug_views: Option<bool>,
+    /// Whether to allow stepping into Dart SDK libraries (`dart:` URIs).
+    ///
+    /// When `true`, the debugger will step into SDK framework code. When
+    /// `false` (the default), SDK libraries are marked as non-debuggable and
+    /// the debugger skips over them during stepping.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_sdk_libraries: Option<bool>,
+    /// Whether to allow stepping into external package libraries.
+    ///
+    /// When `true`, the debugger will step into code from external packages
+    /// (i.e., packages other than the app's own package). When `false` (the
+    /// default), external packages are marked as non-debuggable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub debug_external_package_libraries: Option<bool>,
+    /// The name of the app's own package (from `pubspec.yaml`).
+    ///
+    /// When set, this is used to distinguish the app's own `package:` URIs
+    /// (which are always debuggable) from external package URIs (controlled by
+    /// `debug_external_package_libraries`). Defaults to using the session
+    /// directory name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_name: Option<String>,
+    /// The working directory of the project.
+    ///
+    /// Sent by some IDEs (e.g., Zed sends `cwd` in attach args). Used to
+    /// resolve `package:` URIs to filesystem paths for stack frame sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cwd: Option<String>,
+}
+
+/// Arguments for the `restartFrame` request.
+///
+/// Sent by the IDE when the user chooses "Restart Frame" in the call stack.
+/// The `frameId` identifies which frame to rewind to using the VM Service
+/// `Rewind` step mode.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RestartFrameArguments {
+    /// The frame to restart (rewind to).
+    pub frame_id: i64,
 }
 
 /// Arguments for the `disconnect` request.
@@ -664,6 +752,131 @@ pub struct DisconnectArguments {
     /// disconnecting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suspend_debuggee: Option<bool>,
+}
+
+/// Arguments for the `exceptionInfo` request.
+///
+/// Sent by the IDE when it needs structured exception details after the
+/// debugger pauses at an exception. The adapter looks up the stored
+/// exception reference for the given thread and returns rich exception
+/// data including the exception class name, `toString()` output, and
+/// optional stack trace.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExceptionInfoArguments {
+    /// The thread that is paused at the exception.
+    pub thread_id: i64,
+}
+
+/// Arguments for the `breakpointLocations` request.
+///
+/// Sent by the IDE to discover valid breakpoint positions within a source
+/// file, typically when the user hovers over the gutter. The adapter
+/// queries the Dart VM Service `getSourceReport` RPC with the
+/// `PossibleBreakpoints` report kind and returns the matching positions
+/// filtered to the requested line range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointLocationsArguments {
+    /// The source file to query for valid breakpoint positions.
+    pub source: DapSource,
+    /// Start line of the range to query (1-based, inclusive).
+    pub line: i64,
+    /// Optional end line of the range to query (1-based, inclusive).
+    ///
+    /// When absent, only `line` is queried (a single-line range).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<i64>,
+    /// Optional start column of the range (1-based, inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<i64>,
+    /// Optional end column of the range (1-based, inclusive).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<i64>,
+}
+
+/// A valid breakpoint position within a source file.
+///
+/// Returned in the `breakpoints` array of a `breakpointLocations` response.
+/// Column information is included when available (column breakpoints).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BreakpointLocation {
+    /// The 1-based line number where a breakpoint can be placed.
+    pub line: i64,
+    /// The 1-based column number where a breakpoint can be placed.
+    ///
+    /// When `None`, the entire line is a valid breakpoint location and the
+    /// IDE may place the breakpoint at any column.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<i64>,
+    /// The last line of the range covered by this breakpoint location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<i64>,
+    /// The last column of the range covered by this breakpoint location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end_column: Option<i64>,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Completions Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Arguments for the `completions` request.
+///
+/// Sent by the IDE debug console when the user presses Tab or triggers
+/// auto-complete. The adapter returns a list of [`CompletionItem`]s that
+/// match the identifier fragment being typed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionsArguments {
+    /// The text of the debug console input up to (and including) the character
+    /// at `column - 1`. The adapter extracts the last identifier fragment from
+    /// this string and filters candidates by prefix.
+    pub text: String,
+
+    /// The 1-based column offset of the cursor within `text`.
+    ///
+    /// Only the portion of `text` up to `column - 1` is considered. This
+    /// allows the client to pass the full input line even when the cursor is
+    /// in the middle.
+    pub column: i64,
+
+    /// The stack frame in which to enumerate local variables.
+    ///
+    /// When present, the adapter includes local variable names from the
+    /// corresponding frame in the completion list. When absent, only keywords
+    /// are suggested.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_id: Option<i64>,
+}
+
+/// A single auto-complete suggestion returned in a `completions` response.
+///
+/// Fields correspond to the DAP `CompletionItem` specification.
+///
+/// The `type` field is serialized as `"type"` on the wire (per DAP spec) but
+/// stored as `type_field` in Rust to avoid the reserved keyword.
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompletionItem {
+    /// The text that is inserted when the completion is accepted.
+    pub label: String,
+
+    /// The category of this completion item.
+    ///
+    /// Common values: `"variable"`, `"keyword"`, `"function"`, `"class"`.
+    /// Maps to the `"type"` field in the DAP wire format.
+    #[serde(skip_serializing_if = "Option::is_none", rename = "type")]
+    pub type_field: Option<String>,
+
+    /// An optional string used to sort this item relative to others.
+    ///
+    /// Items with a lexicographically earlier `sort_text` appear first. The
+    /// adapter uses a numeric prefix (`"0_"` for locals, `"2_"` for keywords)
+    /// so that locals sort before keywords in the IDE completion list.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sort_text: Option<String>,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -866,8 +1079,15 @@ impl Capabilities {
             supports_clipboard_context: Some(true),
             supports_log_points: Some(true),
             supports_terminate_request: Some(true),
+            supports_restart_frame: Some(true),
+            // supports_restart_request: the `restart` DAP request handler is implemented
+            // in Task 17, which performs a hot restart under the hood.
             supports_restart_request: Some(true),
             supports_delayed_stack_trace_loading: Some(true),
+            supports_loaded_sources_request: Some(true),
+            supports_exception_info_request: Some(true),
+            supports_breakpoint_locations_request: Some(true),
+            supports_completions_request: Some(true),
             exception_breakpoint_filters: Some(vec![
                 ExceptionBreakpointsFilter {
                     filter: "All".into(),
@@ -1119,13 +1339,16 @@ mod tests {
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].filter, "All");
         assert_eq!(filters[1].filter, "Unhandled");
+        // loadedSources is now enabled (Task 11).
+        assert_eq!(caps.supports_loaded_sources_request, Some(true));
         // Unimplemented capabilities remain None.
         assert!(caps.support_terminate_debuggee.is_none());
-        assert!(caps.supports_exception_info_request.is_none());
-        assert!(caps.supports_loaded_sources_request.is_none());
+        // exceptionInfo is implemented in Task 09 — capability is advertised.
+        assert_eq!(caps.supports_exception_info_request, Some(true));
         assert!(caps.supports_set_variable.is_none());
         assert!(caps.supports_value_formatting_options.is_none());
-        assert!(caps.supports_breakpoint_locations_request.is_none());
+        // breakpointLocations is implemented in Task 15 — capability is advertised.
+        assert_eq!(caps.supports_breakpoint_locations_request, Some(true));
     }
 
     #[test]
@@ -1513,6 +1736,12 @@ mod tests {
         let args = AttachRequestArguments {
             vm_service_uri: Some("ws://127.0.0.1:8181/ws".into()),
             session_id: Some("abc-123".into()),
+            evaluate_getters_in_debug_views: None,
+            evaluate_to_string_in_debug_views: None,
+            debug_sdk_libraries: None,
+            debug_external_package_libraries: None,
+            package_name: None,
+            cwd: None,
         };
         let json = serde_json::to_value(&args).unwrap();
         assert_eq!(json["vmServiceUri"], "ws://127.0.0.1:8181/ws");
@@ -1588,6 +1817,7 @@ mod tests {
             kind: Some("property".into()),
             attributes: Some(vec!["readOnly".into()]),
             visibility: Some("public".into()),
+            lazy: None,
         };
         let serialized = serde_json::to_string(&hint).unwrap();
         let deserialized: DapVariablePresentationHint = serde_json::from_str(&serialized).unwrap();
@@ -1636,9 +1866,10 @@ mod tests {
         assert_eq!(json["supportsLogPoints"], true);
         assert_eq!(json["supportsTerminateRequest"], true);
         assert_eq!(json["supportsDelayedStackTraceLoading"], true);
-        // Phase 4: supportsRestartRequest is now enabled for hotReload/hotRestart
+        // supportsRestartRequest IS advertised: the `restart` handler was implemented in Task 17.
+        // It performs a hot restart under the hood.
         assert_eq!(json["supportsRestartRequest"], true);
-        // Not yet implemented capabilities are absent
-        assert!(json.get("supportsExceptionInfoRequest").is_none());
+        // exceptionInfo is implemented in Task 09 — capability is advertised.
+        assert_eq!(json["supportsExceptionInfoRequest"], true);
     }
 }

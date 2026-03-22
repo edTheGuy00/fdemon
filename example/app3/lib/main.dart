@@ -1,6 +1,8 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
 
+import 'dap_variables_test.dart';
+
 void main() {
   runApp(const App3());
 }
@@ -130,15 +132,32 @@ class _HomePageState extends State<HomePage> with TickerProviderStateMixin {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          setState(() {
-            _tapCount++;
-            _items.insert(0, _RandomItem.generate(_items.length));
-          });
-        },
-        icon: const Icon(Icons.add),
-        label: Text('Add item ($_tapCount)'),
+      floatingActionButton: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          FloatingActionButton.small(
+            heroTag: 'dap',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => const DapVariablesTestPage(),
+              ),
+            ),
+            tooltip: 'DAP Variables Test',
+            child: const Icon(Icons.bug_report),
+          ),
+          const SizedBox(height: 8),
+          FloatingActionButton.extended(
+            heroTag: 'add',
+            onPressed: () {
+              setState(() {
+                _tapCount++;
+                _items.insert(0, _RandomItem.generate(_items.length));
+              });
+            },
+            icon: const Icon(Icons.add),
+            label: Text('Add item ($_tapCount)'),
+          ),
+        ],
       ),
     );
   }

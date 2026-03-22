@@ -689,7 +689,10 @@ async fn test_variables_no_arguments_returns_error() {
 }
 
 #[tokio::test]
-async fn test_variables_globals_scope_returns_empty_list() {
+async fn test_variables_globals_scope_without_frame_returns_error() {
+    // When a Globals scope ref is created without a registered stack frame,
+    // the implementation returns an error (cannot look up isolate ID).
+    // This tests that the adapter handles missing frame gracefully.
     let (mut adapter, _rx) = DapAdapter::new(MockBackend);
     let var_ref = adapter.var_store.allocate(VariableRef::Scope {
         frame_index: 0,
@@ -703,15 +706,14 @@ async fn test_variables_globals_scope_returns_empty_list() {
     };
     let resp = adapter.handle_request(&req).await;
     assert!(
-        resp.success,
-        "Globals scope should succeed with empty list: {:?}",
-        resp.message
+        !resp.success,
+        "Globals scope without registered frame should return error"
     );
-    let body = resp.body.unwrap();
-    let vars = body["variables"].as_array().unwrap();
+    let msg = resp.message.as_deref().unwrap_or("");
     assert!(
-        vars.is_empty(),
-        "Globals should return empty list in Phase 3"
+        msg.contains("not found in frame store") || msg.contains("Failed to get variables"),
+        "Error should mention frame store or variables failure, got: {:?}",
+        msg
     );
 }
 
@@ -957,5 +959,1067 @@ async fn test_variables_unknown_object_type_returns_empty() {
     assert!(
         vars.is_empty(),
         "Unknown object type should return empty list"
+    );
+}
+
+// ── classRef / class dual-path lookup tests ────────────────────────────
+//
+// These tests verify Bug 1 fix: VmServiceBackend::get_stack() serializes
+// through typed Rust structs with #[serde(rename_all = "camelCase")], so
+// InstanceRef.class_ref becomes "classRef" in JSON. The old code read
+// ".get("class")" which always returned None for typed-stack responses.
+// The fix reads "classRef" first, falling back to "class" for raw VM wire.
+
+#[test]
+fn test_instance_ref_to_variable_uses_class_ref_camel_case() {
+    // Simulate typed Stack serialization (camelCase "classRef"):
+    // This is what get_stack() produces when the InstanceRef struct is
+    // serialized via serde with #[serde(rename_all = "camelCase")].
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "widget",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "MyWidget", "id": "classes/1"},
+            "id": "objects/123"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("MyWidget"),
+        "Expected 'MyWidget' from classRef, got: {:?}",
+        var.type_field
+    );
+    assert!(
+        var.value.contains("MyWidget"),
+        "Value should contain class name, got: {:?}",
+        var.value
+    );
+}
+
+#[test]
+fn test_instance_ref_to_variable_uses_class_raw_wire() {
+    // Simulate raw VM wire format (uses "class", not "classRef"):
+    // This is the format returned by get_object() (expand_object path).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "widget",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "class": {"name": "MyWidget", "id": "classes/1"},
+            "id": "objects/123"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("MyWidget"),
+        "Expected 'MyWidget' from class fallback, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_instance_ref_to_variable_class_ref_takes_priority_over_class() {
+    // When both "classRef" and "class" are present, "classRef" wins.
+    // This verifies the priority of the dual-path lookup.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "x",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "CorrectClass", "id": "classes/correct"},
+            "class": {"name": "WrongClass", "id": "classes/wrong"},
+            "id": "objects/1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("CorrectClass"),
+        "classRef should take priority over class"
+    );
+}
+
+#[test]
+fn test_list_variable_shows_class_ref_name_in_type() {
+    // {"kind": "List", "classRef": {"name": "List<int>"}, "length": 3, "id": "objects/456"}
+    // Verify variable.type == "List<int>", not just "List" (the kind fallback).
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "numbers",
+        &serde_json::json!({
+            "kind": "List",
+            "classRef": {"name": "List<int>", "id": "classes/list_int"},
+            "length": 3,
+            "id": "objects/456"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("List<int>"),
+        "List should use classRef name, got: {:?}",
+        var.type_field
+    );
+    assert!(
+        var.value.contains("List<int>"),
+        "Value should contain class name, got: {:?}",
+        var.value
+    );
+    assert!(
+        var.value.contains("length: 3"),
+        "Value should show length, got: {:?}",
+        var.value
+    );
+}
+
+#[test]
+fn test_list_variable_shows_class_raw_wire_name_in_type() {
+    // Same as above but with raw wire "class" field.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "strings",
+        &serde_json::json!({
+            "kind": "List",
+            "class": {"name": "List<String>", "id": "classes/list_str"},
+            "length": 2,
+            "id": "objects/789"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("List<String>"),
+        "List should use class name from raw wire, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_plain_instance_without_either_class_field_falls_back_to_kind() {
+    // When neither "classRef" nor "class" is present, fall back to the kind.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "unknown",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "id": "objects/99"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("PlainInstance"),
+        "Should fall back to kind when no class info, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_map_variable_shows_class_ref_name_in_type() {
+    // Map with a parameterized type from classRef.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "dict",
+        &serde_json::json!({
+            "kind": "Map",
+            "classRef": {"name": "_Map<String, int>", "id": "classes/map_si"},
+            "length": 5,
+            "id": "objects/map1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("_Map<String, int>"),
+        "Map should use classRef name, got: {:?}",
+        var.type_field
+    );
+}
+
+#[test]
+fn test_plain_instance_class_ref_used_in_instance_value_display() {
+    // Verifies the display value for a PlainInstance uses the class name
+    // from classRef, not the kind string.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "counter",
+        &serde_json::json!({
+            "kind": "PlainInstance",
+            "classRef": {"name": "Counter", "id": "classes/counter"},
+            "id": "objects/c1"
+        }),
+        "isolates/1",
+    );
+    // Without valueAsString, display is "<ClassName> instance"
+    assert!(
+        var.value.contains("Counter"),
+        "PlainInstance value should contain class name, got: {:?}",
+        var.value
+    );
+    assert_eq!(var.type_field.as_deref(), Some("Counter"));
+}
+
+#[test]
+fn test_closure_uses_class_ref_when_present() {
+    // Closures can also have classRef providing a more descriptive type.
+    let (mut adapter, _rx) = DapAdapter::new(MockBackend);
+    let var = adapter.instance_ref_to_variable(
+        "fn",
+        &serde_json::json!({
+            "kind": "Closure",
+            "classRef": {"name": "_Closure@12345", "id": "classes/clos"},
+            "id": "objects/fn1"
+        }),
+        "isolates/1",
+    );
+    assert_eq!(
+        var.type_field.as_deref(),
+        Some("_Closure@12345"),
+        "Closure should use classRef name, got: {:?}",
+        var.type_field
+    );
+}
+
+// ── Globals scope implementation tests ───────────────────────────────
+
+/// A mock backend for globals scope tests.
+///
+/// `get_stack` returns a single frame with `code.owner` pointing to a
+/// `Library` (type `"Library"`). `get_object` dispatches on `object_id`:
+///   - `"libraries/1"` → Library with two field refs
+///   - `"fields/counter"` → Field with `staticValue: Int(42)`
+///   - `"fields/label"` → Field with `staticValue: String("hello")`
+struct GlobalsMockBackend;
+
+impl MockTestBackend for GlobalsMockBackend {
+    async fn get_stack(
+        &self,
+        _isolate_id: &str,
+        _limit: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {
+                    "name": "main",
+                    "owner": {
+                        "type": "Library",
+                        "id": "libraries/1",
+                        "uri": "package:myapp/main.dart"
+                    }
+                },
+                "location": {
+                    "script": {"uri": "file:///app/lib/main.dart"},
+                    "line": 10
+                }
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _isolate_id: &str,
+        object_id: &str,
+        _offset: Option<i64>,
+        _count: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/1" => Ok(serde_json::json!({
+                "type": "Library",
+                "id": "libraries/1",
+                "uri": "package:myapp/main.dart",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/counter", "name": "counter"},
+                    {"type": "FieldRef", "id": "fields/label", "name": "label"}
+                ]
+            })),
+            "fields/counter" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/counter",
+                "name": "counter",
+                "isConst": false,
+                "staticValue": {
+                    "type": "InstanceRef",
+                    "kind": "Int",
+                    "valueAsString": "42",
+                    "id": "objects/int1"
+                }
+            })),
+            "fields/label" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/label",
+                "name": "label",
+                "isConst": false,
+                "staticValue": {
+                    "type": "InstanceRef",
+                    "kind": "String",
+                    "valueAsString": "hello",
+                    "id": "objects/str1"
+                }
+            })),
+            _ => Ok(serde_json::json!({"type": "Instance", "kind": "Null"})),
+        }
+    }
+}
+
+/// Backend for testing globals scope with fallback to root library.
+///
+/// The frame has no `code.owner`, so the adapter falls back to
+/// `get_isolate` → `rootLib`. `get_object("libraries/root")` returns
+/// a library with one integer field.
+struct GlobalsFallbackBackend;
+
+impl MockTestBackend for GlobalsFallbackBackend {
+    async fn get_stack(
+        &self,
+        _: &str,
+        _: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {"name": "myFunc"},
+                "location": {
+                    "script": {"uri": "file:///app/lib/main.dart"},
+                    "line": 5
+                }
+                // no "code.owner" field
+            }]
+        }))
+    }
+
+    async fn get_isolate(&self, _: &str) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "id": "isolates/1",
+            "rootLib": {"id": "libraries/root", "uri": "package:myapp/main.dart"}
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        object_id: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/root" => Ok(serde_json::json!({
+                "type": "Library",
+                "id": "libraries/root",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/x", "name": "x"}
+                ]
+            })),
+            "fields/x" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/x",
+                "name": "x",
+                "isConst": false,
+                "staticValue": {
+                    "type": "InstanceRef",
+                    "kind": "Int",
+                    "valueAsString": "99",
+                    "id": "objects/x1"
+                }
+            })),
+            _ => Ok(serde_json::json!({})),
+        }
+    }
+}
+
+/// Backend for testing uninitialized static fields.
+///
+/// Returns a library with a field whose `staticValue` is absent (field not
+/// yet initialized) and another whose `staticValue` is a Sentinel.
+struct GlobalsUninitBackend;
+
+impl MockTestBackend for GlobalsUninitBackend {
+    async fn get_stack(
+        &self,
+        _: &str,
+        _: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {
+                    "name": "run",
+                    "owner": {
+                        "type": "Library",
+                        "id": "libraries/1"
+                    }
+                },
+                "location": {"script": {"uri": "file:///app/lib/main.dart"}, "line": 1}
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        object_id: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/1" => Ok(serde_json::json!({
+                "type": "Library",
+                "id": "libraries/1",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/uninit", "name": "uninit"},
+                    {"type": "FieldRef", "id": "fields/sentinel", "name": "sentinel"}
+                ]
+            })),
+            "fields/uninit" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/uninit",
+                "name": "uninit",
+                "isConst": false
+                // no staticValue key
+            })),
+            "fields/sentinel" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/sentinel",
+                "name": "sentinel",
+                "isConst": false,
+                "staticValue": {
+                    "type": "Sentinel",
+                    "kind": "NotInitialized",
+                    "valueAsString": "<not initialized>"
+                }
+            })),
+            _ => Ok(serde_json::json!({})),
+        }
+    }
+}
+
+/// Backend for testing `const` static fields (should get readOnly + constant attributes).
+struct GlobalsConstBackend;
+
+impl MockTestBackend for GlobalsConstBackend {
+    async fn get_stack(
+        &self,
+        _: &str,
+        _: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {
+                    "name": "build",
+                    "owner": {"type": "Library", "id": "libraries/1"}
+                },
+                "location": {"script": {"uri": "file:///app/lib/main.dart"}, "line": 1}
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        object_id: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/1" => Ok(serde_json::json!({
+                "type": "Library",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/PI", "name": "kPi"}
+                ]
+            })),
+            "fields/PI" => Ok(serde_json::json!({
+                "type": "Field",
+                "id": "fields/PI",
+                "name": "kPi",
+                "isConst": true,
+                "staticValue": {
+                    "type": "InstanceRef",
+                    "kind": "Double",
+                    "valueAsString": "3.14159",
+                    "id": "objects/pi1"
+                }
+            })),
+            _ => Ok(serde_json::json!({})),
+        }
+    }
+}
+
+/// Backend that returns a frame where `code.owner` is a `ClassRef`
+/// (not a direct library), so the library must be obtained from
+/// `owner.library.id`.
+struct GlobalsClassOwnerBackend;
+
+impl MockTestBackend for GlobalsClassOwnerBackend {
+    async fn get_stack(
+        &self,
+        _: &str,
+        _: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {
+                    "name": "MyClass.method",
+                    "owner": {
+                        "type": "Class",
+                        "id": "classes/1",
+                        "name": "MyClass",
+                        "library": {
+                            "type": "Library",
+                            "id": "libraries/2",
+                            "uri": "package:myapp/myclass.dart"
+                        }
+                    }
+                },
+                "location": {"script": {"uri": "file:///app/lib/myclass.dart"}, "line": 20}
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        object_id: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/2" => Ok(serde_json::json!({
+                "type": "Library",
+                "id": "libraries/2",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/shared", "name": "sharedConfig"}
+                ]
+            })),
+            "fields/shared" => Ok(serde_json::json!({
+                "type": "Field",
+                "name": "sharedConfig",
+                "isConst": false,
+                "staticValue": {
+                    "type": "InstanceRef",
+                    "kind": "PlainInstance",
+                    "classRef": {"name": "Config"},
+                    "id": "objects/cfg1"
+                }
+            })),
+            _ => Ok(serde_json::json!({})),
+        }
+    }
+}
+
+/// Backend for testing private fields (names starting with `_`).
+struct GlobalsPrivateFieldBackend;
+
+impl MockTestBackend for GlobalsPrivateFieldBackend {
+    async fn get_stack(
+        &self,
+        _: &str,
+        _: Option<i32>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        Ok(serde_json::json!({
+            "frames": [{
+                "kind": "Regular",
+                "code": {
+                    "name": "init",
+                    "owner": {"type": "Library", "id": "libraries/1"}
+                },
+                "location": {"script": {"uri": "file:///app/lib/main.dart"}, "line": 1}
+            }]
+        }))
+    }
+
+    async fn get_object(
+        &self,
+        _: &str,
+        object_id: &str,
+        _: Option<i64>,
+        _: Option<i64>,
+    ) -> Result<serde_json::Value, super::super::BackendError> {
+        match object_id {
+            "libraries/1" => Ok(serde_json::json!({
+                "type": "Library",
+                "variables": [
+                    {"type": "FieldRef", "id": "fields/pub", "name": "publicVar"},
+                    {"type": "FieldRef", "id": "fields/priv", "name": "_privateVar"}
+                ]
+            })),
+            "fields/pub" => Ok(serde_json::json!({
+                "type": "Field",
+                "name": "publicVar",
+                "isConst": false,
+                "staticValue": {"type": "InstanceRef", "kind": "Int", "valueAsString": "1", "id": "objects/p1"}
+            })),
+            "fields/priv" => Ok(serde_json::json!({
+                "type": "Field",
+                "name": "_privateVar",
+                "isConst": false,
+                "staticValue": {"type": "InstanceRef", "kind": "Int", "valueAsString": "2", "id": "objects/p2"}
+            })),
+            _ => Ok(serde_json::json!({})),
+        }
+    }
+}
+
+// Helper: set up adapter with a registered isolate and return (adapter, rx, thread_id).
+async fn setup_adapter_with_isolate<B: crate::adapter::DebugBackend>(
+    backend: B,
+) -> (
+    crate::adapter::DapAdapter<B>,
+    tokio::sync::mpsc::Receiver<crate::DapMessage>,
+    i64,
+) {
+    let (mut adapter, mut rx) = DapAdapter::new(backend);
+    let thread_id = register_isolate(&mut adapter, &mut rx, "isolates/1").await;
+    (adapter, rx, thread_id)
+}
+
+// Helper: get the globals variablesReference via stackTrace + scopes.
+async fn get_globals_ref<B: crate::adapter::DebugBackend>(
+    adapter: &mut crate::adapter::DapAdapter<B>,
+    thread_id: i64,
+) -> i64 {
+    let stack_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 2,
+            command: "stackTrace".into(),
+            arguments: Some(serde_json::json!({ "threadId": thread_id })),
+        })
+        .await;
+    assert!(stack_resp.success, "stackTrace must succeed");
+    let frame_id = stack_resp.body.unwrap()["stackFrames"][0]["id"]
+        .as_i64()
+        .unwrap();
+
+    let scopes_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 3,
+            command: "scopes".into(),
+            arguments: Some(serde_json::json!({ "frameId": frame_id })),
+        })
+        .await;
+    assert!(scopes_resp.success, "scopes must succeed");
+    // Globals scope is the second scope (index 1).
+    scopes_resp.body.unwrap()["scopes"][1]["variablesReference"]
+        .as_i64()
+        .unwrap()
+}
+
+#[tokio::test]
+async fn test_globals_scope_returns_library_fields() {
+    // GlobalsMockBackend: frame has code.owner pointing to Library "libraries/1".
+    // Library has two fields: counter (Int 42) and label (String "hello").
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(
+        vars_resp.success,
+        "globals variables request should succeed: {:?}",
+        vars_resp.message
+    );
+
+    let body = vars_resp.body.unwrap();
+    let vars = body["variables"].as_array().unwrap();
+    assert_eq!(vars.len(), 2, "Expected 2 global fields");
+
+    let counter = &vars[0];
+    assert_eq!(counter["name"], "counter");
+    assert_eq!(counter["value"], "42");
+
+    let label = &vars[1];
+    assert_eq!(label["name"], "label");
+    assert_eq!(label["value"], "\"hello\"");
+}
+
+#[tokio::test]
+async fn test_globals_scope_variables_have_static_attribute() {
+    // Each returned global variable should carry presentationHint.attributes: ["static"].
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for var in &vars {
+        let attrs = var["presentationHint"]["attributes"]
+            .as_array()
+            .expect("Each global should have presentationHint.attributes");
+        assert!(
+            attrs.iter().any(|a| a == "static"),
+            "Variable '{}' should have 'static' attribute, got: {:?}",
+            var["name"],
+            attrs
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_globals_scope_expandable_variable_has_nonzero_ref() {
+    // PlainInstance globals should have variablesReference > 0.
+    let (mut adapter, mut rx, thread_id) =
+        setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(vars.len(), 1, "Expected 1 global (sharedConfig)");
+    assert!(
+        vars[0]["variablesReference"].as_i64().unwrap() > 0,
+        "PlainInstance global should be expandable"
+    );
+}
+
+#[tokio::test]
+async fn test_globals_scope_fallback_to_root_lib() {
+    // Frame has no code.owner — adapter should fall back to isolate.rootLib.
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsFallbackBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(
+        vars_resp.success,
+        "Fallback to rootLib should succeed: {:?}",
+        vars_resp.message
+    );
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(vars.len(), 1, "Expected 1 global from root library");
+    assert_eq!(vars[0]["name"], "x");
+    assert_eq!(vars[0]["value"], "99");
+}
+
+#[tokio::test]
+async fn test_globals_scope_uninitialized_field_no_static_value() {
+    // Field with no staticValue key → "<not initialized>" display.
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    // Both fields (uninit and sentinel) should be "<not initialized>".
+    assert_eq!(vars.len(), 2, "Expected 2 fields");
+    assert_eq!(
+        vars[0]["value"], "<not initialized>",
+        "Field without staticValue should show '<not initialized>'"
+    );
+    assert_eq!(vars[0]["variablesReference"], 0);
+}
+
+#[tokio::test]
+async fn test_globals_scope_sentinel_field_shows_not_initialized() {
+    // Field with staticValue of type "Sentinel" → "<not initialized>" display.
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    // Second field is the Sentinel — also shows "<not initialized>".
+    assert_eq!(
+        vars[1]["value"], "<not initialized>",
+        "Sentinel staticValue should show '<not initialized>'"
+    );
+    assert_eq!(vars[1]["variablesReference"], 0);
+}
+
+#[tokio::test]
+async fn test_globals_scope_const_field_has_constant_attributes() {
+    // A const field should have presentationHint.attributes: ["static", "readOnly", "constant"].
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsConstBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(vars.len(), 1);
+    assert_eq!(vars[0]["name"], "kPi");
+
+    let attrs = vars[0]["presentationHint"]["attributes"]
+        .as_array()
+        .expect("const field should have attributes");
+    let attr_strs: Vec<&str> = attrs.iter().filter_map(|a| a.as_str()).collect();
+    assert!(
+        attr_strs.contains(&"static"),
+        "const field must have 'static'"
+    );
+    assert!(
+        attr_strs.contains(&"readOnly"),
+        "const field must have 'readOnly'"
+    );
+    assert!(
+        attr_strs.contains(&"constant"),
+        "const field must have 'constant'"
+    );
+}
+
+#[tokio::test]
+async fn test_globals_scope_private_field_has_private_visibility() {
+    // Private fields (starting with `_`) should have visibility: "private".
+    let (mut adapter, mut rx, thread_id) =
+        setup_adapter_with_isolate(GlobalsPrivateFieldBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(vars.len(), 2);
+
+    // publicVar: no visibility hint.
+    let pub_var = &vars[0];
+    assert_eq!(pub_var["name"], "publicVar");
+    let pub_vis = pub_var["presentationHint"]["visibility"].as_str();
+    assert!(
+        pub_vis.is_none() || pub_vis == Some("null"),
+        "Public field should have no visibility hint, got: {:?}",
+        pub_vis
+    );
+
+    // _privateVar: visibility = "private".
+    let priv_var = &vars[1];
+    assert_eq!(priv_var["name"], "_privateVar");
+    assert_eq!(
+        priv_var["presentationHint"]["visibility"], "private",
+        "_privateVar should have visibility: 'private'"
+    );
+}
+
+#[tokio::test]
+async fn test_globals_scope_class_owner_traverses_to_library() {
+    // Frame where code.owner is a Class — must follow owner.library to get lib ID.
+    let (mut adapter, mut rx, thread_id) =
+        setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(
+        vars_resp.success,
+        "Globals via class owner should succeed: {:?}",
+        vars_resp.message
+    );
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert_eq!(vars.len(), 1, "Expected 1 global from the class library");
+    assert_eq!(vars[0]["name"], "sharedConfig");
+}
+
+#[tokio::test]
+async fn test_globals_scope_empty_library_returns_empty_list() {
+    // Library with no variables field → empty globals list.
+    struct EmptyLibBackend;
+    impl MockTestBackend for EmptyLibBackend {
+        async fn get_stack(
+            &self,
+            _: &str,
+            _: Option<i32>,
+        ) -> Result<serde_json::Value, super::super::BackendError> {
+            Ok(serde_json::json!({
+                "frames": [{
+                    "kind": "Regular",
+                    "code": {
+                        "name": "fn",
+                        "owner": {"type": "Library", "id": "libraries/empty"}
+                    },
+                    "location": {"script": {"uri": "file:///app/main.dart"}, "line": 1}
+                }]
+            }))
+        }
+
+        async fn get_object(
+            &self,
+            _: &str,
+            object_id: &str,
+            _: Option<i64>,
+            _: Option<i64>,
+        ) -> Result<serde_json::Value, super::super::BackendError> {
+            if object_id == "libraries/empty" {
+                Ok(serde_json::json!({
+                    "type": "Library",
+                    "id": "libraries/empty",
+                    "variables": []
+                }))
+            } else {
+                Ok(serde_json::json!({}))
+            }
+        }
+    }
+
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(EmptyLibBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(vars.is_empty(), "Empty library should yield no globals");
+}
+
+#[tokio::test]
+async fn test_globals_scope_stale_after_resume_returns_error() {
+    // Once the program resumes, globals scope references should be invalidated.
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    // Simulate resume.
+    adapter.on_resume();
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 5,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(
+        !vars_resp.success,
+        "Globals reference should be invalidated after resume"
+    );
+}
+
+#[tokio::test]
+async fn test_globals_scope_frame_index_not_in_store_returns_error() {
+    // If the frame was never registered (or was cleared), get_globals_variables
+    // should return an error, not panic.
+    let (mut adapter, _rx) = DapAdapter::new(GlobalsMockBackend);
+    // Directly allocate a Globals scope ref without going through stackTrace.
+    let var_ref = adapter.var_store.allocate(VariableRef::Scope {
+        frame_index: 99,
+        scope_kind: ScopeKind::Globals,
+    });
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 1,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": var_ref })),
+        })
+        .await;
+    assert!(
+        !vars_resp.success,
+        "Unknown frame index should return an error"
+    );
+}
+
+#[tokio::test]
+async fn test_globals_scope_returns_success_not_empty_list_old_behavior() {
+    // Regression test: the old stub returned an empty list (success but no data).
+    // The new implementation should return actual fields from GlobalsMockBackend.
+    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
+
+    let vars_resp = adapter
+        .handle_request(&crate::DapRequest {
+            seq: 4,
+            command: "variables".into(),
+            arguments: Some(serde_json::json!({ "variablesReference": globals_ref })),
+        })
+        .await;
+    assert!(vars_resp.success);
+
+    let vars = vars_resp.body.unwrap()["variables"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        !vars.is_empty(),
+        "Globals should no longer return an empty list when library has fields"
     );
 }

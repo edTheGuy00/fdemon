@@ -85,6 +85,7 @@ pub fn handle_debug_event(
             isolate_id: isolate.id.clone(),
             reason: DapPauseReason::Entry,
             breakpoint_id: None,
+            exception: None,
         }),
         DebugEvent::PauseBreakpoint {
             isolate,
@@ -96,26 +97,38 @@ pub fn handle_debug_event(
             // Pass the VM breakpoint ID through to the adapter so it can
             // evaluate conditional breakpoint expressions.
             breakpoint_id: breakpoint.as_ref().map(|bp| bp.id.clone()),
+            exception: None,
         }),
-        DebugEvent::PauseException { isolate, .. } => Some(DapDebugEvent::Paused {
+        DebugEvent::PauseException {
+            isolate, exception, ..
+        } => Some(DapDebugEvent::Paused {
             isolate_id: isolate.id.clone(),
             reason: DapPauseReason::Exception,
             breakpoint_id: None,
+            // Serialize the InstanceRef to JSON for the DAP adapter's
+            // exception scope. The adapter uses it to present an "Exceptions"
+            // scope when the isolate is paused at an exception.
+            exception: exception
+                .as_ref()
+                .and_then(|e| serde_json::to_value(e).ok()),
         }),
         DebugEvent::PauseExit { isolate, .. } => Some(DapDebugEvent::Paused {
             isolate_id: isolate.id.clone(),
             reason: DapPauseReason::Exit,
             breakpoint_id: None,
+            exception: None,
         }),
         DebugEvent::PauseInterrupted { isolate, .. } => Some(DapDebugEvent::Paused {
             isolate_id: isolate.id.clone(),
             reason: DapPauseReason::Interrupted,
             breakpoint_id: None,
+            exception: None,
         }),
         DebugEvent::PausePostRequest { isolate, .. } => Some(DapDebugEvent::Paused {
             isolate_id: isolate.id.clone(),
             reason: DapPauseReason::Interrupted,
             breakpoint_id: None,
+            exception: None,
         }),
         DebugEvent::Resume { isolate } => Some(DapDebugEvent::Resumed {
             isolate_id: isolate.id.clone(),

@@ -70,6 +70,8 @@ pub struct SourceReferenceStore {
     next_id: i64,
     /// reference_id → script information
     references: HashMap<i64, SourceRefEntry>,
+    /// Reverse lookup: (isolate_id, script_id) → reference_id
+    by_script: HashMap<(String, String), i64>,
 }
 
 impl SourceReferenceStore {
@@ -78,6 +80,7 @@ impl SourceReferenceStore {
         Self {
             next_id: 1,
             references: HashMap::new(),
+            by_script: HashMap::new(),
         }
     }
 
@@ -87,11 +90,10 @@ impl SourceReferenceStore {
     /// ID stability: the same `(isolate_id, script_id)` always produces the
     /// same reference ID within a debug session.
     pub fn get_or_create(&mut self, isolate_id: &str, script_id: &str, uri: &str) -> i64 {
-        // Check for an existing reference for this script.
-        for (&id, entry) in &self.references {
-            if entry.script_id == script_id && entry.isolate_id == isolate_id {
-                return id;
-            }
+        // O(1) reverse-index lookup.
+        let key = (isolate_id.to_string(), script_id.to_string());
+        if let Some(&id) = self.by_script.get(&key) {
+            return id;
         }
         // Allocate a new reference.
         let id = self.next_id;
@@ -99,11 +101,12 @@ impl SourceReferenceStore {
         self.references.insert(
             id,
             SourceRefEntry {
-                isolate_id: isolate_id.to_string(),
-                script_id: script_id.to_string(),
+                isolate_id: key.0.clone(),
+                script_id: key.1.clone(),
                 uri: uri.to_string(),
             },
         );
+        self.by_script.insert(key, id);
         id
     }
 
@@ -127,6 +130,7 @@ impl SourceReferenceStore {
     /// old reference IDs. Reusing them would cause stale cache hits.
     pub fn clear(&mut self) {
         self.references.clear();
+        self.by_script.clear();
     }
 
     /// Return the number of currently allocated references.
@@ -183,6 +187,18 @@ pub enum VariableRef {
         /// The VM Service object ID.
         object_id: String,
     },
+    /// A lazy getter evaluation on a specific object.
+    ///
+    /// Created when `evaluateGettersInDebugViews` is `false`. Expanding this
+    /// reference evaluates the getter on demand via `backend.evaluate`.
+    GetterEval {
+        /// The isolate the parent object belongs to.
+        isolate_id: String,
+        /// The VM Service object ID of the parent instance.
+        instance_id: String,
+        /// The getter method name to evaluate (e.g., `"name"`, `"age"`).
+        getter_name: String,
+    },
 }
 
 /// The kind of scope a [`VariableRef::Scope`] represents.
@@ -192,11 +208,28 @@ pub enum ScopeKind {
     Locals,
     /// Module-level (global) variables.
     Globals,
+    /// The current exception when paused at an exception.
+    ///
+    /// This scope appears only when the isolate is paused at a
+    /// `PauseException` event. It contains a single variable (the exception
+    /// object) that can be expanded to inspect its fields.
+    Exceptions,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // VariableStore
 // ─────────────────────────────────────────────────────────────────────────────
+
+/// Maximum number of variable references that [`VariableStore`] will hold.
+///
+/// Prevents unbounded memory growth when debugging programs with very large
+/// object graphs (e.g., widget trees with thousands of children). When the
+/// store reaches this limit, [`VariableStore::allocate`] returns `0`
+/// (non-expandable) and logs a warning instead of inserting a new entry.
+///
+/// Most debug sessions never approach this limit; it is a safety cap for
+/// pathological cases.
+pub(crate) const MAX_VARIABLE_REFS: usize = 10_000;
 
 /// Allocates and looks up variable references for a single stopped state.
 ///
@@ -210,9 +243,20 @@ pub enum ScopeKind {
 /// - Uses a simple `HashMap` — cheap to create, cheap to clear.
 /// - No complex allocator needed: even large Dart programs have at most a few
 ///   hundred variables visible at any one time.
+/// - Capped at [`MAX_VARIABLE_REFS`] entries to prevent unbounded memory use.
 pub struct VariableStore {
     references: HashMap<i64, VariableRef>,
     next_ref: i64,
+    /// Set permanently to `true` after the cap is first hit in a stop cycle.
+    ///
+    /// Prevents subsequent cap hits from re-arming [`cap_warning_pending`],
+    /// ensuring only one warning is issued per stop cycle.
+    cap_hit: bool,
+    /// Set to `true` when [`cap_hit`] transitions from `false` to `true`.
+    ///
+    /// Consumed (reset to `false`) by [`VariableStore::take_cap_warning`] so
+    /// the caller can emit an IDE `output` event exactly once per stop cycle.
+    cap_warning_pending: bool,
 }
 
 impl VariableStore {
@@ -221,17 +265,57 @@ impl VariableStore {
         Self {
             references: HashMap::new(),
             next_ref: 1,
+            cap_hit: false,
+            cap_warning_pending: false,
         }
     }
 
     /// Allocate a new variable reference for the given target.
     ///
-    /// Returns the allocated reference integer (always >= 1).
+    /// Returns the allocated reference integer (>= 1) on success, or `0` when
+    /// the store has reached [`MAX_VARIABLE_REFS`] entries. A return value of
+    /// `0` tells the DAP client that the variable is not expandable.
+    ///
+    /// The first time the cap is hit per stop cycle, a [`tracing::warn`] is
+    /// emitted and a pending-warning flag is armed. Call
+    /// [`VariableStore::take_cap_warning`] to consume the flag and emit a
+    /// one-shot IDE `output` event. Subsequent cap hits in the same stop cycle
+    /// are silent.
     pub fn allocate(&mut self, target: VariableRef) -> i64 {
+        if self.references.len() >= MAX_VARIABLE_REFS {
+            if !self.cap_hit {
+                // First cap hit this stop cycle — arm the warning signal.
+                self.cap_hit = true;
+                self.cap_warning_pending = true;
+                tracing::warn!(
+                    "VariableStore full ({} entries) — returning 0 (non-expandable)",
+                    MAX_VARIABLE_REFS,
+                );
+            }
+            return 0;
+        }
         let r = self.next_ref;
         self.next_ref += 1;
         self.references.insert(r, target);
         r
+    }
+
+    /// Consume the pending cap-reached warning.
+    ///
+    /// Returns `true` exactly once after the first time [`VariableStore::allocate`]
+    /// hits the capacity limit in the current stop cycle. All subsequent calls
+    /// in the same stop cycle return `false` regardless of how many more cap
+    /// hits occur. The warning is re-armed after the next [`VariableStore::reset`].
+    ///
+    /// Intended to be called by the DAP handler layer to emit a one-shot IDE
+    /// `output` event explaining why some variables appear non-expandable.
+    pub fn take_cap_warning(&mut self) -> bool {
+        if self.cap_warning_pending {
+            self.cap_warning_pending = false;
+            true
+        } else {
+            false
+        }
     }
 
     /// Look up what a variable reference points to.
@@ -245,10 +329,13 @@ impl VariableStore {
     /// Invalidate all variable references.
     ///
     /// Must be called when the debuggee resumes. After a reset, any previously
-    /// allocated reference will resolve to `None`.
+    /// allocated reference will resolve to `None`. Both cap-tracking flags are
+    /// reset so the warning can fire again on the next stop cycle.
     pub fn reset(&mut self) {
         self.references.clear();
         self.next_ref = 1;
+        self.cap_hit = false;
+        self.cap_warning_pending = false;
     }
 
     /// Return the number of currently allocated references.
@@ -577,6 +664,90 @@ pub fn resolve_package_uri(uri: &str, project_root: &Path) -> Option<PathBuf> {
     None
 }
 
+/// Build a [`DapSource`] from a script URI and script ID.
+///
+/// This is the direct-URI variant of [`extract_source_with_store`]. It takes
+/// the URI and script ID directly (not wrapped in a frame JSON) and applies the
+/// same source resolution strategy:
+///
+/// | URI prefix              | Strategy                                              |
+/// |-------------------------|-------------------------------------------------------|
+/// | `file://`               | Local path via [`dart_uri_to_path`]; no source ref    |
+/// | `dart:`                 | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `org-dartlang-sdk:`     | `sourceReference > 0`; no `path`; `"deemphasize"` hint |
+/// | `package:`              | Try local path if `project_root` is provided; otherwise `sourceReference > 0` |
+///
+/// Used by `handle_loaded_sources` where scripts are available as URI + ID
+/// pairs rather than nested inside frame JSON.
+pub fn build_source_from_uri(
+    uri: &str,
+    script_id: &str,
+    store: &mut SourceReferenceStore,
+    isolate_id: &str,
+    project_root: Option<&Path>,
+) -> DapSource {
+    let name = uri.rsplit('/').next().unwrap_or(uri).to_string();
+
+    if uri.starts_with("file://") {
+        let path = dart_uri_to_path(uri);
+        return DapSource {
+            name: Some(name),
+            path,
+            source_reference: None,
+            presentation_hint: None,
+        };
+    }
+
+    if uri.starts_with("package:") {
+        let resolved = project_root.and_then(|root| resolve_package_uri(uri, root));
+        if let Some(local_path) = resolved {
+            let hint = if uri.starts_with("package:flutter/") {
+                Some("deemphasize".to_string())
+            } else {
+                None
+            };
+            return DapSource {
+                name: Some(name),
+                path: Some(local_path.to_string_lossy().into_owned()),
+                source_reference: None,
+                presentation_hint: hint,
+            };
+        }
+        // Not resolvable locally — assign a source reference.
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        let hint = if uri.starts_with("package:flutter/") {
+            Some("deemphasize".to_string())
+        } else {
+            None
+        };
+        return DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: hint,
+        };
+    }
+
+    // dart: and org-dartlang-sdk: — always fetch via VM Service.
+    if uri.starts_with("dart:") || uri.starts_with("org-dartlang-sdk:") {
+        let source_ref = store.get_or_create(isolate_id, script_id, uri);
+        return DapSource {
+            name: Some(name),
+            path: None,
+            source_reference: Some(source_ref),
+            presentation_hint: Some("deemphasize".to_string()),
+        };
+    }
+
+    // Unknown URI scheme.
+    DapSource {
+        name: Some(name),
+        path: None,
+        source_reference: None,
+        presentation_hint: None,
+    }
+}
+
 /// Extract line and column numbers from a VM Service frame's `location` field.
 ///
 /// Both values are 1-based per the DAP specification. Returns `(None, None)`
@@ -714,6 +885,34 @@ mod tests {
             id2 > id1,
             "IDs must not be reused after clear (got id1={id1}, id2={id2})"
         );
+    }
+
+    // ── SourceReferenceStore reverse-index ────────────────────────────────
+
+    #[test]
+    fn test_source_ref_store_get_or_create_returns_same_id() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("iso1", "script1", "dart:core");
+        let id2 = store.get_or_create("iso1", "script1", "dart:core");
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn test_source_ref_store_different_scripts_get_different_ids() {
+        let mut store = SourceReferenceStore::new();
+        let id1 = store.get_or_create("iso1", "script1", "dart:core");
+        let id2 = store.get_or_create("iso1", "script2", "dart:async");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_source_ref_store_clear_resets_reverse_index() {
+        let mut store = SourceReferenceStore::new();
+        store.get_or_create("iso1", "script1", "dart:core");
+        store.clear();
+        // After clear, a new get_or_create should allocate a fresh ID
+        let id = store.get_or_create("iso1", "script1", "dart:core");
+        assert_eq!(id, 2); // next_id is preserved; second allocation gets id=2
     }
 
     // ── extract_source_with_store — file:// user code ─────────────────────
@@ -1030,6 +1229,118 @@ mod tests {
     #[test]
     fn test_scope_kind_locals_and_globals_are_distinct() {
         assert_ne!(ScopeKind::Locals, ScopeKind::Globals);
+    }
+
+    // ── VariableStore cap warning ─────────────────────────────────────────
+
+    /// Helper: fill a [`VariableStore`] to exactly [`MAX_VARIABLE_REFS`] entries.
+    fn fill_store_to_cap(store: &mut VariableStore) {
+        for _ in 0..MAX_VARIABLE_REFS {
+            let r = store.allocate(VariableRef::Scope {
+                frame_index: 0,
+                scope_kind: ScopeKind::Locals,
+            });
+            assert_ne!(
+                r, 0,
+                "Should not hit cap while filling to exactly MAX_VARIABLE_REFS"
+            );
+        }
+        assert_eq!(store.len(), MAX_VARIABLE_REFS);
+    }
+
+    #[test]
+    fn test_variable_store_take_cap_warning_returns_false_before_cap() {
+        let mut store = VariableStore::new();
+        // No allocations yet — warning flag must be false.
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning must be false before any cap is hit"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_cap_signals_first_hit() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // Next allocation hits the cap and should set the flag.
+        let r = store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert_eq!(r, 0, "allocate should return 0 when at cap");
+
+        // take_cap_warning must return true exactly once.
+        assert!(
+            store.take_cap_warning(),
+            "take_cap_warning should be true after first cap hit"
+        );
+        // The flag is now consumed — subsequent calls must return false.
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning should be false after flag is consumed"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_cap_subsequent_allocations_do_not_re_signal() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // First cap hit — sets the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+
+        // Consume the flag.
+        let _ = store.take_cap_warning();
+
+        // Further cap hits should NOT re-set the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Globals,
+        });
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            !store.take_cap_warning(),
+            "take_cap_warning must stay false after flag was already consumed"
+        );
+    }
+
+    #[test]
+    fn test_variable_store_reset_clears_cap_flag() {
+        let mut store = VariableStore::new();
+        fill_store_to_cap(&mut store);
+
+        // Hit the cap once — sets the flag.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            store.take_cap_warning(),
+            "Flag should be set after first cap hit"
+        );
+
+        // Reset — clears allocations and the cap-warning flag.
+        store.reset();
+
+        // Fill again.
+        fill_store_to_cap(&mut store);
+
+        // Hit the cap again — should arm the flag for the new stop cycle.
+        store.allocate(VariableRef::Scope {
+            frame_index: 0,
+            scope_kind: ScopeKind::Locals,
+        });
+        assert!(
+            store.take_cap_warning(),
+            "take_cap_warning should be true again after reset and new cap hit"
+        );
     }
 
     // ── FrameStore ────────────────────────────────────────────────────────

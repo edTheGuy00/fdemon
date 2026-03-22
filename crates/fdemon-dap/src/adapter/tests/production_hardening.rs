@@ -3,10 +3,7 @@
 
 use super::make_request;
 use crate::adapter::test_helpers::*;
-use crate::adapter::types::{
-    ERR_EVAL_FAILED, ERR_NOT_CONNECTED, ERR_NO_DEBUG_SESSION, ERR_THREAD_NOT_FOUND, ERR_TIMEOUT,
-    ERR_VM_DISCONNECTED, MAX_VARIABLES_PER_REQUEST, REQUEST_TIMEOUT,
-};
+use crate::adapter::types::{ERR_VM_DISCONNECTED, MAX_VARIABLES_PER_REQUEST, REQUEST_TIMEOUT};
 use crate::adapter::*;
 use crate::DapMessage;
 use crate::DapRequest;
@@ -45,19 +42,16 @@ fn test_error_with_code_has_correct_fields() {
 fn test_error_with_code_1000_not_connected() {
     use crate::DapResponse;
     let req = make_request(2, "threads");
-    let resp = DapResponse::error_with_code(&req, ERR_NOT_CONNECTED, "not connected");
-    assert_eq!(
-        resp.body.as_ref().unwrap()["error"]["id"],
-        ERR_NOT_CONNECTED
-    );
+    let resp = DapResponse::error_with_code(&req, 1000, "not connected");
+    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], 1000);
 }
 
 #[test]
 fn test_error_with_code_1004_timeout() {
     use crate::DapResponse;
     let req = make_request(3, "stackTrace");
-    let resp = DapResponse::error_with_code(&req, ERR_TIMEOUT, "Request timed out");
-    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], ERR_TIMEOUT);
+    let resp = DapResponse::error_with_code(&req, 1004, "Request timed out");
+    assert_eq!(resp.body.as_ref().unwrap()["error"]["id"], 1004);
 }
 
 // ── vm_disconnected guard ──────────────────────────────────────────────
@@ -164,6 +158,7 @@ async fn test_disconnect_resumes_paused_isolates_when_terminate_false() {
             &self,
             isolate_id: &str,
             _step: Option<StepMode>,
+            _frame_index: Option<i32>,
         ) -> Result<(), BackendError> {
             self.resumed.lock().unwrap().push(isolate_id.to_string());
             Ok(())
@@ -349,15 +344,15 @@ fn test_max_variables_per_request_constant_is_100() {
 
 #[tokio::test]
 async fn test_variables_count_capped_at_max() {
-    // Create an adapter and fake a scope with many variables.
-    // We exercise the count capping logic by passing count > MAX directly.
-    // The actual cap is applied in handle_variables before expand_object.
+    // Verify the count capping logic via an Object expansion, which respects
+    // the MAX_VARIABLES_PER_REQUEST cap without needing a live stack frame.
+    // This test exercises the path: handle_variables → expand_object → capped_count.
     let (mut adapter, _rx) = DapAdapter::new(MockBackend);
 
-    // Allocate a fake scope reference.
-    let var_ref = adapter.var_store.allocate(VariableRef::Scope {
-        frame_index: 0,
-        scope_kind: ScopeKind::Globals,
+    // Allocate a fake object reference to trigger the expand_object path.
+    let var_ref = adapter.var_store.allocate(VariableRef::Object {
+        isolate_id: "isolates/1".into(),
+        object_id: "objects/any".into(),
     });
 
     let req = DapRequest {
@@ -365,13 +360,13 @@ async fn test_variables_count_capped_at_max() {
         command: "variables".into(),
         arguments: Some(serde_json::json!({
             "variablesReference": var_ref,
-            "count": 10_000, // Request 10,000 items
+            "count": 10_000, // Request 10,000 items — should be capped to MAX
         })),
     };
     let resp = adapter.handle_request(&req).await;
 
-    // ScopeKind::Globals returns empty (not advertised but enum variant still exists).
-    // Verify the count capping logic doesn't panic and returns a success response.
+    // MockBackend returns {} for get_object, which yields empty expansion.
+    // The important check is that the count capping logic doesn't panic.
     assert!(resp.success, "variables request must succeed");
 }
 
@@ -389,12 +384,9 @@ fn test_request_timeout_constant_is_10_seconds() {
 
 #[test]
 fn test_error_code_constants_are_defined() {
-    // Verify all error code constants are in the expected 1000-1005 range.
-    assert_eq!(ERR_NOT_CONNECTED, 1000);
-    assert_eq!(ERR_NO_DEBUG_SESSION, 1001);
-    assert_eq!(ERR_THREAD_NOT_FOUND, 1002);
-    assert_eq!(ERR_EVAL_FAILED, 1003);
-    assert_eq!(ERR_TIMEOUT, 1004);
+    // Verify the in-use error code constant has the expected value.
+    // The unused placeholder constants (1000–1004) were removed; only
+    // ERR_VM_DISCONNECTED (1005) is actively used by the adapter.
     assert_eq!(ERR_VM_DISCONNECTED, 1005);
 }
 

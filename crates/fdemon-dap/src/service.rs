@@ -89,7 +89,11 @@ impl DapService {
         bind_addr: String,
         event_tx: mpsc::Sender<DapServerEvent>,
     ) -> Result<DapServerHandle> {
-        let config = DapServerConfig { port, bind_addr };
+        let config = DapServerConfig {
+            port,
+            bind_addr,
+            require_auth: false,
+        };
         crate::server::start(config, event_tx, None).await
     }
 
@@ -115,7 +119,11 @@ impl DapService {
         event_tx: mpsc::Sender<DapServerEvent>,
         backend_factory: Arc<dyn BackendFactory>,
     ) -> Result<DapServerHandle> {
-        let config = DapServerConfig { port, bind_addr };
+        let config = DapServerConfig {
+            port,
+            bind_addr,
+            require_auth: false,
+        };
         crate::server::start(config, event_tx, Some(backend_factory)).await
     }
 
@@ -159,6 +167,9 @@ impl DapService {
             shutdown_tx,
             task,
             log_event_tx,
+            // Stdio mode does not use auth tokens — the IDE launches the process
+            // directly and has implicit trust via the process hierarchy.
+            auth_token: None,
         })
     }
 

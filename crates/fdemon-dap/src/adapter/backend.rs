@@ -31,8 +31,17 @@ pub trait LocalDebugBackend: Sync + 'static {
     /// Pause a running isolate.
     async fn pause(&self, isolate_id: &str) -> Result<(), BackendError>;
 
-    /// Resume a paused isolate, optionally with a step mode.
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError>;
+    /// Resume a paused isolate, optionally with a step mode and frame index.
+    ///
+    /// `frame_index` is only used when `step` is [`StepMode::Rewind`] (the
+    /// `restartFrame` DAP request). All other step modes must pass `None` for
+    /// `frame_index`.
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError>;
 
     // ── Breakpoints ───────────────────────────────────────────────────────
 
@@ -100,8 +109,55 @@ pub trait LocalDebugBackend: Sync + 'static {
     /// Get the VM object (lists all isolates).
     async fn get_vm(&self) -> Result<serde_json::Value, BackendError>;
 
+    /// Get the full isolate object for the given isolate ID.
+    ///
+    /// Returns the isolate object including `rootLib`, `libraries[]`,
+    /// `pauseEvent`, etc. This is the reliable way to obtain `rootLib` and is
+    /// needed for globals scope (library enumeration) and `updateDebugOptions`
+    /// (setting library debuggability).
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError>;
+
     /// Get the list of scripts loaded in an isolate.
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError>;
+
+    // ── Generic VM Service RPC ────────────────────────────────────────────
+
+    /// Forward an arbitrary VM Service RPC call.
+    ///
+    /// Used by the `callService` custom DAP request to expose VM Service
+    /// extension methods (e.g., DevTools integration RPCs) without adding
+    /// dedicated methods to this trait.
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError>;
+
+    /// Set the debuggability flag for a library in an isolate.
+    ///
+    /// Calls `setLibraryDebuggable` VM Service RPC. Used by `updateDebugOptions`
+    /// to toggle SDK/external library stepping behaviour.
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError>;
+
+    /// Get a source report for a script in an isolate.
+    ///
+    /// Calls `getSourceReport` VM Service RPC. `report_kinds` is a slice of
+    /// report kind strings (e.g., `["PossibleBreakpoints"]`). `token_pos` and
+    /// `end_token_pos` are optional token position bounds for partial reports.
+    /// Used by `breakpointLocations` to find valid breakpoint positions.
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError>;
 
     // ── Source retrieval ──────────────────────────────────────────────────
 
@@ -112,8 +168,8 @@ pub trait LocalDebugBackend: Sync + 'static {
     /// `getObject` RPC on a `Script` object returns a `source` field with the
     /// full source text.
     ///
-    /// Returns the source text on success, or an error string on failure.
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String>;
+    /// Returns the source text on success, or a [`BackendError`] on failure.
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError>;
 
     // ── Hot reload / restart ──────────────────────────────────────────────
 
@@ -196,6 +252,7 @@ pub trait DynDebugBackendInner: Send + Sync + 'static {
         &'a self,
         isolate_id: &'a str,
         step: Option<StepMode>,
+        frame_index: Option<i32>,
     ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>>;
 
     fn add_breakpoint_boxed<'a>(
@@ -250,16 +307,43 @@ pub trait DynDebugBackendInner: Send + Sync + 'static {
         &self,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + '_>>;
 
+    fn get_isolate_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>;
+
     fn get_scripts_boxed<'a>(
         &'a self,
         isolate_id: &'a str,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>;
+
+    fn call_service_boxed<'a>(
+        &'a self,
+        method: &'a str,
+        params: Option<serde_json::Value>,
+    ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>;
+
+    fn set_library_debuggable_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        library_id: &'a str,
+        is_debuggable: bool,
+    ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>>;
+
+    fn get_source_report_boxed<'a>(
+        &'a self,
+        isolate_id: &'a str,
+        script_id: &'a str,
+        report_kinds: Vec<String>,
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
     ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>;
 
     fn get_source_boxed<'a>(
         &'a self,
         isolate_id: &'a str,
         script_id: &'a str,
-    ) -> Pin<Box<dyn Future<Output = Result<String, String>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>>;
 
     fn hot_reload_boxed(
         &self,
@@ -317,8 +401,13 @@ impl DebugBackend for DynDebugBackend {
         self.inner.pause_boxed(isolate_id).await
     }
 
-    async fn resume(&self, isolate_id: &str, step: Option<StepMode>) -> Result<(), BackendError> {
-        self.inner.resume_boxed(isolate_id, step).await
+    async fn resume(
+        &self,
+        isolate_id: &str,
+        step: Option<StepMode>,
+        frame_index: Option<i32>,
+    ) -> Result<(), BackendError> {
+        self.inner.resume_boxed(isolate_id, step, frame_index).await
     }
 
     async fn add_breakpoint(
@@ -399,11 +488,53 @@ impl DebugBackend for DynDebugBackend {
         self.inner.get_vm_boxed().await
     }
 
+    async fn get_isolate(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
+        self.inner.get_isolate_boxed(isolate_id).await
+    }
+
     async fn get_scripts(&self, isolate_id: &str) -> Result<serde_json::Value, BackendError> {
         self.inner.get_scripts_boxed(isolate_id).await
     }
 
-    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, String> {
+    async fn call_service(
+        &self,
+        method: &str,
+        params: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, BackendError> {
+        self.inner.call_service_boxed(method, params).await
+    }
+
+    async fn set_library_debuggable(
+        &self,
+        isolate_id: &str,
+        library_id: &str,
+        is_debuggable: bool,
+    ) -> Result<(), BackendError> {
+        self.inner
+            .set_library_debuggable_boxed(isolate_id, library_id, is_debuggable)
+            .await
+    }
+
+    async fn get_source_report(
+        &self,
+        isolate_id: &str,
+        script_id: &str,
+        report_kinds: &[&str],
+        token_pos: Option<i64>,
+        end_token_pos: Option<i64>,
+    ) -> Result<serde_json::Value, BackendError> {
+        self.inner
+            .get_source_report_boxed(
+                isolate_id,
+                script_id,
+                report_kinds.iter().map(|s| s.to_string()).collect(),
+                token_pos,
+                end_token_pos,
+            )
+            .await
+    }
+
+    async fn get_source(&self, isolate_id: &str, script_id: &str) -> Result<String, BackendError> {
         self.inner.get_source_boxed(isolate_id, script_id).await
     }
 

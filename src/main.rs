@@ -51,6 +51,16 @@ struct Args {
     #[arg(long, conflicts_with = "dap_port")]
     dap_stdio: bool,
 
+    /// Directory for log files. When set, logs are written to this directory
+    /// instead of the default (~/.local/share/flutter-demon/logs/).
+    ///
+    /// The directory is created if it doesn't exist. Log files are named
+    /// `fdemon-<timestamp>.log` per session.
+    ///
+    /// Example: `fdemon --log-dir ./tmp example/app3`
+    #[arg(long, value_name = "DIR")]
+    log_dir: Option<PathBuf>,
+
     /// Generate DAP config for a specific IDE without auto-detection.
     ///
     /// When used with --dap-port, generates the IDE config file and exits
@@ -72,14 +82,18 @@ async fn main() -> Result<()> {
     // Initialize error handling (must happen once at binary startup)
     color_eyre::install().map_err(|e| Error::terminal(e.to_string()))?;
 
-    // Initialize logging (to file, since TUI owns stdout)
-    fdemon_core::logging::init()?;
+    let args = Args::parse();
+
+    // Initialize logging (to file, since TUI owns stdout).
+    // --log-dir overrides the default log directory.
+    let log_path = fdemon_core::logging::init(args.log_dir.clone())?;
 
     info!("═══════════════════════════════════════════════════════");
     info!("Flutter Demon starting");
+    if let Some(ref p) = log_path {
+        eprintln!("Logs: {}", p.display());
+    }
     info!("═══════════════════════════════════════════════════════");
-
-    let args = Args::parse();
 
     // --dap-stdio: run as a DAP adapter subprocess over stdin/stdout.
     // This mode does not require a Flutter project path and must not start the TUI.

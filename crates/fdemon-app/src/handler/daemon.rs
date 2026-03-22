@@ -1,10 +1,11 @@
 //! Multi-session daemon event handling
 
-use crate::handler::UpdateResult;
+use crate::handler::{UpdateAction, UpdateResult};
 use crate::session::SessionId;
 use crate::state::AppState;
 use fdemon_core::{DaemonEvent, DaemonMessage, LogEntry, LogSource};
 use fdemon_daemon::parse_daemon_message;
+use fdemon_dap::adapter::DebugEvent as DapDebugEvent;
 
 use super::session::{
     handle_session_exited, handle_session_message_state, handle_session_stdout,
@@ -66,9 +67,21 @@ pub fn handle_session_daemon_event(
                 _ => None,
             };
 
-            // Priority: VM service connection (AppDebugPort) > native log capture (AppStart).
-            // These two events are always separate, so at most one action is non-None here.
-            match vm_action.or(native_log_action) {
+            // Check for AppStarted → forward to DAP adapter so VS Code's Dart
+            // extension clears its "Starting debug session..." indicator.
+            let app_started_action = match &parsed {
+                Some(DaemonMessage::AppStarted(_)) => {
+                    tracing::debug!("Session {} app.started → forwarding to DAP", session_id);
+                    Some(UpdateAction::ForwardDapDebugEvents(vec![
+                        DapDebugEvent::AppStarted,
+                    ]))
+                }
+                _ => None,
+            };
+
+            // Priority: VM service connection > native log capture > app started.
+            // These events are always separate, so at most one action is non-None.
+            match vm_action.or(native_log_action).or(app_started_action) {
                 Some(action) => UpdateResult::action(action),
                 None => UpdateResult::none(),
             }

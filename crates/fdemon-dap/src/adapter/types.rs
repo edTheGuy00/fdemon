@@ -17,6 +17,12 @@ pub enum StepMode {
     Into,
     /// Step out of the current function.
     Out,
+    /// Rewind to the start of the selected stack frame.
+    ///
+    /// Maps to the VM Service `"Rewind"` step option. Used by the
+    /// `restartFrame` DAP request. Only valid for synchronous frames below
+    /// the first async suspension marker.
+    Rewind,
 }
 
 /// Result from adding a breakpoint via the VM Service.
@@ -87,6 +93,13 @@ pub enum DebugEvent {
         ///
         /// `None` for non-breakpoint pauses (exceptions, steps, interrupts).
         breakpoint_id: Option<String>,
+        /// The exception `InstanceRef` when the pause reason is
+        /// [`PauseReason::Exception`]. The Dart VM Service includes this in
+        /// `PauseException` events so the adapter can surface it as an
+        /// "Exceptions" scope.
+        ///
+        /// `None` for non-exception pauses.
+        exception: Option<serde_json::Value>,
     },
     /// An isolate resumed execution.
     Resumed {
@@ -155,6 +168,18 @@ pub enum DebugEvent {
     /// emitted by the Engine integration layer when the session phase
     /// transitions to `Running`.
     AppStarted,
+
+    /// A Dart VM service extension was registered by an isolate.
+    ///
+    /// Triggers the `dart.serviceExtensionAdded` custom DAP event. IDEs use
+    /// this to know when extension methods (e.g., Flutter DevTools RPCs) are
+    /// available to call via `callService`.
+    ServiceExtensionAdded {
+        /// Dart VM isolate ID that registered the extension.
+        isolate_id: String,
+        /// The extension RPC name (e.g., `"ext.flutter.debugDumpApp"`).
+        extension_rpc: String,
+    },
 }
 
 /// Reason for a pause event.
@@ -225,31 +250,7 @@ pub(crate) const MAX_VARIABLES_PER_REQUEST: usize = 100;
 /// If a VM Service call does not return within this duration the adapter
 /// returns an error response rather than hanging indefinitely. Slow devices
 /// may require a longer timeout — future work can expose this via `DapSettings`.
-///
-/// Currently documented here; active wrapping of backend calls with this timeout
-/// is deferred to integration once tokio::time::timeout is wired in.
-#[allow(dead_code)]
 pub(crate) const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
-
-/// Numeric error code: VM Service not connected.
-#[allow(dead_code)]
-pub(crate) const ERR_NOT_CONNECTED: i64 = 1000;
-
-/// Numeric error code: no active debug session (no paused isolate).
-#[allow(dead_code)]
-pub(crate) const ERR_NO_DEBUG_SESSION: i64 = 1001;
-
-/// Numeric error code: thread / isolate not found.
-#[allow(dead_code)]
-pub(crate) const ERR_THREAD_NOT_FOUND: i64 = 1002;
-
-/// Numeric error code: evaluation failed.
-#[allow(dead_code)]
-pub(crate) const ERR_EVAL_FAILED: i64 = 1003;
-
-/// Numeric error code: backend request timed out.
-#[allow(dead_code)]
-pub(crate) const ERR_TIMEOUT: i64 = 1004;
 
 /// Numeric error code: VM Service disconnected (app exited mid-session).
 pub(crate) const ERR_VM_DISCONNECTED: i64 = 1005;

@@ -1,0 +1,186 @@
+## Task: Wire Request Timeouts and Missing Custom Events
+
+**Objective**: Apply `REQUEST_TIMEOUT` (10s) to all backend calls to prevent hung VM Service from blocking the DAP session indefinitely. Also emit missing custom DAP events: `dart.serviceExtensionAdded`, `dart.hotReloadComplete`, `dart.hotRestartComplete` (if not already done by Task 14), and the `restart` session-level request handler.
+
+**Depends on**: 01-fix-variable-display-bugs through 16-completions-request (all prior tasks)
+
+**Estimated Time**: 4–5 hours
+
+### Scope
+
+**Files Modified (Write):**
+- `crates/fdemon-dap/src/adapter/handlers.rs`: Wrap backend calls with `tokio::time::timeout`; add `restart` handler
+- `crates/fdemon-dap/src/adapter/variables.rs`: Wrap backend calls with timeout in `get_scope_variables` and `expand_object`
+- `crates/fdemon-dap/src/adapter/events.rs`: Emit `dart.serviceExtensionAdded` on `ServiceExtensionAdded` isolate event
+
+### Details
+
+#### 1. Request timeouts
+
+Remove `#[allow(dead_code)]` from `REQUEST_TIMEOUT` in `adapter/types.rs`.
+
+Wrap all `backend.*()` calls with `tokio::time::timeout`:
+
+```rust
+use crate::adapter::types::REQUEST_TIMEOUT;
+
+// Before:
+let result = self.backend.get_stack(&isolate_id, limit).await?;
+
+// After:
+let result = tokio::time::timeout(REQUEST_TIMEOUT, self.backend.get_stack(&isolate_id, limit))
+    .await
+    .map_err(|_| format!("Request timed out after {}s", REQUEST_TIMEOUT.as_secs()))?
+    .map_err(|e| e.to_string())?;
+```
+
+Apply to all backend calls in:
+- `handlers.rs`: all handler functions
+- `variables.rs`: `get_scope_variables`, `expand_object`
+- `evaluate.rs`: already uses shorter timeouts for hover/toString (1s) — keep those
+
+Consider a helper function:
+```rust
+async fn with_timeout<T, E: std::fmt::Display>(
+    future: impl Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    tokio::time::timeout(REQUEST_TIMEOUT, future)
+        .await
+        .map_err(|_| format!("Request timed out after {}s", REQUEST_TIMEOUT.as_secs()))?
+        .map_err(|e| e.to_string())
+}
+```
+
+#### 2. `dart.serviceExtensionAdded` event
+
+In `events.rs`, handle `IsolateEvent::ServiceExtensionAdded`:
+
+```rust
+DebugEvent::ServiceExtensionAdded { isolate_id, extension_rpc, method } => {
+    self.send_event("dart.serviceExtensionAdded", json!({
+        "extensionRPC": extension_rpc,
+        "isolateId": isolate_id,
+    }));
+}
+```
+
+Check if `DebugEvent` already has a `ServiceExtensionAdded` variant — it may be an `IsolateEvent` variant that needs routing. If it arrives via the Isolate stream (not Debug stream), ensure the event routing in `handle_debug_event` handles it.
+
+#### 3. `restart` session-level handler
+
+Add `restart` to the dispatch table:
+
+```rust
+"restart" => self.handle_restart(request).await,
+```
+
+The `restart` request performs a hot restart (re-creates the main isolate):
+
+```rust
+async fn handle_restart(&mut self, request: &DapRequest) -> DapResponse {
+    self.backend.hot_restart().await
+        .map_err(|e| format!("Restart failed: {}", e))?;
+    DapResponse::success(request, json!({}))
+}
+```
+
+Re-add `supports_restart_request: Some(true)` to `fdemon_defaults()` (was removed in Task 01).
+
+#### 4. Variable store memory cap
+
+Add a safety cap to `VariableStore`:
+
+```rust
+const MAX_VARIABLE_REFS: usize = 10_000;
+
+pub fn allocate(&mut self, var_ref: VariableRef) -> i64 {
+    if self.references.len() >= MAX_VARIABLE_REFS {
+        tracing::warn!("Variable reference store full ({} entries), returning 0", MAX_VARIABLE_REFS);
+        return 0;  // Non-expandable
+    }
+    // ... existing allocation
+}
+```
+
+### Acceptance Criteria
+
+1. All backend calls wrapped with 10s timeout
+2. Timeout errors return clear DAP error responses
+3. `#[allow(dead_code)]` removed from `REQUEST_TIMEOUT`
+4. `dart.serviceExtensionAdded` emitted on `ServiceExtensionAdded` events
+5. `restart` request handler works (hot restart)
+6. `supportsRestartRequest: true` re-added to capabilities
+7. Variable store capped at 10,000 entries
+8. 10+ new unit tests
+
+### Testing
+
+```rust
+#[tokio::test]
+async fn test_backend_timeout_returns_error() {
+    // MockBackend: get_stack hangs forever
+    // Verify timeout error after REQUEST_TIMEOUT
+}
+
+#[tokio::test]
+async fn test_variable_store_cap() {
+    // Allocate MAX_VARIABLE_REFS + 1 entries
+    // Verify last allocation returns 0
+}
+
+#[tokio::test]
+async fn test_restart_calls_hot_restart() {
+    // Call handle_restart
+    // Verify backend.hot_restart called
+}
+```
+
+### Notes
+
+- The `with_timeout` helper should be used consistently across all files to avoid duplicating timeout logic.
+- Short timeouts (1s) for `toString()` and getter evaluation should be kept separate from the general 10s timeout.
+- The variable store cap of 10,000 is generous — most debug sessions will never hit it. But widget trees with thousands of children could theoretically exhaust it in a single pause.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-dap/src/adapter/types.rs` | Removed `#[allow(dead_code)]` from `REQUEST_TIMEOUT`; added `ServiceExtensionAdded` variant to `DebugEvent` enum |
+| `crates/fdemon-dap/src/adapter/handlers.rs` | Added `with_timeout` free function; wrapped all backend calls with 10s timeout; added `restart` dispatch entry and `handle_restart` method; added `std::future::Future` import |
+| `crates/fdemon-dap/src/adapter/variables.rs` | Imported `with_timeout`; wrapped `get_stack`, `get_object`, `get_isolate` calls in `get_scope_variables`, `get_globals_variables`, `expand_object`, `resolve_library_id_for_frame`, `get_root_lib_from_isolate`, and `collect_getters_from_class` |
+| `crates/fdemon-dap/src/adapter/events.rs` | Added `ServiceExtensionAdded` arm to `handle_debug_event` — emits `dart.serviceExtensionAdded` with `extensionRPC` and `isolateId` fields |
+| `crates/fdemon-dap/src/adapter/stack.rs` | Added `MAX_VARIABLE_REFS` constant (10,000); updated `VariableStore::allocate` to enforce the cap (returns 0 and logs a warning when full) |
+| `crates/fdemon-dap/src/protocol/types.rs` | Added `supports_restart_request: Some(true)` to `fdemon_defaults()`; updated the test that previously asserted this capability was absent |
+| `crates/fdemon-dap/src/adapter/tests/mod.rs` | Registered new `request_timeouts_events` test module |
+| `crates/fdemon-dap/src/adapter/tests/request_timeouts_events.rs` | New file: 15 unit tests covering variable store cap, `restart` handler, `dart.serviceExtensionAdded` event, and `with_timeout` helper |
+
+### Notable Decisions/Tradeoffs
+
+1. **`with_timeout` as a free function**: Placed in `handlers.rs` and re-exported as `pub(crate)` so both `handlers.rs` and `variables.rs` can use it without code duplication. The short-timeout paths (`toString()` and getter evaluation, 1 second) are left unchanged since they have deliberate shorter deadlines.
+
+2. **`handle_restart` uses `DapResponse::error` not `error_with_code`**: The timeout error message from `with_timeout` already includes "timed out after 10s" which is user-readable. Using the simpler error path avoids coupling the handler to `ERR_TIMEOUT`.
+
+3. **Updated existing test**: `test_capabilities_phase3_fields_in_json` previously asserted `supportsRestartRequest` was absent. Updated to assert it is `true` since the handler is now implemented.
+
+4. **`ERR_TIMEOUT` kept with `#[allow(dead_code)]`**: It was previously unused and still is (we use the string message path). Left for future use when error codes are surfaced more broadly.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-dap` - Passed (801 tests)
+- `cargo test --workspace` - Passed (all tests across all crates)
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Timeout value not configurable**: The 10s `REQUEST_TIMEOUT` is a compile-time constant. Slow devices (e.g., low-end Android) may hit timeouts during normal operation. Future work could expose this via `DapSettings`.
+
+2. **`with_timeout` on `get_source`**: The `get_source` backend method returns `Result<String, String>` not `Result<String, BackendError>`. It works correctly with `with_timeout` since the error bound is `Display`, but it's a different error type than other backend methods.

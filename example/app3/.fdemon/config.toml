@@ -45,12 +45,9 @@ show_source_indicator = true
 dedupe_threshold_ms = 100
 
 [dap]
-enabled = true
-auto_start_in_ide = false
 port = 33001
 bind_address = "127.0.0.1"
-suppress_reload_on_pause = true
-auto_configure_ide = false
+
 
 [editor]
 command = ""

@@ -39,6 +39,25 @@ use tokio::{
 
 use fdemon_core::error::{Error, Result};
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Auth token generation
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Generate a cryptographically random 32-character hex auth token.
+///
+/// Uses 16 bytes of entropy from the OS PRNG (via `rand`), encoded as hex.
+/// The resulting token is 32 characters long and suitable for use as a shared
+/// secret between the DAP server and its IDE client.
+fn generate_auth_token() -> String {
+    use rand::Rng;
+    let bytes: [u8; 16] = rand::thread_rng().gen();
+    bytes.iter().fold(String::with_capacity(32), |mut s, b| {
+        use std::fmt::Write;
+        let _ = write!(s, "{:02x}", b);
+        s
+    })
+}
+
 use crate::adapter::{DebugEvent, DynDebugBackend};
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -148,6 +167,12 @@ pub struct DapServerHandle {
     /// The capacity is intentionally small — log events are latency-tolerant
     /// and a slow subscriber should lag rather than block the sender.
     pub(crate) log_event_tx: broadcast::Sender<DebugEvent>,
+
+    /// The auth token generated at startup.
+    ///
+    /// `Some` when `DapServerConfig::require_auth` was `true` at startup, so
+    /// sessions can enforce token validation.  `None` when auth is disabled.
+    pub(crate) auth_token: Option<String>,
 }
 
 impl std::fmt::Debug for DapServerHandle {
@@ -165,6 +190,14 @@ impl DapServerHandle {
     /// [`start`], in which case the OS assigned an ephemeral port.
     pub fn port(&self) -> u16 {
         self.port
+    }
+
+    /// Returns the auth token generated at startup, or `None` when auth is disabled.
+    ///
+    /// The token is printed at startup (see [`start`]) so that IDE plugins can
+    /// parse it from the process output and include it in `initialize` requests.
+    pub fn auth_token(&self) -> Option<&str> {
+        self.auth_token.as_deref()
     }
 
     /// Returns a clone of the broadcast sender for forwarding debug events to
@@ -189,6 +222,13 @@ pub struct DapServerConfig {
     /// Bind address (e.g., `"127.0.0.1"` for local-only, `"0.0.0.0"` for all
     /// interfaces — the latter is a security risk; prefer `127.0.0.1`).
     pub bind_addr: String,
+
+    /// When `true`, clients must provide the auth token (printed at startup)
+    /// in the `authToken` field of their `initialize` request.
+    ///
+    /// Defaults to `false` for backward compatibility with existing workflows.
+    /// A future release may change this default to `true`.
+    pub require_auth: bool,
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -252,6 +292,23 @@ pub async fn start(
         );
     }
 
+    // Generate auth token when required; warn when auth is disabled.
+    let auth_token: Option<String> = if config.require_auth {
+        let token = generate_auth_token();
+        tracing::info!("DAP auth token: {}", token);
+        // Print to stderr as well so IDE plugins can parse it from process output.
+        eprintln!("DAP auth token: {}", token);
+        Some(token)
+    } else {
+        tracing::warn!(
+            "DAP server authentication is disabled. Any local process can connect and \
+             execute arbitrary Dart code via the 'evaluate' command. Set \
+             `require_auth = true` in your DAP server configuration to enable token \
+             authentication."
+        );
+        None
+    };
+
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
 
     // Broadcast channel for forwarding debug events (e.g., LogOutput) to all
@@ -267,6 +324,7 @@ pub async fn start(
         semaphore,
         log_event_tx.clone(),
         backend_factory,
+        auth_token.clone(),
     ));
 
     Ok(DapServerHandle {
@@ -274,6 +332,7 @@ pub async fn start(
         shutdown_tx,
         task,
         log_event_tx,
+        auth_token,
     })
 }
 
@@ -309,6 +368,7 @@ async fn accept_loop(
     semaphore: Arc<Semaphore>,
     log_event_tx: broadcast::Sender<DebugEvent>,
     backend_factory: Option<Arc<dyn BackendFactory>>,
+    auth_token: Option<String>,
 ) {
     loop {
         tokio::select! {
@@ -363,6 +423,7 @@ async fn accept_loop(
                         let session_shutdown = shutdown_rx.clone();
                         let session_tx = event_tx.clone();
                         let session_client_id = client_id.clone();
+                        let session_auth_token = auth_token.clone();
 
                         // Attempt to create a real backend for this connection.
                         let maybe_backend = backend_factory.as_ref().and_then(|f| f.create());
@@ -379,6 +440,7 @@ async fn accept_loop(
                                     session_shutdown,
                                     backend_handle.backend,
                                     backend_handle.debug_event_rx,
+                                    session_auth_token,
                                 )
                                 .await;
 
@@ -412,7 +474,7 @@ async fn accept_loop(
 
                             tokio::spawn(async move {
                                 if let Err(e) =
-                                    DapClientSession::run(stream, session_shutdown, log_event_rx).await
+                                    DapClientSession::run(stream, session_shutdown, log_event_rx, session_auth_token).await
                                 {
                                     tracing::warn!(
                                         "DAP client session error ({}): {}",
@@ -471,12 +533,13 @@ mod tests {
 
     // ── Server startup ────────────────────────────────────────────────────────
 
-    /// Helper: start a server on port 0 (NoopBackend for all connections).
+    /// Helper: start a server on port 0 (NoopBackend for all connections, auth disabled).
     async fn start_test_server(event_tx: mpsc::Sender<DapServerEvent>) -> DapServerHandle {
         start(
             DapServerConfig {
                 port: 0,
                 bind_addr: "127.0.0.1".to_string(),
+                require_auth: false,
             },
             event_tx,
             None, // no backend factory — uses NoopBackend
@@ -516,6 +579,7 @@ mod tests {
             DapServerConfig {
                 port: occupied_port,
                 bind_addr: "127.0.0.1".to_string(),
+                require_auth: false,
             },
             event_tx2,
             None,
@@ -851,6 +915,7 @@ mod tests {
                 &'a self,
                 _isolate_id: &'a str,
                 _step: Option<crate::adapter::StepMode>,
+                _frame_index: Option<i32>,
             ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
                 Box::pin(async { Ok(()) })
             }
@@ -936,6 +1001,14 @@ mod tests {
                 Box::pin(async { Ok(serde_json::json!({"isolates": []})) })
             }
 
+            fn get_isolate_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({})) })
+            }
+
             fn get_scripts_boxed<'a>(
                 &'a self,
                 _isolate_id: &'a str,
@@ -944,11 +1017,41 @@ mod tests {
                 Box::pin(async { Ok(serde_json::json!({"scripts": []})) })
             }
 
+            fn call_service_boxed<'a>(
+                &'a self,
+                _method: &'a str,
+                _params: Option<serde_json::Value>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({})) })
+            }
+
+            fn set_library_debuggable_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _library_id: &'a str,
+                _is_debuggable: bool,
+            ) -> Pin<Box<dyn Future<Output = Result<(), BackendError>> + Send + 'a>> {
+                Box::pin(async { Ok(()) })
+            }
+
+            fn get_source_report_boxed<'a>(
+                &'a self,
+                _isolate_id: &'a str,
+                _script_id: &'a str,
+                _report_kinds: Vec<String>,
+                _token_pos: Option<i64>,
+                _end_token_pos: Option<i64>,
+            ) -> Pin<Box<dyn Future<Output = Result<serde_json::Value, BackendError>> + Send + 'a>>
+            {
+                Box::pin(async { Ok(serde_json::json!({"ranges": [], "scripts": []})) })
+            }
+
             fn get_source_boxed<'a>(
                 &'a self,
                 _isolate_id: &'a str,
                 _script_id: &'a str,
-            ) -> Pin<Box<dyn Future<Output = std::result::Result<String, String>> + Send + 'a>>
+            ) -> Pin<Box<dyn Future<Output = Result<String, BackendError>> + Send + 'a>>
             {
                 Box::pin(async { Ok(String::new()) })
             }
@@ -1017,6 +1120,7 @@ mod tests {
             DapServerConfig {
                 port: 0,
                 bind_addr: "127.0.0.1".to_string(),
+                require_auth: false,
             },
             event_tx,
             Some(factory),
@@ -1073,6 +1177,7 @@ mod tests {
             DapServerConfig {
                 port: 0,
                 bind_addr: "127.0.0.1".to_string(),
+                require_auth: false,
             },
             event_tx,
             Some(factory),
