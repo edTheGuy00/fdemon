@@ -19,8 +19,8 @@ Both touch vscode.rs — must run sequentially.
 
 | # | Task | Status | Depends On | Est. | Modules |
 |---|------|--------|------------|------|---------|
-| 1 | [01-remove-fdemon-managed](tasks/01-remove-fdemon-managed.md) | Pending | — | 10min | `ide_config/vscode.rs`, `ide_config/merge.rs` |
-| 2 | [02-workspace-root-detection](tasks/02-workspace-root-detection.md) | Pending | 1 | 30min | `ide_config/vscode.rs`, `ide_config/mod.rs` |
+| 1 | [01-remove-fdemon-managed](tasks/01-remove-fdemon-managed.md) | Done ✅ | — | 10min | `ide_config/vscode.rs`, `ide_config/merge.rs` |
+| 2 | [02-workspace-root-detection](tasks/02-workspace-root-detection.md) | Done ✅ | 1 | 30min | `ide_config/vscode.rs`, `ide_config/mod.rs` |
 
 ## File Overlap Analysis
 

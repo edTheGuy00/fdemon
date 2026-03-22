@@ -38,3 +38,32 @@ Remove the invalid `"fdemon-managed": true` field from generated VS Code/Neovim 
 ## Estimated Time
 
 10 minutes
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/dap-phase-6-plan
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/ide_config/vscode.rs` | Removed `"fdemon-managed": true` from `fdemon_entry()`; updated test assertion from `assert_eq!(configs[0]["fdemon-managed"], true)` to `assert!(cfg.get("fdemon-managed").is_none())` |
+| `crates/fdemon-app/src/ide_config/merge.rs` | Removed `FDEMON_MARKER_FIELD` constant and its `#[allow(dead_code)]` annotation; updated `test_constants_have_expected_values` to only assert `FDEMON_CONFIG_NAME` |
+| `crates/fdemon-app/src/ide_config/neovim.rs` | Updated test assertion from `assert_eq!(cfg["fdemon-managed"], true)` to `assert!(cfg.get("fdemon-managed").is_none())` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test input data preserved**: Test strings that include `"fdemon-managed": true` in existing-config inputs (merge scenarios) were left as-is — they simulate old user configs being migrated, and the merge replaces the entire entry with a fresh `fdemon_entry()` that no longer contains the field. The assertions only verify `debugServer` and `name`, so they remain correct.
+2. **Pre-existing daemon compile error**: `fdemon-daemon` has a pre-existing E0063 error (`missing field ws_uri` in `VmRequestHandle::new_for_test`) that blocks `cargo test` for all dependent crates. This is unrelated to this task. `cargo check -p fdemon-app` passes cleanly.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (no errors or warnings from our changes)
+- `cargo test -p fdemon-app -- ide_config` - Blocked by pre-existing `fdemon-daemon` compile error (unrelated to this task)
+
+### Risks/Limitations
+
+1. **Pre-existing daemon error**: The `fdemon-daemon` crate has a compile error in `vm_service/client.rs:177` that prevents running the `fdemon-app` test suite. This pre-dates this task (verified via `git status` — only our 3 files are modified). Full test validation requires that error to be fixed first.
