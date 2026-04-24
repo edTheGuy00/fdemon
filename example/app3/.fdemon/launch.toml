@@ -12,7 +12,7 @@ mode = "profile"
 
 [[configurations]]
 name = "Development"
-device = "ios"
+device = "android"
 mode = "debug"
 auto_start = true
 

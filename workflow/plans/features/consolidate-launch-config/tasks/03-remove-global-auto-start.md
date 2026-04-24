@@ -77,3 +77,46 @@ EOF
 
 - If any test in `fdemon-tui` was asserting `behavior.auto_start = true` drives auto-launch (without any per-config auto_start), that test's premise disappears. Delete the test or rewrite it to use per-config auto_start.
 - If a user's external tooling reads/writes `[behavior] auto_start` programmatically, their tooling breaks silently (field still "works" serde-wise but has no effect). Accept — this is the deprecation path.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-aeb46f9ba479ef797
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Removed `auto_start` field from `BehaviorSettings` and its `Default` impl; updated two tests |
+| `crates/fdemon-app/src/config/settings.rs` | Added `check_deprecated_auto_start()` fn with `OnceLock`-guarded `warn!`; wired into `load_settings`; removed `auto_start` from both inline and `generate_default_config` default TOML; updated 4 tests |
+| `crates/fdemon-tui/src/startup.rs` | Simplified gate to only `has_auto_start_config`; removed `behavior_auto_start` variable; removed `test_startup_flutter_returns_auto_start_when_behavior_auto_start_enabled`; updated `test_startup_flutter_prefers_launch_config_auto_start` to not set `behavior.auto_start` |
+| `crates/fdemon-app/src/settings_items.rs` | Removed `behavior.auto_start` row from `project_settings_items` |
+| `crates/fdemon-app/src/handler/settings.rs` | Removed `behavior.auto_start` match arm; updated `test_apply_project_setting_bool` to use `behavior.confirm_quit`; updated wrong-prefix noop test |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated `selected_index` from 4 to 3 for `watcher.auto_reload` (shifted after auto_start removal) |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated item count from 34→33; replaced "Auto Start" assertion with "Confirm Quit" |
+| `example/app1/.fdemon/config.toml` | Removed `auto_start = true` from `[behavior]` |
+| `example/app2/.fdemon/config.toml` | Removed `auto_start = false` from `[behavior]` |
+| `example/app3/.fdemon/config.toml` | Removed stale comment block + `auto_start = false` from `[behavior]` |
+| `example/app4/.fdemon/config.toml` | Removed `auto_start = false` from `[behavior]` |
+| `CHANGELOG.md` | Added breaking change note under `[Unreleased]` |
+| Snapshot files | Accepted insta snapshot updates (version string drift 0.3.0→0.4.0, pre-existing) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`OnceLock` for deprecation warning**: Used `std::sync::OnceLock` to ensure at most one warning per process lifetime without requiring a `Mutex` or `AtomicBool`. The raw TOML is parsed with `toml::Value` before serde deserialization to detect the dropped field.
+2. **Startup test removal**: `test_startup_flutter_returns_auto_start_when_behavior_auto_start_enabled` was deleted (its premise — that `behavior.auto_start` drives auto-launch — is gone). The other behavior-related test was rewritten to verify launch.toml-only auto-start.
+3. **Snapshot drift**: The 4 snapshot failures were pre-existing version string drift (`0.3.0` → `0.4.0`), not caused by these changes. Accepted via `cargo insta test --accept`.
+
+### Testing Performed
+
+- `cargo check --workspace` - Passed
+- `cargo test --workspace` - Passed (1876+734+842+866 tests, 0 failures)
+- `cargo fmt --all` - Passed
+- `cargo clippy --workspace -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`save_last_selection` untouched**: Confirmed that `save_last_selection`, `load_last_selection`, and `LastSelection` signatures were not modified — parallel tasks 01/02 are safe.
+2. **Snapshot updates**: The 4 accepted snapshots had pre-existing version-string drift; the acceptance is safe since the diff only shows `v0.3.0` → `v0.4.0` in the header line.

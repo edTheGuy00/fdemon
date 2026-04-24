@@ -6,12 +6,12 @@ Plan: [PLAN.md](./PLAN.md)
 
 ## Tasks
 
-| # | Task | File | Agent | Depends on |
-|---|------|------|-------|------------|
-| 01 | Invert `find_auto_launch_target` priority — launch.toml `auto_start = true` wins over `settings.local.toml` cache | [tasks/01-invert-auto-launch-priority.md](./tasks/01-invert-auto-launch-priority.md) | implementor | — |
-| 02 | Symmetric persistence — save `last_device` / `last_config` on manual NewSessionDialog launches too | [tasks/02-symmetric-persistence.md](./tasks/02-symmetric-persistence.md) | implementor | — |
-| 03 | Remove `[behavior] auto_start` global flag (redundant with per-config `auto_start`) | [tasks/03-remove-global-auto-start.md](./tasks/03-remove-global-auto-start.md) | implementor | — |
-| 04 | Documentation — rewrite CONFIGURATION.md priority section, add TESTING.md regression test J | [tasks/04-docs-rewrite.md](./tasks/04-docs-rewrite.md) | implementor | 01, 02, 03 (logically — merges last to describe final state) |
+| # | Task | File | Agent | Status | Depends on |
+|---|------|------|-------|--------|------------|
+| 01 | Invert `find_auto_launch_target` priority — launch.toml `auto_start = true` wins over `settings.local.toml` cache | [tasks/01-invert-auto-launch-priority.md](./tasks/01-invert-auto-launch-priority.md) | implementor | [x] Done | — |
+| 02 | Symmetric persistence — save `last_device` / `last_config` on manual NewSessionDialog launches too | [tasks/02-symmetric-persistence.md](./tasks/02-symmetric-persistence.md) | implementor | [x] Done | — |
+| 03 | Remove `[behavior] auto_start` global flag (redundant with per-config `auto_start`) | [tasks/03-remove-global-auto-start.md](./tasks/03-remove-global-auto-start.md) | implementor | [x] Done | — |
+| 04 | Documentation — rewrite CONFIGURATION.md priority section, add TESTING.md regression test J | [tasks/04-docs-rewrite.md](./tasks/04-docs-rewrite.md) | implementor | [x] Done (CONCERN resolved: follow-up fixed gate/fall-through doc inaccuracies) | 01, 02, 03 (logically — merges last to describe final state) |
 
 ## Wave Plan
 

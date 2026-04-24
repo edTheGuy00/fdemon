@@ -128,3 +128,37 @@ Add a new Test J after Test I. Use the existing Test X format for consistency.
 
 - Read the new priority section top-to-bottom and confirm each bullet matches `spawn.rs`'s `find_auto_launch_target`.
 - Manually walk through Test J's steps on the live codebase with 4 devices connected — it must pass end-to-end.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/launch-toml-device
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Rewrote Auto-Start Behavior section to describe 4-tier priority chain; removed `auto_start` from Behavior Settings table with deprecation note; added persistence clarification to User Preferences section; removed `auto_start` reference from Settings Panel booleans example; updated Best Practices section 5; removed `auto_start = false` from complete config.toml example |
+| `example/TESTING.md` | Added Test J (consolidate-launch-config regression test); updated Test F to remove reference to deprecated `[behavior] auto_start` as the reason for dialog display |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test F update**: Test F previously showed `[behavior] auto_start = false` in `config.toml` as the mechanism for showing the dialog. Since that flag is now deprecated and has no effect, updated the config description to clarify that the real gate is the absence of per-config `auto_start = true`. The test's expected result is still correct.
+
+2. **4-tier description matches spawn.rs exactly**: Each bullet in the priority section maps 1-to-1 to `try_auto_start_config`, `try_cached_selection`, `try_first_config`, and `bare_flutter_run` in `crates/fdemon-app/src/spawn.rs`.
+
+3. **Startup gate accuracy**: The Auto-Start Behavior section now also accurately reflects `startup.rs` — the TUI startup gate checks only `has_auto_start_config` (whether any config has `auto_start = true`), not `behavior.auto_start`.
+
+### Testing Performed
+
+- Verified Auto-Start Behavior section bullets against `find_auto_launch_target` in `spawn.rs` — all 4 tiers match
+- Verified User Preferences clarification matches `save_last_selection` call added in `launch_context.rs` (Task 02)
+- Verified Behavior Settings table no longer contains `auto_start` row
+- Verified Test J step sequence matches the priority chain: android (auto_start wins) → macos edit (auto_start config changes) → stale cache ignored
+- Verified TOC anchors in CONFIGURATION.md unchanged
+
+### Risks/Limitations
+
+1. **Test J requires 4 physical devices**: Full end-to-end walkthrough of Test J requires connected Android + macOS + iPhone devices. The test steps are correct per code review but manual execution was not possible in this environment.

@@ -41,6 +41,35 @@ When `handle_launch` successfully creates a session from the NewSessionDialog, p
 - Changing the `save_last_selection` function itself. If you find you need to add a parameter or return value, stop and escalate to the planner — Task 03 also reads this function and we don't want a signature change in Wave 1.
 - Adding a "remember my choice" checkbox to the dialog UI. Today the behavior is always-save; a user opt-out is a follow-up.
 
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a54161e078f609532
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | Added `save_last_selection` call in the `Ok(session_id)` success branch of `handle_launch`; added 3 integration tests covering device-only persist, device+config persist, and no-persist on session creation failure |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement before config move**: The `save_last_selection` call is placed immediately after the tracing info log and before the config is moved into the spawn action. This ensures `config.as_ref()` is still available to extract the name without cloning the whole struct.
+2. **Temp dir in tests**: New tests use `tempfile::tempdir()` and `AppState::with_settings(tmp.path(), ...)` so the settings file goes to an isolated temp directory rather than the test CWD, preventing incidental modification of committed `crates/fdemon-app/.fdemon/settings.local.toml`.
+3. **No signature change to `save_last_selection`**: Per task constraint, the function is called exactly as-is — `config.as_ref().map(|c| c.name.as_str())` for the config name and `Some(&device.id)` for the device id.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app "handler::new_session"` — Passed (66 tests, 3 new)
+- `cargo fmt --all` — Passed (no changes needed)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No-op on empty project_path**: When `state.project_path` is empty (default in tests that don't set it), `save_last_selection` will fail to write and log a warning — this is the intended behavior per the task's "non-fatal" requirement. The warning may appear in test output for pre-existing tests that call `handle_launch` with `AppState::default()`.
+
 ## Verification
 
 ```bash
