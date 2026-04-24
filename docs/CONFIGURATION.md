@@ -182,14 +182,21 @@ Supported launch.json fields:
 
 ### Auto-Start Behavior
 
-When `behavior.auto_start = true` in `config.toml`:
+Flutter Demon auto-launches a session at startup when either:
 
-1. Check `settings.local.toml` for last used config/device
-2. If found and valid, use that selection
-3. If not found, look for first config with `auto_start = true`
-4. If no auto_start config, use first config from launch.toml
-5. If no launch.toml, use first config from launch.json
-6. If no configs at all, run bare `flutter run` with first available device
+- Any configuration in `launch.toml` sets `auto_start = true`, OR
+- `settings.local.toml` contains a valid cached `last_device` from a previous run.
+
+**Selection priority (first matching tier wins):**
+
+1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). This tier always beats the cache.
+2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`.
+3. **First available** — first config in `launch.toml` (or `launch.json`) + first discovered device.
+4. **Bare `flutter run`** — if no configs exist at all.
+
+If a tier matches but its target device has disappeared (disconnected phone, closed simulator), Flutter Demon falls through to the next tier and logs a warning visible in the log buffer.
+
+**When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful.
 
 ### User Preferences (settings.local.toml)
 
@@ -203,6 +210,8 @@ last_device = "iPhone-15-Pro"
 ```
 
 This file is automatically added to `.gitignore` as it contains user-specific preferences.
+
+Both auto-launch and manual launches via the NewSessionDialog update this file, so your most recent device and config selection is always remembered for the next run.
 
 ### Creating Configurations
 
@@ -226,14 +235,14 @@ Control general application behavior.
 
 ```toml
 [behavior]
-auto_start = false      # If true, skip device selector and use first available device
 confirm_quit = true     # Show confirmation dialog when quitting with active sessions
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
-| `auto_start` | `boolean` | `false` | If `false`, shows device selector on startup. If `true`, automatically starts on the first available device. |
 | `confirm_quit` | `boolean` | `true` | If `true`, shows confirmation dialog when quitting with running apps. If `false`, quits immediately. |
+
+> **Removed in v0.5.0:** `[behavior] auto_start` — it was redundant with per-config `auto_start` in `launch.toml`, and its documented semantics never matched the code. Existing configs with the flag load cleanly but the flag has no effect; fdemon logs a one-time deprecation warning. Use per-config `auto_start = true` on the launch configuration you want to auto-launch.
 
 ### Watcher Settings
 
@@ -821,7 +830,6 @@ When running inside an IDE's integrated terminal, Flutter Demon automatically:
 
 ```toml
 [behavior]
-auto_start = false
 confirm_quit = true
 
 [watcher]
@@ -1031,7 +1039,7 @@ Different setting types have different editing behaviors:
 
 #### Booleans
 - **Enter/Space**: Toggle between `true` and `false`
-- Example: `auto_start`, `confirm_quit`, `show_timestamps`
+- Example: `confirm_quit`, `show_timestamps`
 
 #### Numbers
 - **+/=**: Increment by 1
@@ -1160,6 +1168,8 @@ device = "iphone"
 mode = "debug"
 auto_start = true  # Starts automatically
 ```
+
+Setting `auto_start = true` on a launch config is now the *only* way to trigger auto-launch at startup.
 
 ---
 
