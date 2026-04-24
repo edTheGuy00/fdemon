@@ -212,59 +212,111 @@ pub fn spawn_auto_launch(
 }
 
 /// Find the best device/config combination for auto-launch
-fn find_auto_launch_target(
+///
+/// Priority order:
+/// 1. `launch.toml` config with `auto_start = true` — always wins over cached selection
+/// 2. `settings.local.toml` cached `last_device` / `last_config` — used when no auto_start config
+/// 3. First launch config + first device (fallback when cache is stale or missing)
+/// 4. Bare flutter run with first device (no configs at all)
+pub fn find_auto_launch_target(
     configs: &LoadedConfigs,
     devices: &[Device],
     project_path: &Path,
 ) -> AutoLaunchSuccess {
-    // Priority 1: Check settings.local.toml for saved selection
-    if let Some(selection) = load_last_selection(project_path) {
-        if let Some(validated) = validate_last_selection(&selection, configs, devices) {
-            let config = validated.config_idx.and_then(|i| configs.configs.get(i));
-            if let Some(device) = validated.device_idx.and_then(|i| devices.get(i)) {
-                return AutoLaunchSuccess {
-                    device: device.clone(),
-                    config: config.map(|c| c.config.clone()),
-                };
-            } else {
-                tracing::warn!(
-                    "Saved device index {} not found in {} available devices, falling back to Priority 2",
-                    validated.device_idx.unwrap_or(0),
-                    devices.len()
-                );
-            }
-        } else {
-            tracing::debug!("Saved selection validation failed, falling back to Priority 2");
-        }
+    // Priority 1: launch.toml config with auto_start = true
+    if let Some(result) = try_auto_start_config(configs, devices) {
+        return result;
     }
 
-    // Priority 2: Find auto_start config or first config
-    let config = get_first_auto_start(configs).or_else(|| get_first_config(configs));
-
-    if let Some(sourced) = config {
-        // Find matching device
-        let device = if sourced.config.device == "auto" {
-            devices.first()
-        } else {
-            let found = devices::find_device(devices, &sourced.config.device);
-            if found.is_none() {
-                tracing::warn!(
-                    "Configured device '{}' not found, falling back to first available device",
-                    sourced.config.device
-                );
-            }
-            found.or_else(|| devices.first())
-        };
-
-        if let Some(device) = device {
-            return AutoLaunchSuccess {
-                device: device.clone(),
-                config: Some(sourced.config.clone()),
-            };
-        }
+    // Priority 2: settings.local.toml cached selection (only when no auto_start config)
+    if let Some(result) = try_cached_selection(configs, devices, project_path) {
+        return result;
     }
 
-    // Priority 3: Bare run with first device
+    // Priority 3: first launch config + first device
+    if let Some(result) = try_first_config(configs, devices) {
+        return result;
+    }
+
+    // Priority 4: bare flutter run with first device
+    bare_flutter_run(devices)
+}
+
+/// Priority 1: try to find a config with `auto_start = true` and resolve its device.
+fn try_auto_start_config(configs: &LoadedConfigs, devices: &[Device]) -> Option<AutoLaunchSuccess> {
+    let sourced = get_first_auto_start(configs)?;
+
+    let device = if sourced.config.device == "auto" {
+        devices.first()
+    } else {
+        let found = devices::find_device(devices, &sourced.config.device);
+        if found.is_none() {
+            tracing::warn!(
+                "Configured device '{}' not found, falling back to first available device",
+                sourced.config.device
+            );
+        }
+        found.or_else(|| devices.first())
+    };
+
+    device.map(|d| AutoLaunchSuccess {
+        device: d.clone(),
+        config: Some(sourced.config.clone()),
+    })
+}
+
+/// Priority 2: try the cached `last_device` / `last_config` from `settings.local.toml`.
+fn try_cached_selection(
+    configs: &LoadedConfigs,
+    devices: &[Device],
+    project_path: &Path,
+) -> Option<AutoLaunchSuccess> {
+    let selection = load_last_selection(project_path)?;
+    let validated = validate_last_selection(&selection, configs, devices)?;
+
+    let config = validated.config_idx.and_then(|i| configs.configs.get(i));
+    let device = validated.device_idx.and_then(|i| devices.get(i));
+
+    if let Some(device) = device {
+        Some(AutoLaunchSuccess {
+            device: device.clone(),
+            config: config.map(|c| c.config.clone()),
+        })
+    } else {
+        tracing::warn!(
+            "Saved device index {} not found in {} available devices, falling back to Priority 3",
+            validated.device_idx.unwrap_or(0),
+            devices.len()
+        );
+        None
+    }
+}
+
+/// Priority 3: use the first launch config with the first available device.
+fn try_first_config(configs: &LoadedConfigs, devices: &[Device]) -> Option<AutoLaunchSuccess> {
+    let sourced = get_first_config(configs)?;
+
+    let device = if sourced.config.device == "auto" {
+        devices.first()
+    } else {
+        let found = devices::find_device(devices, &sourced.config.device);
+        if found.is_none() {
+            tracing::warn!(
+                "Configured device '{}' not found, falling back to first available device",
+                sourced.config.device
+            );
+        }
+        found.or_else(|| devices.first())
+    };
+
+    device.map(|d| AutoLaunchSuccess {
+        device: d.clone(),
+        config: Some(sourced.config.clone()),
+    })
+}
+
+/// Priority 4: bare `flutter run` — no config, just the first device.
+fn bare_flutter_run(devices: &[Device]) -> AutoLaunchSuccess {
     AutoLaunchSuccess {
         device: devices
             .first()
@@ -277,20 +329,40 @@ fn find_auto_launch_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{priority::SourcedConfig, types::ConfigSource};
+    use tempfile::tempdir;
 
-    #[test]
-    fn test_find_auto_launch_target_uses_first_device() {
-        let configs = LoadedConfigs::default();
-        let devices = vec![Device {
-            id: "device1".to_string(),
-            name: "Test Device".to_string(),
-            platform: "android".to_string(),
+    fn make_device(id: &str, platform: &str) -> Device {
+        Device {
+            id: id.to_string(),
+            name: id.to_string(),
+            platform: platform.to_string(),
             emulator: false,
             emulator_id: None,
             ephemeral: false,
             category: None,
             platform_type: None,
-        }];
+        }
+    }
+
+    fn make_sourced_config(name: &str, device: &str, auto_start: bool) -> SourcedConfig {
+        use crate::config::types::LaunchConfig;
+        SourcedConfig {
+            config: LaunchConfig {
+                name: name.to_string(),
+                device: device.to_string(),
+                auto_start,
+                ..Default::default()
+            },
+            source: ConfigSource::FDemon,
+            display_name: name.to_string(),
+        }
+    }
+
+    #[test]
+    fn test_find_auto_launch_target_uses_first_device() {
+        let configs = LoadedConfigs::default();
+        let devices = vec![make_device("device1", "android")];
         let project_path = Path::new("/tmp/test");
 
         let result = find_auto_launch_target(&configs, &devices, project_path);
@@ -303,6 +375,131 @@ mod tests {
     fn test_tool_check_timeout_is_reasonable() {
         // Verify timeout is set to a reasonable value (10 seconds)
         assert_eq!(TOOL_CHECK_TIMEOUT.as_secs(), 10);
+    }
+
+    /// T1: auto_start config beats cached selection
+    ///
+    /// launch.toml has auto_start=true with device="android"
+    /// settings.local.toml has last_device="macos-device"
+    /// Expected: returns android device + auto_start config (cache is ignored)
+    #[test]
+    fn test_auto_start_config_beats_cached_selection() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Write a cached selection pointing to a macOS device
+        crate::config::save_last_selection(project_path, None, Some("macos-device")).unwrap();
+
+        // Build LoadedConfigs with one auto_start config targeting android
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("Dev", "android", true));
+        configs.is_empty = false;
+
+        let devices = vec![
+            make_device("android-device-1", "android"),
+            make_device("macos-device", "macos"),
+        ];
+
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        // Should resolve via auto_start, not cache
+        assert_eq!(result.device.id, "android-device-1");
+        assert_eq!(result.config.as_ref().unwrap().name, "Dev");
+    }
+
+    /// T2: no auto_start config → cached selection is used
+    ///
+    /// launch.toml has no auto_start=true
+    /// settings.local.toml has a valid last_device
+    /// Expected: returns the cached device selection
+    #[test]
+    fn test_no_auto_start_uses_cached_selection() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Write a cached selection pointing to android device
+        crate::config::save_last_selection(project_path, None, Some("android-device-1")).unwrap();
+
+        // Build LoadedConfigs with one non-auto_start config
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("Dev", "auto", false));
+        configs.is_empty = false;
+
+        let devices = vec![
+            make_device("android-device-1", "android"),
+            make_device("ios-device-1", "ios"),
+        ];
+
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        // Should use cached device
+        assert_eq!(result.device.id, "android-device-1");
+    }
+
+    /// T3: no auto_start + stale cached device → falls through to first config + first device
+    ///
+    /// launch.toml has no auto_start=true
+    /// settings.local.toml has last_device pointing to a device that's no longer available
+    /// Expected: falls through to first config + first available device
+    #[test]
+    fn test_stale_cached_device_falls_through_to_first_config() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Cache a device that won't be in the discovered list
+        crate::config::save_last_selection(project_path, None, Some("disconnected-device"))
+            .unwrap();
+
+        // Build LoadedConfigs with one non-auto_start config
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("Dev", "auto", false));
+        configs.is_empty = false;
+
+        // Only one device available, not the cached one
+        let devices = vec![make_device("ios-device-1", "ios")];
+
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        // Should fall through to first config + first device
+        assert_eq!(result.device.id, "ios-device-1");
+        assert_eq!(result.config.as_ref().unwrap().name, "Dev");
+    }
+
+    /// T4 (regression): auto_start=true with device="auto" and no cache → first config + first device
+    ///
+    /// launch.toml has auto_start=true, device="auto"
+    /// No settings.local.toml cache
+    /// Expected: returns first config + first device
+    #[test]
+    fn test_auto_start_with_device_auto_uses_first_device() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // No cache file written
+
+        // Build LoadedConfigs with one auto_start config using device="auto"
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("Dev", "auto", true));
+        configs.is_empty = false;
+
+        let devices = vec![
+            make_device("ios-device-1", "ios"),
+            make_device("android-device-1", "android"),
+        ];
+
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        // auto_start=true + device="auto" → first device
+        assert_eq!(result.device.id, "ios-device-1");
+        assert_eq!(result.config.as_ref().unwrap().name, "Dev");
     }
 }
 
