@@ -6,19 +6,27 @@ All notable changes to Flutter Demon are documented here.
 
 ### Breaking Changes
 - `[behavior] auto_start` in `config.toml` is removed. The field is now silently
-  ignored with a deprecation warning at startup. Use per-config `auto_start = true`
-  in `.fdemon/launch.toml` instead.
+  ignored with a one-time deprecation warning at startup. Use per-config
+  `auto_start = true` in `.fdemon/launch.toml` instead.
 
 ### Bug Fixes
-- Release workflow version bump and changelog completeness
+- Editing `.fdemon/launch.toml` between runs is now honored even when
+  `settings.local.toml` holds a cached selection. `auto_start = true` in
+  `launch.toml` is treated as explicit intent and always beats the cache;
+  the cache is only consulted when no config has `auto_start = true`. (#29)
 
+### Features
+- Symmetric persistence for manual launches: picking a device/config in the
+  New Session dialog now updates `last_device` and `last_config` in
+  `settings.local.toml`, matching the auto-launch path. Previously only
+  auto-launches seeded the cache, which made the dialog feel forgetful.
 
-### Miscellaneous
-- Add release workflow fix plan and task breakdown
-
-
-### Other Changes
-- Native DAP server for IDE debugging (#10)
+### Documentation
+- Rewrite `docs/CONFIGURATION.md` auto-start priority section to describe the
+  4-tier chain (explicit intent → remembered last selection → first available
+  → bare `flutter run`) and mirror it on the website Configuration page.
+- Add `example/TESTING.md` Test J: regression test for the launch.toml-edit-
+  after-auto-launch scenario.
 
 
 ## [0.2.0] - 2026-03-02
