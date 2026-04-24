@@ -2,7 +2,6 @@
 # See: https://github.com/example/flutter-demon#configuration
 
 [behavior]
-auto_start = true      # Set to true to skip device selection
 confirm_quit = true     # Ask before quitting with running apps
 
 [watcher]

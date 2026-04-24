@@ -4,6 +4,11 @@ All notable changes to Flutter Demon are documented here.
 
 ## [Unreleased]
 
+### Breaking Changes
+- `[behavior] auto_start` in `config.toml` is removed. The field is now silently
+  ignored with a deprecation warning at startup. Use per-config `auto_start = true`
+  in `.fdemon/launch.toml` instead.
+
 ### Bug Fixes
 - Release workflow version bump and changelog completeness
 

@@ -8,11 +8,6 @@ use crate::config::{
 pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
     match item.id.as_str() {
         // Behavior
-        "behavior.auto_start" => {
-            if let SettingValue::Bool(v) = &item.value {
-                settings.behavior.auto_start = *v;
-            }
-        }
         "behavior.confirm_quit" => {
             if let SettingValue::Bool(v) = &item.value {
                 settings.behavior.confirm_quit = *v;
@@ -262,13 +257,13 @@ mod tests {
     #[test]
     fn test_apply_project_setting_bool() {
         let mut settings = Settings::default();
-        assert!(!settings.behavior.auto_start);
+        assert!(settings.behavior.confirm_quit); // default is true
 
-        let item =
-            SettingItem::new("behavior.auto_start", "Auto Start").value(SettingValue::Bool(true));
+        let item = SettingItem::new("behavior.confirm_quit", "Confirm Quit")
+            .value(SettingValue::Bool(false));
 
         apply_project_setting(&mut settings, &item);
-        assert!(settings.behavior.auto_start);
+        assert!(!settings.behavior.confirm_quit);
     }
 
     #[test]
@@ -739,7 +734,8 @@ mod tests {
 
         apply_launch_config_change(
             &mut config,
-            &SettingItem::new("behavior.auto_start", "Auto Start").value(SettingValue::Bool(true)),
+            &SettingItem::new("behavior.confirm_quit", "Confirm Quit")
+                .value(SettingValue::Bool(false)),
         );
 
         assert_eq!(

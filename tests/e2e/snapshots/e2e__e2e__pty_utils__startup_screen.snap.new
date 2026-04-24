@@ -1,6 +1,0 @@
----
-source: tests/e2e/pty_utils.rs
-assertion_line: 608
-expression: content
----
-                                    [Esc] Close  │       ││       │──────────────────────────────────────────────────────────────│       ││       │╭──────────────────────╮│                                     │       ││       ││1 Connected2 Bootable ││  CONFIGURATION                      │       ││       │╰──────────────────────╯│                                     │       ││       │ Discovering devices... │

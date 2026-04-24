@@ -8,7 +8,6 @@
 # Also watches .json files in addition to .dart files.
 
 [behavior]
-auto_start = false
 confirm_quit = true
 
 [watcher]

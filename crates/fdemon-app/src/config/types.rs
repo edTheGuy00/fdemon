@@ -155,10 +155,6 @@ pub struct FlutterSettings {
 /// Behavior settings
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BehaviorSettings {
-    /// If false, show device selector on startup
-    #[serde(default)]
-    pub auto_start: bool,
-
     /// Ask before quitting with running apps
     #[serde(default = "default_true")]
     pub confirm_quit: bool,
@@ -166,10 +162,7 @@ pub struct BehaviorSettings {
 
 impl Default for BehaviorSettings {
     fn default() -> Self {
-        Self {
-            auto_start: false,
-            confirm_quit: true,
-        }
+        Self { confirm_quit: true }
     }
 }
 
@@ -1334,7 +1327,6 @@ mod tests {
     #[test]
     fn test_settings_defaults() {
         let settings = Settings::default();
-        assert!(!settings.behavior.auto_start);
         assert!(settings.behavior.confirm_quit);
         assert_eq!(settings.watcher.debounce_ms, 500);
         assert!(settings.watcher.auto_reload);
@@ -1389,6 +1381,7 @@ flavor = "production"
 
     #[test]
     fn test_settings_deserialize_partial() {
+        // auto_start is no longer a recognized field; serde silently ignores it.
         let toml_content = r#"
 [behavior]
 auto_start = true
@@ -1398,7 +1391,6 @@ debounce_ms = 1000
 "#;
 
         let settings: Settings = toml::from_str(toml_content).unwrap();
-        assert!(settings.behavior.auto_start);
         assert!(settings.behavior.confirm_quit); // default
         assert_eq!(settings.watcher.debounce_ms, 1000);
         assert!(settings.watcher.auto_reload); // default
