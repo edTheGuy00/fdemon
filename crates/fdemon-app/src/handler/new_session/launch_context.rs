@@ -486,6 +486,17 @@ pub fn handle_launch(state: &mut AppState) -> UpdateResult {
                     device.id
                 );
 
+                // Persist the user's device and config choice for future auto-launch.
+                // Failures are non-fatal: a disk or permission issue must not block
+                // the launch that the user just confirmed.
+                if let Err(e) = crate::config::save_last_selection(
+                    &state.project_path,
+                    config.as_ref().map(|c| c.name.as_str()),
+                    Some(&device.id),
+                ) {
+                    tracing::warn!("handle_launch: failed to persist last selection: {e}");
+                }
+
                 // Auto-switch to the newly created session
                 state.session_manager.select_by_id(session_id);
 
@@ -1820,6 +1831,172 @@ mod tests {
             matches!(result.action, Some(UpdateAction::SpawnPreAppSources { .. })),
             "Expected SpawnPreAppSources when shared pre-app source is not yet running, got {:?}",
             result.action
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Symmetric persistence: handle_launch persists device + config selection
+    // (consolidate-launch-config Task 02)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Helper: create state_with_sdk but also set project_path to a real temp dir
+    /// so that save_last_selection can actually write the settings file.
+    fn state_with_sdk_and_project(project_dir: &std::path::Path) -> AppState {
+        let mut state = AppState::with_settings(project_dir.to_path_buf(), Default::default());
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
+        state
+    }
+
+    #[test]
+    fn test_handle_launch_persists_device_id_on_success() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".fdemon")).expect("create .fdemon");
+
+        let mut state = state_with_sdk_and_project(tmp.path());
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        // selected_index = 1 because index 0 is the group header
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // No config selected — ad-hoc device selection
+        let result = handle_launch(&mut state);
+
+        assert!(
+            result.action.is_some(),
+            "Expected a spawn action from handle_launch"
+        );
+
+        // settings.local.toml must now contain the device id
+        let prefs_path = tmp.path().join(".fdemon/settings.local.toml");
+        assert!(
+            prefs_path.exists(),
+            "settings.local.toml should have been created by save_last_selection"
+        );
+        let contents = std::fs::read_to_string(&prefs_path).expect("read settings.local.toml");
+        assert!(
+            contents.contains("emulator-5554"),
+            "settings.local.toml should contain the selected device id, got: {contents}"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_persists_config_name_when_config_selected() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".fdemon")).expect("create .fdemon");
+
+        let mut state = state_with_sdk_and_project(tmp.path());
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        // Select a named config
+        state
+            .new_session_dialog_state
+            .launch_context
+            .configs
+            .configs
+            .push(SourcedConfig {
+                config: LaunchConfig {
+                    name: "Staging".to_string(),
+                    ..Default::default()
+                },
+                source: ConfigSource::FDemon,
+                display_name: "Staging".to_string(),
+            });
+        state
+            .new_session_dialog_state
+            .launch_context
+            .selected_config_index = Some(0);
+        // Set flavor so the config condition in handle_launch fires
+        state.new_session_dialog_state.launch_context.flavor = Some("staging".to_string());
+
+        let result = handle_launch(&mut state);
+
+        assert!(
+            result.action.is_some(),
+            "Expected a spawn action from handle_launch"
+        );
+
+        let prefs_path = tmp.path().join(".fdemon/settings.local.toml");
+        assert!(
+            prefs_path.exists(),
+            "settings.local.toml should have been created"
+        );
+        let contents = std::fs::read_to_string(&prefs_path).expect("read settings.local.toml");
+        assert!(
+            contents.contains("emulator-5554"),
+            "settings.local.toml should contain device id, got: {contents}"
+        );
+        assert!(
+            contents.contains("Staging"),
+            "settings.local.toml should contain config name 'Staging', got: {contents}"
+        );
+    }
+
+    #[test]
+    fn test_handle_launch_does_not_persist_on_session_creation_failure() {
+        // session_manager already has MAX_SESSIONS slots taken so create_session fails
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(tmp.path().join(".fdemon")).expect("create .fdemon");
+
+        let mut state = state_with_sdk_and_project(tmp.path());
+        state.ui_mode = UiMode::NewSessionDialog;
+
+        // Fill all session slots — SessionManager enforces a max of 9
+        for i in 0..9 {
+            let d = fdemon_daemon::Device {
+                id: format!("filler-device-{i}"),
+                name: format!("Filler {i}"),
+                platform: "android".to_string(),
+                emulator: true,
+                category: None,
+                platform_type: None,
+                ephemeral: false,
+                emulator_id: None,
+            };
+            let _ = state.session_manager.create_session(&d);
+        }
+
+        // Select the test device through the dialog (slot is full — create_session will fail)
+        state
+            .new_session_dialog_state
+            .target_selector
+            .connected_devices
+            .push(test_device());
+        state
+            .new_session_dialog_state
+            .target_selector
+            .selected_index = 1;
+
+        let result = handle_launch(&mut state);
+
+        // Session creation should fail → no spawn action
+        assert!(
+            result.action.is_none(),
+            "Expected no action when session creation fails"
+        );
+
+        // settings.local.toml must NOT be written
+        let prefs_path = tmp.path().join(".fdemon/settings.local.toml");
+        assert!(
+            !prefs_path.exists(),
+            "settings.local.toml must NOT be written when session creation fails"
         );
     }
 }
