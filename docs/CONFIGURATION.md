@@ -182,19 +182,16 @@ Supported launch.json fields:
 
 ### Auto-Start Behavior
 
-Flutter Demon auto-launches a session at startup when either:
+Flutter Demon auto-launches a session at startup when at least one configuration in `launch.toml` sets `auto_start = true`. Otherwise, the NewSessionDialog opens for the user to pick a config and device manually.
 
-- Any configuration in `launch.toml` sets `auto_start = true`, OR
-- `settings.local.toml` contains a valid cached `last_device` from a previous run.
+Once the auto-launch gate fires, the **selection priority** below decides which config + device pair to use.
 
 **Selection priority (first matching tier wins):**
 
-1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). This tier always beats the cache.
-2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`.
+1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). If the configured device is not found among connected devices, Flutter Demon picks the first available device (still using the auto_start config — stays on Tier 1) and logs a warning visible in the log buffer. This tier always beats the cache.
+2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`. If the saved device is no longer connected, this tier returns no match and falls through to Tier 3, logging a warning.
 3. **First available** — first config in `launch.toml` (or `launch.json`) + first discovered device.
 4. **Bare `flutter run`** — if no configs exist at all.
-
-If a tier matches but its target device has disappeared (disconnected phone, closed simulator), Flutter Demon falls through to the next tier and logs a warning visible in the log buffer.
 
 **When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful.
 
