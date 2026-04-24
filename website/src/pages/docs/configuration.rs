@@ -50,11 +50,17 @@ pub fn Configuration() -> impl IntoView {
 
             // ── Behavior Settings ────────────────────────────────────
             <Section title="Behavior Settings">
-                <CodeBlock language="toml" code="[behavior]\nauto_start = false      # Skip device selector, use first available device\nconfirm_quit = true     # Show confirmation when quitting with active sessions" />
+                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true     # Show confirmation when quitting with active sessions" />
                 <SettingsTable entries=vec![
-                    ("auto_start", "boolean", "false", "If true, skips device selector on startup and uses first available device"),
                     ("confirm_quit", "boolean", "true", "If true, shows confirmation dialog when quitting with running apps"),
                 ] />
+                <div class="bg-amber-900/20 border border-amber-800 p-4 rounded-lg text-amber-200 text-sm">
+                    <p class="font-medium mb-1">"Deprecated: "<code class="text-amber-300">"[behavior] auto_start"</code></p>
+                    <p>
+                        "Removed in v0.5.0. Use per-config "<code class="text-amber-300">"auto_start = true"</code>
+                        " in "<code class="text-amber-300">".fdemon/launch.toml"</code>" instead. Existing configs that still set the flag load without error \u{2014} Flutter Demon logs a one-time deprecation warning and ignores the value."
+                    </p>
+                </div>
             </Section>
 
             // ── Watcher Settings ─────────────────────────────────────
@@ -234,6 +240,52 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                 <p class="text-slate-400 mb-2">"The "<code class="text-blue-400">"device"</code>" property accepts:"</p>
                 <CodeBlock language="toml" code="device = \"auto\"              # First available\ndevice = \"ios\"               # Any iOS device/simulator\ndevice = \"android\"           # Any Android device/emulator\ndevice = \"iphone\"            # Matches \"iPhone 15 Pro\"\ndevice = \"chrome\"            # Web on Chrome" />
 
+                <h3 class="text-lg font-bold text-white mt-6">"Auto-Start Behavior"</h3>
+                <p class="text-slate-400">
+                    "Flutter Demon auto-launches a session at startup when at least one configuration in "
+                    <code class="text-blue-400 bg-slate-900 px-1 rounded">"launch.toml"</code>
+                    " sets "<code class="text-blue-400">"auto_start = true"</code>
+                    ". Otherwise, the New Session dialog opens for manual selection."
+                </p>
+
+                <h4 class="font-bold text-white mt-4">"Selection Priority"</h4>
+                <p class="text-slate-400 text-sm">"First matching tier wins:"</p>
+                <ol class="list-decimal list-inside text-slate-400 space-y-2 ml-2 text-sm">
+                    <li>
+                        <strong class="text-white">"Explicit intent"</strong>
+                        " \u{2014} first launch config with "<code class="text-blue-400">"auto_start = true"</code>
+                        ". Always beats the cache. If its "<code class="text-blue-400">"device"</code>
+                        " is not connected, Flutter Demon uses the first available device (still Tier 1)."
+                    </li>
+                    <li>
+                        <strong class="text-white">"Remembered last selection"</strong>
+                        " \u{2014} if "<code class="text-blue-400">"settings.local.toml"</code>
+                        " holds "<code class="text-blue-400">"last_device"</code>" + "
+                        <code class="text-blue-400">"last_config"</code>
+                        " and the device is still connected, that selection is used. Reachable only when no config has "
+                        <code class="text-blue-400">"auto_start = true"</code>
+                        ". Falls through to Tier 3 if the saved device has been disconnected."
+                    </li>
+                    <li>
+                        <strong class="text-white">"First available"</strong>
+                        " \u{2014} first config in "<code class="text-blue-400">"launch.toml"</code>
+                        " (or "<code class="text-blue-400">"launch.json"</code>") + first discovered device."
+                    </li>
+                    <li>
+                        <strong class="text-white">"Bare "</strong>
+                        <code class="text-blue-400">"flutter run"</code>
+                        " \u{2014} if no configs exist at all."
+                    </li>
+                </ol>
+
+                <h4 class="font-bold text-white mt-4">"Cache Updates"</h4>
+                <p class="text-slate-400 text-sm">
+                    <code class="text-blue-400">"last_device"</code>" and "
+                    <code class="text-blue-400">"last_config"</code>
+                    " are written to "<code class="text-blue-400">"settings.local.toml"</code>
+                    " whenever a session starts successfully \u{2014} from both auto-launch and manual selections in the New Session dialog."
+                </p>
+
                 <h3 class="text-lg font-bold text-white mt-6">"Dart Defines"</h3>
                 <p class="text-slate-400 mb-2">"Pass compile-time constants to your Dart code:"</p>
                 <CodeBlock language="toml" code="[configurations.dart_defines]\nAPI_URL = \"https://api.example.com\"\nFEATURE_FLAG_X = \"true\"\nDEBUG_MODE = \"false\"" />
@@ -322,7 +374,7 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
             // ── Complete Example ──────────────────────────────────────
             <Section title="Complete Example">
                 <h3 class="text-lg font-bold text-white">"config.toml"</h3>
-                <CodeBlock language="toml" code="[behavior]\nauto_start = false\nconfirm_quit = true\n\n[watcher]\npaths = [\"lib\", \"packages/core/lib\"]\ndebounce_ms = 500\nauto_reload = true\nextensions = [\"dart\"]\n\n[ui]\nlog_buffer_size = 15000\nshow_timestamps = true\ncompact_logs = false\nstack_trace_collapsed = true\nstack_trace_max_frames = 3\n\n[devtools]\nauto_open = false\n\n[editor]\ncommand = \"\"  # Auto-detect" />
+                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true\n\n[watcher]\npaths = [\"lib\", \"packages/core/lib\"]\ndebounce_ms = 500\nauto_reload = true\nextensions = [\"dart\"]\n\n[ui]\nlog_buffer_size = 15000\nshow_timestamps = true\ncompact_logs = false\nstack_trace_collapsed = true\nstack_trace_max_frames = 3\n\n[devtools]\nauto_open = false\n\n[editor]\ncommand = \"\"  # Auto-detect" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"launch.toml"</h3>
                 <CodeBlock language="toml" code="[[configurations]]\nname = \"Dev (iOS)\"\ndevice = \"iphone\"\nmode = \"debug\"\nflavor = \"development\"\nentry_point = \"lib/main_dev.dart\"\nauto_start = true\n\n[configurations.dart_defines]\nAPI_URL = \"https://dev.api.example.com\"\nDEBUG_MODE = \"true\"\n\n[[configurations]]\nname = \"Production\"\ndevice = \"auto\"\nmode = \"release\"\nflavor = \"production\"\nentry_point = \"lib/main_prod.dart\"\nextra_args = [\"--obfuscate\", \"--split-debug-info=build/symbols\"]\n\n[configurations.dart_defines]\nAPI_URL = \"https://api.example.com\"" />
