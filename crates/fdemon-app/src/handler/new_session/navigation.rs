@@ -179,10 +179,14 @@ pub fn handle_field_activate(
 /// Opens the new session dialog and triggers device discovery.
 ///
 /// Loads launch configurations from the project path and initializes
-/// the dialog state. If no configurations are found, defaults are used.
+/// the dialog state.
 ///
-/// Uses cached devices if available (< 30s old) for instant display,
-/// then triggers background refresh to keep data fresh.
+/// Uses any cached devices/bootable for instant display. The cache has no TTL;
+/// it survives for the lifetime of the AppState. Whenever a cache hit occurs,
+/// the corresponding `refreshing` flag is set on the target selector and
+/// `RefreshDevicesAndBootableBackground` is dispatched so both lists stay
+/// fresh without a loading screen. If both caches are empty (first ever
+/// open), falls back to the foreground `DiscoverDevices` path.
 pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     // Load configs with error handling
     let configs = crate::config::load_all_configs(&state.project_path);
@@ -195,11 +199,8 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     // Show the dialog
     state.show_new_session_dialog(configs);
 
-    // Check cache first - this is the ONLY place where cache is checked and populated
-    // to avoid duplicate logic. The handler manages both cache checking and background refresh.
-
     // Check connected devices cache
-    let has_connected_cache = if let Some(cached_devices) = state.get_cached_devices() {
+    let connected_cached = if let Some(cached_devices) = state.get_cached_devices() {
         tracing::debug!(
             "Using cached devices ({} devices, age: {:?})",
             cached_devices.len(),
@@ -217,7 +218,7 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     };
 
     // Check bootable devices cache (independent of connected devices cache)
-    if let Some((simulators, avds)) = state.get_cached_bootable_devices() {
+    let bootable_cached = if let Some((simulators, avds)) = state.get_cached_bootable_devices() {
         tracing::debug!(
             "Using cached bootable devices ({} simulators, {} AVDs, age: {:?})",
             simulators.len(),
@@ -229,23 +230,33 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
             .new_session_dialog_state
             .target_selector
             .set_bootable_devices(simulators, avds);
-    }
+        true
+    } else {
+        false
+    };
 
-    // If we have connected device cache, trigger background refresh
-    if has_connected_cache {
-        let Some(flutter) = state.flutter_executable() else {
-            tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — skipping background device refresh");
-            return UpdateResult::none();
-        };
-        return UpdateResult::action(UpdateAction::RefreshDevicesBackground { flutter });
-    }
-
-    // Cache miss or expired - show loading and discover
-    tracing::debug!("Device cache miss, triggering discovery");
     let Some(flutter) = state.flutter_executable() else {
-        tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — cannot discover devices");
+        tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — skipping device refresh");
         return UpdateResult::none();
     };
+
+    if connected_cached || bootable_cached {
+        // We have at least one cached list shown — refresh in the background.
+        // Set refreshing flags AFTER set_*_devices() so they are not cleared.
+        if connected_cached {
+            state.new_session_dialog_state.target_selector.refreshing = true;
+        }
+        if bootable_cached {
+            state
+                .new_session_dialog_state
+                .target_selector
+                .bootable_refreshing = true;
+        }
+        return UpdateResult::action(UpdateAction::RefreshDevicesAndBootableBackground { flutter });
+    }
+
+    // Both caches are empty — fall back to the foreground discovery path.
+    tracing::debug!("Device cache miss, triggering foreground discovery");
     state.new_session_dialog_state.target_selector.loading = true;
     UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
 }
@@ -348,10 +359,13 @@ mod tests {
         // Should NOT show loading
         assert!(!state.new_session_dialog_state.target_selector.loading);
 
-        // Should trigger background refresh
+        // refreshing should be set because we had a cache hit
+        assert!(state.new_session_dialog_state.target_selector.refreshing);
+
+        // Should trigger background refresh (combined action)
         assert!(matches!(
             result.action,
-            Some(UpdateAction::RefreshDevicesBackground { .. })
+            Some(UpdateAction::RefreshDevicesAndBootableBackground { .. })
         ));
     }
 
@@ -393,10 +407,12 @@ mod tests {
                 .len(),
             1
         );
-        // Should trigger background refresh (not foreground discovery)
+        // refreshing should be set because we had a cache hit
+        assert!(state.new_session_dialog_state.target_selector.refreshing);
+        // Should trigger combined background refresh (not foreground discovery)
         assert!(matches!(
             result.action,
-            Some(UpdateAction::RefreshDevicesBackground { .. })
+            Some(UpdateAction::RefreshDevicesAndBootableBackground { .. })
         ));
     }
 
@@ -579,6 +595,58 @@ mod tests {
         assert!(matches!(
             result.action,
             Some(UpdateAction::DiscoverBootableDevices)
+        ));
+    }
+
+    #[test]
+    fn test_open_dialog_sets_refreshing_flags_on_cache_hit() {
+        let mut state = test_app_state();
+
+        // Pre-populate both caches.
+        state.set_device_cache(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.set_bootable_cache(vec![], vec![]);
+
+        let result = handle_open_new_session_dialog(&mut state);
+
+        assert!(state.new_session_dialog_state.target_selector.refreshing);
+        assert!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .bootable_refreshing
+        );
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::RefreshDevicesAndBootableBackground { .. })
+        ));
+    }
+
+    #[test]
+    fn test_open_dialog_only_connected_cached_sets_only_refreshing() {
+        let mut state = test_app_state();
+        state.set_device_cache(vec![test_device_full("1", "iPhone", "ios", false)]);
+        // No bootable cache set.
+
+        let _ = handle_open_new_session_dialog(&mut state);
+        assert!(state.new_session_dialog_state.target_selector.refreshing);
+        assert!(
+            !state
+                .new_session_dialog_state
+                .target_selector
+                .bootable_refreshing
+        );
+    }
+
+    #[test]
+    fn test_open_dialog_no_caches_falls_back_to_loading() {
+        let mut state = test_app_state();
+        // No caches set.
+        let result = handle_open_new_session_dialog(&mut state);
+        assert!(state.new_session_dialog_state.target_selector.loading);
+        assert!(!state.new_session_dialog_state.target_selector.refreshing);
+        assert!(matches!(
+            result.action,
+            Some(UpdateAction::DiscoverDevices { .. })
         ));
     }
 

@@ -10073,3 +10073,13 @@ fn test_enter_devtools_with_network_default_queues_switch_panel_message() {
         "Lazy-start path with Network default should queue SwitchDevToolsPanel(Network)"
     );
 }
+
+#[test]
+fn test_devices_discovered_clears_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state.new_session_dialog_state.target_selector.refreshing = true;
+
+    let _ = update(&mut state, Message::DevicesDiscovered { devices: vec![] });
+    assert!(!state.new_session_dialog_state.target_selector.refreshing);
+}
