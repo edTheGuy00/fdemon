@@ -89,6 +89,14 @@ pub fn handle_action(
             spawn::spawn_bootable_device_discovery(msg_tx, tool_availability);
         }
 
+        UpdateAction::DiscoverDevicesAndBootable { flutter } => {
+            // Foreground connected discovery (loading-aware, shows spinner and surfaces errors).
+            spawn::spawn_device_discovery(msg_tx.clone(), flutter);
+            // Background bootable discovery in parallel (uses tool_availability for
+            // emulator/simulator listings; errors are logged only).
+            spawn::spawn_bootable_device_discovery(msg_tx, tool_availability);
+        }
+
         UpdateAction::DiscoverDevicesAndAutoLaunch { configs, flutter } => {
             spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf(), flutter);
         }

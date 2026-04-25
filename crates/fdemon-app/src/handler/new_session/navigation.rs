@@ -186,7 +186,8 @@ pub fn handle_field_activate(
 /// the corresponding `refreshing` flag is set on the target selector and
 /// `RefreshDevicesAndBootableBackground` is dispatched so both lists stay
 /// fresh without a loading screen. If both caches are empty (first ever
-/// open), falls back to the foreground `DiscoverDevices` path.
+/// open), falls back to the foreground `DiscoverDevicesAndBootable` path so
+/// both the Connected and Bootable tabs populate on the first dialog open.
 pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     // Load configs with error handling
     let configs = crate::config::load_all_configs(&state.project_path);
@@ -258,9 +259,11 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     }
 
     // Both caches are empty — fall back to the foreground discovery path.
-    tracing::debug!("Device cache miss, triggering foreground discovery");
+    // Also trigger bootable discovery in parallel so the Bootable tab populates
+    // on the first dialog open without requiring a manual tab switch.
+    tracing::debug!("Device cache miss, triggering combined foreground+bootable discovery");
     state.new_session_dialog_state.target_selector.loading = true;
-    UpdateResult::action(UpdateAction::DiscoverDevices { flutter })
+    UpdateResult::action(UpdateAction::DiscoverDevicesAndBootable { flutter })
 }
 
 /// Closes the new session dialog and returns to the appropriate UI mode.
@@ -381,10 +384,10 @@ mod tests {
         // Should show loading
         assert!(state.new_session_dialog_state.target_selector.loading);
 
-        // Should trigger foreground discovery
+        // Should trigger combined foreground+bootable discovery (updated from DiscoverDevices)
         assert!(matches!(
             result.action,
-            Some(UpdateAction::DiscoverDevices { .. })
+            Some(UpdateAction::DiscoverDevicesAndBootable { .. })
         ));
     }
 
@@ -648,8 +651,32 @@ mod tests {
         assert!(!state.new_session_dialog_state.target_selector.refreshing);
         assert!(matches!(
             result.action,
-            Some(UpdateAction::DiscoverDevices { .. })
+            Some(UpdateAction::DiscoverDevicesAndBootable { .. })
         ));
+    }
+
+    #[test]
+    fn test_open_dialog_no_caches_dispatches_combined_discovery() {
+        let mut state = test_app_state();
+        // Both caches empty (default state)
+        assert!(state.device_cache.is_none());
+        assert!(state.ios_simulators_cache.is_none());
+        assert!(state.android_avds_cache.is_none());
+
+        let result = handle_open_new_session_dialog(&mut state);
+
+        assert!(
+            state.new_session_dialog_state.target_selector.loading,
+            "connected tab should show loading on cache miss"
+        );
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::DiscoverDevicesAndBootable { .. })
+            ),
+            "cache miss should dispatch combined discovery, got {:?}",
+            result.action
+        );
     }
 
     #[test]
