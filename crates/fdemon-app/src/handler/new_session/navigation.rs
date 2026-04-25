@@ -219,6 +219,8 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
 
     // Check bootable devices cache (independent of connected devices cache)
     let bootable_cached = if let Some((simulators, avds)) = state.get_cached_bootable_devices() {
+        let simulators = simulators.clone();
+        let avds = avds.clone();
         tracing::debug!(
             "Using cached bootable devices ({} simulators, {} AVDs, age: {:?})",
             simulators.len(),

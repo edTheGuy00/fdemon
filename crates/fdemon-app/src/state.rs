@@ -1255,12 +1255,15 @@ impl AppState {
 
     /// Get cached bootable devices.
     ///
-    /// Returns both iOS simulators and Android AVDs from cache whenever both are
-    /// populated. Cache survives for the lifetime of AppState; the dialog always
-    /// triggers a background refresh on open to keep the list fresh.
-    pub fn get_cached_bootable_devices(&self) -> Option<(Vec<IosSimulator>, Vec<AndroidAvd>)> {
+    /// Returns references to both iOS simulators and Android AVDs from cache whenever
+    /// both are populated. Cache survives for the lifetime of AppState; the dialog
+    /// always triggers a background refresh on open to keep the list fresh.
+    ///
+    /// The caller is responsible for cloning if it needs ownership (mirroring the
+    /// `get_cached_devices` pattern).
+    pub fn get_cached_bootable_devices(&self) -> Option<(&Vec<IosSimulator>, &Vec<AndroidAvd>)> {
         match (&self.ios_simulators_cache, &self.android_avds_cache) {
-            (Some(sims), Some(avds)) => Some((sims.clone(), avds.clone())),
+            (Some(sims), Some(avds)) => Some((sims, avds)),
             _ => None,
         }
     }
