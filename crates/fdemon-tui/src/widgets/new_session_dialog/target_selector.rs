@@ -89,8 +89,12 @@ impl TargetSelector<'_> {
         );
 
         // Render tab bar
-        // Note: refreshing flags will be wired to real state in task 06.
-        let tab_bar = TabBar::new(self.state.active_tab, self.is_focused, false, false);
+        let tab_bar = TabBar::new(
+            self.state.active_tab,
+            self.is_focused,
+            self.state.refreshing,
+            self.state.bootable_refreshing,
+        );
         tab_bar.render(chunks[0], buf);
 
         // Render content based on active tab
@@ -1007,6 +1011,106 @@ mod tests {
             content.contains("Dev 1"),
             "Selected device 'Dev 1' (flat index 2) should be visible after scroll correction; content: {}",
             &content.chars().take(200).collect::<String>()
+        );
+    }
+
+    #[test]
+    fn test_target_selector_renders_refreshing_glyph_when_state_set() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully and the ↻ glyph is visible.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("↻"),
+            "expected refresh glyph in target selector, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_renders_bootable_refreshing_glyph_when_state_set() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully and the ↻ glyph is visible.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.active_tab = TargetTab::Bootable;
+        state.set_bootable_devices(vec![], vec![]);
+        state.bootable_refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("↻"),
+            "expected bootable refresh glyph in target selector, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_no_glyph_when_not_refreshing() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        // refreshing defaults to false
+
+        let tool_availability = ToolAvailability::default();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            !rendered.contains("↻"),
+            "expected no refresh glyph when not refreshing, got: {rendered}"
         );
     }
 
