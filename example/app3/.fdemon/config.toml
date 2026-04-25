@@ -2,11 +2,9 @@
 # Configured for profile mode lag reproduction (Issue #25).
 # Uses aggressive DevTools polling (minimum allowed intervals) to maximise VM
 # Service pressure, matching the reporter's environment.
-# The [behavior] auto_start is false — per-config auto_start in launch.toml
-# controls which configuration launches automatically.
+# Auto-start is controlled via per-config auto_start in launch.toml.
 
 [behavior]
-auto_start = false      # Global auto_start disabled — per-config takes precedence
 confirm_quit = true
 
 [watcher]

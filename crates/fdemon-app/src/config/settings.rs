@@ -357,6 +357,34 @@ impl EditorSettings {
 // Settings Loading
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Emit a one-time deprecation warning if the raw TOML content contains
+/// the removed `[behavior] auto_start` key.
+///
+/// We do a cheap scan on the raw TOML `toml::Value` rather than relying on
+/// serde, because serde silently drops unknown fields.
+fn check_deprecated_auto_start(content: &str) {
+    use std::sync::OnceLock;
+    static WARNED: OnceLock<()> = OnceLock::new();
+
+    let Ok(value) = content.parse::<toml::Value>() else {
+        return; // parse errors are reported separately
+    };
+
+    let has_field = value
+        .get("behavior")
+        .and_then(|b| b.get("auto_start"))
+        .is_some();
+
+    if has_field {
+        WARNED.get_or_init(|| {
+            warn!(
+                "config.toml: [behavior] auto_start is deprecated and has no effect; \
+                 use per-config auto_start in launch.toml instead"
+            );
+        });
+    }
+}
+
 /// Load settings from .fdemon/config.toml
 ///
 /// Returns default settings if file doesn't exist or can't be parsed.
@@ -368,16 +396,20 @@ pub fn load_settings(project_path: &Path) -> Settings {
         Settings::default()
     } else {
         match std::fs::read_to_string(&config_path) {
-            Ok(content) => match toml::from_str(&content) {
-                Ok(settings) => {
-                    debug!("Loaded settings from {:?}", config_path);
-                    settings
+            Ok(content) => {
+                // Warn once if the now-removed [behavior] auto_start key is present.
+                check_deprecated_auto_start(&content);
+                match toml::from_str(&content) {
+                    Ok(settings) => {
+                        debug!("Loaded settings from {:?}", config_path);
+                        settings
+                    }
+                    Err(e) => {
+                        warn!("Failed to parse {:?}: {}", config_path, e);
+                        Settings::default()
+                    }
                 }
-                Err(e) => {
-                    warn!("Failed to parse {:?}: {}", config_path, e);
-                    Settings::default()
-                }
-            },
+            }
             Err(e) => {
                 warn!("Failed to read {:?}: {}", config_path, e);
                 Settings::default()
@@ -418,7 +450,6 @@ pub fn init_config_dir(project_path: &Path) -> Result<()> {
 # See: https://github.com/example/flutter-demon#configuration
 
 [behavior]
-auto_start = false      # Set to true to skip device selection
 confirm_quit = true     # Ask before quitting with running apps
 
 [watcher]
@@ -621,7 +652,6 @@ fn generate_default_config() -> String {
 # See: https://github.com/example/flutter-demon#configuration
 
 [behavior]
-auto_start = false      # Set to true to skip device selection
 confirm_quit = true     # Ask before quitting with running apps
 
 [watcher]
@@ -861,7 +891,6 @@ mod tests {
         let temp = tempdir().unwrap();
         let settings = load_settings(temp.path());
 
-        assert!(!settings.behavior.auto_start);
         assert!(settings.behavior.confirm_quit);
         assert_eq!(settings.watcher.debounce_ms, 500);
         assert!(settings.watcher.auto_reload);
@@ -873,6 +902,7 @@ mod tests {
         let fdemon_dir = temp.path().join(".fdemon");
         std::fs::create_dir_all(&fdemon_dir).unwrap();
 
+        // auto_start is now ignored; config still loads cleanly
         let config = r#"
 [behavior]
 auto_start = true
@@ -885,7 +915,7 @@ auto_reload = false
 
         let settings = load_settings(temp.path());
 
-        assert!(settings.behavior.auto_start);
+        assert!(settings.behavior.confirm_quit); // default (auto_start dropped silently)
         assert_eq!(settings.watcher.debounce_ms, 1000);
         assert!(!settings.watcher.auto_reload);
     }
@@ -901,7 +931,7 @@ auto_reload = false
 
         // Should return defaults
         let settings = load_settings(temp.path());
-        assert!(!settings.behavior.auto_start);
+        assert!(settings.behavior.confirm_quit);
     }
 
     #[test]
@@ -1281,7 +1311,6 @@ open_pattern = "zed $FILE:$LINE"
         let temp = tempdir().unwrap();
 
         let mut settings = Settings::default();
-        settings.behavior.auto_start = true;
         settings.watcher.debounce_ms = 1000;
         settings.ui.theme = "dark".to_string();
 
@@ -1291,7 +1320,6 @@ open_pattern = "zed $FILE:$LINE"
         // Load
         let loaded = load_settings(temp.path());
 
-        assert!(loaded.behavior.auto_start);
         assert_eq!(loaded.watcher.debounce_ms, 1000);
         assert_eq!(loaded.ui.theme, "dark");
     }
@@ -1339,7 +1367,6 @@ open_pattern = "zed $FILE:$LINE"
         let temp = tempdir().unwrap();
 
         let mut settings = Settings::default();
-        settings.behavior.auto_start = true;
         settings.behavior.confirm_quit = false;
         settings.watcher.debounce_ms = 2000;
         settings.watcher.auto_reload = false;
@@ -1359,7 +1386,6 @@ open_pattern = "zed $FILE:$LINE"
         save_settings(temp.path(), &settings).unwrap();
         let loaded = load_settings(temp.path());
 
-        assert_eq!(loaded.behavior.auto_start, true);
         assert_eq!(loaded.behavior.confirm_quit, false);
         assert_eq!(loaded.watcher.debounce_ms, 2000);
         assert_eq!(loaded.watcher.auto_reload, false);

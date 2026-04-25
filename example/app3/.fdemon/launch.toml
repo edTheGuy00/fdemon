@@ -12,8 +12,9 @@ mode = "profile"
 
 [[configurations]]
 name = "Development"
-device = "auto"
+device = "android"
 mode = "debug"
+auto_start = true
 
 [[configurations]]
 name = "Staging"

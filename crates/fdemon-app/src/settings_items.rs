@@ -83,11 +83,6 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
         // ─────────────────────────────────────────────────────────
         // Behavior Section
         // ─────────────────────────────────────────────────────────
-        SettingItem::new("behavior.auto_start", "Auto Start")
-            .description("Skip device selector and start immediately")
-            .value(SettingValue::Bool(settings.behavior.auto_start))
-            .default(SettingValue::Bool(false))
-            .section("Behavior"),
         SettingItem::new("behavior.confirm_quit", "Confirm Quit")
             .description("Ask before quitting with running apps")
             .value(SettingValue::Bool(settings.behavior.confirm_quit))

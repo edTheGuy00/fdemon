@@ -19,23 +19,22 @@ pub enum StartupAction {
 
 /// Initialize startup state
 ///
-/// Checks for auto-start conditions (config `auto_start = true` or
-/// `behavior.auto_start = true` in settings). If either is set, returns
+/// Checks for auto-start conditions (`auto_start = true` on any launch config
+/// in `launch.toml`). If any config has it set, returns
 /// `StartupAction::AutoStart` so the runner can send `Message::StartAutoLaunch`.
 /// Otherwise shows the NewSessionDialog in Startup mode and returns `Ready`.
 pub fn startup_flutter(
     state: &mut AppState,
-    settings: &config::Settings,
+    _settings: &config::Settings,
     project_path: &Path,
 ) -> StartupAction {
     // Load configs upfront
     let configs = load_all_configs(project_path);
 
-    // Check if any launch config has auto_start = true, or behavior.auto_start is enabled
+    // Check if any launch config has auto_start = true
     let has_auto_start_config = get_first_auto_start(&configs).is_some();
-    let behavior_auto_start = settings.behavior.auto_start;
 
-    if has_auto_start_config || behavior_auto_start {
+    if has_auto_start_config {
         // Return AutoStart — runner will send StartAutoLaunch message
         return StartupAction::AutoStart { configs };
     }
@@ -66,22 +65,6 @@ mod tests {
         // Should show NewSessionDialog in Startup mode when no auto-start configured
         assert_eq!(state.ui_mode, UiMode::Startup);
         assert!(matches!(result, StartupAction::Ready));
-    }
-
-    #[test]
-    fn test_startup_flutter_returns_auto_start_when_behavior_auto_start_enabled() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut state = AppState::new();
-        let mut settings = Settings::default();
-        settings.behavior.auto_start = true;
-        let project_path = dir.path();
-
-        let result = startup_flutter(&mut state, &settings, project_path);
-
-        // behavior.auto_start = true triggers AutoStart
-        assert!(matches!(result, StartupAction::AutoStart { .. }));
-        // UI mode should NOT be set to Startup when auto-starting
-        assert_ne!(state.ui_mode, UiMode::Startup);
     }
 
     #[test]
@@ -138,9 +121,8 @@ auto_start = false
     }
 
     #[test]
-    fn test_startup_flutter_prefers_launch_config_auto_start() {
-        // launch.toml has auto_start = true, but behavior.auto_start is false
-        // The launch config auto_start should win
+    fn test_startup_flutter_auto_start_driven_by_launch_config() {
+        // launch.toml has auto_start = true — the sole gate for auto-start
         let temp = tempdir().unwrap();
         let fdemon_dir = temp.path().join(".fdemon");
         std::fs::create_dir_all(&fdemon_dir).unwrap();
@@ -156,12 +138,11 @@ auto_start = true
         .unwrap();
 
         let mut state = AppState::new();
-        let mut settings = Settings::default();
-        settings.behavior.auto_start = false;
+        let settings = Settings::default();
 
         let result = startup_flutter(&mut state, &settings, temp.path());
 
-        // launch.toml auto_start = true takes precedence even when behavior.auto_start = false
+        // launch.toml auto_start = true triggers AutoStart
         assert!(matches!(result, StartupAction::AutoStart { .. }));
         assert_ne!(state.ui_mode, UiMode::Startup);
     }

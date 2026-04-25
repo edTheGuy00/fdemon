@@ -171,8 +171,8 @@ fn test_project_settings_items_count() {
     let settings = Settings::default();
     let items = project_settings_items(&settings);
 
-    // Should have 34 items across 8 sections (includes DevTools + DevTools Logging + DAP Server)
-    assert_eq!(items.len(), 34);
+    // Should have 33 items across 8 sections (includes DevTools + DevTools Logging + DAP Server)
+    assert_eq!(items.len(), 33);
 }
 
 #[test]
@@ -262,7 +262,7 @@ fn test_render_project_tab() {
     assert!(content.contains("U I"));
 
     // Check some settings are rendered
-    assert!(content.contains("Auto Start"));
+    assert!(content.contains("Confirm Quit"));
     assert!(content.contains("Debounce"));
     assert!(content.contains("Log Buffer"));
 }

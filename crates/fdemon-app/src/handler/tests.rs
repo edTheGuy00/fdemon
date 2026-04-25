@@ -1950,8 +1950,8 @@ fn test_settings_toggle_bool_flips_value() {
     // Set initial boolean value to true for auto_reload setting
     state.settings.watcher.auto_reload = true;
 
-    // Select the auto_reload item (index 4 in Project tab)
-    state.settings_view_state.selected_index = 4;
+    // Select the auto_reload item (index 3 in Project tab, after behavior.auto_start removal)
+    state.settings_view_state.selected_index = 3;
 
     // Handle the toggle message
     update(&mut state, Message::SettingsToggleBool);

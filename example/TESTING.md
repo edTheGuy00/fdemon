@@ -165,12 +165,10 @@ flavor = "production"
 **Purpose**: Confirm that without `auto_start`, fdemon always shows the
 NewSessionDialog on startup.
 
-**Configuration:** `example/app2/.fdemon/config.toml`
-```toml
-[behavior]
-auto_start = false
-```
-`example/app2/.fdemon/launch.toml` — no `auto_start` on any config.
+**Configuration:** `example/app2/.fdemon/launch.toml` — no `auto_start = true`
+on any config. The absence of per-config `auto_start = true` is the sole gate;
+the old `[behavior] auto_start` flag in `config.toml` is deprecated and has no
+effect as of v0.5.0.
 
 **Steps:**
 
@@ -284,6 +282,55 @@ auto_start = true
 **Expected result**: Profile mode shows periodic freezes when DevTools polling
 is active; debug mode does not. This confirms the lag is caused by VM Service
 polling pressure in profile mode.
+
+---
+
+## Test J — launch.toml edits take effect across runs (consolidate-launch-config regression)
+
+**Purpose**: Regression test for the bug that surfaced the consolidate-launch-config plan.
+Ensures that editing `launch.toml` between runs is honored even when
+`settings.local.toml` holds a stale cached selection.
+
+**Steps:**
+
+1. In `example/app3`, remove any existing `settings.local.toml`:
+   ```
+   rm example/app3/.fdemon/settings.local.toml
+   ```
+2. Edit `example/app3/.fdemon/launch.toml`. On the "Development" config (or a
+   config of your choice), set:
+   ```toml
+   device = "android"
+   mode = "debug"
+   auto_start = true
+   ```
+3. Connect at least one Android device and one other device (e.g. macOS).
+4. Run:
+   ```
+   cargo run -- example/app3
+   ```
+5. Expected: session starts on Android. Confirm
+   `example/app3/.fdemon/settings.local.toml` now contains
+   `last_device = "<android-id>"`.
+6. Quit fdemon.
+7. Without touching `settings.local.toml`, edit `launch.toml` and change the
+   "Development" config to:
+   ```toml
+   device = "macos"
+   mode = "debug"
+   auto_start = true
+   ```
+8. Run `cargo run -- example/app3` again.
+9. **Expected result:** session starts on macOS, not Android. Before this fix,
+   the stale `last_device = "<android-id>"` in `settings.local.toml` would have
+   overridden the edited `launch.toml` and the session would have spawned on Android.
+10. Also verify the manual-persistence leg (Task 02 fix): remove `auto_start = true`
+    from the config, launch the NewSessionDialog, pick iPhone simulator, confirm
+    `settings.local.toml` now reflects the simulator UUID.
+
+**Expected result**: After step 9, fdemon launches on macOS — not the previously
+cached Android device. After step 10, `settings.local.toml` is updated with the
+iPhone simulator UUID selected from the dialog.
 
 ---
 
