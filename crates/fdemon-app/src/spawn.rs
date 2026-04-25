@@ -272,24 +272,24 @@ fn try_cached_selection(
     project_path: &Path,
 ) -> Option<AutoLaunchSuccess> {
     let selection = load_last_selection(project_path)?;
-    let validated = validate_last_selection(&selection, configs, devices)?;
+    let Some(validated) = validate_last_selection(&selection, configs, devices) else {
+        tracing::warn!(
+            "Cached selection in settings.local.toml is no longer valid \
+             (saved device disconnected or config removed); \
+             falling back to first available config + device"
+        );
+        return None;
+    };
 
     let config = validated.config_idx.and_then(|i| configs.configs.get(i));
-    let device = validated.device_idx.and_then(|i| devices.get(i));
+    // Defense-in-depth: device_idx is guaranteed Some by validate_last_selection's contract,
+    // but we use `?` to guard against future contract drift.
+    let device = validated.device_idx.and_then(|i| devices.get(i))?;
 
-    if let Some(device) = device {
-        Some(AutoLaunchSuccess {
-            device: device.clone(),
-            config: config.map(|c| c.config.clone()),
-        })
-    } else {
-        tracing::warn!(
-            "Saved device index {} not found in {} available devices, falling back to Priority 3",
-            validated.device_idx.unwrap_or(0),
-            devices.len()
-        );
-        None
-    }
+    Some(AutoLaunchSuccess {
+        device: device.clone(),
+        config: config.map(|c| c.config.clone()),
+    })
 }
 
 /// Priority 3: use the first launch config with the first available device.
@@ -500,6 +500,46 @@ mod tests {
         // auto_start=true + device="auto" → first device
         assert_eq!(result.device.id, "ios-device-1");
         assert_eq!(result.config.as_ref().unwrap().name, "Dev");
+    }
+
+    /// T5: stale cache (cached device disconnected) falls through to Tier 3 (first config + first device)
+    ///
+    /// settings.local.toml has last_device="disconnected" pointing to a device no longer in the
+    /// discovered list.  No auto_start config.
+    ///
+    /// Expected: `find_auto_launch_target` returns the Tier 3 result (first config + first device).
+    /// `try_cached_selection` returns None and warns to the log file via tracing (not asserted here —
+    /// tracing::warn! is hard to capture in unit tests; a comment is sufficient per task spec).
+    #[test]
+    fn test_disconnected_cache_falls_through_to_first_config() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Cache a device that is NOT in the discovered list
+        crate::config::save_last_selection(project_path, None, Some("disconnected")).unwrap();
+
+        // One non-auto_start config; no auto_start wins
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("MyConfig", "auto", false));
+        configs.is_empty = false;
+
+        let devices = vec![make_device("ios-1", "ios")];
+
+        // Full cascade: Tier 1 skipped (no auto_start), Tier 2 skipped (cache invalid, warns to
+        // log file via tracing), Tier 3 resolves to first config + first device.
+        let result = find_auto_launch_target(&configs, &devices, project_path);
+
+        assert_eq!(result.device.id, "ios-1");
+        assert_eq!(result.config.as_ref().unwrap().name, "MyConfig");
+
+        // Verify try_cached_selection directly returns None for the disconnected device.
+        let cached = try_cached_selection(&configs, &devices, project_path);
+        assert!(
+            cached.is_none(),
+            "try_cached_selection should return None when cached device is not in device list"
+        );
     }
 }
 
