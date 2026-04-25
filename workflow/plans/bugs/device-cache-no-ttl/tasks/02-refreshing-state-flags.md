@@ -138,3 +138,32 @@ the `TabBar` widget for rendering.
 
 - Setting the flags `true` (handled in task 04).
 - Rendering the indicator (handled in tasks 05 and 06).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** main
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | Added `refreshing` and `bootable_refreshing` fields to struct and `Default`; cleared `refreshing` in `set_connected_devices()` and `set_error()`; cleared `bootable_refreshing` in `set_bootable_devices()`; added 4 new unit tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field placement**: The two new fields are placed after `bootable_loading` and before `error` in the struct definition, grouping the loading/refreshing indicators together logically.
+2. **`set_error` scope**: Only `refreshing` is cleared (not `bootable_refreshing`), per the task spec — `set_error` is used for SDK/connected-side errors only.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1888 tests, 0 failed)
+- `cargo clippy -p fdemon-app -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Flags not yet set to `true`**: Setting these flags is intentionally out of scope (task 04). Until task 04 is implemented, the flags will always remain `false` at runtime.

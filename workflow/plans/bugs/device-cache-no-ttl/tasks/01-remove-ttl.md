@@ -90,3 +90,31 @@ memory.
 
 - Changing the dialog-open behaviour (handled in task 04).
 - Adding the `refreshing` flags (handled in task 02).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a62f90b7a5e7bf4cd
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Removed TTL logic from `get_cached_devices()` and `get_cached_bootable_devices()`; updated doc comments; replaced `test_device_cache_expires` with `test_device_cache_does_not_expire` |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Renamed `test_open_dialog_expired_cache_shows_loading` to `test_open_dialog_stale_timestamp_cache_still_shows_devices` and updated assertions to reflect new no-expiry behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Navigation handler test update**: The test `test_open_dialog_expired_cache_shows_loading` in `navigation.rs` was also testing the old TTL behavior — it expected `loading = true` and a foreground `DiscoverDevices` action when cache had a stale timestamp. With the TTL removed, a populated cache (regardless of timestamp age) now yields an immediate display + background refresh. This test was updated accordingly. It was not explicitly listed in the task but was required to make the tests pass.
+
+2. **Fields preserved**: `devices_last_updated` and `bootable_last_updated` remain in `AppState` and are still set by `set_device_cache()` / `set_bootable_cache()`. The tracing debug logs in the handler still reference them via `.map(|t| t.elapsed())`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib` — Passed (1884 passed, 0 failed, 4 ignored)
+
+### Risks/Limitations
+
+1. **No TTL means stale data on reconnect**: The cache now survives indefinitely; freshness depends entirely on the background refresh triggered at dialog-open time. If a device disconnects between sessions, users may briefly see stale data until the background refresh completes. This is acceptable as it is the intended new design.

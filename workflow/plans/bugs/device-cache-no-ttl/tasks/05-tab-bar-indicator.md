@@ -184,3 +184,33 @@ that an in-place refresh is in flight.
 
 - Updating callers of `TabBar::new()` outside this file (handled in task 06).
 - Setting the flags from the handler side (handled in task 04).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a7db589c9a667afc4
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs` | Added `connected_refreshing` and `bootable_refreshing` fields to `TabBar`; updated `new()` to take 4 args; updated render loop to append ` ↻` glyph when flag is set; updated 3 existing tests; added 3 new render tests |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Updated the one caller of `TabBar::new()` outside `tab_bar.rs` to pass `false, false` as placeholder refreshing flags (task 06 will wire real state) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Updated `target_selector.rs` caller**: The task scope says task 06 handles callers outside `tab_bar.rs`, but the build fails if the old 2-arg call remains. Passing `false, false` is correct: it preserves existing behaviour and task 06 will replace them with real state fields.
+2. **`format!()` only when refreshing**: The non-refreshing path uses `.to_string()` on the `&'static str` label to keep the code uniform (avoids a conditional `&str` vs `String` binding).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (872 tests, 0 failed)
+- `cargo clippy -p fdemon-tui -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Placeholder `false, false` in `target_selector.rs`**: The refreshing indicator will not appear in the actual TUI until task 06 wires the real state fields. This is intentional and expected.

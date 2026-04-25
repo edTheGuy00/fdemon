@@ -106,3 +106,32 @@ shows up end-to-end when the dialog is opened with cached data.
 
 - Modifying the `TabBar` widget itself (task 05).
 - Adding new state fields (task 02).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ab57294973d1149bd
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Replaced `false, false` placeholder arguments in `TabBar::new()` with `self.state.refreshing` and `self.state.bootable_refreshing`; added 3 new render tests for glyph visibility |
+
+### Notable Decisions/Tradeoffs
+
+1. **Terminal height for render tests**: The task's sample test used a 6-row terminal which is too small for `render_full` (needs min 9 rows: 3 tab + 5 content + 1 footer). Increased to 12 rows so the tab bar area renders fully and the `↻` glyph is visible. Added a comment explaining the layout constraint.
+
+2. **Three tests instead of one**: Added `test_target_selector_renders_refreshing_glyph_when_state_set`, `test_target_selector_renders_bootable_refreshing_glyph_when_state_set`, and `test_target_selector_no_glyph_when_not_refreshing` to cover both tabs and the negative case.
+
+### Testing Performed
+
+- `cargo build --workspace` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (875 tests, 0 failures)
+- Target-selector-only run: 41 passed, 0 failed
+
+### Risks/Limitations
+
+1. **No risks**: This is a pure wiring change — replacing compile-time constants with state field reads. The `refreshing` and `bootable_refreshing` fields were already present on `TargetSelectorState` from task 02.

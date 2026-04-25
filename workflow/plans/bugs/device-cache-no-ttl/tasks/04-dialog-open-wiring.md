@@ -193,3 +193,36 @@ Update `handle_open_new_session_dialog()` so that opening the dialog:
 
 - Rendering the indicator (tasks 05 and 06).
 - Modifying the cache accessors (task 01).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a157da4affbcc3629
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Rewrote `handle_open_new_session_dialog()`: restructured bootable cache block to capture `bootable_cached` boolean, merged control flow so `refreshing`/`bootable_refreshing` are set after cache-populate calls, dispatches `RefreshDevicesAndBootableBackground` on any cache hit, falls back to `DiscoverDevices` when both caches are empty. Updated doc comment. Updated 2 existing tests (`test_open_dialog_uses_cached_devices`, `test_open_dialog_stale_timestamp_cache_still_shows_devices`) to assert new `refreshing` flag and `RefreshDevicesAndBootableBackground` action. Added 3 new tests: `test_open_dialog_sets_refreshing_flags_on_cache_hit`, `test_open_dialog_only_connected_cached_sets_only_refreshing`, `test_open_dialog_no_caches_falls_back_to_loading`. |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_devices_discovered_clears_refreshing` to verify that `Message::DevicesDiscovered` clears the `refreshing` flag via `set_connected_devices()`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Order of operations — set flags after `set_*_devices()`**: `set_connected_devices()` and `set_bootable_devices()` both clear their respective `refreshing` flags. The new code sets `refreshing = true` after these calls, ensuring the flag is not immediately cleared by the populate step.
+2. **Single `RefreshDevicesAndBootableBackground` for any cache hit**: Even if only one cache is populated, both connected and bootable lists are refreshed together. This avoids partial staleness without extra complexity.
+3. **No-SDK early return before the cache-hit block**: If `flutter_executable()` returns `None` the function returns immediately without setting flags, which is correct — no refresh can happen without a Flutter SDK.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` — Passed
+- `cargo test -p fdemon-app --lib -- new_session::navigation` — Passed (17 tests)
+- `cargo test -p fdemon-app --lib -- test_devices_discovered_clears_refreshing` — Passed
+- `cargo test -p fdemon-app --lib` — Passed (1892 tests)
+- `cargo clippy -p fdemon-app -- -D warnings` — Passed
+- `cargo fmt --all` — Passed (format check clean)
+
+### Risks/Limitations
+
+1. **Only connected-only cache hit**: When only the connected devices cache is populated (no bootable cache yet), `bootable_refreshing` is NOT set (by design). The bootable tab will still show its normal loading state from the initial `bootable_loading: true` default. This is correct because there is no cached bootable list to show a "refreshing" indicator over.

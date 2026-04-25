@@ -81,3 +81,31 @@ the two discoveries in one variant is the simplest approach.
 - Removing the existing `RefreshDevicesBackground` variant — keep it; other callers
   may exist (e.g. session lifecycle) and we don't want to change their semantics in
   this fix.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-af5fb4d58eb6bbf6e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `RefreshDevicesAndBootableBackground { flutter }` variant to `UpdateAction` enum, placed after `RefreshDevicesBackground` |
+| `crates/fdemon-app/src/actions/mod.rs` | Added match arm for `RefreshDevicesAndBootableBackground` calling both `spawn_device_discovery_background` (with cloned `msg_tx`) and `spawn_bootable_device_discovery` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Clone order**: `msg_tx.clone()` is passed to `spawn_device_discovery_background` while the original `msg_tx` is consumed by `spawn_bootable_device_discovery`, mirroring the exact pattern in the task spec.
+2. **No new tests**: As specified in the task, `UpdateAction` is a plain enum with no logic — the combined behavior is exercised by downstream task 04 tests.
+
+### Testing Performed
+
+- `cargo build --workspace` - Passed (full workspace, no exhaustive-match warnings)
+- `cargo test -p fdemon-app --lib` - Passed (1884 passed; 0 failed; 4 ignored)
+
+### Risks/Limitations
+
+1. **No callers yet**: The new variant is not dispatched from anywhere until task 04 wires it up on dialog open.
