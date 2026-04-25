@@ -410,6 +410,12 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
                 // Background refresh - log error but don't show to user
                 // User can still select from cached devices
                 tracing::warn!("Background device refresh failed: {}", error);
+                // Clear the refreshing indicator so it doesn't stay stuck when the
+                // dialog is open. Do NOT touch bootable_refreshing — the bootable spawn
+                // swallows errors and never sends DeviceDiscoveryFailed.
+                if state.ui_mode == UiMode::NewSessionDialog || state.ui_mode == UiMode::Startup {
+                    state.new_session_dialog_state.target_selector.refreshing = false;
+                }
             } else {
                 // Foreground discovery - show error to user
                 // Update new_session_dialog_state if visible

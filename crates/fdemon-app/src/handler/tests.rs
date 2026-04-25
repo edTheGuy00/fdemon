@@ -10083,3 +10083,24 @@ fn test_devices_discovered_clears_refreshing() {
     let _ = update(&mut state, Message::DevicesDiscovered { devices: vec![] });
     assert!(!state.new_session_dialog_state.target_selector.refreshing);
 }
+
+#[test]
+fn test_background_device_discovery_failure_clears_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state.set_device_cache(vec![test_device("dev1", "Device 1")]);
+    state.new_session_dialog_state.target_selector.refreshing = true;
+
+    let _ = update(
+        &mut state,
+        Message::DeviceDiscoveryFailed {
+            error: "transient flutter devices error".to_string(),
+            is_background: true,
+        },
+    );
+
+    assert!(
+        !state.new_session_dialog_state.target_selector.refreshing,
+        "background failure must clear the refreshing flag"
+    );
+}
