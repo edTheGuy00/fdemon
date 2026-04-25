@@ -373,20 +373,30 @@ mod tests {
     }
 
     #[test]
-    fn test_open_dialog_expired_cache_shows_loading() {
+    fn test_open_dialog_stale_timestamp_cache_still_shows_devices() {
         let mut state = test_app_state();
 
-        // Set cache with old timestamp (> 30s ago)
+        // Set cache with old timestamp (> 30s ago) — cache no longer expires,
+        // so devices should still be shown immediately with a background refresh.
         state.device_cache = Some(vec![test_device_full("1", "iPhone", "ios", false)]);
         state.devices_last_updated = Some(Instant::now() - Duration::from_secs(60));
 
         let result = handle_open_new_session_dialog(&mut state);
 
-        // Cache expired - should show loading
-        assert!(state.new_session_dialog_state.target_selector.loading);
+        // Cache is still valid — should show device immediately, not loading
+        assert!(!state.new_session_dialog_state.target_selector.loading);
+        assert_eq!(
+            state
+                .new_session_dialog_state
+                .target_selector
+                .connected_devices
+                .len(),
+            1
+        );
+        // Should trigger background refresh (not foreground discovery)
         assert!(matches!(
             result.action,
-            Some(UpdateAction::DiscoverDevices { .. })
+            Some(UpdateAction::RefreshDevicesBackground { .. })
         ));
     }
 

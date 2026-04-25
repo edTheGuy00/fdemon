@@ -1232,21 +1232,12 @@ impl AppState {
     // Device Cache Helpers (Task 08e)
     // ─────────────────────────────────────────────────────────
 
-    /// Get cached devices if fresh enough (within TTL)
+    /// Get cached devices.
     ///
-    /// Cache is considered valid for 30 seconds to balance freshness with responsiveness.
-    /// Device list changes are rare (device connects/disconnects) so this is a safe tradeoff.
+    /// Cache survives for the lifetime of AppState; the dialog always triggers a
+    /// background refresh on open to keep the list fresh.
     pub fn get_cached_devices(&self) -> Option<&Vec<Device>> {
-        // Cache TTL of 30 seconds
-        const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
-
-        if let (Some(ref devices), Some(updated)) = (&self.device_cache, self.devices_last_updated)
-        {
-            if updated.elapsed() < CACHE_TTL {
-                return Some(devices);
-            }
-        }
-        None
+        self.device_cache.as_ref()
     }
 
     /// Update device cache with fresh devices
@@ -1262,25 +1253,16 @@ impl AppState {
     // Bootable Device Cache Helpers (Bug Fix: Task 03)
     // ─────────────────────────────────────────────────────────
 
-    /// Get cached bootable devices if fresh enough (within TTL)
+    /// Get cached bootable devices.
     ///
-    /// Returns both iOS simulators and Android AVDs from cache if valid.
-    /// Cache is considered valid for 30 seconds to balance freshness with responsiveness.
-    /// Bootable device changes are rare (simulator/AVD creation/deletion) so this is a safe tradeoff.
+    /// Returns both iOS simulators and Android AVDs from cache whenever both are
+    /// populated. Cache survives for the lifetime of AppState; the dialog always
+    /// triggers a background refresh on open to keep the list fresh.
     pub fn get_cached_bootable_devices(&self) -> Option<(Vec<IosSimulator>, Vec<AndroidAvd>)> {
-        // Cache TTL of 30 seconds (same as connected devices)
-        const CACHE_TTL: std::time::Duration = std::time::Duration::from_secs(30);
-
-        if let (Some(ref simulators), Some(ref avds), Some(updated)) = (
-            &self.ios_simulators_cache,
-            &self.android_avds_cache,
-            self.bootable_last_updated,
-        ) {
-            if updated.elapsed() < CACHE_TTL {
-                return Some((simulators.clone(), avds.clone()));
-            }
+        match (&self.ios_simulators_cache, &self.android_avds_cache) {
+            (Some(sims), Some(avds)) => Some((sims.clone(), avds.clone())),
+            _ => None,
         }
-        None
     }
 
     /// Update the bootable device cache with fresh results
@@ -1777,17 +1759,15 @@ mod tests {
     }
 
     #[test]
-    fn test_device_cache_expires() {
+    fn test_device_cache_does_not_expire() {
         let mut state = AppState::new();
         state.set_device_cache(vec![test_device("dev1", "Device 1")]);
 
-        // Fresh cache
-        assert!(state.get_cached_devices().is_some());
-
-        // Expired cache (mock time travel by manually setting timestamp)
+        // Simulate a stale timestamp — cache should still be returned.
         state.devices_last_updated =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(60));
-        assert!(state.get_cached_devices().is_none());
+            Some(std::time::Instant::now() - std::time::Duration::from_secs(60 * 60));
+        assert!(state.get_cached_devices().is_some());
+        assert_eq!(state.get_cached_devices().unwrap().len(), 1);
     }
 
     #[test]
