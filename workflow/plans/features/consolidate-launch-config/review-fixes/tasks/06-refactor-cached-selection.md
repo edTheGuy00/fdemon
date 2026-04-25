@@ -71,3 +71,34 @@ cargo clippy --workspace -- -D warnings
 ```
 
 Confirm clippy doesn't flag the refactored `try_cached_selection` (e.g. no `clippy::needless_match`, `clippy::redundant_else`, etc.).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/launch-toml-device
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/spawn.rs` | Refactored `try_cached_selection` to move `tracing::warn!` from the dead inner `else` branch to the real failure point (`validate_last_selection` returning `None`). Used `let-else` for idiomatic early return. Kept `?` on `devices.get(i)` for defense-in-depth. Added T5 test. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`let-else` over `match`**: The `let Some(validated) = ... else { ... return None; }` form matches the surrounding style in `spawn.rs` (which uses `let ... = ... ?` patterns) and is more concise than the explicit `match` form suggested in the Copilot snippet. Both are valid; `let-else` reads more cleanly here.
+2. **`?` on `devices.get(i)`**: Kept as defense-in-depth against future contract drift, per task spec. The current `validate_last_selection` contract guarantees `device_idx.is_some()` implies a valid index, but the `?` prevents a panic if that contract ever changes.
+3. **Warning message wording**: Used "Cached selection in settings.local.toml is no longer valid (saved device disconnected or config removed); falling back to first available config + device" — user-facing description that appears in the fdemon log file.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app spawn::` — Passed (7 tests: T1–T4 unchanged + T5 new + `test_tool_check_timeout_is_reasonable`)
+- `cargo fmt --all` — Passed (no changes needed)
+- `cargo clippy --workspace -- -D warnings` — Passed (no warnings)
+- `cargo check --workspace` — Passed
+
+### Risks/Limitations
+
+1. **Warning not captured in tests**: `tracing::warn!` output is not captured in unit tests; T5 comments that the warning is emitted to the log file. This is acceptable per task spec ("asserting on the warning is optional").
+2. **No changes to `validate_last_selection`**: The contract of `validate_last_selection` in `settings.rs` was not modified, per the Wave 1 coordination rule.

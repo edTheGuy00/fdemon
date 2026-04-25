@@ -9,9 +9,9 @@ Parent tasks: [../TASKS.md](../TASKS.md)
 
 | # | Task | File | Agent | Status | Depends on |
 |---|------|------|-------|--------|------------|
-| 05 | Broaden the startup gate to fire `AutoStart` on cached `last_device` presence | [tasks/05-broaden-startup-gate.md](./tasks/05-broaden-startup-gate.md) | implementor | [ ] Not Started | — |
-| 06 | Refactor `try_cached_selection` to log on real validation failure (Copilot #2 fix; dead-code cleanup that also becomes user-visible after Task 05) | [tasks/06-refactor-cached-selection.md](./tasks/06-refactor-cached-selection.md) | implementor | [ ] Not Started | — |
-| 07 | Update docs to describe the widened gate, fix "log buffer" wording (Copilot #3), fix `example/app3/.fdemon/launch.toml` header comment (Copilot #4), uplift CHANGELOG entry | [tasks/07-docs-and-changelog.md](./tasks/07-docs-and-changelog.md) | implementor | [ ] Not Started | 05, 06 (describe final code state) |
+| 05 | Broaden the startup gate to fire `AutoStart` on cached `last_device` presence | [tasks/05-broaden-startup-gate.md](./tasks/05-broaden-startup-gate.md) | implementor | [x] Done (validated PASS, merged) | — |
+| 06 | Refactor `try_cached_selection` to log on real validation failure (Copilot #2 fix; dead-code cleanup that also becomes user-visible after Task 05) | [tasks/06-refactor-cached-selection.md](./tasks/06-refactor-cached-selection.md) | implementor | [x] Done (validated PASS, merged) | — |
+| 07 | Update docs to describe the widened gate, fix "log buffer" wording (Copilot #3), fix `example/app3/.fdemon/launch.toml` header comment (Copilot #4), uplift CHANGELOG entry | [tasks/07-docs-and-changelog.md](./tasks/07-docs-and-changelog.md) | implementor | [x] Done (validated PASS) | 05, 06 (describe final code state) |
 
 ## Wave Plan
 

@@ -124,3 +124,34 @@ cd website && cargo check
 
 - Read the updated Auto-Start Behavior section top-to-bottom and confirm each bullet matches `find_auto_launch_target` and the new gate.
 - The full manual smoke (steps 1–7) is documented in the parent TASKS.md "Verification" section. Re-run it end-to-end on real devices once before marking the PR ready for release.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/launch-toml-device
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Rewrote Auto-Start Behavior intro for two-gate condition; replaced both "log buffer" references with "fdemon log file"; added cache-trigger sentence to "When is the cache updated?" note; fixed stale Best Practices sentence claiming auto_start is the "only" gate |
+| `website/src/pages/docs/configuration.rs` | Mirrored the two-gate intro (bulleted list), updated Tier 1/Tier 2 to say "fdemon log file", added cache-as-trigger sentence to Cache Updates paragraph |
+| `example/app3/.fdemon/launch.toml` | Replaced header comment to accurately describe "Development" (not "Profile") as the auto_start config, referencing Test J and Issue #29 |
+| `CHANGELOG.md` | Added second Bug Fixes bullet in [Unreleased] capturing the cache-triggers-auto-launch behavior |
+
+### Notable Decisions/Tradeoffs
+
+1. **Best Practices stale sentence**: The task didn't explicitly call out the Best Practices section's false claim that `auto_start = true` is "the *only* way to trigger auto-launch". Fixed it anyway since it directly contradicts the new two-gate behavior.
+2. **CHANGELOG framing as Bug Fix**: The cache-gate fix belongs under Bug Fixes (the cache was being written but never read — that's a bug), consistent with the existing #29 entry structure.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no output)
+- `cargo check --workspace` - Passed
+- `cd website && cargo check` - Passed (pre-existing dead_code warning in debugging.rs, unrelated)
+
+### Risks/Limitations
+
+1. **Manual smoke test**: The full end-to-end device flow (TASKS.md steps 1–7) requires real hardware and is not automated. It should be run before the PR is merged.

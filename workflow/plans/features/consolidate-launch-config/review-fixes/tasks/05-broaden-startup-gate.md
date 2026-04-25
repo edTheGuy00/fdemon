@@ -70,3 +70,33 @@ cargo clippy --workspace -- -D warnings
 ```
 
 Quick manual sanity (optional — full regression smoke is in TASKS.md): write a `settings.local.toml` with `last_device = "iphone"` into a tempdir, no launch.toml, call `startup_flutter`, assert it returns `AutoStart` and `state.ui_mode != UiMode::Startup`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/launch-toml-device
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/startup.rs` | Added `has_cached_last_device` helper, broadened startup gate to fire on cached `last_device`, updated `startup_flutter` doc comment, added 3 new tests (G1/G2/G3) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Field name correction**: The task's implementation note example used `s.last_device` but `LastSelection` actually has `device_id: Option<String>`. Used the correct field name `device_id`.
+2. **`cache_trigger` short-circuit**: Evaluated `has_cached_last_device` only when `has_auto_start_config` is false, avoiding an unnecessary file read in the common auto-start config path.
+3. **`LoadedConfigs` unused warning not triggered**: The `_settings` parameter prefix was already suppressing warnings; no additional changes needed.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui startup::` - Passed (9 tests: 6 original + 3 new G1/G2/G3)
+- `cargo test --workspace --lib` - Passed (869 tests)
+- `cargo fmt --all` - Passed (imports reformatted to multi-line by rustfmt)
+- `cargo clippy --workspace -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **Stale cache device**: When the cache gate fires but the cached device is gone, `find_auto_launch_target` falls through to Tier 3/Tier 4 as designed. No user-visible feedback is added here (option β deferred per TASKS.md).
