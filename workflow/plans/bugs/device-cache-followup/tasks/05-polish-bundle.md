@@ -189,3 +189,36 @@ Adjust to match the actual existing structure in the post-task-02 code.
 - Resolving the pre-existing TODO at `target_selector_state.rs:455` about
   `calculate_scroll_offset` (m9 — explicitly out of scope per the followup plan).
 - The icon routing and compact-mode work (handled in task 04).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a82394c45b9c3b098
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_bootable_devices_discovered_clears_bootable_refreshing` test (m1) |
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | Replaced one-liner `/// Set error state` doc with multi-paragraph comment explaining asymmetric clearing (m3) |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Added race comment above `refreshing = true` writes (m5); collapsed dead `if/else` in `handle_close_new_session_dialog` to single assignment (m7); captured `cached_devices.len()` to `cached_len` local before `.clone()` (n3) |
+| `crates/fdemon-app/src/handler/mod.rs` | Expanded `RefreshDevicesAndBootableBackground` to multi-line with `///` doc on `flutter` field (n1) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing test failure**: `flutter_sdk::locator::tests::test_flutter_wrapper_detection` fails before and after these changes — confirmed via `git stash` round-trip. It is an environment-sensitive test unrelated to this task.
+2. **m7 doc comment**: Removed the misleading "No sessions, stay in startup mode" comment along with the dead branch, and trimmed the function's doc comment to match the simplified body.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (reformatted navigation.rs and tests.rs)
+- `cargo check --workspace` - Passed
+- `cargo test --workspace --lib` - 733 passed, 1 pre-existing failure (unrelated)
+- `cargo clippy --workspace --lib -- -D warnings` - Passed (clean)
+- `cargo test -p fdemon-app --lib test_bootable_devices_discovered_clears_bootable_refreshing` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing test failure**: `test_flutter_wrapper_detection` in `fdemon-daemon` fails due to an environment condition (a `flutter` wrapper present in the test environment), not related to this task's changes.

@@ -9,21 +9,21 @@ Source review: [REVIEW.md](../../../reviews/bugs/device-cache-no-ttl/REVIEW.md)
 
 | ID | Task | Depends on | Files Modified (Write) | Files Read |
 |---|---|---|---|---|
-| 01 | [Clear `refreshing` on background failure](tasks/01-clear-refreshing-on-bg-failure.md) | — | `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-app/src/handler/tests.rs`, `workflow/plans/bugs/device-cache-no-ttl/BUG.md` | `target_selector_state.rs`, `state.rs` |
-| 02 | [Reference-returning bootable accessor](tasks/02-bootable-accessor-refs.md) | — | `crates/fdemon-app/src/state.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs` | `target_selector_state.rs` |
+| 01 | [x] [Clear `refreshing` on background failure](tasks/01-clear-refreshing-on-bg-failure.md) — Done ✅ | — | `crates/fdemon-app/src/handler/update.rs`, `crates/fdemon-app/src/handler/tests.rs`, `workflow/plans/bugs/device-cache-no-ttl/BUG.md` | `target_selector_state.rs`, `state.rs` |
+| 02 | [x] [Reference-returning bootable accessor](tasks/02-bootable-accessor-refs.md) — Done ✅ | — | `crates/fdemon-app/src/state.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs` | `target_selector_state.rs` |
 
 ## Wave 2 — Cache-miss wiring (sequential after Wave 1)
 
 | ID | Task | Depends on | Files Modified (Write) | Files Read |
 |---|---|---|---|---|
-| 03 | [`DiscoverDevicesAndBootable` action + cache-miss wiring](tasks/03-discover-and-bootable-action.md) | 02 | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs` | `spawn.rs`, `state.rs` |
+| 03 | [x] [`DiscoverDevicesAndBootable` action + cache-miss wiring](tasks/03-discover-and-bootable-action.md) — Done ✅ | 02 | `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/actions/mod.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs` | `spawn.rs`, `state.rs` |
 
 ## Wave 3 — Polish (parallel after Wave 2)
 
 | ID | Task | Depends on | Files Modified (Write) | Files Read |
 |---|---|---|---|---|
-| 04 | [Icon routing + compact-mode glyph](tasks/04-icon-routing-and-compact.md) | — | `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs`, `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | `theme/icons.rs`, `widgets/new_session_dialog/mod.rs` |
-| 05 | [Polish bundle](tasks/05-polish-bundle.md) | — | `crates/fdemon-app/src/handler/tests.rs`, `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs`, `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | — |
+| 04 | [x] [Icon routing + compact-mode glyph](tasks/04-icon-routing-and-compact.md) — Done ✅ | — | `crates/fdemon-tui/src/widgets/new_session_dialog/tab_bar.rs`, `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | `theme/icons.rs`, `widgets/new_session_dialog/mod.rs` |
+| 05 | [x] [Polish bundle](tasks/05-polish-bundle.md) — Done ✅ | — | `crates/fdemon-app/src/handler/tests.rs`, `crates/fdemon-app/src/handler/mod.rs`, `crates/fdemon-app/src/handler/new_session/navigation.rs`, `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | — |
 
 ---
 

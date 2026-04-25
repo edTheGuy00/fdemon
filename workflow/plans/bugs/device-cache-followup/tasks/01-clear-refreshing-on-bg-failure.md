@@ -137,3 +137,35 @@ incorrectly claims `set_error()` handles this case — that line needs to be cor
 - Reworking the `is_background` boolean into a typed enum.
 - Changing the `set_error()` implementation in `target_selector_state.rs` (handled in
   task 05's polish bundle).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** main
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/update.rs` | Added `refreshing = false` clear in the `is_background: true` branch of `DeviceDiscoveryFailed`, guarded by `NewSessionDialog || Startup` UI mode check |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_background_device_discovery_failure_clears_refreshing` test immediately after `test_devices_discovered_clears_refreshing` |
+| `workflow/plans/bugs/device-cache-no-ttl/BUG.md` | Corrected the "Cache Becoming Severely Stale" mitigation paragraph to accurately describe both foreground and background clearing paths |
+
+### Notable Decisions/Tradeoffs
+
+1. **`bootable_refreshing` untouched**: The task explicitly requires not clearing `bootable_refreshing` in this arm. The bootable discovery spawn swallows errors via `unwrap_or_default()` and never sends `DeviceDiscoveryFailed`, so touching that flag here would be incorrect and misleading.
+
+2. **UI mode guard mirrors foreground branch**: The condition `UiMode::NewSessionDialog || UiMode::Startup` exactly mirrors the existing foreground guard, so the behaviour is symmetric — both branches only touch dialog state when the dialog is actually visible.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (auto-formatted update.rs whitespace)
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1893 tests, 0 failed)
+- `cargo clippy -p fdemon-app --lib -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No risk**: The change is minimal and surgical — one boolean assignment behind an existing UI-mode guard in a failure path that previously did nothing useful for the flag.

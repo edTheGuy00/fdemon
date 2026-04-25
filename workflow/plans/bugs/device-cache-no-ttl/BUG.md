@@ -187,10 +187,10 @@ without losing the cached content.
 - **Risk:** with no TTL, if `flutter devices` keeps failing, the cache could show
   outdated devices indefinitely.
 - **Mitigation:** every dialog open triggers a background refresh, and the discovery
-  failure path (`Message::DeviceDiscoveryFailed`) already reports errors. The
-  `refreshing` indicator clears even on failure (handled by `set_error()` clearing
-  `refreshing`). Background failures (`is_background: true`) are logged only — the
-  user still sees the previous devices, which is the desired UX.
+  failure path (`Message::DeviceDiscoveryFailed`) clears the `refreshing` indicator on
+  both the foreground branch (via `set_error()`) and the background branch (via a
+  direct flag clear). Background failures (`is_background: true`) are logged at warn
+  level only — the user still sees the previous devices, which is the desired UX.
 
 ### Concurrent Discovery
 - **Risk:** triggering a refresh while a previous discovery is still in flight could

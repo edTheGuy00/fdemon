@@ -156,6 +156,41 @@ discovery so the user gets a proper loading indicator and surfaced errors.
 - [ ] `cargo test --workspace --lib` passes.
 - [ ] `cargo clippy --workspace --lib -- -D warnings` clean.
 
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** main
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mod.rs` | Added `DiscoverDevicesAndBootable { flutter: FlutterExecutable }` variant to `UpdateAction` enum with doc comment and field doc |
+| `crates/fdemon-app/src/actions/mod.rs` | Added match arm that calls `spawn_device_discovery(msg_tx.clone(), flutter)` and `spawn_bootable_device_discovery(msg_tx, tool_availability)` |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Updated cache-miss fallback to dispatch `DiscoverDevicesAndBootable`; updated doc comment; updated two existing tests; added new `test_open_dialog_no_caches_dispatches_combined_discovery` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Variant placement**: `DiscoverDevicesAndBootable` is placed immediately after `RefreshDevicesAndBootableBackground` in the enum, keeping the "combined" variants together for readability.
+2. **msg_tx.clone() pattern**: Mirrors the existing `RefreshDevicesAndBootableBackground` arm exactly — the first spawn gets a clone, the second consumes the original sender.
+3. **doc comment update**: Updated the doc comment on `handle_open_new_session_dialog` to reference the new action name rather than the old `DiscoverDevices` path.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1894 passed, 0 failed, 4 ignored)
+  - `test_open_dialog_no_caches_dispatches_combined_discovery` - ok
+  - `test_open_dialog_cache_miss_shows_loading` (updated assertion) - ok
+  - `test_open_dialog_no_caches_falls_back_to_loading` (updated assertion) - ok
+- `cargo clippy --workspace --lib -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **Existing `DiscoverDevices` call sites**: Verified 6 other call sites all remain unaffected (engine startup, session lifecycle, target_selector pull-to-refresh) — none were in the cache-miss path.
+
 ## Out of Scope
 
 - Changing the existing `DiscoverDevices` variant (still used elsewhere — e.g., engine

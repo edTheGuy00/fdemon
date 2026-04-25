@@ -117,3 +117,34 @@ and forwarded to `set_bootable_devices(simulators, avds)` which takes ownership.
   handlers receive owned values from messages; ownership is correct there).
 - Restructuring the bootable cache fields themselves.
 - The cache-miss bootable discovery (handled in task 03).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** main
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/state.rs` | Changed `get_cached_bootable_devices()` return type from `Option<(Vec<IosSimulator>, Vec<AndroidAvd>)>` to `Option<(&Vec<IosSimulator>, &Vec<AndroidAvd>)>`; removed `.clone()` calls inside the function; updated doc comment to note caller responsibility for cloning |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Added `let simulators = simulators.clone()` and `let avds = avds.clone()` at the call site inside `handle_open_new_session_dialog`, before forwarding to `set_bootable_devices` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Clone placement**: The clones are inserted immediately after the `if let` binding (before the debug log), so `simulators.len()` and `avds.len()` in the debug log refer to the freshly-cloned owned values. This matches the semantics of the original code and avoids any re-borrowing issues.
+
+2. **No test changes**: The existing tests in `state.rs` (`test_get_cached_bootable_devices_valid`, `test_get_cached_bootable_devices_empty_when_not_set`) access the returned tuple via auto-deref, so they work unchanged with references.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1892 tests, 0 failures)
+- `cargo clippy -p fdemon-app --lib -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **None**: Pure refactor with identical observable behavior. The borrow-checker enforces correctness at compile time.
