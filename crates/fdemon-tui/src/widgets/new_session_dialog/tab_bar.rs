@@ -17,13 +17,24 @@ pub struct TabBar {
     active_tab: TargetTab,
     /// Whether this pane is focused
     pane_focused: bool,
+    /// Refresh-in-flight indicator for the Connected tab.
+    connected_refreshing: bool,
+    /// Refresh-in-flight indicator for the Bootable tab.
+    bootable_refreshing: bool,
 }
 
 impl TabBar {
-    pub fn new(active_tab: TargetTab, pane_focused: bool) -> Self {
+    pub fn new(
+        active_tab: TargetTab,
+        pane_focused: bool,
+        connected_refreshing: bool,
+        bootable_refreshing: bool,
+    ) -> Self {
         Self {
             active_tab,
             pane_focused,
+            connected_refreshing,
+            bootable_refreshing,
         }
     }
 }
@@ -51,7 +62,16 @@ impl Widget for TabBar {
             .enumerate()
         {
             let is_active = *tab == self.active_tab;
-            let label = tab.label();
+            let refreshing = match tab {
+                TargetTab::Connected => self.connected_refreshing,
+                TargetTab::Bootable => self.bootable_refreshing,
+            };
+
+            let label = if refreshing {
+                format!("{} ↻", tab.label())
+            } else {
+                tab.label().to_string()
+            };
 
             let style = if is_active && self.pane_focused {
                 Style::default()
@@ -110,7 +130,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Connected, true);
+                let tab_bar = TabBar::new(TargetTab::Connected, true, false, false);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -129,7 +149,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Bootable, true);
+                let tab_bar = TabBar::new(TargetTab::Bootable, true, false, false);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -148,7 +168,7 @@ mod tests {
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Connected, false);
+                let tab_bar = TabBar::new(TargetTab::Connected, false, false, false);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -159,5 +179,68 @@ mod tests {
         // Should still render both tabs
         assert!(content.contains("Connected"));
         assert!(content.contains("Bootable"));
+    }
+
+    #[test]
+    fn test_tab_bar_renders_connected_refreshing_indicator() {
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Connected, true, true, false);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains("↻"),
+            "expected refresh glyph on Connected tab, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_renders_bootable_refreshing_indicator() {
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Bootable, true, false, true);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(rendered.contains("↻"));
+    }
+
+    #[test]
+    fn test_tab_bar_no_indicator_when_not_refreshing() {
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Connected, true, false, false);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(!rendered.contains("↻"));
     }
 }

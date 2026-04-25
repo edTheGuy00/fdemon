@@ -89,7 +89,8 @@ impl TargetSelector<'_> {
         );
 
         // Render tab bar
-        let tab_bar = TabBar::new(self.state.active_tab, self.is_focused);
+        // Note: refreshing flags will be wired to real state in task 06.
+        let tab_bar = TabBar::new(self.state.active_tab, self.is_focused, false, false);
         tab_bar.render(chunks[0], buf);
 
         // Render content based on active tab
