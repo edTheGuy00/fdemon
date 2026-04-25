@@ -5,7 +5,9 @@
 
 use std::path::Path;
 
-use fdemon_app::config::{self, get_first_auto_start, load_all_configs, LoadedConfigs};
+use fdemon_app::config::{
+    self, get_first_auto_start, load_all_configs, load_last_selection, LoadedConfigs,
+};
 use fdemon_app::state::{AppState, UiMode};
 
 /// Result of startup initialization
@@ -17,12 +19,33 @@ pub enum StartupAction {
     AutoStart { configs: LoadedConfigs },
 }
 
-/// Initialize startup state
+/// Returns `true` when `settings.local.toml` exists in `project_path` and
+/// contains a non-empty `last_device` value.
 ///
-/// Checks for auto-start conditions (`auto_start = true` on any launch config
-/// in `launch.toml`). If any config has it set, returns
-/// `StartupAction::AutoStart` so the runner can send `Message::StartAutoLaunch`.
-/// Otherwise shows the NewSessionDialog in Startup mode and returns `Ready`.
+/// A missing file, a parse failure, or an empty string all return `false`.
+fn has_cached_last_device(project_path: &Path) -> bool {
+    load_last_selection(project_path)
+        .and_then(|s| s.device_id)
+        .is_some_and(|d| !d.is_empty())
+}
+
+/// Initialize startup state.
+///
+/// The auto-start gate fires when **either** of these conditions holds:
+///
+/// 1. **Explicit config:** any launch config in `launch.toml` has `auto_start = true`.
+/// 2. **Cached last device:** `settings.local.toml` exists and contains a
+///    non-empty `last_device` field (written by Task 02's symmetric persistence).
+///
+/// When the gate fires, returns `StartupAction::AutoStart` so the runner can
+/// send `Message::StartAutoLaunch`. `find_auto_launch_target`'s 4-tier cascade
+/// then resolves the actual target: Tier 1 wins when an explicit `auto_start`
+/// config is present; Tier 2 consumes the cached selection otherwise. If the
+/// cached device has since been disconnected, Tier 3 / Tier 4 handle the
+/// fall-through as usual.
+///
+/// When neither condition holds, shows the NewSessionDialog in Startup mode
+/// and returns `StartupAction::Ready`.
 pub fn startup_flutter(
     state: &mut AppState,
     _settings: &config::Settings,
@@ -31,10 +54,12 @@ pub fn startup_flutter(
     // Load configs upfront
     let configs = load_all_configs(project_path);
 
-    // Check if any launch config has auto_start = true
+    // Gate: fire AutoStart when an explicit auto_start config exists OR a
+    // cached last_device is present (makes find_auto_launch_target Tier 2 reachable).
     let has_auto_start_config = get_first_auto_start(&configs).is_some();
+    let cache_trigger = !has_auto_start_config && has_cached_last_device(project_path);
 
-    if has_auto_start_config {
+    if has_auto_start_config || cache_trigger {
         // Return AutoStart — runner will send StartAutoLaunch message
         return StartupAction::AutoStart { configs };
     }
@@ -224,5 +249,104 @@ auto_start = false
             assert_eq!(configs.configs[1].config.name, "AutoRelease");
             assert_eq!(configs.configs[2].config.name, "ManualProfile");
         }
+    }
+
+    // ── Cache-gate tests (G1 / G2 / G3) ─────────────────────────────────────
+
+    /// G1: Cache with last_device = "foo", no auto_start configs → AutoStart fires.
+    /// UI mode must NOT be Startup (we did not show the new-session dialog).
+    #[test]
+    fn test_startup_flutter_cache_last_device_triggers_auto_start() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a settings.local.toml with a non-empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "foo""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let settings = Settings::default();
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // Cache-gate fires → AutoStart
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when last_device is set, got Ready"
+        );
+        // NewSessionDialog was NOT shown
+        assert_ne!(state.ui_mode, UiMode::Startup);
+    }
+
+    /// G2: Cache file present but last_device = "", no auto_start configs → Ready.
+    /// Empty string is treated as "no cache" — gate must NOT fire.
+    #[test]
+    fn test_startup_flutter_empty_cached_last_device_shows_dialog() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a settings.local.toml with an empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = """#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let settings = Settings::default();
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // Empty string → gate does not fire
+        assert_eq!(state.ui_mode, UiMode::Startup);
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when last_device is empty string"
+        );
+    }
+
+    /// G3: Cache present with last_device = "foo" AND an auto_start config →
+    /// AutoStart still fires (auto_start path takes priority; cache doesn't matter).
+    #[test]
+    fn test_startup_flutter_auto_start_config_takes_priority_over_cache() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a launch.toml with auto_start = true
+        std::fs::write(
+            fdemon_dir.join("launch.toml"),
+            r#"
+[[configurations]]
+name = "AutoDev"
+device = "auto"
+auto_start = true
+"#,
+        )
+        .unwrap();
+
+        // Also write a settings.local.toml with a non-empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "foo""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let settings = Settings::default();
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // Both conditions active → AutoStart fires (auto_start config path)
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when auto_start config is present"
+        );
+        assert_ne!(state.ui_mode, UiMode::Startup);
     }
 }

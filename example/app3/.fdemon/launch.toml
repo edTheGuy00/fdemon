@@ -1,9 +1,10 @@
-# Launch configurations for profile mode lag reproduction (Issue #25)
+# Launch configurations for profile-mode lag reproduction (Issue #25)
 # and multi-config testing (Issue #18).
 #
-# The "Profile (Issue #25)" config has auto_start = true and mode = "profile".
-# Use it to reproduce the lag reported in Issue #25.
-# Switch to "Development" (debug mode) for A/B comparison.
+# The "Development" config has auto_start = true + device = "android" + mode = "debug"
+# and is used by example/TESTING.md Test J (the consolidate-launch-config regression
+# from Issue #29). Switch to "Profile (Issue #25)" via the New Session dialog when
+# you want to A/B-compare against the lag scenario reported in Issue #25.
 
 [[configurations]]
 name = "Profile (Issue #25)"

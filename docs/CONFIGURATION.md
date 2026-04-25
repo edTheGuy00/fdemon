@@ -182,18 +182,23 @@ Supported launch.json fields:
 
 ### Auto-Start Behavior
 
-Flutter Demon auto-launches a session at startup when at least one configuration in `launch.toml` sets `auto_start = true`. Otherwise, the NewSessionDialog opens for the user to pick a config and device manually.
+Flutter Demon auto-launches a session at startup when **either**:
 
-Once the auto-launch gate fires, the **selection priority** below decides which config + device pair to use.
+- any configuration in `launch.toml` sets `auto_start = true`, **or**
+- `settings.local.toml` holds a `last_device` from a previous run.
+
+Otherwise, the New Session dialog opens for the user to pick a config and device manually.
+
+Once the auto-launch gate fires, the **selection priority** below decides which config + device pair to use. When the gate fires via the cache and the cached device is no longer connected, the cascade falls through to Tier 3 / Tier 4 — see the "Cache Updates" note for behavior in that edge case.
 
 **Selection priority (first matching tier wins):**
 
-1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). If the configured device is not found among connected devices, Flutter Demon picks the first available device (still using the auto_start config — stays on Tier 1) and logs a warning visible in the log buffer. This tier always beats the cache.
-2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`. If the saved device is no longer connected, this tier returns no match and falls through to Tier 3, logging a warning.
+1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). If the configured device is not found among connected devices, Flutter Demon picks the first available device (still using the auto_start config — stays on Tier 1) and writes a warning to the fdemon log file. This tier always beats the cache.
+2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`. If the saved device is no longer connected, this tier returns no match and falls through to Tier 3, writing a warning to the fdemon log file.
 3. **First available** — first config in `launch.toml` (or `launch.json`) + first discovered device.
 4. **Bare `flutter run`** — if no configs exist at all.
 
-**When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful.
+**When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful. The cache is now also the trigger that lets the New Session dialog be skipped on subsequent runs — pick a device once, and Flutter Demon remembers it the next time you launch.
 
 ### User Preferences (settings.local.toml)
 
@@ -1166,7 +1171,7 @@ mode = "debug"
 auto_start = true  # Starts automatically
 ```
 
-Setting `auto_start = true` on a launch config is now the *only* way to trigger auto-launch at startup.
+Setting `auto_start = true` on a launch config is the most explicit way to trigger auto-launch at startup. Flutter Demon also skips the New Session dialog on subsequent runs when a `last_device` is cached from a previous session.
 
 ---
 

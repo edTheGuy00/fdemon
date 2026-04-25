@@ -242,10 +242,23 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"Auto-Start Behavior"</h3>
                 <p class="text-slate-400">
-                    "Flutter Demon auto-launches a session at startup when at least one configuration in "
-                    <code class="text-blue-400 bg-slate-900 px-1 rounded">"launch.toml"</code>
-                    " sets "<code class="text-blue-400">"auto_start = true"</code>
-                    ". Otherwise, the New Session dialog opens for manual selection."
+                    "Flutter Demon auto-launches a session at startup when "
+                    <strong class="text-white">"either"</strong>
+                    ":"
+                </p>
+                <ul class="list-disc list-inside text-slate-400 space-y-1 ml-2 text-sm mt-2">
+                    <li>
+                        "any configuration in "
+                        <code class="text-blue-400 bg-slate-900 px-1 rounded">"launch.toml"</code>
+                        " sets "<code class="text-blue-400">"auto_start = true"</code>", or"
+                    </li>
+                    <li>
+                        <code class="text-blue-400 bg-slate-900 px-1 rounded">"settings.local.toml"</code>
+                        " holds a "<code class="text-blue-400">"last_device"</code>" from a previous run."
+                    </li>
+                </ul>
+                <p class="text-slate-400 mt-2 text-sm">
+                    "Otherwise, the New Session dialog opens for manual selection. When the gate fires via the cache and the cached device is no longer connected, the cascade falls through to Tier 3 / Tier 4."
                 </p>
 
                 <h4 class="font-bold text-white mt-4">"Selection Priority"</h4>
@@ -255,7 +268,7 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                         <strong class="text-white">"Explicit intent"</strong>
                         " \u{2014} first launch config with "<code class="text-blue-400">"auto_start = true"</code>
                         ". Always beats the cache. If its "<code class="text-blue-400">"device"</code>
-                        " is not connected, Flutter Demon uses the first available device (still Tier 1)."
+                        " is not connected, Flutter Demon uses the first available device (still Tier 1) and writes a warning to the fdemon log file."
                     </li>
                     <li>
                         <strong class="text-white">"Remembered last selection"</strong>
@@ -264,7 +277,7 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                         <code class="text-blue-400">"last_config"</code>
                         " and the device is still connected, that selection is used. Reachable only when no config has "
                         <code class="text-blue-400">"auto_start = true"</code>
-                        ". Falls through to Tier 3 if the saved device has been disconnected."
+                        ". Falls through to Tier 3 if the saved device has been disconnected, writing a warning to the fdemon log file."
                     </li>
                     <li>
                         <strong class="text-white">"First available"</strong>
@@ -283,7 +296,8 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                     <code class="text-blue-400">"last_device"</code>" and "
                     <code class="text-blue-400">"last_config"</code>
                     " are written to "<code class="text-blue-400">"settings.local.toml"</code>
-                    " whenever a session starts successfully \u{2014} from both auto-launch and manual selections in the New Session dialog."
+                    " whenever a session starts successfully \u{2014} from both auto-launch and manual selections in the New Session dialog. "
+                    "The cache is also the trigger that lets the New Session dialog be skipped on subsequent runs \u{2014} pick a device once, and Flutter Demon remembers it the next time you launch."
                 </p>
 
                 <h3 class="text-lg font-bold text-white mt-6">"Dart Defines"</h3>
