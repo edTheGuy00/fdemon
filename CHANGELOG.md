@@ -14,6 +14,11 @@ All notable changes to Flutter Demon are documented here.
   `settings.local.toml` holds a cached selection. `auto_start = true` in
   `launch.toml` is treated as explicit intent and always beats the cache;
   the cache is only consulted when no config has `auto_start = true`. (#29)
+- The cached `last_device`/`last_config` in `settings.local.toml` now
+  actually triggers auto-launch on subsequent runs even without an
+  `auto_start = true` config — pick a device manually once, and Flutter
+  Demon will remember it next time. Previously the cache was being written
+  but never read at the startup gate.
 
 ### Features
 - Symmetric persistence for manual launches: picking a device/config in the
