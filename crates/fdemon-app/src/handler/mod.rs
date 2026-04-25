@@ -77,7 +77,10 @@ pub enum UpdateAction {
     /// shown, so that both lists are kept fresh without a loading screen.
     /// Errors on either side are logged only; the user keeps seeing the
     /// previous device lists until the discovery returns.
-    RefreshDevicesAndBootableBackground { flutter: FlutterExecutable },
+    RefreshDevicesAndBootableBackground {
+        /// Flutter executable to use for both background discovery tasks.
+        flutter: FlutterExecutable,
+    },
 
     /// Foreground connected-device discovery + background bootable discovery in parallel.
     /// Used by the new-session dialog cache-miss fallback so both tabs populate on

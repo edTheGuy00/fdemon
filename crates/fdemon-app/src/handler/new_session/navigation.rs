@@ -202,10 +202,12 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
 
     // Check connected devices cache
     let connected_cached = if let Some(cached_devices) = state.get_cached_devices() {
+        let cached_len = cached_devices.len();
+        let age = state.devices_last_updated.map(|t| t.elapsed());
         tracing::debug!(
             "Using cached devices ({} devices, age: {:?})",
-            cached_devices.len(),
-            state.devices_last_updated.map(|t| t.elapsed())
+            cached_len,
+            age
         );
 
         // Populate dialog with cached devices immediately
@@ -245,7 +247,13 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
 
     if connected_cached || bootable_cached {
         // We have at least one cached list shown — refresh in the background.
-        // Set refreshing flags AFTER set_*_devices() so they are not cleared.
+        // Set refreshing flags AFTER set_*_devices() (which clears them).
+        //
+        // Race: if the user closes and quickly reopens the dialog while a previous
+        // background discovery is in flight, that discovery's DevicesDiscovered message
+        // will arrive at the new dialog and clear `refreshing` before this open's own
+        // discovery completes. Convergence is correct (last write wins), but the visual
+        // cue may briefly disappear and reappear. Acceptable transient flicker.
         if connected_cached {
             state.new_session_dialog_state.target_selector.refreshing = true;
         }
@@ -266,21 +274,10 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     UpdateResult::action(UpdateAction::DiscoverDevicesAndBootable { flutter })
 }
 
-/// Closes the new session dialog and returns to the appropriate UI mode.
-///
-/// If sessions are running, returns to Normal mode. Otherwise, remains
-/// in Normal mode (as startup state).
+/// Closes the new session dialog and returns to Normal UI mode.
 pub fn handle_close_new_session_dialog(state: &mut AppState) -> UpdateResult {
     state.hide_new_session_dialog();
-
-    // Return to appropriate UI mode based on session state
-    if state.session_manager.has_running_sessions() {
-        state.ui_mode = UiMode::Normal;
-    } else {
-        // No sessions, stay in startup mode
-        state.ui_mode = UiMode::Normal;
-    }
-
+    state.ui_mode = UiMode::Normal;
     UpdateResult::none()
 }
 

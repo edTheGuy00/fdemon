@@ -268,7 +268,14 @@ impl TargetSelectorState {
         }
     }
 
-    /// Set error state
+    /// Set the connected-discovery error state.
+    ///
+    /// Clears `loading` and `refreshing` because this is invoked only from the
+    /// connected-device foreground failure path (`Message::DeviceDiscoveryFailed`
+    /// with `is_background: false`). `bootable_refreshing` is intentionally **not**
+    /// cleared here — bootable failures are routed through their own paths
+    /// (`spawn_bootable_device_discovery` swallows errors via `unwrap_or_default()`),
+    /// and clearing the bootable indicator on a connected error would be misleading.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
         self.loading = false;

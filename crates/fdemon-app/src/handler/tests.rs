@@ -10085,6 +10085,32 @@ fn test_devices_discovered_clears_refreshing() {
 }
 
 #[test]
+fn test_bootable_devices_discovered_clears_bootable_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state
+        .new_session_dialog_state
+        .target_selector
+        .bootable_refreshing = true;
+
+    let _ = update(
+        &mut state,
+        Message::BootableDevicesDiscovered {
+            ios_simulators: vec![],
+            android_avds: vec![],
+        },
+    );
+
+    assert!(
+        !state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_refreshing,
+        "BootableDevicesDiscovered must clear the bootable_refreshing flag"
+    );
+}
+
+#[test]
 fn test_background_device_discovery_failure_clears_refreshing() {
     let mut state = AppState::new();
     state.show_new_session_dialog(crate::config::LoadedConfigs::default());
