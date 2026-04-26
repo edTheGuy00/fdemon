@@ -268,14 +268,23 @@ impl TargetSelectorState {
         }
     }
 
-    /// Set the connected-discovery error state.
+    /// Set a new-session dialog error state.
     ///
-    /// Clears `loading` and `refreshing` because this is invoked only from the
-    /// connected-device foreground failure path (`Message::DeviceDiscoveryFailed`
-    /// with `is_background: false`). `bootable_refreshing` is intentionally **not**
-    /// cleared here — bootable failures are routed through their own paths
-    /// (`spawn_bootable_device_discovery` swallows errors via `unwrap_or_default()`),
-    /// and clearing the bootable indicator on a connected error would be misleading.
+    /// This helper is used by many new-session error paths, not just the
+    /// connected-device foreground discovery failure path. Callers include device
+    /// discovery failures, session creation failures, boot failures, config save
+    /// errors, "no Flutter SDK" surfaces from the launch context and dialog open,
+    /// and several validation paths.
+    ///
+    /// It records the error and clears the connected-side `loading` and
+    /// `refreshing` flags so the UI does not remain stuck in a connected
+    /// in-progress state after an error is surfaced.
+    ///
+    /// `bootable_loading` and `bootable_refreshing` are intentionally **not**
+    /// cleared here. Bootable discovery is independent (xcrun/emulator tools,
+    /// not the Flutter SDK) and its in-flight flags are managed by their own
+    /// success/failure paths. Callers that need to clear bootable indicators on
+    /// a particular error must do so themselves.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
         self.loading = false;
