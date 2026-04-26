@@ -50,19 +50,22 @@ impl std::fmt::Display for SdkSource {
     }
 }
 
-/// How to invoke the Flutter binary.
+/// Represents how to invoke the Flutter binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlutterExecutable {
-    /// Unix shell script or direct executable — invoke directly
+    /// Direct invocation of the binary by absolute path.
     Direct(PathBuf),
-    /// Windows `.bat` file — metadata marker only.
+    /// Windows `.bat` shim path.
     ///
-    /// The runtime invocation is identical to [`Direct`](Self::Direct): Rust's
-    /// stdlib (≥ 1.77.2) handles `.bat` / `.cmd` invocation safely when the
-    /// program path has an explicit extension, including the `cmd.exe`
-    /// argument-escape rules covered by CVE-2024-24576. The old `cmd /c`
-    /// wrapper has been removed because it caused quote-stripping failures on
-    /// paths containing whitespace (see issues #32, #34).
+    /// **Operationally identical to `Direct`** — both variants spawn via
+    /// `Command::new(path)` directly. The Rust stdlib (≥ 1.77.2, our
+    /// declared MSRV) handles `.bat` argument escaping safely per
+    /// CVE-2024-24576, so no `cmd /c` wrapper is needed.
+    ///
+    /// Retained as a separate variant for backward compatibility with
+    /// callers that pattern-match on it. New code should rely on the path's
+    /// extension (`.bat` / `.cmd`) for batch-file detection rather than the
+    /// variant tag.
     WindowsBatch(PathBuf),
 }
 
@@ -76,16 +79,15 @@ impl FlutterExecutable {
 
     /// Configures a [`tokio::process::Command`] for this executable.
     ///
-    /// Both variants now invoke the resolved absolute path directly. Rust's
-    /// stdlib (≥ 1.77.2 — our MSRV) handles `.bat` / `.cmd` invocation
-    /// safely when the program path has an explicit extension, including
-    /// the `cmd.exe` argument-escape rules covered by CVE-2024-24576.
+    /// Both variants invoke the resolved absolute path directly via
+    /// `Command::new(path)`. Rust's stdlib (≥ 1.77.2 — our MSRV) handles
+    /// `.bat` / `.cmd` invocation safely per CVE-2024-24576 when the program
+    /// path has an explicit extension. The previous `cmd /c <path>` wrapper
+    /// (removed in #32/#34's fix) caused quote-stripping failures on paths
+    /// containing whitespace.
     ///
-    /// The `WindowsBatch` variant is retained as a *metadata* marker so callers
-    /// and logs can tell that the underlying executable is a batch file. The
-    /// previous `cmd /c <path>` wrapper has been removed because it caused
-    /// quote-stripping failures on paths containing whitespace
-    /// (see issues #32, #34).
+    /// The two variants are operationally identical at this layer; callers
+    /// distinguish batch files via the path extension if needed.
     pub fn command(&self) -> tokio::process::Command {
         match self {
             Self::Direct(path) | Self::WindowsBatch(path) => tokio::process::Command::new(path),
