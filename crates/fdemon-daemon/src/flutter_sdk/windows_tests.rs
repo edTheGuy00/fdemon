@@ -6,7 +6,7 @@
 #![cfg(all(test, target_os = "windows"))]
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serial_test::serial;
 use tempfile::TempDir;
