@@ -258,8 +258,9 @@ flutter-demon/
 │   │       ├── test_utils.rs     # Test helpers
 │   │       ├── flutter_sdk/      # Flutter SDK detection and executable abstraction
 │   │       │   ├── mod.rs        # Public API: find_flutter_sdk(), FlutterSdk
-│   │       │   ├── locator.rs    # 11-strategy locator (env vars, PATH via which, version managers, cache)
+│   │       │   ├── locator.rs    # 12-strategy locator (env vars, PATH via which, version managers, shim fallback)
 │   │       │   ├── types.rs      # FlutterExecutable enum (Direct, WindowsBatch) + validate_sdk_path
+│   │       │   ├── diagnostics.rs  # Shared diagnostic helpers: windows_hint(), is_path_resolution_error(), strip_ansi()
 │   │       │   ├── version_probe.rs  # flutter --version parsing
 │   │       │   ├── cache_scanner.rs  # Version-manager cache directory scanning
 │   │       │   ├── channel.rs    # Flutter channel detection
@@ -454,8 +455,9 @@ flutter-demon/
 | `tool_availability.rs` | Tool detection (`adb`, `xcrun simctl`, `idevicesyslog`, `log`). `IosLogTool` enum selects the iOS capture backend at runtime. |
 | `test_utils.rs` | Test helpers for device/emulator testing |
 | `flutter_sdk/mod.rs` | Public API: `find_flutter_sdk()`, `FlutterSdk` — entry point for SDK detection |
-| `flutter_sdk/locator.rs` | 11-strategy locator: explicit config, env vars, version managers (`fvm`, `asdf`, `mise`), system PATH. Strategy 10 uses `which::which("flutter")` for PATHEXT-aware discovery on Windows. See source for full strategy list. |
+| `flutter_sdk/locator.rs` | 12-strategy locator: explicit config, env vars, version managers (`fvm`, `asdf`, `mise`), system PATH, binary-only shim fallback. Strategy 10 uses `which::which("flutter")` for PATHEXT-aware discovery on Windows. See source for full strategy list. |
 | `flutter_sdk/types.rs` | `FlutterExecutable` enum and `validate_sdk_path` / `validate_sdk_path_lenient` |
+| `flutter_sdk/diagnostics.rs` | Shared diagnostic helpers used by `devices.rs` and `emulators.rs` — `windows_hint()` (Windows-only, hints at `[flutter] sdk_path`), `is_path_resolution_error()` (stderr predicate to gate the hint), `strip_ansi()` (cleans Flutter CLI color codes from stderr before user-facing display). |
 | `flutter_sdk/version_probe.rs` | Parses `flutter --version` output |
 | `flutter_sdk/cache_scanner.rs` | Scans version-manager cache directories |
 | `flutter_sdk/channel.rs` | Flutter channel detection |
@@ -469,7 +471,24 @@ flutter-demon/
 
 **Flutter SDK Detection (`flutter_sdk/`):**
 
-`find_flutter_sdk()` runs up to 11 ordered strategies (explicit config, environment variables, version managers, system PATH). Strategy 10 uses `which::which("flutter")` which respects `PATHEXT` on Windows to correctly locate `flutter.bat`, `flutter.cmd`, or `flutter.exe`. Path normalization uses `dunce::canonicalize` instead of `std::fs::canonicalize` to avoid `\\?\`-prefixed UNC paths that `cmd.exe` cannot consume.
+`find_flutter_sdk()` runs up to 12 ordered strategies (explicit config, environment variables, version managers, system PATH, binary-only shim fallback). Strategy 10 uses `which::which("flutter")` which respects `PATHEXT` on Windows to correctly locate `flutter.bat`, `flutter.cmd`, or `flutter.exe`. Path normalization uses `dunce::canonicalize` instead of `std::fs::canonicalize` to avoid `\\?\`-prefixed UNC paths that `cmd.exe` cannot consume.
+
+| # | Strategy | Description |
+|---|----------|-------------|
+| 1 | Explicit config | `[flutter] sdk_path` in `.fdemon/config.toml` |
+| 2 | `FLUTTER_ROOT` env | Environment variable set by the user or CI |
+| 3 | FVM modern | `.fvmrc` in project tree |
+| 4 | FVM legacy | `.fvm/fvm_config.json` + symlink |
+| 5 | Puro | `.puro.json` in project tree |
+| 6 | asdf | `.tool-versions` in project tree |
+| 7 | mise | `.mise.toml` in project tree |
+| 8 | proto | `.prototools` in project tree |
+| 9 | flutter_wrapper | `flutterw` script + `.flutter/` directory |
+| 10 | System PATH | `which::which("flutter")` → resolve symlinks → SDK root |
+| 11 | Lenient PATH fallback | Binary on PATH but `VERSION` file missing or unreadable |
+| 12 | Binary-only fallback (shim-installer support) | Last resort. When `which::which("flutter")` succeeds but the inferred SDK root fails both strict and lenient validation, returns a `FlutterSdk` with `source = SdkSource::PathInferred`, `version = "unknown"`. This unblocks scoop and winget Flutter installations that don't follow the canonical `<root>/bin/flutter` layout. |
+
+**Diagnostic hints are content-gated.** `devices.rs` and `emulators.rs` only append the Windows-specific `windows_hint()` (which directs users to set `[flutter] sdk_path` in `.fdemon/config.toml`) when the failure's stderr matches a path-resolution error pattern (via `is_path_resolution_error()`). This prevents the hint from misleading users when `flutter` exits non-zero for unrelated reasons (e.g., adb crashed, license not accepted, network proxy errors).
 
 `FlutterExecutable` has two variants:
 
