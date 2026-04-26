@@ -1,7 +1,7 @@
 //! # Flutter SDK Locator
 //!
 //! Top-level detection chain that resolves the Flutter SDK for a given project.
-//! Walks 11 strategies in strict priority order, returning the first valid SDK found.
+//! Walks 12 strategies in strict priority order, returning the first valid SDK found.
 //!
 //! ## Priority Order
 //!
@@ -16,6 +16,7 @@
 //! 9. flutter_wrapper (`flutterw` + `.flutter/`)
 //! 10. System PATH (`which flutter` → resolve symlinks → SDK root)
 //! 11. Lenient PATH fallback (binary on PATH but VERSION file missing/unreadable)
+//! 12. Binary-only fallback (shim installers: scoop, winget — executable found but SDK root not canonical)
 
 use std::path::{Path, PathBuf};
 
@@ -24,7 +25,8 @@ use fdemon_core::prelude::*;
 use super::{
     channel::detect_channel,
     types::{
-        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterSdk, SdkSource,
+        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterExecutable,
+        FlutterSdk, SdkSource,
     },
     version_managers,
 };
@@ -218,6 +220,36 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         }
     }
 
+    // Strategy 12: Binary-only fallback for shim installers (scoop, winget, etc.)
+    // When `which::which("flutter")` resolved a binary but the inferred SDK root
+    // failed both strict and lenient validation, the binary itself is still a
+    // working executable — package-manager shims like scoop's `shims/` and
+    // winget's `Links/` simply don't follow the canonical `<root>/bin/flutter`
+    // layout. We construct a FlutterSdk with placeholder metadata so the engine
+    // can spawn flutter; SDK-root-dependent features (channel detection, version
+    // pinning) gracefully degrade.
+    if let Ok(binary_path) = which::which("flutter") {
+        let canonical_binary = dunce::canonicalize(&binary_path).unwrap_or(binary_path);
+        let executable = flutter_executable_from_binary_path(&canonical_binary);
+        let root = canonical_binary
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| canonical_binary.clone());
+        let sdk = FlutterSdk {
+            root,
+            executable,
+            source: SdkSource::PathInferred,
+            version: "unknown".to_string(),
+            channel: None,
+        };
+        info!(
+            source = %sdk.source,
+            binary = %canonical_binary.display(),
+            "Flutter SDK resolved (binary-only fallback — shim installer detected)"
+        );
+        return Ok(sdk);
+    }
+
     warn!("SDK detection: all strategies exhausted, Flutter SDK not found");
     Err(Error::FlutterNotFound)
 }
@@ -282,6 +314,27 @@ fn try_resolve_sdk(
 // Strategy Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Construct the platform-appropriate `FlutterExecutable` variant from a
+/// canonical binary path. Used by Strategy 12's binary-only fallback.
+///
+/// On Windows, returns `WindowsBatch(path)` if the path's extension is
+/// `.bat` or `.cmd`, otherwise `Direct(path)`. On non-Windows, always
+/// returns `Direct(path)`.
+fn flutter_executable_from_binary_path(path: &Path) -> FlutterExecutable {
+    #[cfg(target_os = "windows")]
+    {
+        let is_batch = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("bat") || s.eq_ignore_ascii_case("cmd"))
+            .unwrap_or(false);
+        if is_batch {
+            return FlutterExecutable::WindowsBatch(path.to_path_buf());
+        }
+    }
+    FlutterExecutable::Direct(path.to_path_buf())
+}
+
 /// Strategy 1: Return the explicitly configured SDK path if provided.
 fn try_explicit_config(explicit_path: Option<&Path>) -> Option<PathBuf> {
     explicit_path.map(|p| p.to_path_buf())
@@ -340,6 +393,39 @@ mod tests {
     use serial_test::serial;
     use std::fs;
     use tempfile::TempDir;
+
+    /// RAII guard that prepends `dir` to the PATH environment variable for
+    /// the lifetime of the guard, then restores the original PATH on drop.
+    struct PathPrependGuard {
+        original: std::ffi::OsString,
+    }
+
+    impl PathPrependGuard {
+        fn new(dir: &Path) -> Self {
+            let original = std::env::var_os("PATH").unwrap_or_default();
+            let sep = if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            };
+            let mut new_path = std::ffi::OsString::from(dir);
+            new_path.push(sep);
+            new_path.push(&original);
+            std::env::set_var("PATH", new_path);
+            Self { original }
+        }
+    }
+
+    impl Drop for PathPrependGuard {
+        fn drop(&mut self) {
+            std::env::set_var("PATH", &self.original);
+        }
+    }
+
+    /// Prepend `dir` to PATH for the lifetime of the returned guard.
+    fn path_prepend_guard(dir: &Path) -> PathPrependGuard {
+        PathPrependGuard::new(dir)
+    }
 
     /// Create a mock valid Flutter SDK directory structure.
     fn create_mock_sdk(root: &Path, version: &str) {
@@ -619,6 +705,48 @@ mod tests {
         let sdk = result.expect("Should succeed with lenient PATH fallback");
         assert!(matches!(sdk.source, SdkSource::PathInferred));
         assert_eq!(sdk.version, "unknown");
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    #[serial]
+    fn test_strategy_12_binary_only_fallback_when_inferred_root_invalid() {
+        // Simulate a shim layout: <temp>/scoop/shims/flutter (Unix-ish for cross-platform test).
+        // The key property is that `which::which("flutter")` resolves the binary but
+        // resolve_sdk_root_from_binary() walks up two parents to <temp>/scoop — which has no
+        // bin/flutter — so strategies 10 and 11 both fail, and Strategy 12 fires.
+        let temp = TempDir::new().unwrap();
+        let shims = temp.path().join("scoop").join("shims");
+        fs::create_dir_all(&shims).unwrap();
+
+        // Create a fake flutter binary (executable on Unix; the test only inspects
+        // path resolution, not spawn).
+        let binary = shims.join("flutter");
+        fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&binary).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&binary, perms).unwrap();
+        }
+
+        // Prepend shims to PATH and clear FLUTTER_ROOT so strategies 1-9 fail.
+        let _guard = path_prepend_guard(&shims);
+        std::env::remove_var("FLUTTER_ROOT");
+
+        // walk-up-2 from <temp>/scoop/shims/flutter is <temp>/scoop — which has no
+        // bin/flutter, so strategies 10 and 11 both fail and Strategy 12 fires.
+        let project = TempDir::new().unwrap();
+        let sdk = find_flutter_sdk(project.path(), None).unwrap();
+        assert_eq!(sdk.source, SdkSource::PathInferred);
+        assert_eq!(sdk.version, "unknown");
+        assert!(sdk.channel.is_none());
+        // The executable must be the canonical binary path itself.
+        assert!(
+            sdk.executable.path().ends_with("flutter")
+                || sdk.executable.path().ends_with("flutter.bat")
+        );
     }
 
     #[test]
