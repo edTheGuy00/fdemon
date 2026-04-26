@@ -62,9 +62,14 @@ impl FlutterProcess {
 
         info!(
             binary = %flutter.path().display(),
-            args = ?args,
             cwd = %project_path.display(),
             "Spawning flutter session"
+        );
+        debug!(
+            binary = %flutter.path().display(),
+            args = ?args,
+            cwd = %project_path.display(),
+            "Spawning flutter session (with args)"
         );
 
         // Spawn the Flutter process
