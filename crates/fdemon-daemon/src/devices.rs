@@ -1,6 +1,6 @@
 //! Device discovery using flutter devices command
 
-use crate::flutter_sdk::diagnostics::windows_hint;
+use crate::flutter_sdk::diagnostics::{is_path_resolution_error, strip_ansi, windows_hint};
 use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -217,10 +217,16 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
                 output.status.code()
             );
         } else {
+            let stderr_clean = strip_ansi(&stderr);
+            let hint = if is_path_resolution_error(&stderr_clean) {
+                windows_hint()
+            } else {
+                ""
+            };
             error!(
                 binary = %flutter.path().display(),
                 exit_code = ?output.status.code(),
-                stderr = %stderr,
+                stderr = %stderr_clean,
                 stdout = %stdout,
                 "flutter devices failed"
             );
@@ -228,8 +234,8 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
                 "flutter devices failed (binary: {}, exit code {:?}): {}{}",
                 flutter.path().display(),
                 output.status.code(),
-                stderr.trim(),
-                windows_hint(),
+                stderr_clean.trim(),
+                hint,
             )));
         }
     }

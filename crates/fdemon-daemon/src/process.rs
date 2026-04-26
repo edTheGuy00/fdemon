@@ -82,14 +82,20 @@ impl FlutterProcess {
             .stderr(Stdio::piped())
             .kill_on_drop(true) // Critical: cleanup on drop
             .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Error::FlutterNotFound
-                } else {
-                    Error::ProcessSpawn {
-                        reason: format!("{} (binary: {})", e, flutter.path().display()),
-                    }
-                }
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Error::FlutterNotFound,
+                #[cfg(target_os = "windows")]
+                std::io::ErrorKind::InvalidInput => Error::ProcessSpawn {
+                    reason: format!(
+                        "flutter spawn rejected an argument it could not safely escape (binary: {}). \
+                         This usually means a dart-define value contains characters cmd.exe cannot \
+                         pass safely (% ^ & | < > unmatched \"). Check launch.toml.",
+                        flutter.path().display()
+                    ),
+                },
+                _ => Error::ProcessSpawn {
+                    reason: format!("{} (binary: {})", e, flutter.path().display()),
+                },
             })?;
 
         let pid = child.id();

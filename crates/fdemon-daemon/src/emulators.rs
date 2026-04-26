@@ -11,7 +11,7 @@ use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};
 
-use crate::flutter_sdk::diagnostics::windows_hint;
+use crate::flutter_sdk::diagnostics::{is_path_resolution_error, strip_ansi, windows_hint};
 use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 
@@ -154,10 +154,16 @@ async fn run_flutter_emulators(flutter: &FlutterExecutable) -> Result<FlutterOut
     }
 
     if !output.status.success() {
+        let stderr_clean = strip_ansi(&stderr);
+        let hint = if is_path_resolution_error(&stderr_clean) {
+            windows_hint()
+        } else {
+            ""
+        };
         error!(
             binary = %flutter.path().display(),
             exit_code = ?output.status.code(),
-            stderr = %stderr,
+            stderr = %stderr_clean,
             stdout = %stdout,
             "flutter emulators failed"
         );
@@ -165,8 +171,8 @@ async fn run_flutter_emulators(flutter: &FlutterExecutable) -> Result<FlutterOut
             "flutter emulators failed (binary: {}, exit code {:?}): {}{}",
             flutter.path().display(),
             output.status.code(),
-            stderr.trim(),
-            windows_hint(),
+            stderr_clean.trim(),
+            hint,
         )));
     }
 

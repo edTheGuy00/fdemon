@@ -183,9 +183,14 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         Err(e) => debug!("SDK detection: flutter_wrapper — error: {e}"),
     }
 
+    // Cache PATH-resolution result once for strategies 10, 11, and 12.
+    let path_resolution = try_system_path();
+
     // Strategy 10: System PATH
-    if let Some(sdk_root) = try_system_path() {
-        if let Some(sdk) = try_resolve_sdk(sdk_root, |_| SdkSource::SystemPath, "system PATH") {
+    if let Some(ref sdk_root) = path_resolution {
+        if let Some(sdk) =
+            try_resolve_sdk(sdk_root.clone(), |_| SdkSource::SystemPath, "system PATH")
+        {
             return Ok(sdk);
         }
     } else {
@@ -195,14 +200,14 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
     // Strategy 11: Lenient PATH fallback — binary on PATH but VERSION file missing/unreadable.
     // Re-scans PATH using the same logic as strategy 10 but skips the VERSION file requirement.
     // Uses SdkSource::PathInferred to distinguish from a fully resolved SdkSource::SystemPath.
-    if let Some(sdk_root) = try_system_path() {
-        match validate_sdk_path_lenient(&sdk_root) {
+    if let Some(ref sdk_root) = path_resolution {
+        match validate_sdk_path_lenient(sdk_root) {
             Ok(executable) => {
                 let version =
-                    read_version_file(&sdk_root).unwrap_or_else(|_| "unknown".to_string());
-                let channel = detect_channel(&sdk_root).map(|c| c.to_string());
+                    read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
+                let channel = detect_channel(sdk_root).map(|c| c.to_string());
                 let sdk = FlutterSdk {
-                    root: sdk_root,
+                    root: sdk_root.clone(),
                     executable,
                     source: SdkSource::PathInferred,
                     version,
@@ -353,6 +358,12 @@ fn try_flutter_root_env() -> Option<PathBuf> {
 /// on Unix. It returns the absolute path to the binary; we then canonicalize
 /// it (via `dunce::canonicalize` to avoid `\\?\` UNC prefixes on Windows) and
 /// walk up two parents to find the SDK root (`<root>/bin/flutter`).
+///
+/// **Security note:** PATH-based binary resolution trusts every directory on
+/// `PATH`. Users in security-sensitive environments (multi-tenant boxes,
+/// shared developer machines) should pin an absolute SDK path via
+/// `[flutter] sdk_path` in `.fdemon/config.toml` to bypass PATH lookup
+/// entirely.
 fn try_system_path() -> Option<PathBuf> {
     match which::which("flutter") {
         Ok(binary_path) => {
