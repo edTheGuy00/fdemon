@@ -26,6 +26,11 @@ const VERSION_PROBE_TIMEOUT_SECS: u64 = 30;
 /// * `Ok(FlutterVersionInfo)` with parsed metadata
 /// * `Err(...)` if the subprocess fails or output is not valid JSON
 pub async fn probe_flutter_version(executable: &FlutterExecutable) -> Result<FlutterVersionInfo> {
+    debug!(
+        binary = %executable.path().display(),
+        "Probing flutter version"
+    );
+
     let mut cmd = executable.command();
     cmd.args(["--version", "--machine"]);
     cmd.stdin(std::process::Stdio::null());
@@ -39,15 +44,22 @@ pub async fn probe_flutter_version(executable: &FlutterExecutable) -> Result<Flu
     .await
     .map_err(|_| {
         Error::config(format!(
-            "flutter --version --machine timed out after {VERSION_PROBE_TIMEOUT_SECS}s"
+            "flutter --version --machine timed out after {VERSION_PROBE_TIMEOUT_SECS}s (binary: {})",
+            executable.path().display()
         ))
     })?
-    .map_err(|e| Error::config(format!("failed to run flutter --version --machine: {e}")))?;
+    .map_err(|e| {
+        Error::config(format!(
+            "flutter --version --machine failed ({}): {e}",
+            executable.path().display()
+        ))
+    })?;
 
     if !output.status.success() {
         return Err(Error::config(format!(
-            "flutter --version --machine exited with status {}",
-            output.status
+            "flutter --version --machine exited with status {} (binary: {})",
+            output.status,
+            executable.path().display()
         )));
     }
 

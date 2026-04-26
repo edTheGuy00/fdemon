@@ -60,7 +60,12 @@ impl FlutterProcess {
             });
         }
 
-        info!("Spawning Flutter: flutter {}", args.join(" "));
+        info!(
+            binary = %flutter.path().display(),
+            args = ?args,
+            cwd = %project_path.display(),
+            "Spawning flutter session"
+        );
 
         // Spawn the Flutter process
         let mut child = flutter
@@ -77,7 +82,7 @@ impl FlutterProcess {
                     Error::FlutterNotFound
                 } else {
                     Error::ProcessSpawn {
-                        reason: e.to_string(),
+                        reason: format!("{} (binary: {})", e, flutter.path().display()),
                     }
                 }
             })?;
