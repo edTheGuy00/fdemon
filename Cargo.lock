@@ -636,7 +636,7 @@ checksum = "9f1f227452a390804cdb637b74a86990f2a7d7ba4b7d5693aac9b4dd6defd8d6"
 
 [[package]]
 name = "fdemon-app"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "color-eyre",
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "dirs",
@@ -680,7 +680,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-daemon"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "dirs",
@@ -700,7 +700,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-dap"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "fdemon-core",
  "rand 0.8.6",
@@ -715,7 +715,7 @@ dependencies = [
 
 [[package]]
 name = "fdemon-tui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "crossterm",
@@ -782,7 +782,7 @@ checksum = "0ce7134b9999ecaf8bcd65542e436736ef32ddca1b3e06094cb6ec5755203b80"
 
 [[package]]
 name = "flutter-demon"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "chrono",
  "clap",
