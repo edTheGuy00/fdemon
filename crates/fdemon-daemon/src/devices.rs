@@ -1,5 +1,6 @@
 //! Device discovery using flutter devices command
 
+use crate::flutter_sdk::diagnostics::windows_hint;
 use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -234,23 +235,6 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
     }
 
     Ok(FlutterOutput { stdout, stderr })
-}
-
-/// Returns a Windows-specific hint about configuring the Flutter SDK path.
-///
-/// On Windows, package-manager shims (Chocolatey, scoop, winget) can cause
-/// spawn failures. The hint points the user at the config option that lets
-/// them pin an exact SDK path.
-#[cfg(target_os = "windows")]
-fn windows_hint() -> &'static str {
-    "\n\nHint: If your Flutter is installed via a package manager (Chocolatey, scoop, winget) \
-     or in a non-standard location, set `[flutter] sdk_path = \"C:\\\\path\\\\to\\\\flutter\"` \
-     in `.fdemon/config.toml`."
-}
-
-#[cfg(not(target_os = "windows"))]
-fn windows_hint() -> &'static str {
-    ""
 }
 
 struct FlutterOutput {

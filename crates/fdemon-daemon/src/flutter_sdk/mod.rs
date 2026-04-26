@@ -43,6 +43,7 @@
 
 pub mod cache_scanner;
 mod channel;
+pub(crate) mod diagnostics;
 mod locator;
 mod types;
 pub mod version_managers;
