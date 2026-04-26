@@ -17,10 +17,7 @@
 //! 10. System PATH (`which flutter` → resolve symlinks → SDK root)
 //! 11. Lenient PATH fallback (binary on PATH but VERSION file missing/unreadable)
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use fdemon_core::prelude::*;
 
@@ -295,57 +292,41 @@ fn try_flutter_root_env() -> Option<PathBuf> {
     std::env::var_os("FLUTTER_ROOT").map(PathBuf::from)
 }
 
-/// Strategy 10: Find `flutter` on the system PATH and resolve to the SDK root.
+/// Strategy 10: Resolve `flutter` on the system PATH using `which::which`,
+/// then walk up to the SDK root.
 ///
-/// On Unix: searches PATH for `flutter`, resolves symlinks, then walks up
-/// from the binary to find the SDK root (`<root>/bin/flutter` → `<root>/`).
-///
-/// On Windows: searches PATH for `flutter.bat` or `flutter.exe`.
+/// `which` respects `PATHEXT` on Windows (so it finds `flutter.bat`, `.cmd`,
+/// or `.exe` according to the user's `PATHEXT` ordering) and follows symlinks
+/// on Unix. It returns the absolute path to the binary; we then canonicalize
+/// it (via `dunce::canonicalize` to avoid `\\?\` UNC prefixes on Windows) and
+/// walk up two parents to find the SDK root (`<root>/bin/flutter`).
 fn try_system_path() -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-
-    for dir in std::env::split_paths(&path_var) {
-        if let Some(sdk_root) = find_flutter_in_dir(&dir) {
-            return Some(sdk_root);
+    match which::which("flutter") {
+        Ok(binary_path) => {
+            debug!(path = %binary_path.display(), "SDK detection: which resolved flutter");
+            resolve_sdk_root_from_binary(&binary_path)
         }
-    }
-
-    None
-}
-
-/// Check if a directory contains the flutter binary and return the SDK root.
-fn find_flutter_in_dir(dir: &Path) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        // Try flutter.bat first, then flutter.exe
-        for name in &["flutter.bat", "flutter.exe"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                if let Some(sdk_root) = resolve_sdk_root_from_binary(&candidate) {
-                    return Some(sdk_root);
-                }
-            }
+        Err(e) => {
+            debug!("SDK detection: which::which(\"flutter\") failed: {e}");
+            None
         }
-        None
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let candidate = dir.join("flutter");
-        if candidate.is_file() {
-            return resolve_sdk_root_from_binary(&candidate);
-        }
-        None
     }
 }
 
 /// Given a path to a flutter binary, resolve the SDK root directory.
 ///
-/// Expects the binary to be at `<root>/bin/flutter`.
+/// Expects the binary to be at `<root>/bin/flutter` (or `flutter.bat` on Windows).
 /// Canonicalizes the path to follow symlinks, then walks up two levels.
+///
+/// Uses [`dunce::canonicalize`] instead of [`std::fs::canonicalize`] to avoid
+/// `\\?\` UNC-prefixed paths on Windows. UNC prefixes are valid Win32 paths but
+/// are not understood by `cmd.exe` — leaving them in place would break any
+/// downstream invocation that flows through cmd. `dunce::canonicalize` returns
+/// the same value as `fs::canonicalize` on Unix, so this is a transparent
+/// upgrade for non-Windows targets.
 pub(crate) fn resolve_sdk_root_from_binary(binary_path: &Path) -> Option<PathBuf> {
-    // canonicalize → parent (bin/) → parent (root/)
-    let canonical = fs::canonicalize(binary_path).ok()?;
+    // dunce::canonicalize → parent (bin/) → parent (root/)
+    let canonical = dunce::canonicalize(binary_path).ok()?;
     canonical.parent()?.parent().map(|p| p.to_path_buf())
 }
 
@@ -421,11 +402,11 @@ mod tests {
         create_mock_sdk(&sdk_root, "3.22.0");
 
         // Test the helper function directly — it resolves the SDK root from the binary path.
-        // Canonicalize sdk_root as well since on macOS /var → /private/var is followed by
-        // fs::canonicalize inside resolve_sdk_root_from_binary.
+        // Use dunce::canonicalize to match the implementation (avoids \\?\ UNC prefix on Windows;
+        // on macOS follows /var → /private/var symlinks just like fs::canonicalize).
         let binary = sdk_root.join("bin/flutter");
         let resolved = resolve_sdk_root_from_binary(&binary);
-        let expected = fs::canonicalize(&sdk_root).ok();
+        let expected = dunce::canonicalize(&sdk_root).ok();
         assert_eq!(resolved, expected);
     }
 
@@ -590,17 +571,18 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn test_system_path_strategy_uses_find_flutter_in_dir() {
+    fn test_resolve_sdk_root_from_binary_finds_sdk_root() {
         let tmp = TempDir::new().unwrap();
         let sdk_root = tmp.path().join("flutter-sdk");
         create_mock_sdk(&sdk_root, "3.24.0");
 
-        // find_flutter_in_dir looks for `flutter` binary in a dir.
+        // resolve_sdk_root_from_binary canonicalizes the binary path (following symlinks)
+        // and walks up two parents to the SDK root.
         // Canonicalize sdk_root so macOS /var → /private/var symlink is resolved.
-        let bin_dir = sdk_root.join("bin");
-        let result = find_flutter_in_dir(&bin_dir);
-        let expected = fs::canonicalize(&sdk_root).ok();
-        // The binary exists; canonicalize should succeed and return the SDK root
+        let binary = sdk_root.join("bin/flutter");
+        let result = resolve_sdk_root_from_binary(&binary);
+        let expected = dunce::canonicalize(&sdk_root).ok();
+        // The binary exists; dunce::canonicalize should succeed and return the SDK root
         assert_eq!(result, expected);
     }
 
