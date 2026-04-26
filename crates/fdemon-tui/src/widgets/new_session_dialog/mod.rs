@@ -330,7 +330,8 @@ impl<'a> NewSessionDialog<'a> {
             &self.state.target_selector,
             self.tool_availability,
             target_focused,
-        );
+        )
+        .icons(*self.icons);
         target_selector.render(chunks[0], buf);
 
         // Render vertical separator
@@ -553,6 +554,7 @@ impl<'a> NewSessionDialog<'a> {
             self.tool_availability,
             target_focused,
         )
+        .icons(*self.icons)
         .compact(target_compact);
         target_selector.render(chunks[2], buf);
 
@@ -1219,6 +1221,135 @@ mod tests {
             LaunchContext::min_height(),
             "MIN_EXPANDED_LAUNCH_HEIGHT must equal LaunchContext::min_height() \
              to avoid button clipping at the expanded threshold boundary"
+        );
+    }
+
+    // =========================================================================
+    // Group 6: IconSet threading — NewSessionDialog must pass configured icons
+    //          through to TargetSelector (and its TabBar) at both call sites.
+    // =========================================================================
+
+    /// Lock-in test: NewSessionDialog threads a non-default IconSet to TargetSelector
+    /// so that the configured refresh glyph appears in the rendered tab bar.
+    ///
+    /// The horizontal layout (width >= 70, height >= 20) exercises the call site
+    /// inside `render_panes()` (line ~329).
+    #[test]
+    fn test_new_session_dialog_threads_iconset_to_target_selector() {
+        // Build a NerdFonts icon set whose refresh glyph differs from the default (Unicode).
+        let nerd_icons = IconSet::new(IconMode::NerdFonts);
+        let nerd_refresh = nerd_icons.refresh(); // \u{f021}
+        let unicode_refresh = IconSet::default().refresh(); // \u{21bb} ↻
+
+        // Verify test setup: the two glyphs must differ; if they ever become equal,
+        // the test can no longer distinguish "threading worked" from "fallback used".
+        assert_ne!(
+            nerd_refresh, unicode_refresh,
+            "test setup error: NerdFonts refresh glyph must differ from Unicode default"
+        );
+
+        // Build dialog state with refreshing=true so the glyph is emitted by TabBar.
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        state.target_selector.refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+        let dialog = NewSessionDialog::new(&state, &tool_availability, &nerd_icons);
+
+        // Render at a size that triggers horizontal (two-pane) layout.
+        // MIN_HORIZONTAL_WIDTH = 70, MIN_HORIZONTAL_HEIGHT = 20 — use 120×40 for headroom.
+        let backend = TestBackend::new(120, 40);
+        let mut terminal = Terminal::new(backend).expect("test: failed to create terminal");
+
+        terminal
+            .draw(|f| {
+                f.render_widget(dialog, f.area());
+            })
+            .expect("test: failed to draw");
+
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(
+            rendered.contains(nerd_refresh),
+            "expected NerdFonts refresh glyph ({}) in rendered tab bar, got: {:?}",
+            nerd_refresh,
+            &rendered.chars().take(400).collect::<String>()
+        );
+        assert!(
+            !rendered.contains(unicode_refresh),
+            "default Unicode refresh glyph ({}) must NOT appear when NerdFonts is \
+             configured — threading is broken if it does. got: {:?}",
+            unicode_refresh,
+            &rendered.chars().take(400).collect::<String>()
+        );
+    }
+
+    /// Lock-in test for the vertical (compact) layout call site in `render_vertical()`
+    /// (~line 551). Renders into a narrow terminal (width 40–69) with sufficient height
+    /// to trigger the vertical layout path.
+    ///
+    /// Uses `bootable_refreshing = true` with the active tab set to Bootable so the
+    /// glyph appears in the compact tab bar rendered by `render_tabs_compact`.
+    #[test]
+    fn test_new_session_dialog_threads_iconset_to_target_selector_vertical() {
+        let nerd_icons = IconSet::new(IconMode::NerdFonts);
+        let nerd_refresh = nerd_icons.refresh();
+        let unicode_refresh = IconSet::default().refresh();
+
+        assert_ne!(
+            nerd_refresh, unicode_refresh,
+            "test setup error: NerdFonts refresh glyph must differ from Unicode default"
+        );
+
+        // Build dialog state with Bootable tab active and bootable_refreshing=true.
+        // Note: set_bootable_devices() resets bootable_refreshing to false, so we
+        // must set bootable_refreshing AFTER the call to preserve the in-flight state.
+        let mut state = NewSessionDialogState::new(LoadedConfigs::default());
+        state.target_selector.active_tab = TargetTab::Bootable;
+        state.target_selector.loading = false;
+        state.target_selector.set_bootable_devices(vec![], vec![]);
+        state.target_selector.bootable_refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+        let dialog = NewSessionDialog::new(&state, &tool_availability, &nerd_icons);
+
+        // Render at a size that triggers vertical layout:
+        // MIN_VERTICAL_WIDTH=40, MIN_VERTICAL_HEIGHT=20 — use 50×40 (below horizontal
+        // threshold of 70 wide, above vertical threshold of 40 wide and 20 tall).
+        let backend = TestBackend::new(50, 40);
+        let mut terminal = Terminal::new(backend).expect("test: failed to create terminal");
+
+        terminal
+            .draw(|f| {
+                f.render_widget(dialog, f.area());
+            })
+            .expect("test: failed to draw");
+
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|c| c.symbol())
+            .collect();
+
+        assert!(
+            rendered.contains(nerd_refresh),
+            "expected NerdFonts refresh glyph ({}) in vertical-layout rendered tab bar, got: {:?}",
+            nerd_refresh,
+            &rendered.chars().take(400).collect::<String>()
+        );
+        assert!(
+            !rendered.contains(unicode_refresh),
+            "default Unicode refresh glyph ({}) must NOT appear when NerdFonts is \
+             configured in vertical layout. got: {:?}",
+            unicode_refresh,
+            &rendered.chars().take(400).collect::<String>()
         );
     }
 }
