@@ -230,25 +230,29 @@ impl TargetSelector<'_> {
             .add_modifier(Modifier::BOLD);
         let style_inactive = Style::default().fg(palette::TEXT_MUTED);
 
-        // Build labels with optional refresh glyph for the active tab's in-flight state.
-        let connected_label = if connected_active {
-            if self.state.refreshing {
-                format!("[1 Connected {}]", self.icons.refresh())
-            } else {
-                "[1 Connected]".to_string()
-            }
+        // Build the base label (active-tab brackets vs bare), then conditionally
+        // append the refresh glyph for any tab whose refresh is in flight. This
+        // mirrors `TabBar`'s per-tab semantics in full mode.
+        let connected_base = if connected_active {
+            "[1 Connected]"
         } else {
-            "1 Connected".to_string()
+            "1 Connected"
+        };
+        let connected_label = if self.state.refreshing {
+            format!("{} {}", connected_base, self.icons.refresh())
+        } else {
+            connected_base.to_string()
         };
 
-        let bootable_label = if bootable_active {
-            if self.state.bootable_refreshing {
-                format!("[2 Bootable {}]", self.icons.refresh())
-            } else {
-                "[2 Bootable]".to_string()
-            }
+        let bootable_base = if bootable_active {
+            "[2 Bootable]"
         } else {
-            "2 Bootable".to_string()
+            "2 Bootable"
+        };
+        let bootable_label = if self.state.bootable_refreshing {
+            format!("{} {}", bootable_base, self.icons.refresh())
+        } else {
+            bootable_base.to_string()
         };
 
         // Pill-style compact: use brackets for active tab
@@ -1229,5 +1233,80 @@ mod tests {
             rendered.contains(glyph),
             "compact mode should show refresh glyph when active tab is refreshing, got: {rendered}"
         );
+    }
+
+    #[test]
+    fn test_target_selector_compact_renders_refreshing_glyph_on_inactive_tab() {
+        // Case 1: Active tab is Connected, but Bootable is refreshing (inactive tab).
+        // The glyph must appear next to the inactive Bootable label.
+        {
+            let mut state = TargetSelectorState::default();
+            state.loading = false;
+            state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+            state.bootable_refreshing = true;
+            state.active_tab = TargetTab::Connected;
+
+            let tool_availability = ToolAvailability::default();
+            let icons = crate::theme::icons::IconSet::default();
+            let glyph = icons.refresh();
+
+            let backend = TestBackend::new(50, 10);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let selector =
+                        TargetSelector::new(&state, &tool_availability, true).compact(true);
+                    selector.render(f.area(), f.buffer_mut());
+                })
+                .unwrap();
+            let rendered: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<Vec<_>>()
+                .join("");
+            assert!(
+                rendered.contains(glyph),
+                "expected refresh glyph on inactive Bootable tab in compact mode, got: {rendered}"
+            );
+        }
+
+        // Case 2: Active tab is Bootable, but Connected is refreshing (inactive tab).
+        // The glyph must appear next to the inactive Connected label.
+        {
+            let mut state = TargetSelectorState::default();
+            state.loading = false;
+            state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+            state.refreshing = true;
+            state.active_tab = TargetTab::Bootable;
+
+            let tool_availability = ToolAvailability::default();
+            let icons = crate::theme::icons::IconSet::default();
+            let glyph = icons.refresh();
+
+            let backend = TestBackend::new(50, 10);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let selector =
+                        TargetSelector::new(&state, &tool_availability, true).compact(true);
+                    selector.render(f.area(), f.buffer_mut());
+                })
+                .unwrap();
+            let rendered: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<Vec<_>>()
+                .join("");
+            assert!(
+                rendered.contains(glyph),
+                "expected refresh glyph on inactive Connected tab in compact mode, got: {rendered}"
+            );
+        }
     }
 }
