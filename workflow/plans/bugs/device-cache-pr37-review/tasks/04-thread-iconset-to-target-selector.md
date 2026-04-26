@@ -205,3 +205,37 @@ chaining; if it's not `Copy`, use `.clone()` instead of `*`). The fix is to chai
 - Threading `IconSet` to other child widgets (`LaunchContextWithDevice` already
   receives `self.icons` per `mod.rs:346` and `mod.rs:570` — verify, don't touch).
 - Rewriting the `IconSet` type or its constructors.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a96dd1e525b9e7ff5
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `.icons(*self.icons)` chain to both `TargetSelector::new()` call sites (horizontal at line ~329 and vertical at line ~551); added two lock-in render tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **IconSet is Copy**: Confirmed `IconSet` derives `Copy` (line 13 of `theme/icons.rs`), so used `*self.icons` (dereference copy) instead of `.clone()`.
+
+2. **Vertical test ordering**: `set_bootable_devices()` resets `bootable_refreshing` to `false` (line 254 of `target_selector_state.rs`), so the test must set `bootable_refreshing = true` AFTER calling `set_bootable_devices()` — not before. Initial test had the order reversed, causing the glyph to not appear.
+
+3. **Two lock-in tests**: Added both horizontal and vertical tests as the task specified both paths. The vertical test uses `bootable_refreshing = true` with `active_tab = Bootable` to distinguish the NerdFonts glyph from Unicode in the compact tab bar rendered by `render_tabs_compact`.
+
+4. **LaunchContextWithDevice verified untouched**: Both call sites at ~line 346 and ~line 570 already chain `self.icons` to `LaunchContextWithDevice::new()` — confirmed out of scope, not modified.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (auto-formatted)
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (878 tests, 2 new)
+- `cargo clippy -p fdemon-tui --lib -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **NerdFonts glyph in test terminal**: The NerdFonts glyph `\u{f021}` is from the Private Use Area. The test correctly checks for its presence using `rendered.contains(nerd_refresh)` which works regardless of terminal font support since it operates on the raw string data in the Ratatui `TestBackend` buffer.

@@ -142,3 +142,33 @@ the glyph.
   task 04).
 - Adding new public APIs to `TargetSelector` or new builder methods. The fix is
   internal to `render_tabs_compact`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a969ce4f369774621
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Refactored `render_tabs_compact` label construction to separate base-label (brackets vs bare) from glyph appending; added `test_target_selector_compact_renders_refreshing_glyph_on_inactive_tab` test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Two-block test structure**: The new test uses two inner scopes (Case 1 and Case 2) within a single `#[test]` function as suggested in the task, providing clear diagnostic messages for each scenario while keeping the test count tidy.
+2. **No change to active-tab behavior**: The refactored label construction preserves the `[brackets]` for the active tab and bare text for the inactive tab, just reorders the nesting so the glyph check is outer.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed
+- `cargo check -p fdemon-tui` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (877 tests)
+- `cargo clippy -p fdemon-tui --lib -- -D warnings` - Passed (clean)
+- `cargo test -p fdemon-tui --lib "target_selector"` - Passed (44 tests, including new inactive-tab test)
+
+### Risks/Limitations
+
+1. **None**: The change is purely internal to `render_tabs_compact`; no public API was modified and no layer boundaries were touched.

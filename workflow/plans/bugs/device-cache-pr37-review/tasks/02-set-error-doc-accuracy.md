@@ -125,3 +125,32 @@ adopts that wording with light edits.
   per the BUG.md.
 - Adding tests for the comment wording. Doc-only changes don't warrant test
   additions.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/remove-cache-device-ttl
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | Replaced `set_error()` doc comment with accurate multi-caller description |
+
+### Notable Decisions/Tradeoffs
+
+1. **Adopted reviewer's suggested wording verbatim**: The task specified adopting the PR #37 reviewer's language with light edits. The replacement comment accurately lists the broad caller categories and explicitly names both `bootable_loading` and `bootable_refreshing` as intentionally not cleared.
+2. **No behavior change**: The function body (`self.error = Some(error); self.loading = false; self.refreshing = false;`) was not touched.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no changes needed)
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app --lib` - Passed (1895 tests, 0 failed)
+- `cargo clippy -p fdemon-app --lib -- -D warnings` - Passed (clean)
+
+### Risks/Limitations
+
+1. **None**: This is a pure doc rewrite with no semantic changes. All acceptance criteria are met.

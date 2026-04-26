@@ -199,3 +199,36 @@ Key facts the implementor must know:
   remain silently swallowed by `unwrap_or_default()` (separate UX decision).
 - Restructuring the cache-population blocks earlier in the function (lines
   204-241). They are correct as-is.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ae9aadcc3bbe6bc44
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | F1: replaced bare early return with `set_error()` + explicit bootable flag clears; F2: changed `connected_cached \|\| bootable_cached` to `if connected_cached` routing; added 3 new tests |
+| `crates/fdemon-app/src/handler/tests.rs` | Fixed `test_background_discovery_error_is_silent` to inject a fake SDK so it reaches the background path (was relying on the old silent early return) |
+
+### Notable Decisions/Tradeoffs
+
+1. **F1 error message**: Used the exact message from the task spec (`"No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."`) matching the established pattern from `launch_context.rs:532`.
+
+2. **F2 branch restructure**: Changed `if connected_cached || bootable_cached` to `if connected_cached` as specified. The `bootable_cached`-only scenario now falls through to `DiscoverDevicesAndBootable` with `bootable_refreshing=true`, which is correct because the foreground path handles connected-discovery failures via `set_error()` (clearing `loading`).
+
+3. **Existing test fix**: `test_background_discovery_error_is_silent` in `handler/tests.rs` used `AppState::new()` without an SDK. Before this fix, the early return was silent so the dialog opened without error. After the fix, the missing SDK is surfaced as an error, breaking the test. Added `state.resolved_sdk = Some(fake_flutter_sdk())` to match the test's intent (testing background failures, not SDK-missing scenarios).
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (1 file reformatted)
+- `cargo check -p fdemon-app` - Passed (exit code 0)
+- `cargo test -p fdemon-app --lib` - Passed (1898 tests, 0 failed)
+- `cargo clippy -p fdemon-app --lib -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **SDK-missing error surfacing**: The new behavior surfaces the SDK error immediately on dialog open (not just on launch). This is strictly better UX but is a behavioral change — users with no SDK configured will now see the error in the dialog's Connected tab rather than a perpetual spinner. This aligns with the task's intent.

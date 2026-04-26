@@ -10,12 +10,12 @@ so the open PR can be merged once all fixes are pushed).
 
 ## Wave 1 — All findings (single wave, all parallel)
 
-| ID | Task | Depends on | Files Modified (Write) | Files Read |
-|---|---|---|---|---|
-| 01 | [Stuck-loading + connected cache-miss foreground (F1+F2)](tasks/01-stuck-loading-and-cache-miss.md) | — | `crates/fdemon-app/src/handler/new_session/navigation.rs` | `target_selector_state.rs`, `handler/mod.rs`, `actions/mod.rs`, `state.rs` |
-| 02 | [`set_error()` doc accuracy (F3)](tasks/02-set-error-doc-accuracy.md) | — | `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | `handler/update.rs`, `handler/new_session/launch_context.rs`, `handler/new_session/target_selector.rs` (callers, read-only) |
-| 03 | [Compact-mode glyph for inactive refreshing tabs (F4)](tasks/03-compact-mode-glyph-inactive-tab.md) | — | `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | `tab_bar.rs`, `theme/icons.rs` |
-| 04 | [Thread `IconSet` from `NewSessionDialog` to `TargetSelector` (F5)](tasks/04-thread-iconset-to-target-selector.md) | — | `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | `target_selector.rs`, `theme/icons.rs` |
+| ID | Status | Task | Depends on | Files Modified (Write) | Files Read |
+|---|---|---|---|---|---|
+| 01 | [x] Done | [Stuck-loading + connected cache-miss foreground (F1+F2)](tasks/01-stuck-loading-and-cache-miss.md) | — | `crates/fdemon-app/src/handler/new_session/navigation.rs` | `target_selector_state.rs`, `handler/mod.rs`, `actions/mod.rs`, `state.rs` |
+| 02 | [x] Done | [`set_error()` doc accuracy (F3)](tasks/02-set-error-doc-accuracy.md) | — | `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | `handler/update.rs`, `handler/new_session/launch_context.rs`, `handler/new_session/target_selector.rs` (callers, read-only) |
+| 03 | [x] Done | [Compact-mode glyph for inactive refreshing tabs (F4)](tasks/03-compact-mode-glyph-inactive-tab.md) | — | `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | `tab_bar.rs`, `theme/icons.rs` |
+| 04 | [x] Done | [Thread `IconSet` from `NewSessionDialog` to `TargetSelector` (F5)](tasks/04-thread-iconset-to-target-selector.md) | — | `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | `target_selector.rs`, `theme/icons.rs` |
 
 ---
 
