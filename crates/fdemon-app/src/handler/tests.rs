@@ -3330,6 +3330,8 @@ mod auto_launch_tests {
 
         // Background errors should not show error UI when cached devices exist
         let mut state = AppState::new();
+        // Inject a fake SDK so the handler proceeds past the SDK-missing guard.
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
 
         // Set up cached devices
         state.set_device_cache(vec![test_device("cached-1", "Cached Phone")]);

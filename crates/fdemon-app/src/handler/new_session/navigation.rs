@@ -241,22 +241,33 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
     };
 
     let Some(flutter) = state.flutter_executable() else {
-        tracing::warn!("handle_open_new_session_dialog: no Flutter SDK — skipping device refresh");
+        tracing::warn!(
+            "handle_open_new_session_dialog: no Flutter SDK — surfacing error to dialog"
+        );
+        let selector = &mut state.new_session_dialog_state.target_selector;
+        // set_error() clears `loading` and `refreshing`; bootable flags must be
+        // cleared explicitly because bootable discovery is independent of the
+        // Flutter SDK (see task 02 for the doc rewrite explaining this).
+        selector.bootable_loading = false;
+        selector.bootable_refreshing = false;
+        selector.set_error(
+            "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                .to_string(),
+        );
         return UpdateResult::none();
     };
 
-    if connected_cached || bootable_cached {
-        // We have at least one cached list shown — refresh in the background.
-        // Set refreshing flags AFTER set_*_devices() (which clears them).
+    if connected_cached {
+        // Connected list shown — refresh both in background. Failures on the
+        // connected side will only clear `refreshing` (not `loading`), but that's
+        // fine because `loading` is already false (set_connected_devices cleared it).
         //
         // Race: if the user closes and quickly reopens the dialog while a previous
         // background discovery is in flight, that discovery's DevicesDiscovered message
         // will arrive at the new dialog and clear `refreshing` before this open's own
         // discovery completes. Convergence is correct (last write wins), but the visual
         // cue may briefly disappear and reappear. Acceptable transient flicker.
-        if connected_cached {
-            state.new_session_dialog_state.target_selector.refreshing = true;
-        }
+        state.new_session_dialog_state.target_selector.refreshing = true;
         if bootable_cached {
             state
                 .new_session_dialog_state
@@ -266,11 +277,26 @@ pub fn handle_open_new_session_dialog(state: &mut AppState) -> UpdateResult {
         return UpdateResult::action(UpdateAction::RefreshDevicesAndBootableBackground { flutter });
     }
 
-    // Both caches are empty — fall back to the foreground discovery path.
-    // Also trigger bootable discovery in parallel so the Bootable tab populates
-    // on the first dialog open without requiring a manual tab switch.
-    tracing::debug!("Device cache miss, triggering combined foreground+bootable discovery");
+    // Connected cache missing — foreground discovery so failures route through
+    // set_error() and clear `loading`. Bootable spawns in parallel (background).
+    if bootable_cached {
+        // Bootable already shown; mark its parallel refresh as in-flight.
+        state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_refreshing = true;
+    }
+    // `loading` is already true (default from show_new_session_dialog), but set
+    // explicitly for readability and to defend against future refactors.
     state.new_session_dialog_state.target_selector.loading = true;
+    tracing::debug!(
+        "Device cache miss for connected ({}), triggering foreground combined discovery",
+        if bootable_cached {
+            "bootable cached"
+        } else {
+            "neither cached"
+        }
+    );
     UpdateResult::action(UpdateAction::DiscoverDevicesAndBootable { flutter })
 }
 
@@ -712,5 +738,104 @@ mod tests {
                 .bootable_loading
         );
         assert!(result.action.is_none());
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // F1 + F2 regression tests (PR #37 Copilot review)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_open_dialog_no_flutter_sdk_surfaces_error() {
+        let mut state = test_app_state();
+        // Remove the injected SDK so flutter_executable() returns None.
+        state.resolved_sdk = None;
+
+        let result = handle_open_new_session_dialog(&mut state);
+
+        let selector = &state.new_session_dialog_state.target_selector;
+        assert_eq!(
+            selector.error,
+            Some(
+                "No Flutter SDK found. Configure sdk_path in .fdemon/config.toml or install Flutter."
+                    .to_string()
+            ),
+            "dialog must surface the SDK-missing error"
+        );
+        assert!(!selector.loading, "loading must be cleared by set_error()");
+        assert!(
+            !selector.bootable_loading,
+            "bootable_loading must be explicitly cleared"
+        );
+        assert!(
+            !selector.refreshing,
+            "refreshing must be cleared by set_error()"
+        );
+        assert!(
+            !selector.bootable_refreshing,
+            "bootable_refreshing must be explicitly cleared"
+        );
+        assert!(
+            result.action.is_none(),
+            "no action should be dispatched when SDK is missing"
+        );
+    }
+
+    #[test]
+    fn test_open_dialog_bootable_cached_only_uses_foreground() {
+        let mut state = test_app_state();
+        // Populate only the bootable cache; leave connected cache empty.
+        state.set_bootable_cache(vec![], vec![]);
+
+        let result = handle_open_new_session_dialog(&mut state);
+
+        let selector = &state.new_session_dialog_state.target_selector;
+        // Must use the foreground path (not background), because the connected
+        // cache is missing and failures on the foreground path clear `loading`.
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::DiscoverDevicesAndBootable { .. })
+            ),
+            "bootable-only cache must dispatch DiscoverDevicesAndBootable, got {:?}",
+            result.action
+        );
+        assert!(selector.loading, "connected tab must show loading spinner");
+        assert!(
+            selector.bootable_refreshing,
+            "bootable is already shown — its in-flight flag must be set"
+        );
+        assert!(
+            !selector.refreshing,
+            "connected isn't cached — refreshing (not loading) must NOT be set"
+        );
+    }
+
+    #[test]
+    fn test_open_dialog_both_cached_uses_background() {
+        let mut state = test_app_state();
+        // Populate both caches.
+        state.set_device_cache(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.set_bootable_cache(vec![], vec![]);
+
+        let result = handle_open_new_session_dialog(&mut state);
+
+        let selector = &state.new_session_dialog_state.target_selector;
+        assert!(
+            matches!(
+                result.action,
+                Some(UpdateAction::RefreshDevicesAndBootableBackground { .. })
+            ),
+            "both caches populated must dispatch background refresh, got {:?}",
+            result.action
+        );
+        assert!(
+            selector.refreshing,
+            "connected cache hit must set refreshing"
+        );
+        assert!(
+            selector.bootable_refreshing,
+            "bootable cache hit must set bootable_refreshing"
+        );
+        assert!(!selector.loading, "loading must NOT be set on cache hit");
     }
 }
