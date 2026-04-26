@@ -256,6 +256,15 @@ flutter-demon/
 │   │       ├── simulators.rs     # iOS simulator utilities
 │   │       ├── tool_availability.rs  # Tool detection (adb, xcrun simctl, idevicesyslog)
 │   │       ├── test_utils.rs     # Test helpers
+│   │       ├── flutter_sdk/      # Flutter SDK detection and executable abstraction
+│   │       │   ├── mod.rs        # Public API: find_flutter_sdk(), FlutterSdk
+│   │       │   ├── locator.rs    # 11-strategy locator (env vars, PATH via which, version managers, cache)
+│   │       │   ├── types.rs      # FlutterExecutable enum (Direct, WindowsBatch) + validate_sdk_path
+│   │       │   ├── version_probe.rs  # flutter --version parsing
+│   │       │   ├── cache_scanner.rs  # Version-manager cache directory scanning
+│   │       │   ├── channel.rs    # Flutter channel detection
+│   │       │   ├── version_managers.rs  # fvm, asdf, mise strategy helpers
+│   │       │   └── windows_tests.rs  # Windows-only integration tests
 │   │       ├── native_logs/      # Native platform log capture
 │   │       │   ├── mod.rs        # NativeLogCapture trait, shared types, platform dispatch
 │   │       │   ├── android.rs    # adb logcat capture
@@ -444,12 +453,32 @@ flutter-demon/
 | `simulators.rs` | iOS simulator utilities |
 | `tool_availability.rs` | Tool detection (`adb`, `xcrun simctl`, `idevicesyslog`, `log`). `IosLogTool` enum selects the iOS capture backend at runtime. |
 | `test_utils.rs` | Test helpers for device/emulator testing |
+| `flutter_sdk/mod.rs` | Public API: `find_flutter_sdk()`, `FlutterSdk` — entry point for SDK detection |
+| `flutter_sdk/locator.rs` | 11-strategy locator: explicit config, env vars, version managers (`fvm`, `asdf`, `mise`), system PATH. Strategy 10 uses `which::which("flutter")` for PATHEXT-aware discovery on Windows. See source for full strategy list. |
+| `flutter_sdk/types.rs` | `FlutterExecutable` enum and `validate_sdk_path` / `validate_sdk_path_lenient` |
+| `flutter_sdk/version_probe.rs` | Parses `flutter --version` output |
+| `flutter_sdk/cache_scanner.rs` | Scans version-manager cache directories |
+| `flutter_sdk/channel.rs` | Flutter channel detection |
+| `flutter_sdk/version_managers.rs` | fvm / asdf / mise strategy helpers |
 | `native_logs/mod.rs` | `NativeLogCapture` trait, `NativeLogHandle`, shared types (`NativeLogEvent`, `AndroidLogConfig`, `MacOsLogConfig`, `IosLogConfig`), and `create_native_log_capture()` platform dispatch |
 | `native_logs/android.rs` | `AndroidLogCapture` — spawns `adb logcat`, parses logcat output |
 | `native_logs/macos.rs` | `MacOsLogCapture` — spawns `log stream`, parses macOS unified log output |
 | `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
 | `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
 | `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
+
+**Flutter SDK Detection (`flutter_sdk/`):**
+
+`find_flutter_sdk()` runs up to 11 ordered strategies (explicit config, environment variables, version managers, system PATH). Strategy 10 uses `which::which("flutter")` which respects `PATHEXT` on Windows to correctly locate `flutter.bat`, `flutter.cmd`, or `flutter.exe`. Path normalization uses `dunce::canonicalize` instead of `std::fs::canonicalize` to avoid `\\?\`-prefixed UNC paths that `cmd.exe` cannot consume.
+
+`FlutterExecutable` has two variants:
+
+| Variant | When produced | Runtime invocation |
+|---------|---------------|--------------------|
+| `Direct(PathBuf)` | Unix or Windows `.exe` | `Command::new(path)` |
+| `WindowsBatch(PathBuf)` | Windows `.bat` / `.cmd` | `Command::new(path)` |
+
+Both variants invoke the resolved absolute path directly via `Command::new`. The `WindowsBatch` discriminant is a metadata marker (callers and logs can distinguish batch from native executables) — the runtime invocation is identical to `Direct`. The previous `cmd /c <path>` wrapper has been removed; direct invocation is safe because the workspace MSRV is 1.77.2, which includes the CVE-2024-24576 fix for `.bat` argument escaping.
 
 **Platform Support:**
 
