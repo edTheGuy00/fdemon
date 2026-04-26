@@ -150,3 +150,34 @@ Windows-specific tests live in `windows_tests.rs` (task 05) and run on CI only.
 - `which` does NOT search `cwd` by default on Unix (matching shell behavior); on Windows it does NOT search `cwd` either if you use `which::which` (vs. `which::which_in`). This matches our intent — we want PATH-based lookup, not "is there a flutter in the current Flutter project dir".
 - Consider adding a tracing `instrument` macro on `try_system_path` and `resolve_sdk_root_from_binary` if other functions in the file already use it. Match the existing style.
 - **Do not** modify `validate_sdk_path` or `validate_sdk_path_lenient` in this task — those changes (if any) belong in task 02. Keep this task tightly scoped to `locator.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Replaced `try_system_path` (hand-rolled PATH walker) with `which::which("flutter")`; deleted `find_flutter_in_dir`; replaced `fs::canonicalize` with `dunce::canonicalize` in `resolve_sdk_root_from_binary`; removed unused top-level `use std::fs` import; updated tests that referenced the deleted `find_flutter_in_dir` and `fs::canonicalize`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Removed top-level `use std::fs`**: The import was only used in the (now-deleted) `find_flutter_in_dir` function in production code. The `#[cfg(test)]` module has its own `use std::fs;` import, so tests are unaffected.
+2. **Rewrote `test_system_path_strategy_uses_find_flutter_in_dir`**: Since `find_flutter_in_dir` was deleted, this test was rewritten as `test_resolve_sdk_root_from_binary_finds_sdk_root` which tests `resolve_sdk_root_from_binary` directly — the same behavior, exercised through the public-facing helper instead of the deleted internal function.
+3. **Updated `test_system_path_resolves_sdk_root`**: Changed `fs::canonicalize` to `dunce::canonicalize` in the expected value to match the implementation (semantically identical on Unix, but consistent with code under test).
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo test -p fdemon-daemon flutter_sdk::locator` - Passed (16/16 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (clean)
+- `cargo fmt --all && cargo check --workspace` - Passed
+
+### Risks/Limitations
+
+1. **Shim installs on Windows**: As noted in the task, `which` returns the shim path (e.g. `C:\ProgramData\chocolatey\bin\flutter.bat`) for Chocolatey/scoop/winget users. Walking up two parents from a shim gives a non-SDK directory, so both strategy 10 and strategy 11 will fail for these users. They will see `Err(FlutterNotFound)`. A full fix requires resolving the shim target and is out of scope for this task.
+2. **No `#[instrument]` added**: Other functions in the file do not use `#[instrument]`, so none was added — consistent with existing style.

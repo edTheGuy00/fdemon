@@ -229,3 +229,35 @@ On CI: covered by task 06's workflow.
 - The dunce test is a spec test — it would catch a regression if we ever switched back to `fs::canonicalize`.
 - If `tokio::runtime::Runtime::new()` is overkill for the spawn assertion, use `#[tokio::test]` annotations instead. Match the surrounding test style in the daemon crate.
 - **Do not** add or modify tests in `types.rs` or `locator.rs` from this task — task 02 and task 03 own those files. This task only writes to `windows_tests.rs` and adds one line to `mod.rs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ac5162c5936cda026
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` | New file: 8 Windows-only tests under `#[cfg(all(test, target_os = "windows"))]` |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Added `#[cfg(all(test, target_os = "windows"))] mod windows_tests;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[serial]` on PATH-mutating tests**: `which_resolves_flutter_bat_via_pathext` and `find_flutter_sdk_resolves_via_path` both use `PathPrepender` to mutate the process-global `PATH` env var, so they are tagged `#[serial]` (from `serial_test`, already a dev-dependency) to prevent races when cargo runs tests in parallel.
+2. **Separate `resolve_sdk_root_from_binary` test added**: The task spec did not include this test but the function is `pub(crate)` and directly exercised in the end-to-end path; a unit test covering it improves confidence without expanding scope beyond the module.
+3. **`tokio::runtime::Runtime::new()` used directly**: Matches the existing daemon crate test style (not `#[tokio::test]`), consistent with the surrounding `locator.rs` tests.
+4. **Windows path separators in `create_fake_sdk`**: Used raw string `r"bin\flutter.bat"` and `r"bin\cache\dart-sdk"` since this code only compiles on Windows where backslash is the native separator.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed (no new warnings)
+- `cargo test -p fdemon-daemon` — Passed (736 existing tests, 0 new windows tests ran — cfg gate confirmed working)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **Windows-only execution**: Tests cannot be run locally on macOS/Linux. CI on `windows-latest` (task 06) is required for functional validation.
+2. **PATH mutation in `find_flutter_sdk_resolves_via_path`**: This test removes `FLUTTER_ROOT` to force PATH-based resolution. If CI has `FLUTTER_ROOT` set for other reasons, the test may behave unexpectedly — but `serial` isolation prevents races with other tests that also mutate env vars.

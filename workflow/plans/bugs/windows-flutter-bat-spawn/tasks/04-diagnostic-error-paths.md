@@ -189,3 +189,34 @@ async fn test_run_flutter_devices_error_includes_binary_path() {
 - **Do not** include user-private data (env vars, full PATH) in the log unless it's already standard practice in the daemon. Path of the resolved binary is fine; the full PATH variable is not.
 - If `Error::process` doesn't already truncate or sanitize, the formatted message could be huge for verbose Flutter stderr (think 500+ lines). Consider truncating to ~2KB. **Defer** this — it's a follow-up.
 - The `windows_hint()` helper in `devices.rs` is fine to inline if you prefer. The `cfg`-gated approach keeps the message short and accurate per platform.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/devices.rs` | Added `windows_hint()` cfg-gated helper; promoted non-zero exit to `error!` with structured fields (binary, exit_code, stderr, stdout); updated spawn-error message to include binary path; added `test_run_flutter_devices_error_includes_binary_path` unit test |
+| `crates/fdemon-daemon/src/process.rs` | Replaced bare `info!` with structured `info!(binary, args, cwd, ...)` before spawn; included binary path in `ProcessSpawn` error reason |
+| `crates/fdemon-daemon/src/flutter_sdk/version_probe.rs` | Added `debug!(binary, ...)` before probe; added binary path to all three error messages (timeout, io error, non-zero exit) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`windows_hint()` as a free function**: Chose the cfg-gated free-function approach (as specified) over inlining. This keeps the error-construction site clean and lets the compiler eliminate the hint entirely on non-Windows builds with no runtime overhead.
+2. **Binary path in `ProcessSpawn::reason`**: The task said to include the path in the spawn error. Rather than adding a new `Error` variant, the path is folded into the existing `reason` string so no cross-crate changes were needed.
+3. **Stderr truncation deferred**: The task explicitly says to defer truncation of large Flutter stderr. Left as-is with a note in the task.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon` — Passed (735 tests, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` — Passed (no warnings)
+- New test `devices::tests::test_run_flutter_devices_error_includes_binary_path` — Passed
+
+### Risks/Limitations
+
+1. **Non-zero exit path test coverage**: The new `error!` structured log in the non-zero exit branch is exercised via integration test (requires real Flutter SDK, marked `#[ignore]`). The `test_run_flutter_devices_error_includes_binary_path` test exercises the `NotFound` path (which returns `FlutterNotFound` directly), matching the task's specified test shape.

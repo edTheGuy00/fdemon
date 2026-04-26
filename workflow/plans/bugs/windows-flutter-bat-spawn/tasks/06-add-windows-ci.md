@@ -107,3 +107,33 @@ After merge, verify on the GitHub Actions tab that all three runners pass.
 - Future enhancement (out of scope): add a `release.yml` that builds and uploads `windows-x86_64`, `macos-x86_64`, `macos-aarch64`, `linux-x86_64` artifacts on tag push. That would let us hand a Windows build to the reporters of #32 / #34 directly from a release page.
 - If the team prefers `taiki-e/install-action` over `dtolnay/rust-toolchain`, swap accordingly. Both are widely used; `dtolnay`'s is the simplest.
 - This workflow does not run on `windows-2025` or `windows-2019` — `windows-latest` (currently 2022, will roll forward to 2025) is sufficient. Pin if reproducibility becomes critical.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/ci.yml` | New file: three-OS (ubuntu-latest, macos-latest, windows-latest) CI matrix with fmt, check, test, and clippy steps |
+
+### Notable Decisions/Tradeoffs
+
+1. **Added `concurrency` block**: Followed the project's existing `e2e.yml` convention of cancelling in-progress runs when a new push to the same ref arrives. Reduces wasted runner minutes on force-pushes.
+2. **Matched action versions to existing workflows**: Used `actions/checkout@v4`, `dtolnay/rust-toolchain@stable`, and `Swatinem/rust-cache@v2` — the exact versions already used in `e2e.yml` and `release.yml`, keeping the project consistent.
+3. **`cargo check --all-targets`**: The task spec and `docs/DEVELOPMENT.md` both recommend `--workspace`; added `--all-targets` to cover test and bench targets as well, consistent with the clippy step and the project quality gate.
+4. **No Flutter SDK install**: Per task guidance, Windows-specific unit tests use a fake `flutter.bat` shim (task 05) and require no real Flutter SDK on the runner.
+
+### Testing Performed
+
+- `ruby -ryaml -e 'YAML.load_file(".github/workflows/ci.yml"); puts "YAML valid"'` — Passed (YAML valid)
+- Verified all three acceptance-criteria steps (`fmt`, `check`, `test`, `clippy`) match the full verification sequence in `docs/DEVELOPMENT.md`.
+
+### Risks/Limitations
+
+1. **Cannot run locally**: The CI workflow is only exercised on GitHub Actions; local validation is limited to YAML syntax checking. Full green-pass verification requires an actual push to the branch.
+2. **`windows-latest` rolls forward**: GitHub periodically bumps `windows-latest` from 2022 to 2025. This is low risk for a pure Rust project but worth monitoring if Windows-specific toolchain issues appear.

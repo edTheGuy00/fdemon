@@ -109,3 +109,35 @@ cargo clippy -p fdemon-daemon -- -D warnings
 - **Do not** add a `current_dir(...)` call here. Spawn-site callers (e.g. `process.rs`) decide CWD.
 - The unit-test additions above are the *only* tests that go in `types.rs`. Cross-platform end-to-end Windows assertions live in `windows_tests.rs` (task 05).
 - If the project's MSRV is below 1.77.2 (currently `1.70+` per `docs/DEVELOPMENT.md`), bump it to `1.77.2` in the workspace `Cargo.toml`'s `rust-version = "..."` field and in `docs/DEVELOPMENT.md`. The CVE-2024-24576 fix is what makes direct `.bat` invocation safe; we should not silently rely on a newer compiler than declared.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | Rewrote `FlutterExecutable::command()` to use `Command::new(path)` for both variants; updated `WindowsBatch` doc comment to describe metadata-marker role; replaced `test_flutter_executable_direct_command` with two new tests that assert `get_program()` returns the path itself for both `Direct` and `WindowsBatch` |
+| `Cargo.toml` | Added `rust-version = "1.77.2"` to `[workspace.package]` to declare the MSRV required for safe `.bat` invocation via CVE-2024-24576 fix |
+
+### Notable Decisions/Tradeoffs
+
+1. **MSRV bump to 1.77.2**: The task required declaring a minimum Rust version since direct `.bat` invocation safety depends on the CVE-2024-24576 fix. The workspace Cargo.toml had no `rust-version` field, so it was added. This is a declared MSRV, not a forced toolchain change.
+2. **`WindowsBatch` variant retained**: As specified by the task, the enum variant is kept as a metadata marker so callers and logs can distinguish batch files from Unix executables. Only the runtime invocation path changed.
+3. **Test coverage**: Replaced the weak "just ensure it builds a command without panicking" test with two assertive tests that verify `get_program()` equals the path (not `"cmd"`) for both variants. Both tests are platform-agnostic since we only inspect the program field without spawning.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon flutter_sdk::types` - Passed (23 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (clean)
+- `cargo check -p fdemon-daemon` - Passed
+- `cargo fmt --all` - Applied (collapsed match body to one line)
+
+### Risks/Limitations
+
+1. **MSRV enforcement**: The `rust-version` field in Cargo.toml will cause `cargo build` to error on Rust < 1.77.2. If any CI runner or contributor is on an older toolchain, they will need to update. This is intentional — the safety guarantee requires it.
+2. **docs/DEVELOPMENT.md not updated**: That file still says "Minimum Rust Version: 1.70+". Per agent instructions, core docs cannot be directly edited — flagging this for the doc_maintainer agent.

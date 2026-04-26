@@ -55,3 +55,28 @@ No new modules or layer dependencies; no new crates in the workspace tree. The a
 - The user-facing CHANGELOG entry (if `CHANGELOG.md` exists at the repo root) is **out of scope** for `doc_maintainer`. The implementor or release manager updates the changelog separately.
 - Do **not** edit `CLAUDE.md` — it's a Claude-Code instruction file, not project documentation.
 - Do **not** edit `README.md` — keep this PR focused on internal docs.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-ac69a608db9b630bc
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/DEVELOPMENT.md` | Updated MSRV from `1.70+` to `1.77.2` (line 9 and Common Issues entry); added "CI / Continuous Integration" subsection (three-OS matrix, quality gate); added Windows-specific "Common Issues" entry for `flutter devices` failure with `sdk_path` hint |
+| `docs/ARCHITECTURE.md` | Added `flutter_sdk/` subtree to fdemon-daemon project structure; added `flutter_sdk/` files to fdemon-daemon module reference table; added `FlutterExecutable` variant table and semantics note (`WindowsBatch` as metadata marker, both variants use `Command::new(path)` directly, CVE-2024-24576 / MSRV 1.77.2 rationale) |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **FlutterExecutable description placement**: Placed the `FlutterExecutable` variant table and semantics note immediately after the module reference table in the fdemon-daemon section (before "Platform Support"), which keeps SDK detection information co-located with the module inventory it describes.
+2. **Locator strategies not enumerated**: Per task notes, the 11 locator strategies are not listed in full — the doc links to source. Only the PATHEXT-aware change (strategy 10, `which::which`) is called out by name.
+3. **Windows Common Issues entry uses `[flutter]` TOML header**: The exact key `[flutter] sdk_path` is referenced as specified in acceptance criteria, presented as a working TOML snippet rather than prose only.

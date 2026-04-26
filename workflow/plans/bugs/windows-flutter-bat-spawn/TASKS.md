@@ -35,13 +35,13 @@ Wave 3 (depends on 02 + 03 + 04)
 
 | # | Task | Status | Depends On | Est. Hours | Modules | Agent |
 |---|------|--------|------------|------------|---------|-------|
-| 1 | [01-add-windows-deps](tasks/01-add-windows-deps.md) | Not Started | — | 0.5h | `Cargo.toml`, `crates/fdemon-daemon/Cargo.toml` | implementor |
-| 2 | [02-simplify-flutter-executable](tasks/02-simplify-flutter-executable.md) | Not Started | 1 | 1-2h | `crates/fdemon-daemon/src/flutter_sdk/types.rs` | implementor |
-| 3 | [03-locator-which-dunce](tasks/03-locator-which-dunce.md) | Not Started | 1 | 2-3h | `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | implementor |
-| 4 | [04-diagnostic-error-paths](tasks/04-diagnostic-error-paths.md) | Not Started | 1 | 1-2h | `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/process.rs`, `crates/fdemon-daemon/src/flutter_sdk/version_probe.rs` | implementor |
-| 5 | [05-windows-only-tests](tasks/05-windows-only-tests.md) | Not Started | 2, 3 | 2-3h | `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` (NEW), `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | implementor |
-| 6 | [06-add-windows-ci](tasks/06-add-windows-ci.md) | Not Started | — | 1-2h | `.github/workflows/ci.yml` (NEW) | implementor |
-| 7 | [07-update-docs](tasks/07-update-docs.md) | Not Started | 2, 3, 4 | 0.5-1h | `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md` | doc_maintainer |
+| 1 | [01-add-windows-deps](tasks/01-add-windows-deps.md) | Done | — | 0.5h | `Cargo.toml`, `crates/fdemon-daemon/Cargo.toml` | implementor |
+| 2 | [02-simplify-flutter-executable](tasks/02-simplify-flutter-executable.md) | Done (CONCERN: docs/DEVELOPMENT.md MSRV bump deferred to task 07) | 1 | 1-2h | `crates/fdemon-daemon/src/flutter_sdk/types.rs` | implementor |
+| 3 | [03-locator-which-dunce](tasks/03-locator-which-dunce.md) | Done | 1 | 2-3h | `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | implementor |
+| 4 | [04-diagnostic-error-paths](tasks/04-diagnostic-error-paths.md) | Done | 1 | 1-2h | `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/process.rs`, `crates/fdemon-daemon/src/flutter_sdk/version_probe.rs` | implementor |
+| 5 | [05-windows-only-tests](tasks/05-windows-only-tests.md) | Done (follow-up: removed unused PathBuf import) | 2, 3 | 2-3h | `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` (NEW), `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | implementor |
+| 6 | [06-add-windows-ci](tasks/06-add-windows-ci.md) | Done | — | 1-2h | `.github/workflows/ci.yml` (NEW) | implementor |
+| 7 | [07-update-docs](tasks/07-update-docs.md) | Done (also resolved task 02 MSRV carry-over) | 2, 3, 4 | 0.5-1h | `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT.md` | doc_maintainer |
 
 **Estimated total:** 8-13 hours
 
