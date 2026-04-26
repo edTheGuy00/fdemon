@@ -55,7 +55,14 @@ impl std::fmt::Display for SdkSource {
 pub enum FlutterExecutable {
     /// Unix shell script or direct executable — invoke directly
     Direct(PathBuf),
-    /// Windows .bat file — requires `cmd /c` wrapper
+    /// Windows `.bat` file — metadata marker only.
+    ///
+    /// The runtime invocation is identical to [`Direct`](Self::Direct): Rust's
+    /// stdlib (≥ 1.77.2) handles `.bat` / `.cmd` invocation safely when the
+    /// program path has an explicit extension, including the `cmd.exe`
+    /// argument-escape rules covered by CVE-2024-24576. The old `cmd /c`
+    /// wrapper has been removed because it caused quote-stripping failures on
+    /// paths containing whitespace (see issues #32, #34).
     WindowsBatch(PathBuf),
 }
 
@@ -67,18 +74,21 @@ impl FlutterExecutable {
         }
     }
 
-    /// Configures a [`tokio::process::Command`] for this executable type.
+    /// Configures a [`tokio::process::Command`] for this executable.
     ///
-    /// - `Direct`: `Command::new(path)` — invoked directly
-    /// - `WindowsBatch`: `Command::new("cmd").args(["/c", path])` — requires cmd wrapper
+    /// Both variants now invoke the resolved absolute path directly. Rust's
+    /// stdlib (≥ 1.77.2 — our MSRV) handles `.bat` / `.cmd` invocation
+    /// safely when the program path has an explicit extension, including
+    /// the `cmd.exe` argument-escape rules covered by CVE-2024-24576.
+    ///
+    /// The `WindowsBatch` variant is retained as a *metadata* marker so callers
+    /// and logs can tell that the underlying executable is a batch file. The
+    /// previous `cmd /c <path>` wrapper has been removed because it caused
+    /// quote-stripping failures on paths containing whitespace
+    /// (see issues #32, #34).
     pub fn command(&self) -> tokio::process::Command {
         match self {
-            Self::Direct(path) => tokio::process::Command::new(path),
-            Self::WindowsBatch(path) => {
-                let mut cmd = tokio::process::Command::new("cmd");
-                cmd.args(["/c", &*path.to_string_lossy()]);
-                cmd
-            }
+            Self::Direct(path) | Self::WindowsBatch(path) => tokio::process::Command::new(path),
         }
     }
 }
@@ -399,12 +409,21 @@ mod tests {
         assert_eq!(exe.path(), Path::new("C:\\flutter\\bin\\flutter.bat"));
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn test_flutter_executable_direct_command() {
-        let exe = FlutterExecutable::Direct(PathBuf::from("/usr/local/flutter/bin/flutter"));
-        // Just ensure it builds a command without panicking
-        let _cmd = exe.command();
+    fn test_flutter_executable_direct_command_invokes_path() {
+        let path = PathBuf::from("/usr/local/flutter/bin/flutter");
+        let exe = FlutterExecutable::Direct(path.clone());
+        let cmd = exe.command();
+        assert_eq!(cmd.as_std().get_program(), path.as_os_str());
+    }
+
+    #[test]
+    fn test_flutter_executable_windows_batch_command_invokes_path() {
+        let path = PathBuf::from("C:\\flutter\\bin\\flutter.bat");
+        let exe = FlutterExecutable::WindowsBatch(path.clone());
+        let cmd = exe.command();
+        // After the fix, WindowsBatch invokes the .bat directly (not cmd.exe)
+        assert_eq!(cmd.as_std().get_program(), path.as_os_str());
     }
 
     #[test]

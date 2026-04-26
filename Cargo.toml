@@ -7,6 +7,9 @@ resolver = "2"
 version = "0.4.2"
 edition = "2021"
 license = "BSL-1.1"
+# Minimum Rust version required for safe .bat/.cmd invocation via Command::new(path)
+# (CVE-2024-24576 fix landed in 1.77.2).
+rust-version = "1.77.2"
 
 [workspace.dependencies]
 # Internal crate dependencies
