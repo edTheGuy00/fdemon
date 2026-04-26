@@ -86,7 +86,11 @@ fn windows_batch_command_executes_successfully() {
     // Verify Rust's stdlib correctly invokes the .bat via cmd internally.
     let rt = tokio::runtime::Runtime::new().unwrap();
     let output = rt.block_on(async { exe.command().output().await.unwrap() });
-    assert!(output.status.success(), "exit code: {:?}", output.status.code());
+    assert!(
+        output.status.success(),
+        "exit code: {:?}",
+        output.status.code()
+    );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("FAKE_FLUTTER"), "stdout was: {stdout}");
 }
@@ -173,11 +177,14 @@ fn find_flutter_sdk_resolves_via_path() {
     // through to strategy 10 (system PATH via which).
     std::env::remove_var("FLUTTER_ROOT");
     let project = TempDir::new().unwrap();
-    let sdk = find_flutter_sdk(project.path(), None)
-        .expect("locator should find the fake SDK on PATH");
+    let sdk =
+        find_flutter_sdk(project.path(), None).expect("locator should find the fake SDK on PATH");
     assert!(sdk.executable.path().ends_with("flutter.bat"));
     assert!(sdk.executable.path().is_absolute());
     // The executable path must NOT have a UNC prefix.
     let p = sdk.executable.path().to_string_lossy();
-    assert!(!p.starts_with(r"\\?\"), "UNC prefix leaked into executable path: {p}");
+    assert!(
+        !p.starts_with(r"\\?\"),
+        "UNC prefix leaked into executable path: {p}"
+    );
 }
