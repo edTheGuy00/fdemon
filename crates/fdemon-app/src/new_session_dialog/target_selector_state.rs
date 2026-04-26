@@ -41,6 +41,20 @@ pub struct TargetSelectorState {
     /// Loading state for bootable device discovery
     pub bootable_loading: bool,
 
+    /// Background refresh in progress for connected devices.
+    ///
+    /// Distinct from `loading`: `loading` shows a full-screen spinner with no
+    /// content, whereas `refreshing` is set when the cached list is already shown
+    /// and a background discovery is updating it in place. Cleared by
+    /// `set_connected_devices()` and `set_error()`.
+    pub refreshing: bool,
+
+    /// Background refresh in progress for bootable devices.
+    ///
+    /// Mirror of `refreshing` for the bootable tab. Cleared by
+    /// `set_bootable_devices()`.
+    pub bootable_refreshing: bool,
+
     /// Error message if discovery failed
     pub error: Option<String>,
 
@@ -69,6 +83,8 @@ impl Default for TargetSelectorState {
             selected_index: 0,
             loading: true,
             bootable_loading: true,
+            refreshing: false,
+            bootable_refreshing: false,
             error: None,
             scroll_offset: 0,
             last_known_visible_height: Cell::new(0),
@@ -212,6 +228,7 @@ impl TargetSelectorState {
     pub fn set_connected_devices(&mut self, devices: Vec<Device>) {
         self.connected_devices = devices;
         self.loading = false;
+        self.refreshing = false;
         self.error = None;
         self.invalidate_cache();
         self.scroll_offset = 0; // Reset scroll when devices change
@@ -234,6 +251,7 @@ impl TargetSelectorState {
         self.ios_simulators = ios_simulators;
         self.android_avds = android_avds;
         self.bootable_loading = false;
+        self.bootable_refreshing = false;
         // NOTE: do NOT clear self.error here — bootable device discovery uses
         // xcrun/emulator tools that are independent of the Flutter SDK.
         // SDK-level errors (e.g. "Flutter SDK not found") must persist until
@@ -250,10 +268,27 @@ impl TargetSelectorState {
         }
     }
 
-    /// Set error state
+    /// Set a new-session dialog error state.
+    ///
+    /// This helper is used by many new-session error paths, not just the
+    /// connected-device foreground discovery failure path. Callers include device
+    /// discovery failures, session creation failures, boot failures, config save
+    /// errors, "no Flutter SDK" surfaces from the launch context and dialog open,
+    /// and several validation paths.
+    ///
+    /// It records the error and clears the connected-side `loading` and
+    /// `refreshing` flags so the UI does not remain stuck in a connected
+    /// in-progress state after an error is surfaced.
+    ///
+    /// `bootable_loading` and `bootable_refreshing` are intentionally **not**
+    /// cleared here. Bootable discovery is independent (xcrun/emulator tools,
+    /// not the Flutter SDK) and its in-flight flags are managed by their own
+    /// success/failure paths. Callers that need to clear bootable indicators on
+    /// a particular error must do so themselves.
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
         self.loading = false;
+        self.refreshing = false;
     }
 
     /// Adjust scroll offset to keep selected item visible
@@ -390,6 +425,37 @@ mod tests {
         // Error should be cleared — successful device discovery means SDK is working
         assert!(state.error.is_none());
         assert!(!state.loading);
+    }
+
+    #[test]
+    fn test_refreshing_default_false() {
+        let state = TargetSelectorState::default();
+        assert!(!state.refreshing);
+        assert!(!state.bootable_refreshing);
+    }
+
+    #[test]
+    fn test_set_connected_devices_clears_refreshing() {
+        let mut state = TargetSelectorState::default();
+        state.refreshing = true;
+        state.set_connected_devices(vec![]);
+        assert!(!state.refreshing);
+    }
+
+    #[test]
+    fn test_set_bootable_devices_clears_bootable_refreshing() {
+        let mut state = TargetSelectorState::default();
+        state.bootable_refreshing = true;
+        state.set_bootable_devices(vec![], vec![]);
+        assert!(!state.bootable_refreshing);
+    }
+
+    #[test]
+    fn test_set_error_clears_refreshing() {
+        let mut state = TargetSelectorState::default();
+        state.refreshing = true;
+        state.set_error("boom".to_string());
+        assert!(!state.refreshing);
     }
 }
 

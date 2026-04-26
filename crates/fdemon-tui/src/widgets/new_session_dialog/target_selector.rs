@@ -16,7 +16,7 @@ use super::tab_bar::TabBar;
 use super::TargetTab;
 use fdemon_app::ToolAvailability;
 
-use crate::theme::palette;
+use crate::theme::{icons::IconSet, palette};
 
 // Re-export TargetSelectorState from app layer for backward compatibility
 pub use fdemon_app::new_session_dialog::TargetSelectorState;
@@ -25,6 +25,8 @@ pub use fdemon_app::new_session_dialog::TargetSelectorState;
 pub struct TargetSelector<'a> {
     state: &'a TargetSelectorState,
     tool_availability: &'a ToolAvailability,
+    /// Icon set for resolving glyphs (Unicode vs Nerd Fonts).
+    icons: IconSet,
     is_focused: bool,
     compact: bool,
 }
@@ -38,9 +40,19 @@ impl<'a> TargetSelector<'a> {
         Self {
             state,
             tool_availability,
+            icons: IconSet::default(),
             is_focused,
             compact: false,
         }
+    }
+
+    /// Set the icon set for this widget (builder pattern).
+    ///
+    /// Callers that have a configured `IconSet` (e.g. from `NewSessionDialog`)
+    /// should pass it here to ensure Nerd Font glyphs are used when configured.
+    pub fn icons(mut self, icons: IconSet) -> Self {
+        self.icons = icons;
+        self
     }
 
     /// Enable compact mode for narrow terminals
@@ -89,7 +101,13 @@ impl TargetSelector<'_> {
         );
 
         // Render tab bar
-        let tab_bar = TabBar::new(self.state.active_tab, self.is_focused);
+        let tab_bar = TabBar::new(
+            self.state.active_tab,
+            self.is_focused,
+            self.state.refreshing,
+            self.state.bootable_refreshing,
+            &self.icons,
+        );
         tab_bar.render(chunks[0], buf);
 
         // Render content based on active tab
@@ -212,14 +230,35 @@ impl TargetSelector<'_> {
             .add_modifier(Modifier::BOLD);
         let style_inactive = Style::default().fg(palette::TEXT_MUTED);
 
+        // Build the base label (active-tab brackets vs bare), then conditionally
+        // append the refresh glyph for any tab whose refresh is in flight. This
+        // mirrors `TabBar`'s per-tab semantics in full mode.
+        let connected_base = if connected_active {
+            "[1 Connected]"
+        } else {
+            "1 Connected"
+        };
+        let connected_label = if self.state.refreshing {
+            format!("{} {}", connected_base, self.icons.refresh())
+        } else {
+            connected_base.to_string()
+        };
+
+        let bootable_base = if bootable_active {
+            "[2 Bootable]"
+        } else {
+            "2 Bootable"
+        };
+        let bootable_label = if self.state.bootable_refreshing {
+            format!("{} {}", bootable_base, self.icons.refresh())
+        } else {
+            bootable_base.to_string()
+        };
+
         // Pill-style compact: use brackets for active tab
         let tabs = vec![
             Span::styled(
-                if connected_active {
-                    "[1 Connected]"
-                } else {
-                    "1 Connected"
-                },
+                connected_label,
                 if connected_active {
                     style_active
                 } else {
@@ -228,11 +267,7 @@ impl TargetSelector<'_> {
             ),
             Span::raw("  "),
             Span::styled(
-                if bootable_active {
-                    "[2 Bootable]"
-                } else {
-                    "2 Bootable"
-                },
+                bootable_label,
                 if bootable_active {
                     style_active
                 } else {
@@ -1010,6 +1045,112 @@ mod tests {
     }
 
     #[test]
+    fn test_target_selector_renders_refreshing_glyph_when_state_set() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+        let icons = crate::theme::icons::IconSet::default();
+        let glyph = icons.refresh();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains(glyph),
+            "expected refresh glyph in target selector, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_renders_bootable_refreshing_glyph_when_state_set() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.active_tab = TargetTab::Bootable;
+        state.set_bootable_devices(vec![], vec![]);
+        state.bootable_refreshing = true;
+
+        let tool_availability = ToolAvailability::default();
+        let icons = crate::theme::icons::IconSet::default();
+        let glyph = icons.refresh();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains(glyph),
+            "expected bootable refresh glyph in target selector, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_no_glyph_when_not_refreshing() {
+        // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
+        // Use height 12 to ensure the tab bar renders fully.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        // refreshing defaults to false
+
+        let tool_availability = ToolAvailability::default();
+        let icons = crate::theme::icons::IconSet::default();
+        let glyph = icons.refresh();
+
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            !rendered.contains(glyph),
+            "expected no refresh glyph when not refreshing, got: {rendered}"
+        );
+    }
+
+    #[test]
     fn test_render_at_various_heights() {
         use ratatui::layout::{Constraint, Layout, Rect};
 
@@ -1054,6 +1195,117 @@ mod tests {
                 "At terminal height {}, expected visible_height {} (from layout solver)",
                 height,
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn test_target_selector_compact_renders_refreshing_glyph() {
+        // Use a height small enough to trigger compact mode via the caller (compact(true)).
+        // compact mode renders a single-line tab bar via render_tabs_compact.
+        let mut state = TargetSelectorState::default();
+        state.loading = false;
+        state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+        state.refreshing = true;
+        state.active_tab = TargetTab::Connected;
+
+        let tool_availability = ToolAvailability::default();
+        let icons = crate::theme::icons::IconSet::default();
+        let glyph = icons.refresh();
+
+        let backend = TestBackend::new(50, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let selector = TargetSelector::new(&state, &tool_availability, true).compact(true);
+                selector.render(f.area(), f.buffer_mut());
+            })
+            .unwrap();
+        let rendered: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains(glyph),
+            "compact mode should show refresh glyph when active tab is refreshing, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_target_selector_compact_renders_refreshing_glyph_on_inactive_tab() {
+        // Case 1: Active tab is Connected, but Bootable is refreshing (inactive tab).
+        // The glyph must appear next to the inactive Bootable label.
+        {
+            let mut state = TargetSelectorState::default();
+            state.loading = false;
+            state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+            state.bootable_refreshing = true;
+            state.active_tab = TargetTab::Connected;
+
+            let tool_availability = ToolAvailability::default();
+            let icons = crate::theme::icons::IconSet::default();
+            let glyph = icons.refresh();
+
+            let backend = TestBackend::new(50, 10);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let selector =
+                        TargetSelector::new(&state, &tool_availability, true).compact(true);
+                    selector.render(f.area(), f.buffer_mut());
+                })
+                .unwrap();
+            let rendered: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<Vec<_>>()
+                .join("");
+            assert!(
+                rendered.contains(glyph),
+                "expected refresh glyph on inactive Bootable tab in compact mode, got: {rendered}"
+            );
+        }
+
+        // Case 2: Active tab is Bootable, but Connected is refreshing (inactive tab).
+        // The glyph must appear next to the inactive Connected label.
+        {
+            let mut state = TargetSelectorState::default();
+            state.loading = false;
+            state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
+            state.refreshing = true;
+            state.active_tab = TargetTab::Bootable;
+
+            let tool_availability = ToolAvailability::default();
+            let icons = crate::theme::icons::IconSet::default();
+            let glyph = icons.refresh();
+
+            let backend = TestBackend::new(50, 10);
+            let mut terminal = Terminal::new(backend).unwrap();
+            terminal
+                .draw(|f| {
+                    let selector =
+                        TargetSelector::new(&state, &tool_availability, true).compact(true);
+                    selector.render(f.area(), f.buffer_mut());
+                })
+                .unwrap();
+            let rendered: String = terminal
+                .backend()
+                .buffer()
+                .content()
+                .iter()
+                .map(|cell| cell.symbol())
+                .collect::<Vec<_>>()
+                .join("");
+            assert!(
+                rendered.contains(glyph),
+                "expected refresh glyph on inactive Connected tab in compact mode, got: {rendered}"
             );
         }
     }

@@ -3330,6 +3330,8 @@ mod auto_launch_tests {
 
         // Background errors should not show error UI when cached devices exist
         let mut state = AppState::new();
+        // Inject a fake SDK so the handler proceeds past the SDK-missing guard.
+        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
 
         // Set up cached devices
         state.set_device_cache(vec![test_device("cached-1", "Cached Phone")]);
@@ -10071,5 +10073,62 @@ fn test_enter_devtools_with_network_default_queues_switch_panel_message() {
             ))
         ),
         "Lazy-start path with Network default should queue SwitchDevToolsPanel(Network)"
+    );
+}
+
+#[test]
+fn test_devices_discovered_clears_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state.new_session_dialog_state.target_selector.refreshing = true;
+
+    let _ = update(&mut state, Message::DevicesDiscovered { devices: vec![] });
+    assert!(!state.new_session_dialog_state.target_selector.refreshing);
+}
+
+#[test]
+fn test_bootable_devices_discovered_clears_bootable_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state
+        .new_session_dialog_state
+        .target_selector
+        .bootable_refreshing = true;
+
+    let _ = update(
+        &mut state,
+        Message::BootableDevicesDiscovered {
+            ios_simulators: vec![],
+            android_avds: vec![],
+        },
+    );
+
+    assert!(
+        !state
+            .new_session_dialog_state
+            .target_selector
+            .bootable_refreshing,
+        "BootableDevicesDiscovered must clear the bootable_refreshing flag"
+    );
+}
+
+#[test]
+fn test_background_device_discovery_failure_clears_refreshing() {
+    let mut state = AppState::new();
+    state.show_new_session_dialog(crate::config::LoadedConfigs::default());
+    state.set_device_cache(vec![test_device("dev1", "Device 1")]);
+    state.new_session_dialog_state.target_selector.refreshing = true;
+
+    let _ = update(
+        &mut state,
+        Message::DeviceDiscoveryFailed {
+            error: "transient flutter devices error".to_string(),
+            is_background: true,
+        },
+    );
+
+    assert!(
+        !state.new_session_dialog_state.target_selector.refreshing,
+        "background failure must clear the refreshing flag"
     );
 }

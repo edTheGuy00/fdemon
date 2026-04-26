@@ -10,25 +10,40 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::theme::palette;
+use crate::theme::{icons::IconSet, palette};
 
 /// Tab bar widget for switching between Connected and Bootable views
-pub struct TabBar {
+pub struct TabBar<'a> {
     active_tab: TargetTab,
     /// Whether this pane is focused
     pane_focused: bool,
+    /// Refresh-in-flight indicator for the Connected tab.
+    connected_refreshing: bool,
+    /// Refresh-in-flight indicator for the Bootable tab.
+    bootable_refreshing: bool,
+    /// Icon set for resolving glyphs (Unicode vs Nerd Fonts).
+    icons: &'a IconSet,
 }
 
-impl TabBar {
-    pub fn new(active_tab: TargetTab, pane_focused: bool) -> Self {
+impl<'a> TabBar<'a> {
+    pub fn new(
+        active_tab: TargetTab,
+        pane_focused: bool,
+        connected_refreshing: bool,
+        bootable_refreshing: bool,
+        icons: &'a IconSet,
+    ) -> Self {
         Self {
             active_tab,
             pane_focused,
+            connected_refreshing,
+            bootable_refreshing,
+            icons,
         }
     }
 }
 
-impl Widget for TabBar {
+impl Widget for TabBar<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         // Outer container: dark background with rounded border
         let container_bg = palette::DEEPEST_BG;
@@ -51,7 +66,16 @@ impl Widget for TabBar {
             .enumerate()
         {
             let is_active = *tab == self.active_tab;
-            let label = tab.label();
+            let refreshing = match tab {
+                TargetTab::Connected => self.connected_refreshing,
+                TargetTab::Bootable => self.bootable_refreshing,
+            };
+
+            let label = if refreshing {
+                format!("{} {}", tab.label(), self.icons.refresh())
+            } else {
+                tab.label().to_string()
+            };
 
             let style = if is_active && self.pane_focused {
                 Style::default()
@@ -77,6 +101,7 @@ impl Widget for TabBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::icons::IconSet;
     use ratatui::{backend::TestBackend, Terminal};
 
     #[test]
@@ -105,12 +130,13 @@ mod tests {
 
     #[test]
     fn test_tab_bar_renders() {
+        let icons = IconSet::default();
         let backend = TestBackend::new(40, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Connected, true);
+                let tab_bar = TabBar::new(TargetTab::Connected, true, false, false, &icons);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -124,12 +150,13 @@ mod tests {
 
     #[test]
     fn test_tab_bar_renders_with_bootable_active() {
+        let icons = IconSet::default();
         let backend = TestBackend::new(40, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Bootable, true);
+                let tab_bar = TabBar::new(TargetTab::Bootable, true, false, false, &icons);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -143,12 +170,13 @@ mod tests {
 
     #[test]
     fn test_tab_bar_unfocused() {
+        let icons = IconSet::default();
         let backend = TestBackend::new(40, 3);
         let mut terminal = Terminal::new(backend).unwrap();
 
         terminal
             .draw(|f| {
-                let tab_bar = TabBar::new(TargetTab::Connected, false);
+                let tab_bar = TabBar::new(TargetTab::Connected, false, false, false, &icons);
                 f.render_widget(tab_bar, f.area());
             })
             .unwrap();
@@ -159,5 +187,77 @@ mod tests {
         // Should still render both tabs
         assert!(content.contains("Connected"));
         assert!(content.contains("Bootable"));
+    }
+
+    #[test]
+    fn test_tab_bar_renders_connected_refreshing_indicator() {
+        let icons = IconSet::default();
+        let glyph = icons.refresh();
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Connected, true, true, false, &icons);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains(glyph),
+            "expected refresh glyph on Connected tab, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_renders_bootable_refreshing_indicator() {
+        let icons = IconSet::default();
+        let glyph = icons.refresh();
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Bootable, true, false, true, &icons);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(
+            rendered.contains(glyph),
+            "expected refresh glyph on Bootable tab, got: {rendered}"
+        );
+    }
+
+    #[test]
+    fn test_tab_bar_no_indicator_when_not_refreshing() {
+        let icons = IconSet::default();
+        let glyph = icons.refresh();
+        let backend = TestBackend::new(40, 3);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                let tab_bar = TabBar::new(TargetTab::Connected, true, false, false, &icons);
+                f.render_widget(tab_bar, f.area());
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let rendered: String = buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<Vec<_>>()
+            .join("");
+        assert!(!rendered.contains(glyph));
     }
 }

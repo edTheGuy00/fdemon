@@ -71,6 +71,29 @@ pub enum UpdateAction {
         flutter: FlutterExecutable,
     },
 
+    /// Refresh both connected and bootable device lists in the background.
+    ///
+    /// Dispatched when the new-session dialog opens with cached data already
+    /// shown, so that both lists are kept fresh without a loading screen.
+    /// Errors on either side are logged only; the user keeps seeing the
+    /// previous device lists until the discovery returns.
+    RefreshDevicesAndBootableBackground {
+        /// Flutter executable to use for both background discovery tasks.
+        flutter: FlutterExecutable,
+    },
+
+    /// Foreground connected-device discovery + background bootable discovery in parallel.
+    /// Used by the new-session dialog cache-miss fallback so both tabs populate on
+    /// first dialog open even when no caches exist.
+    ///
+    /// `UpdateResult` carries a single action, so this combined variant is the cleanest
+    /// way to spawn both. Mirrors `RefreshDevicesAndBootableBackground` but uses the
+    /// foreground (loading-aware) connected spawn.
+    DiscoverDevicesAndBootable {
+        /// Flutter executable to use for both discovery tasks.
+        flutter: FlutterExecutable,
+    },
+
     /// Discover devices and auto-launch a session
     /// Used when auto_start=true to run device discovery in background
     /// and automatically launch with the best available config/device
