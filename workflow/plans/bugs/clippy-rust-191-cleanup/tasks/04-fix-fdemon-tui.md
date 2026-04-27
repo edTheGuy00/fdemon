@@ -93,25 +93,35 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** worktree-agent-af58bdb4086fa7f7e
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-tui/src/test_utils.rs` | Removed `#[test]` attribute from doc-comment example (`clippy::test_attr_in_doctest`) |
+| `crates/fdemon-tui/src/widgets/devtools/mod.rs` | Converted 13 `field_reassign_with_default` patterns to struct literals |
+| `crates/fdemon-tui/src/widgets/devtools/network/tests.rs` | Reverted auto-fix `is_multiple_of(2)` (MSRV incompatible); added `#[allow(clippy::manual_is_multiple_of)]` instead |
+| `crates/fdemon-tui/src/widgets/devtools/performance/tests.rs` | Converted 2 `field_reassign_with_default` patterns to struct literals |
+| `crates/fdemon-tui/src/widgets/header.rs` | Auto-fixed `clippy::len_zero` (`.len() == 0` → `.is_empty()`) and `clippy::identity_op` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/launch_context.rs` | Auto-fixed `clippy::bool_comparison` and `clippy::identity_op` |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/target_selector.rs` | Converted ~35 `field_reassign_with_default` patterns to struct literals (largest cluster) |
+| `crates/fdemon-tui/src/widgets/search_input.rs` | Converted 1 `field_reassign_with_default` pattern to struct literal |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Auto-fixed 2 `clippy::bool_assert_comparison` (`assert_eq!(x, false)` → `assert!(!x)`) |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **MSRV guard for `manual_is_multiple_of`**: The `cargo clippy --fix` auto-apply introduced `i.is_multiple_of(2)` in `network/tests.rs`, which requires Rust 1.87. This was reverted to `i % 2 == 0` with an `#[allow(clippy::manual_is_multiple_of)]` attribute, per task instructions. Pre-existing uses of `is_multiple_of` in `bars.rs` and `memory_chart/chart.rs` were already present at HEAD and not changed.
+2. **Conditional assignments preserved**: In tests that set additional fields after method calls (e.g., `state.refreshing = true` after `state.set_connected_devices(...)`), only the consecutive assignments immediately after `default()` were moved into the struct literal. Post-method assignments remain separate to preserve semantics.
+3. **4 pre-existing snapshot test failures**: `render::tests::snapshot_normal_mode_*` tests were already failing before this task (verified by stash test). These failures are not caused by our changes.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-tui` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-tui` - 875 passed, 4 pre-existing snapshot failures (unrelated)
+- `cargo fmt --all` - Passed
 
 ### Risks/Limitations
 
-_tbd_
+1. **Pre-existing snapshot failures**: 4 snapshot tests (`render::tests::snapshot_normal_mode_*`) were already failing before this task. They are not regressions introduced here.

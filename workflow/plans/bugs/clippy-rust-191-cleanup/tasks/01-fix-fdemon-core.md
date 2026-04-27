@@ -60,25 +60,25 @@ Both occurrences are inside test code where a `Vec<&str>` literal is constructed
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-core/src/ansi.rs` | Replaced two `vec![...]` array literals with plain `[...]` arrays in test fixtures (lines 461 and 470 of `test_strip_flutter_machine_mode_full_block`). |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Reverted unrelated `cargo fmt` change**: `cargo fmt --all` also reformatted a line in `crates/fdemon-daemon/src/flutter_sdk/locator.rs`. That change is outside this task's scope (no clippy warning there), so it was reverted to keep the diff limited to `ansi.rs` as required by acceptance criteria.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-core` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy -p fdemon-core --all-targets -- -D warnings` — Passed (0 warnings, exit 0)
+- `cargo test -p fdemon-core` — Passed (372 unit tests + 5 doc tests, 0 failures)
+- `cargo fmt --all` — Passed (no formatting changes needed in `ansi.rs`)
 
 ### Risks/Limitations
 
-_tbd_
+1. **None**: Pure syntax change (`vec![...]` → `[...]`) with no behavior difference. Both types implement `IntoIterator` and `iter()` identically in this context.

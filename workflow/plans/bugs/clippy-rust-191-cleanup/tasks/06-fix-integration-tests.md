@@ -77,25 +77,28 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `tests/sdk_detection/docker_helpers.rs` | Removed `mut` from `let mut child` binding at line 135; removed `mut` from `mut child: Child` function parameter at line 327 |
+| `tests/sdk_detection/tier1_detection_chain.rs` | Converted `match &sdk.channel { Some(ch) => { … }, None => {} }` to `if let Some(ch) = &sdk.channel { … }` with preserved comment |
+| `tests/sdk_detection/tier2_headless.rs` | Replaced `.map_or(false, |m| { … })` with `.is_some_and(|m| { … })` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Comment preservation in single_match fix**: The original `None => {}` had an inline comment "Also acceptable — no git dir means channel is None". Moved it above the `if let` as it conveys the same intent without conflating it with the match arm syntax.
 
 ### Testing Performed
 
-- `cargo clippy --test sdk_detection -- -D warnings` — _tbd_
-- `cargo test --test sdk_detection` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy --test sdk_detection -- -D warnings` — Passed (0 warnings)
+- `cargo clippy -p flutter-demon --all-targets -- -D warnings` — Passed
+- `cargo test --test sdk_detection` — Passed (103 passed, 23 ignored)
+- `cargo fmt --all` — Passed (minor formatting applied to tier2_headless.rs)
 
 ### Risks/Limitations
 
-_tbd_
+1. **None**: All fixes are purely mechanical lint cleanups with no behavioural changes.

@@ -74,25 +74,28 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-dap/src/adapter/threads.rs` | Auto-fixed 5 `manual_range_contains` warnings: `x >= 1000 && x < 2000` → `(1000..2000).contains(&x)` at lines 777, 797, 801, 983, 984 |
+| `crates/fdemon-dap/src/adapter/tests/stack_scopes_variables.rs` | Renamed 12 occurrences of `rx` → `_rx` (all in `let (mut adapter, rx, thread_id)` patterns where receiver channel was unused); auto-fix had already removed `mut` from these |
+| `crates/fdemon-dap/src/adapter/tests/call_service.rs` | Added `type SharedCallLog = Arc<Mutex<Vec<(String, Option<serde_json::Value>)>>>` alias; updated `RecordingCallServiceBackend` struct and `new()` return type to use it |
+| `crates/fdemon-dap/src/adapter/tests/restart_frame.rs` | Added `type SharedResumeLog = Arc<Mutex<Vec<(String, Option<StepMode>, Option<i32>)>>>` alias; updated `RecordingBackend` struct and `new()` return type to use it |
+| `crates/fdemon-dap/src/adapter/tests/update_debug_options.rs` | Added `type SharedDebuggabilityLog = Arc<Mutex<Vec<(String, String, bool)>>>` alias; updated `LibraryDebuggableMock` struct and `new()` return type to use it |
+| `crates/fdemon-dap/src/adapter/tests/request_timeouts_events.rs` | Added `#[allow(dead_code)]` to `HangingGetVmBackend` struct |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **`cargo clippy --fix` first**: Applied the automated fix pass first to handle `manual_range_contains` and the `unused_mut` pairs in test files other than `stack_scopes_variables.rs`. The auto-fixer removed `mut` from `rx` bindings but did not prefix them with `_`, so remaining `unused_variable: rx` errors in `stack_scopes_variables.rs` required a manual `replace_all` edit.
+2. **Type alias naming follows semantic role**: `SharedCallLog`, `SharedResumeLog`, and `SharedDebuggabilityLog` are named after what they record, not their structural shape — consistent with the task's guidance.
+3. **`HangingGetVmBackend` preserved**: Added `#[allow(dead_code)]` only; the struct and its `MockTestBackend` impl are intact as intentional scaffolding.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-dap --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-dap` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
-
-### Risks/Limitations
-
-_tbd_
+- `cargo clippy -p fdemon-dap --all-targets -- -D warnings` — Passed (exit 0, no warnings)
+- `cargo test -p fdemon-dap` — Passed (842 unit tests + 2 doc tests)
+- `cargo fmt --all -- --check` — Passed (exit 0)

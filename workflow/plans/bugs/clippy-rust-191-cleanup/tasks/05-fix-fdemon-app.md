@@ -105,25 +105,46 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-app/src/actions/native_logs.rs` | `while_let_loop`: rewrote `loop { match … }` as `while let` |
+| `crates/fdemon-app/src/actions/network.rs` | `assertions_on_constants`: moved `#[allow]` to test function level |
+| `crates/fdemon-app/src/actions/performance.rs` | `assertions_on_constants`: moved `#[allow]` to test function level for 2 tests |
+| `crates/fdemon-app/src/actions/vm_service.rs` | `assertions_on_constants`: moved `#[allow]` to test function level |
+| `crates/fdemon-app/src/config/settings.rs` | `field_reassign_with_default`: 5 sites converted to struct literals; removed redundant `..Default::default()` from fully-specified `EditorSettings` |
+| `crates/fdemon-app/src/handler/new_session/launch_context.rs` | `field_reassign_with_default`: 21 sites — `state_with_sdk()` helper and 20 `AppState::default() + ui_mode` patterns — converted to struct literals |
+| `crates/fdemon-app/src/handler/settings_dart_defines.rs` | `unnecessary_get_then_check`: `.get(k).is_none()` → `.contains_key(k)` negated |
+| `crates/fdemon-app/src/handler/tests.rs` | `type_complexity`: added `SourceStartedResult` type alias; used in 2 helper functions |
+| `crates/fdemon-app/src/new_session_dialog/target_selector_state.rs` | `field_reassign_with_default`: 3 sites converted to struct literals |
+| `crates/fdemon-app/src/session/debug_state.rs` | `field_reassign_with_default`: 2 sites converted to struct literals |
+| `crates/fdemon-app/src/session/network.rs` | `field_reassign_with_default`: 7 sites converted to struct literals |
+| `crates/fdemon-app/src/session/performance.rs` | `field_reassign_with_default`: 1 site converted to struct literal |
+| `crates/fdemon-app/src/session/tests.rs` | `module_inception`: added `#[allow(clippy::module_inception)]` above `mod tests` |
+| `crates/fdemon-app/src/settings_items.rs` | `field_reassign_with_default`: 1 site converted to struct literal |
+| `crates/fdemon-app/src/state.rs` | `field_reassign_with_default`: 6 sites converted to struct literals |
+| `crates/fdemon-app/src/watcher/mod.rs` | `cloned_ref_to_slice_refs`: replaced `&[x.clone()]` with `std::slice::from_ref(&x)` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **`assertions_on_constants` annotated rather than removed**: These are legitimate "constant invariant" guard tests that verify the compile-time constants maintain their intended relationships (e.g., profile mode minimums are greater than debug minimums). Rather than deleting them, they are annotated with `#[allow(clippy::assertions_on_constants)]` at the test-function level per the task instructions. A FIXME comment explains the intent.
+
+2. **`#[allow]` at function level, not inline**: Rust does not allow inner attributes on macro invocations (like `assert!`), so `#[allow(clippy::assertions_on_constants)]` must go on the containing test function, not adjacent to the `assert!` call.
+
+3. **`EditorSettings` in `test_editor_resolve_with_custom_pattern`**: This struct only has 2 fields; since both are specified, `..Default::default()` triggered `struct_update_has_no_effect` — removed it and made the struct fully explicit.
+
+4. **`field_reassign_with_default` in `launch_context.rs`**: All 20 test sites that did `let mut state = AppState::default(); state.ui_mode = UiMode::NewSessionDialog;` were converted via `replace_all`. Tests that call `state_with_sdk()` (a custom helper, not `Default::default()`) were left unchanged as clippy doesn't fire there.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-app` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (0 errors, 0 warnings)
+- `cargo test -p fdemon-app` — Passed (1,898 tests, 0 failed)
+- `cargo fmt --all -- --check` — Passed
 
 ### Risks/Limitations
 
-_tbd_
+1. **Test count differs from plan**: Task notes 1,511 unit tests; actual count is 1,898, suggesting test growth since the plan was written. All pass.

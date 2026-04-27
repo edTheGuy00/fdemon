@@ -74,25 +74,31 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-daemon/src/devices.rs` | Replace `groups.get("Windows").is_none()` with `!groups.contains_key("Windows")` |
+| `crates/fdemon-daemon/src/native_logs/custom.rs` | Convert three `loop { match ... }` blocks to `while let Ok(Some(event)) = ...` form |
+| `crates/fdemon-daemon/src/vm_service/extensions/inspector.rs` | Indent two doc-comment continuation lines to 4 spaces so they render as list item continuations |
+| `crates/fdemon-daemon/src/vm_service/extensions/overlays.rs` | Replace `Default::default()` + reassignment with struct literal `DebugOverlayState { repaint_rainbow: Some(true), ..Default::default() }` |
+| `crates/fdemon-daemon/src/vm_service/extensions/mod.rs` | Auto-fixed by `cargo clippy --fix`: 3x `assert_eq!(x, true/false)` → `assert!(x)` / `assert!(!x)` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Auto-fix first**: Ran `cargo clippy --fix --allow-dirty` which resolved the `bool_assert_comparison` lint automatically. The other lints required manual edits.
+2. **while_let_loop**: All three loops had symmetric `Ok(Some(event)) => push` + `_ => break` patterns, making them safe to convert to `while let Ok(Some(event)) = ...`. No side effects in the non-Some arms were lost.
+3. **doc_lazy_continuation**: The original code had two continuation lines with only 2-space indent (`///   `) but needed 4-space indent (`///     `) to be recognized as continuation of the bullet list items at `///   -`. The fix is purely cosmetic and preserves the existing prose.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-daemon` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — Passed (exit 0)
+- `cargo test -p fdemon-daemon` — Passed (740 tests, 3 ignored, 0 failed)
+- `cargo fmt --all` — Applied (no formatting issues)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Test count**: Task stated 527 unit tests but actual count is 740 — the test suite has grown since the task was written. All tests pass, no regressions.

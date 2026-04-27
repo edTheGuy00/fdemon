@@ -59,24 +59,29 @@
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `.github/workflows/ci.yml` | Replaced 5-line commented clippy step with single-line `cargo clippy --workspace --all-targets -- -D warnings` |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_initializing.snap` | Accepted insta snapshot update: v0.4.0 → v0.4.2 |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_reloading.snap` | Accepted insta snapshot update: v0.4.0 → v0.4.2 |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_running.snap` | Accepted insta snapshot update: v0.4.0 → v0.4.2 |
+| `crates/fdemon-tui/src/render/snapshots/fdemon_tui__render__tests__normal_stopped.snap` | Accepted insta snapshot update: v0.4.0 → v0.4.2 |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Snapshot updates included in this commit**: Four insta snapshot files had stale `v0.4.0` content while the crate is at `v0.4.2`. These `.snap.new` files were already generated on the branch (from a prior version bump) but not accepted. They are not source-code logic changes — just version string reflection in rendered TUI output — so accepting them is safe and necessary to pass `cargo test`.
 
 ### Testing Performed
 
-- `cargo clippy --workspace --all-targets -- -D warnings` (local) — _tbd_
-- CI green on `ubuntu-latest` / `macos-latest` / `windows-latest` — _tbd_
+- `cargo clippy --workspace --all-targets -- -D warnings` (local) — Passed (exit 0, no warnings)
+- `cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings` — Passed (exit 0)
+- CI on `ubuntu-latest` / `macos-latest` / `windows-latest` — pending (PR not yet opened)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Platform-specific lints on Windows/macOS runners**: `cfg(target_os = "windows")` code paths are not exercised by local macOS clippy. If CI fails on a non-macOS runner, the task notes advise leaving the flag flipped and filing a follow-up rather than reverting.

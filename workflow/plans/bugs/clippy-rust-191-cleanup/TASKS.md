@@ -27,13 +27,22 @@ Wave 2 (sequential — depends on all of Wave 1)
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-fdemon-core](tasks/01-fix-fdemon-core.md) | Not Started | - | 0.25h | `crates/fdemon-core/` |
-| 2 | [02-fix-fdemon-daemon](tasks/02-fix-fdemon-daemon.md) | Not Started | - | 0.5h | `crates/fdemon-daemon/` |
-| 3 | [03-fix-fdemon-dap](tasks/03-fix-fdemon-dap.md) | Not Started | - | 1–1.5h | `crates/fdemon-dap/` |
-| 4 | [04-fix-fdemon-tui](tasks/04-fix-fdemon-tui.md) | Not Started | - | 1.5–2h | `crates/fdemon-tui/` |
-| 5 | [05-fix-fdemon-app](tasks/05-fix-fdemon-app.md) | Not Started | - | 2–3h | `crates/fdemon-app/` |
-| 6 | [06-fix-integration-tests](tasks/06-fix-integration-tests.md) | Not Started | - | 0.25h | `tests/sdk_detection/` |
-| 7 | [07-restore-d-warnings-ci](tasks/07-restore-d-warnings-ci.md) | Not Started | 1, 2, 3, 4, 5, 6 | 0.25h | `.github/workflows/ci.yml` |
+| 1 | [01-fix-fdemon-core](tasks/01-fix-fdemon-core.md) | Done ✅ | - | 0.25h | `crates/fdemon-core/` |
+| 2 | [02-fix-fdemon-daemon](tasks/02-fix-fdemon-daemon.md) | Done ⚠️ | - | 0.5h | `crates/fdemon-daemon/` |
+| 3 | [03-fix-fdemon-dap](tasks/03-fix-fdemon-dap.md) | Done ⚠️ | - | 1–1.5h | `crates/fdemon-dap/` |
+| 4 | [04-fix-fdemon-tui](tasks/04-fix-fdemon-tui.md) | Done ⚠️ | - | 1.5–2h | `crates/fdemon-tui/` |
+| 5 | [05-fix-fdemon-app](tasks/05-fix-fdemon-app.md) | Done ⚠️ | - | 2–3h | `crates/fdemon-app/` |
+| 6 | [06-fix-integration-tests](tasks/06-fix-integration-tests.md) | Done ⚠️ | - | 0.25h | `tests/sdk_detection/` |
+| 7 | [07-restore-d-warnings-ci](tasks/07-restore-d-warnings-ci.md) | Done ⚠️ | 1, 2, 3, 4, 5, 6 | 0.25h | `.github/workflows/ci.yml` |
+
+### Validation Concerns (Wave 1)
+
+- **02–06**: `cargo fmt --all` (step 5 of the per-crate procedure) reflowed a two-line `let` in `crates/fdemon-daemon/src/flutter_sdk/locator.rs` to one line. Pure whitespace, identical across all 5 worktrees. Out-of-scope per declared write-files but zero behavior risk. The same change was first committed during the 02 merge; subsequent merges no-op on it.
+- **04**: 4 `.snap.new` files under `crates/fdemon-tui/src/render/snapshots/` were committed alongside the lint fixes. Validator confirmed these are **pre-existing snapshot failures** on `fix/detect-windows-bat` (v0.4.0 vs v0.4.2 binary version mismatch in fixture data) — not introduced by the lint cleanup. The `.snap.new` artifacts were dropped during the orchestrator merge; the underlying snapshots were then regenerated as part of task 07.
+
+### Validation Concerns (Wave 2)
+
+- **07**: Implementor accepted the 4 stale insta snapshots (`v0.4.0` → `v0.4.2`) so that `cargo test --workspace` would pass — the workspace test gate was a blocker for the workspace-wide `-D warnings` restoration. Snapshot files are outside the declared write-file scope but the change is purely a version-string update mechanically applied via `cargo insta accept`. Reasonable in context; could have been a separate preparatory commit. **CI verification on all three runners is still pending** — confirm green CI before considering this fix shipped.
 
 ## File Overlap Analysis
 
