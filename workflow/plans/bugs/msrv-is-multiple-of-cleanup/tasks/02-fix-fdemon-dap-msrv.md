@@ -95,25 +95,26 @@ Verify any test that asserts modulo-based hit conditions still passes. The rewri
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-dap/src/adapter/breakpoints.rs` | Replaced `hit_count.is_multiple_of(n)` with `hit_count % n == 0`; added MSRV guard comment and `#[allow(clippy::manual_is_multiple_of)]` before `evaluate_hit_condition` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Attribute placement**: The MSRV guard comment and `#[allow]` attribute were placed between the existing rustdoc block and the `pub fn` declaration, exactly as specified in the task and matching the reference pattern in `fdemon-tui/src/widgets/devtools/network/tests.rs:11-12`.
+2. **No other changes**: Only the two specified modifications were made — the `is_multiple_of` call and the attribute/comment addition. All other logic, comments, and the `n > 0` guard were preserved unchanged.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-dap --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-dap` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy -p fdemon-dap --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-dap` - Passed (842 unit tests + 2 doc-tests, 0 failed)
 
 ### Risks/Limitations
 
-_tbd_
+1. **None**: The rewrite from `is_multiple_of(n)` to `% n == 0` is semantically identical for all `n > 0`, and the `n > 0` guard prevents division-by-zero. No behavioral change.

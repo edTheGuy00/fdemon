@@ -23,10 +23,10 @@ No cross-task dependencies — Wave 1 is the only wave.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-fdemon-app-msrv](tasks/01-fix-fdemon-app-msrv.md) | Not Started | - | 0.25h | `crates/fdemon-app/` |
-| 2 | [02-fix-fdemon-dap-msrv](tasks/02-fix-fdemon-dap-msrv.md) | Not Started | - | 0.25h | `crates/fdemon-dap/` |
-| 3 | [03-fix-fdemon-tui-msrv](tasks/03-fix-fdemon-tui-msrv.md) | Not Started | - | 0.25–0.5h | `crates/fdemon-tui/` |
-| 4 | [04-document-hanging-get-vm-backend](tasks/04-document-hanging-get-vm-backend.md) | Not Started | - | 0.1h | `crates/fdemon-dap/` |
+| 1 | [01-fix-fdemon-app-msrv](tasks/01-fix-fdemon-app-msrv.md) | Done | - | 0.25h | `crates/fdemon-app/` |
+| 2 | [02-fix-fdemon-dap-msrv](tasks/02-fix-fdemon-dap-msrv.md) | Done | - | 0.25h | `crates/fdemon-dap/` |
+| 3 | [03-fix-fdemon-tui-msrv](tasks/03-fix-fdemon-tui-msrv.md) | Done | - | 0.25–0.5h | `crates/fdemon-tui/` |
+| 4 | [04-document-hanging-get-vm-backend](tasks/04-document-hanging-get-vm-backend.md) | Done | - | 0.1h | `crates/fdemon-dap/` |
 
 ## File Overlap Analysis
 

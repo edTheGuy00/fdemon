@@ -117,25 +117,27 @@ If insta snapshot tests exist for these widgets, they must remain green. The rew
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-tui/src/widgets/devtools/performance/memory_chart/chart.rs` | Replaced `dot_x.is_multiple_of(2)` with `dot_x % 2 == 0` at two sites (lines 111 and 223). Added MSRV guard comment + `#[allow(clippy::manual_is_multiple_of)]` to each enclosing function (`render_sample_chart` and `render_history_chart`) — two separate functions, so two separate attributes. |
+| `crates/fdemon-tui/src/widgets/devtools/performance/frame_chart/bars.rs` | Replaced `(x - line_start_x).is_multiple_of(2)` with `(x - line_start_x) % 2 == 0` at one site (line 180), preserving parentheses. Added MSRV guard comment + `#[allow(clippy::manual_is_multiple_of)]` to the enclosing method `render_budget_line`. |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Two separate `#[allow]` attributes in `chart.rs`**: The two `is_multiple_of` call sites are in different functions (`render_sample_chart` and `render_history_chart`), so each required its own attribute. The task confirmed this: "if both sites are in the same function, one `#[allow]` covers both" — they were not.
+2. **Comment placement before `///` doc comments**: The MSRV guard `// ...` comment and `#[allow]` attribute appear before the `///` doc comment on each function, matching the reference pattern in `network/tests.rs`. Rust allows doc comments after outer attributes.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-tui` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` — Passed (exit 0)
+- `cargo test -p fdemon-tui` — Passed (879 unit tests + 7 doc tests, 0 failed)
+- `cargo fmt --all -- --check` — Passed (no formatting changes needed)
 
 ### Risks/Limitations
 
-_tbd_
+1. **None**: The substitution `% 2 == 0` vs `is_multiple_of(2)` is semantically identical for `usize`/`u16` non-negative values. The surrounding loop invariants guarantee no underflow in `bars.rs`.
