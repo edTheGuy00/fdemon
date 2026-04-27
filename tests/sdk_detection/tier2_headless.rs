@@ -263,9 +263,9 @@ fn test_headless_no_sdk_emits_error() {
     let sdk_error = events.iter().find(|e| {
         e.event == "error"
             && e.fatal == Some(true)
-            && e.message.as_deref().map_or(false, |m| {
-                m.contains("Flutter SDK") || m.contains("flutter")
-            })
+            && e.message
+                .as_deref()
+                .is_some_and(|m| m.contains("Flutter SDK") || m.contains("flutter"))
     });
 
     assert!(

@@ -987,13 +987,11 @@ fn test_detached_head_channel_is_unknown() {
 
     let sdk = find_flutter_sdk(&project, Some(&sdk_root)).unwrap();
     // The channel should not be "stable", "beta", or "main" — it's a commit hash fragment
-    match &sdk.channel {
-        Some(ch) => {
-            assert_ne!(ch, "stable");
-            assert_ne!(ch, "beta");
-            assert_ne!(ch, "main");
-        }
-        None => {} // Also acceptable — no git dir means channel is None
+    // None is also acceptable — no git dir means channel is None
+    if let Some(ch) = &sdk.channel {
+        assert_ne!(ch, "stable");
+        assert_ne!(ch, "beta");
+        assert_ne!(ch, "main");
     }
 }
 
