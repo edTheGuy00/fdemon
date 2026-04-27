@@ -212,3 +212,35 @@ cargo test -p fdemon-daemon flutter_sdk::locator
 - If `path_prepend_guard` is not accessible from `windows_tests.rs`, copy it locally rather than making the locator test helper public — keep the public surface minimal.
 - Do NOT add tests that require a real Flutter SDK. The existing tests already use fake `.bat` shims; the new tests follow the same pattern.
 - Do NOT change the inner `#![cfg(all(test, target_os = "windows"))]` attribute on `windows_tests.rs`. The file remains Windows-only.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` | Renamed all 8 existing tests to `test_<function>_<scenario>_<expected_result>` convention; replaced all `unwrap()` with `.expect("...")` and descriptive messages; updated `create_fake_sdk` to use `Path::join` chains instead of `r"bin\..."` literals; updated the bat shim to echo `%*` for argument verification; strengthened the spaces-in-path test to assert argument arrived intact; added `#[serial]` rationale comments to all PATH-mutating tests; added `path_prepend_guard` helper (copied locally from locator.rs); added two new Strategy 12 tests (`test_find_flutter_sdk_scoop_shim_resolves_via_strategy_12`, `test_find_flutter_sdk_winget_shim_resolves_via_strategy_12`) with scoop and winget shim layout helpers. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`path_prepend_guard` copied locally**: As noted in the task, `path_prepend_guard` lives in `locator.rs`'s `#[cfg(test)] mod tests` which is not accessible from `windows_tests.rs`. Copied a local version rather than making it public, keeping the public API surface minimal.
+2. **Single `%*` in `create_fake_sdk`**: Updated the shared `create_fake_sdk` bat shim to echo `%*` (arguments). This is used by all tests — the prefix `FAKE_FLUTTER` with a trailing space from `%*` when no args are given is harmless for tests that don't assert on arguments.
+3. **Strategy 12 tests verify `SdkSource::PathInferred` and `version == "unknown"`**: These are the observable hallmarks of a Strategy 12 resolution — the shim has no surrounding SDK tree, so version/channel are placeholders.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` - Passed (macOS — file is Windows-only cfg-gated)
+- `cargo check --workspace` - Passed
+- `cargo test -p fdemon-daemon flutter_sdk::types` - Passed (23 tests)
+- `cargo test -p fdemon-daemon flutter_sdk::locator` - Passed (17 tests)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed
+- `cargo fmt --all` - Applied (minor formatting adjustments)
+
+### Risks/Limitations
+
+1. **Windows-only execution**: The 10 tests in `windows_tests.rs` cannot be executed locally on macOS (cfg-gated). They will run on Windows CI. The Strategy 12 logic is also tested by `test_strategy_12_binary_only_fallback_when_inferred_root_invalid` in `locator.rs` for non-Windows platforms to give cross-platform confidence.

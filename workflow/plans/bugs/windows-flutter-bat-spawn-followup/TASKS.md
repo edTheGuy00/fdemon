@@ -41,15 +41,15 @@ Wave D (depends on Waves A-C; doc_maintainer)
 
 | # | Task | Status | Depends On | Est. Hours | Modules | Agent |
 |---|------|--------|------------|------------|---------|-------|
-| 1 | [01-emulators-diagnostic-pattern](tasks/01-emulators-diagnostic-pattern.md) | Not Started | — | 1.5h | `crates/fdemon-daemon/src/emulators.rs`, `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` (NEW), `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | implementor |
-| 2 | [02-demote-args-logging](tasks/02-demote-args-logging.md) | Not Started | — | 0.5h | `crates/fdemon-daemon/src/process.rs` | implementor |
-| 3 | [03-relax-clippy-ci](tasks/03-relax-clippy-ci.md) | Not Started | — | 0.5h | `.github/workflows/ci.yml`, `workflow/plans/bugs/clippy-rust-191-cleanup/BUG.md` (NEW) | implementor |
-| 4 | [04-shim-installer-real-fix](tasks/04-shim-installer-real-fix.md) | Not Started | — | 2.5-3h | `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | implementor |
-| 5 | [05-windows-tests-cleanup](tasks/05-windows-tests-cleanup.md) | Not Started | 1, 4 | 1.5h | `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` | implementor |
-| 6 | [06-diagnostic-surface-polish](tasks/06-diagnostic-surface-polish.md) | Not Started | 1, 2, 4 | 1.5-2h | `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/flutter_sdk/locator.rs`, `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs`, `crates/fdemon-daemon/src/process.rs` | implementor |
-| 7 | [07-windowsbatch-doc-honesty](tasks/07-windowsbatch-doc-honesty.md) | Not Started | — | 0.25h | `crates/fdemon-daemon/src/flutter_sdk/types.rs` | implementor |
-| 8 | [08-pin-actions-shas](tasks/08-pin-actions-shas.md) | Not Started | 3 | 0.5h | `.github/workflows/ci.yml`, `.github/workflows/e2e.yml`, `.github/workflows/release.yml` | implementor |
-| 9 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | Not Started | 1, 4, 6 | 0.5h | `docs/ARCHITECTURE.md` | doc_maintainer |
+| 1 | [01-emulators-diagnostic-pattern](tasks/01-emulators-diagnostic-pattern.md) | Done ✅ | — | 1.5h | `crates/fdemon-daemon/src/emulators.rs`, `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` (NEW), `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | implementor |
+| 2 | [02-demote-args-logging](tasks/02-demote-args-logging.md) | Done ✅ | — | 0.5h | `crates/fdemon-daemon/src/process.rs` | implementor |
+| 3 | [03-relax-clippy-ci](tasks/03-relax-clippy-ci.md) | Done ✅ | — | 0.5h | `.github/workflows/ci.yml`, `workflow/plans/bugs/clippy-rust-191-cleanup/BUG.md` (NEW) | implementor |
+| 4 | [04-shim-installer-real-fix](tasks/04-shim-installer-real-fix.md) | Done ✅ | — | 2.5-3h | `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | implementor |
+| 5 | [05-windows-tests-cleanup](tasks/05-windows-tests-cleanup.md) | Done ✅ | 1, 4 | 1.5h | `crates/fdemon-daemon/src/flutter_sdk/windows_tests.rs` | implementor |
+| 6 | [06-diagnostic-surface-polish](tasks/06-diagnostic-surface-polish.md) | Done ✅ | 1, 2, 4 | 1.5-2h | `crates/fdemon-daemon/src/devices.rs`, `crates/fdemon-daemon/src/flutter_sdk/locator.rs`, `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs`, `crates/fdemon-daemon/src/process.rs` | implementor |
+| 7 | [07-windowsbatch-doc-honesty](tasks/07-windowsbatch-doc-honesty.md) | Done ✅ | — | 0.25h | `crates/fdemon-daemon/src/flutter_sdk/types.rs` | implementor |
+| 8 | [08-pin-actions-shas](tasks/08-pin-actions-shas.md) | Done ✅ | 3 | 0.5h | `.github/workflows/ci.yml`, `.github/workflows/e2e.yml`, `.github/workflows/release.yml` | implementor |
+| 9 | [09-update-architecture-doc](tasks/09-update-architecture-doc.md) | Done ✅ | 1, 4, 6 | 0.5h | `docs/ARCHITECTURE.md` | doc_maintainer |
 
 **Estimated total:** 8.75-10h
 

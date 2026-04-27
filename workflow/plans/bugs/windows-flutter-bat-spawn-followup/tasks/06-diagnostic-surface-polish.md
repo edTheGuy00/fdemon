@@ -277,3 +277,41 @@ cargo clippy -p fdemon-daemon
 - Do NOT add a separate `linux_hint()` or `macos_hint()`. Those platforms have well-functioning native diagnostics; we don't need to layer on top.
 - The `cfg(target_os = "windows")` arm on `InvalidInput` keeps the Unix flow simpler and avoids unneeded text on platforms where the error doesn't apply.
 - `path_resolution.clone()` in the Strategy 10 block is deliberate — `try_resolve_sdk` consumes the path. The clone is one `PathBuf` per `find_flutter_sdk` call, negligible cost.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` | Added `is_path_resolution_error()` and `strip_ansi()` helpers with unit tests |
+| `crates/fdemon-daemon/src/devices.rs` | Updated import; gate `windows_hint()` via `is_path_resolution_error`; strip ANSI from stderr before embedding in error and log |
+| `crates/fdemon-daemon/src/emulators.rs` | Same hint-gating and ANSI-strip change as `devices.rs` |
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Cache `try_system_path()` result into `path_resolution`; strategies 10 and 11 share it via `ref`; updated doc comment with security note |
+| `crates/fdemon-daemon/src/process.rs` | Added `#[cfg(target_os = "windows")]` `InvalidInput` arm to spawn-error `match` with dart-define escape message |
+
+### Notable Decisions/Tradeoffs
+
+1. **`ref sdk_root` in strategies 10/11**: Using `if let Some(ref sdk_root) = path_resolution` avoids consuming `path_resolution` so strategy 11 can reuse it. Strategy 11's `FlutterSdk` construction needed `sdk_root.clone()` since the field takes ownership — cost is one `PathBuf` per call, negligible.
+2. **Strategy 12 keeps its own `which::which` call**: Strategy 12 needs the binary path directly (not the inferred SDK root that `try_system_path()` returns), so it cannot share `path_resolution`. The task doc explicitly notes this and the cost is negligible at this last-resort branch.
+3. **ANSI stripper is CSI-only**: Flutter's CLI emits standard `ESC[` color sequences. A more complete OSC/DCS stripper was out of scope per the task notes.
+
+### Testing Performed
+
+- `cargo check -p fdemon-daemon` — Passed
+- `cargo test -p fdemon-daemon flutter_sdk::diagnostics` — Passed (2 new tests)
+- `cargo test -p fdemon-daemon devices` — Passed (34 passed, 1 ignored)
+- `cargo test -p fdemon-daemon emulators` — Passed (11 passed, 2 ignored)
+- `cargo test -p fdemon-daemon process` — Passed (9 passed)
+- `cargo test -p fdemon-daemon flutter_sdk::locator` — Passed (17 passed)
+- `cargo clippy -p fdemon-daemon` — Passed (no new warnings)
+
+### Risks/Limitations
+
+1. **`is_path_resolution_error` false negatives**: Non-English Windows locales may produce different error messages from `cmd.exe`. The predicate covers the most common English-language phrases; alternative locales would fall through to the catch-all (which still shows the stderr text, just without the hint).
+2. **`strip_ansi` is CSI-only**: Exotic OSC or DCS sequences are not stripped. This is sufficient for Flutter's CLI output in practice, per the task notes.

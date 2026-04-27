@@ -69,3 +69,31 @@ RUST_LOG=info cargo run -- /tmp/some-flutter-project &  # or however the project
 - Do NOT redact dart-defines at the log site. We considered redaction but it is fragile (must handle `--dart-define KEY=VALUE`, `--dart-define=KEY=VALUE`, and `--dart-define-from-file=...` forms) and adds maintenance burden. Demoting the level is simpler and equally safe.
 - The two log statements share most fields. Some readers may consider this duplication; it is intentional — the `info!` line is the "this happened" diagnostic that should always be retained, the `debug!` line is the "what was passed" detail useful only for active debugging.
 - Do NOT move the args to `trace!`. `debug!` is the correct level — it's the level developers actually enable when investigating spawn issues.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/process.rs` | Split `info!(args = ?args)` at lines 63-68 into two log statements: an `info!` for `binary` and `cwd` only, and a `debug!` for `binary`, `args`, and `cwd` with distinct message "Spawning flutter session (with args)" |
+
+### Notable Decisions/Tradeoffs
+
+1. **`debug!` macro already in scope**: The prelude (`fdemon_core::prelude::*`) already re-exports `tracing::debug`, so no additional import was needed.
+2. **No redaction**: Per task notes, args are demoted by level rather than redacted — simpler and equally safe against dart-define disclosure.
+
+### Testing Performed
+
+- `cargo fmt --all` - Passed (no formatting changes needed)
+- `cargo test -p fdemon-daemon` - Passed (736 tests, 0 failures, 3 ignored)
+- `cargo clippy -p fdemon-daemon -- -D warnings` - Passed (clean, no warnings)
+
+### Risks/Limitations
+
+1. **None**: This is a pure log-level demotion with no behavioral changes.

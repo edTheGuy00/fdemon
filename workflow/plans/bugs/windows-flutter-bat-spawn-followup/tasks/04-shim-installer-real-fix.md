@@ -176,3 +176,33 @@ cargo clippy -p fdemon-daemon
 - Keep the order: 1-9 (explicit/env/version-managers) → 10 (strict) → 11 (lenient) → 12 (binary-only). Strategy 12 is genuinely the last resort — it accepts any working flutter binary on PATH.
 - The placeholder `version = "unknown"` may break callers that assume version is parseable. Audit `fdemon-app` callers (search for `sdk.version`) — if any consumer assumes a numeric form, they need to handle the literal "unknown" string. (This is mentioned in BUG.md's risks.)
 - Resist the temptation to also fix the double-`try_system_path()` call in strategies 10 and 11. That cleanup is in Task 06.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6ba1870825d1cc6e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Added Strategy 12 block, `flutter_executable_from_binary_path` helper, `PathPrependGuard` RAII struct, `path_prepend_guard` fn, and `test_strategy_12_binary_only_fallback_when_inferred_root_invalid` test; updated module doc comment to say "12 strategies"; imported `FlutterExecutable` |
+
+### Notable Decisions/Tradeoffs
+
+1. **`path_prepend_guard` as a wrapper function**: The task said "verify and reuse" the helper but it didn't exist yet in `locator.rs`. Added a `PathPrependGuard` RAII struct and a `path_prepend_guard` factory function — mirrors the `PathPrepender` in `windows_tests.rs` but with cross-platform PATH separator logic.
+2. **`#[cfg(not(target_os = "windows"))]` on the new test**: The test creates a Unix `flutter` binary (no extension). On Windows, `which::which("flutter")` resolves `flutter.bat` via PATHEXT, so the shim layout path would differ. Windows-specific Strategy 12 tests are delegated to Task 05 as specified.
+3. **`FlutterExecutable` import added**: Strategy 12 uses `flutter_executable_from_binary_path` which returns `FlutterExecutable`; the type was already re-exported from `types.rs` but not imported in `locator.rs`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon flutter_sdk::locator::tests` — Passed (17 tests, including new Strategy 12 test)
+- `cargo test -p fdemon-daemon flutter_sdk::types` — Passed (23 tests)
+- `cargo clippy -p fdemon-daemon` — Passed (no warnings)
+- `cargo fmt --all` — Applied
+
+### Risks/Limitations
+
+1. **`sdk.version = "unknown"` in Strategy 12**: Callers in `fdemon-app` that assume `sdk.version` is a parseable semver string will silently get "unknown". This was noted in BUG.md's risks section and is pre-existing scope.

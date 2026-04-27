@@ -263,3 +263,36 @@ cargo clippy -p fdemon-daemon
 - The `error!` macro must be in scope; `emulators.rs:12` already imports `tracing::{debug, info, warn}` — add `error` to that list.
 - Visibility on `windows_hint()` should be `pub(crate)`. It is consumed by `devices.rs` and `emulators.rs`, both inside `fdemon-daemon`. No external consumers.
 - The new `diagnostics` module name leaves room for Task 06 to add `is_path_resolution_error(stderr) -> bool` for stderr-content-gated hint dispatch.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/diagnostics.rs` | NEW — `windows_hint()` helper pair (cfg-gated Windows / non-Windows) |
+| `crates/fdemon-daemon/src/flutter_sdk/mod.rs` | Added `pub(crate) mod diagnostics;` declaration |
+| `crates/fdemon-daemon/src/devices.rs` | Removed local `windows_hint()` function; added import from `crate::flutter_sdk::diagnostics` |
+| `crates/fdemon-daemon/src/emulators.rs` | Updated `run_flutter_emulators` (binary path in spawn-error, structured `error!` log + binary path in non-zero-exit); updated `run_flutter_emulator_launch` (binary path in spawn-error); added `#[derive(Debug)]` to `FlutterOutput`; added `error` to tracing import; added import from `crate::flutter_sdk::diagnostics`; added `test_run_flutter_emulators_error_includes_binary_path` unit test |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[derive(Debug)]` on `FlutterOutput`**: The test uses `unwrap_err()` which requires `T: Debug`. The private `FlutterOutput` struct had no derive. Adding `#[derive(Debug)]` is the minimal fix with no downside since the struct is private to the module.
+2. **Non-zero-exit in `run_flutter_emulator_launch` unchanged**: Per task spec, emulators boot asynchronously and Flutter intentionally returns exit 0 even on launch issues. The branch was deliberately left alone.
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon emulators` — Passed (11 passed, 2 ignored)
+- `cargo test -p fdemon-daemon devices` — Passed (34 passed, 1 ignored)
+- `cargo test -p fdemon-daemon` — Passed (737 passed, 0 failed, 3 ignored)
+- `cargo clippy -p fdemon-daemon` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed
+
+### Risks/Limitations
+
+1. **Non-Windows hint is empty string**: The `windows_hint()` on non-Windows returns `""` which means no hint is appended on Linux/macOS. This is the intended behavior from the original `devices.rs` implementation.

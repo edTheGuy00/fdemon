@@ -126,3 +126,33 @@ ls workflow/plans/bugs/clippy-rust-191-cleanup/BUG.md
 - Do NOT fix any of the actual clippy errors in this task. The whole point is to defer them to the dedicated bug-plan. Touching them here defeats the scope split.
 - Pinning the `dtolnay/rust-toolchain` action to a specific Rust version (e.g. `@1.77.2`) would make CI deterministic against future toolchain changes, but that's a separate concern (see Task 08 for action-pinning hygiene). For now, leave it at `@stable`.
 - The scaffold BUG.md does not need to be exhaustive — a future planner agent will flesh it out into TASKS.md when the cleanup is scheduled.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `.github/workflows/ci.yml` | Removed `-- -D warnings` from clippy step; added inline comment pointing to cleanup bug |
+| `workflow/plans/bugs/clippy-rust-191-cleanup/BUG.md` | Created new file: bug-plan scaffold with inventory table populated from actual `cargo clippy` output |
+
+### Notable Decisions/Tradeoffs
+
+1. **Actual warning count differs from task estimate**: The task referenced ~120 errors; actual output shows ~193 `warning:` lines (187 non-summary) across 29 files in 6 crates. The BUG.md inventory was populated from real `cargo clippy` output and notes this discrepancy. The lints are warnings (not errors) since `-D warnings` was already absent from any `allow` attributes — they only become errors when `-D warnings` is passed to the compiler flag.
+2. **fdemon-dap crate**: The task scaffold mentioned `fdemon-dap` as a crate; the inventory confirms it exists (35 warnings). The task's scaffold template listed it as well, so this is consistent.
+3. **No fixes applied**: Per task scope, no actual clippy warnings were fixed in this task — all cleanup is deferred to the new bug plan.
+
+### Testing Performed
+
+- `cargo clippy --workspace --all-targets` — Exit code 0 (warnings allowed)
+- `cargo clippy --workspace --all-targets 2>&1 | grep -c "^warning:"` — Returns 193 (warnings present, cleanup work is real)
+- `ls workflow/plans/bugs/clippy-rust-191-cleanup/BUG.md` — File exists
+
+### Risks/Limitations
+
+1. **CI now tolerates warnings**: Until the clippy cleanup ships and `-D warnings` is restored, new warning-generating code will not be caught by CI. The BUG.md comment reminds future implementors to restore the flag once cleanup is complete.

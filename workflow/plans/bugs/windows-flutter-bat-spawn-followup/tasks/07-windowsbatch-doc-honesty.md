@@ -121,3 +121,30 @@ cargo check -p fdemon-daemon
 - The `WindowsBatch` variant is intentionally preserved per `workflow/plans/bugs/windows-flutter-bat-spawn/BUG.md` Risks/Open Questions #3. Do NOT collapse it.
 - Task 04 introduces a private `flutter_executable_from_binary_path` helper inside `locator.rs` that branches on path extension. After Task 04 lands, the new doc-comment's recommendation ("rely on the path's extension") will be reflected in real code.
 - Task 04 keeps its helper inside `locator.rs` precisely to avoid overlap with this task. Task 07 owns `types.rs` outright in Wave A; no sequencing constraint is needed.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/flutter_sdk/types.rs` | Updated doc-comment on `FlutterExecutable` enum (top-level), `Direct` variant, `WindowsBatch` variant, and `command()` method to remove "metadata marker" language and accurately describe operational identity |
+
+### Notable Decisions/Tradeoffs
+
+1. **Doc-only change**: No code logic was altered, only `///` doc-comment text was updated as specified by the task.
+2. **Retained pre-existing warnings**: `cargo doc` emits 18 pre-existing warnings in other files (`native_logs/formats.rs`, `process.rs`, etc.); none originate from `types.rs`. These were not introduced by this task.
+
+### Testing Performed
+
+- `cargo doc -p fdemon-daemon --no-deps` - Passed (18 pre-existing warnings from other files, zero new warnings from `types.rs`)
+- `cargo check -p fdemon-daemon` - Passed
+
+### Risks/Limitations
+
+1. **None**: This is a pure documentation change. The enum variant and implementation are unchanged.
