@@ -80,25 +80,26 @@ All `vscode::tests::*` cases must pass on macOS. Windows verification is via the
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-app/src/ide_config/vscode.rs` | Changed `rel.to_string_lossy().into_owned()` to `rel.to_string_lossy().replace('\\', "/")` in `compute_cwd` to normalise path separators to forward slashes on all platforms |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Simple `.replace('\\', "/")` vs component iteration**: The task notes that the simple replace is sufficient for strip-prefixed relative paths since drive letters never appear in them. Kept the minimal change rather than the more complex component-join approach.
+2. **Single site**: There was only one `to_string_lossy()` call in the file (confirmed by grep). The `Err(_)` fallback already returns `"${workspaceFolder}"` which has no path separators.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-app` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo test -p fdemon-app ide_config::vscode` — Passed (25 tests)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (clean)
+- `cargo fmt --all -- --check` — Passed (clean)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Windows CI verification only**: The actual backslash-to-forward-slash normalisation can only be observed on Windows (macOS/Linux already use forward slashes). The fix is correct by construction and verified by the test assertions on macOS, with Windows coverage delegated to CI.

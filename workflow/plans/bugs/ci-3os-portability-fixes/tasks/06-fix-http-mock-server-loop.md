@@ -89,25 +89,26 @@ If possible, simulate the Windows race locally on macOS by inserting a `tokio::t
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-app/src/actions/ready_check.rs` | Converted `test_http_check_success` spawned task from single-shot `if let Ok` accept to `loop { if let Ok ... }` accept-loop, matching the pattern of `test_http_check_non_200_retries` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Pattern match to sibling test**: Used the same `loop { if let Ok((mut sock, _)) = listener.accept().await { ... } }` structure as `test_http_check_non_200_retries`, not the `let Ok(...) else { break }` style shown in the task description. The task explicitly says "copy its loop structure verbatim" referring to the sibling test, which uses `if let Ok`.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-app` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo test -p fdemon-app actions::ready_check` — Passed (18 tests)
+- `cargo test -p fdemon-app` — Passed (1898 tests + 1 doc-test)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting changes needed)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Windows CI verification**: The race condition fix can only be fully verified on Windows via CI. The local macOS run passes, and the loop structure eliminates the root cause (single-shot accept being exhausted before the client connects).

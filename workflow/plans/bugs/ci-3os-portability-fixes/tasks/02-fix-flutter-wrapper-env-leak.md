@@ -74,25 +74,27 @@ cargo test -p fdemon-daemon flutter_sdk::locator
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-daemon/src/flutter_sdk/locator.rs` | Added `#[serial]` attribute and `std::env::remove_var("FLUTTER_ROOT")` call to `test_flutter_wrapper_detection` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Only `FLUTTER_ROOT` scrubbed**: Strategy 2 is the only strategy that reads `FLUTTER_ROOT`. Strategies 3-8 (FVM, Puro, asdf, mise, proto) depend on project-local config files that the test does not create, so they pass through without interference. No other env vars needed scrubbing.
+2. **`remove_var` placed after file setup but before `find_flutter_sdk` call**: Mirrors the exact pattern of sibling tests (`test_fvm_modern_detection`, `test_flutter_root_env_beats_version_managers`), where the env scrub happens just before the function under test is called.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-daemon` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-daemon flutter_sdk::locator::tests::test_flutter_wrapper_detection` — Passed (1 test)
+- `cargo test -p fdemon-daemon` — Passed (740 tests, 3 ignored)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Concurrent test isolation**: The `#[serial]` attribute ensures this test does not race with other env-touching tests. Without it, a concurrent test could set `FLUTTER_ROOT` between the `remove_var` call and the `find_flutter_sdk` call.

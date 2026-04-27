@@ -84,25 +84,27 @@ On Linux/Windows: 1 test should run (`_no_tools` only) — the others are exclud
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-daemon/src/tool_availability.rs` | Added `#[cfg(target_os = "macos")]` attribute to `test_native_logs_available_ios_with_simctl` and `test_native_logs_available_ios_with_idevicesyslog` tests |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **Minimal change**: Only the two outer test attributes were added. The inner `#[cfg(target_os = "macos")]` on the `idevicesyslog` struct field literal inside `test_native_logs_available_ios_with_idevicesyslog` was left as-is, as it is independent of the new outer attribute and still required for the struct initializer to compile on non-macOS platforms.
+2. **No production code changes**: Exactly as the task specifies — the fix is purely on the test side.
+3. **`test_native_logs_available_ios_no_tools` unchanged**: That test asserts `false` (which the catch-all `_ => false` returns on every platform), so it correctly passes everywhere and needs no gate.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-daemon` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo test -p fdemon-daemon tool_availability::tests` — Passed (20 tests, on macOS both gated tests ran and asserted true)
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — Passed (0 warnings)
+- `cargo fmt --all -- --check` — Passed (clean)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Linux/Windows verification**: The CI will confirm the gated tests are excluded on non-macOS platforms. On macOS (local dev environment), all 20 tests run. The `#[cfg]` attribute correctly gates compilation so neither test appears in the binary on Linux or Windows.

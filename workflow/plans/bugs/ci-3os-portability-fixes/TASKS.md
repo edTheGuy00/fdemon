@@ -27,14 +27,14 @@ No cross-task dependencies. Wave 1 is the only wave.
 
 | # | Task | Status | Depends On | Est. Hours | Modules |
 |---|------|--------|------------|------------|---------|
-| 1 | [01-fix-ios-tool-availability-tests](tasks/01-fix-ios-tool-availability-tests.md) | Not Started | - | 0.25h | `crates/fdemon-daemon/` |
-| 2 | [02-fix-flutter-wrapper-env-leak](tasks/02-fix-flutter-wrapper-env-leak.md) | Not Started | - | 0.25h | `crates/fdemon-daemon/` |
-| 3 | [03-fix-emacs-path-separator](tasks/03-fix-emacs-path-separator.md) | Not Started | - | 0.5–1h | `crates/fdemon-app/` |
-| 4 | [04-fix-vscode-path-separator](tasks/04-fix-vscode-path-separator.md) | Not Started | - | 0.5h | `crates/fdemon-app/` |
-| 5 | [05-fix-instant-subtraction](tasks/05-fix-instant-subtraction.md) | Not Started | - | 0.25h | `crates/fdemon-app/` |
-| 6 | [06-fix-http-mock-server-loop](tasks/06-fix-http-mock-server-loop.md) | Not Started | - | 0.5h | `crates/fdemon-app/` |
-| 7 | [07-fix-review-feedback-code](tasks/07-fix-review-feedback-code.md) | Not Started | - | 0.5h | `.github/workflows/`, `crates/fdemon-daemon/` |
-| 8 | [08-fix-development-doc-commands](tasks/08-fix-development-doc-commands.md) | Not Started | - | 0.25h | `docs/` |
+| 1 | [01-fix-ios-tool-availability-tests](tasks/01-fix-ios-tool-availability-tests.md) | Done | - | 0.25h | `crates/fdemon-daemon/` |
+| 2 | [02-fix-flutter-wrapper-env-leak](tasks/02-fix-flutter-wrapper-env-leak.md) | Done | - | 0.25h | `crates/fdemon-daemon/` |
+| 3 | [03-fix-emacs-path-separator](tasks/03-fix-emacs-path-separator.md) | Done | - | 0.5–1h | `crates/fdemon-app/` |
+| 4 | [04-fix-vscode-path-separator](tasks/04-fix-vscode-path-separator.md) | Done | - | 0.5h | `crates/fdemon-app/` |
+| 5 | [05-fix-instant-subtraction](tasks/05-fix-instant-subtraction.md) | Done | - | 0.25h | `crates/fdemon-app/` |
+| 6 | [06-fix-http-mock-server-loop](tasks/06-fix-http-mock-server-loop.md) | Done | - | 0.5h | `crates/fdemon-app/` |
+| 7 | [07-fix-review-feedback-code](tasks/07-fix-review-feedback-code.md) | Done | - | 0.5h | `.github/workflows/`, `crates/fdemon-daemon/` |
+| 8 | [08-fix-development-doc-commands](tasks/08-fix-development-doc-commands.md) | Done | - | 0.25h | `docs/` |
 
 ## File Overlap Analysis
 

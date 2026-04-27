@@ -83,25 +83,26 @@ For the workflow change there is no automated test — the next CI run on this b
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `.github/workflows/ci.yml` | Replaced misleading "freezes the Rust toolchain version" comment with accurate supply-chain immutability description |
+| `.github/workflows/release.yml` | Same comment fix, applied to all 4 occurrences (4 job steps each with the same inaccurate comment) |
+| `.github/workflows/e2e.yml` | Same comment fix |
+| `crates/fdemon-daemon/src/process.rs` | Changed `Check launch.toml` to `Check .fdemon/launch.toml` in Windows `InvalidInput` error message |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **replace_all for release.yml**: Used `replace_all` to fix all 4 occurrences of the misleading comment in release.yml in one edit — all instances were identical and all needed the same correction.
+2. **publish-site.yml untouched**: Verified `publish-site.yml` does not use `dtolnay/rust-toolchain` and has no misleading comment — no change needed.
+3. **Comment rewrite matches ci.yml style**: Used a 2-line comment block matching the existing indentation and voice, similar to the sibling comments already present in the file.
 
 ### Testing Performed
 
-- `cargo clippy --workspace --all-targets -- -D warnings` — _tbd_
-- `cargo test --workspace` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
-
-### Risks/Limitations
-
-_tbd_
+- `cargo fmt --all -- --check` — Passed (no output)
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — Passed
+- `cargo test -p fdemon-daemon` — Passed (740 tests passed, 0 failed)

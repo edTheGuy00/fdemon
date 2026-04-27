@@ -92,25 +92,31 @@ This must pass on macOS. The Windows verification is via the post-merge CI matri
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** fix/detect-windows-bat
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-app/src/state.rs` | Removed unnecessary time manipulation from `test_device_cache_does_not_expire`; added comment explaining the no-expiry contract |
+| `crates/fdemon-app/src/handler/new_session/navigation.rs` | Replaced two `Instant::now() - Duration::from_secs(N)` with `checked_sub(...).unwrap_or_else(Instant::now)` |
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Replaced two `Instant::now() - Duration::from_secs(N)` with `checked_sub(...).or_else(|| Some(Instant::now()))` |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **state.rs used the simpler form (drop time manipulation)**: The test verifies there is no expiry check at all — the time manipulation was noise. The contract "after `set_device_cache`, `get_cached_devices` returns `Some` regardless of timestamp" is expressed more directly without touching `devices_last_updated`.
+
+2. **navigation.rs and inspector.rs used `checked_sub`**: These tests assign stale timestamps to simulate meaningful conditions for debug logging and debounce behaviour. The `checked_sub(...).unwrap_or_else(Instant::now)` / `.or_else(|| Some(Instant::now()))` form preserves intent on normal systems while falling back gracefully on freshly-booted Windows runners (uptime < subtracted duration).
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-app` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo test -p fdemon-app state::tests::test_device_cache_does_not_expire` — Passed
+- `cargo test -p fdemon-app` — Passed (1898 tests)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+- Workspace-wide grep for `Instant::now() -` — No remaining patterns
 
 ### Risks/Limitations
 
-_tbd_
+1. **Windows fallback is non-stale on fresh boot**: On a freshly-booted Windows runner (uptime < 5-60s), the `unwrap_or_else(Instant::now)` fallback means `devices_last_updated` will be set to `now` rather than 5/60 seconds ago. This only affects debug-logging age values and the navigation tests' "stale" vs "fresh" distinction — both tests assert on cache _presence_, not on age-based branching, so the assertions remain valid.

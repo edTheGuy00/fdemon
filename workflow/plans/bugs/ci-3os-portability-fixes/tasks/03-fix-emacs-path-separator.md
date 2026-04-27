@@ -91,25 +91,26 @@ cargo test -p fdemon-app ide_config::emacs::tests::test_emacs_merge_produces_abs
 
 ## Completion Summary
 
-**Status:** Not Started
-**Branch:** _to be filled by implementor_
+**Status:** Done
+**Branch:** worktree-agent-ae82274f4c691f186
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| _tbd_ | _tbd_ |
+| `crates/fdemon-app/src/ide_config/emacs.rs` | Added `to_lisp_path` helper; updated `generate` and `merge_config` to use `to_lisp_path`; fixed `test_emacs_merge_produces_absolute_path` to normalise expected string with forward slashes |
 
 ### Notable Decisions/Tradeoffs
 
-_tbd_
+1. **`to_lisp_path` helper vs inline**: Added a small named helper function rather than inlining `.replace('\\', "/")` in two places. With two call sites in `generate` and `merge_config`, the named helper makes the intent clear and avoids subtle copy-paste mistakes. The task notes say to inline when there is only one site; with two sites a helper is appropriate.
+2. **`to_string_lossy` vs `display()`**: Used `path.to_string_lossy()` rather than `path.display().to_string()` to avoid any platform-specific `Display` formatting; on macOS/Linux both are equivalent, but `to_string_lossy` is more direct for this use case.
 
 ### Testing Performed
 
-- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — _tbd_
-- `cargo test -p fdemon-app` — _tbd_
-- `cargo fmt --all -- --check` — _tbd_
+- `cargo test -p fdemon-app ide_config::emacs` — Passed (12/12 tests)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (clean)
+- `cargo fmt --all -- --check` — Passed (clean)
 
 ### Risks/Limitations
 
-_tbd_
+1. **Windows CI verification**: The path-separator fix cannot be validated locally on macOS since tempdir paths never contain backslashes here. The fix is correct by construction — `to_lisp_path` unconditionally replaces `\` with `/`, which is the correct behaviour on Windows where `Path::to_string_lossy` produces backslash-separated paths.
