@@ -748,12 +748,14 @@ impl LoadingState {
     /// Tick animation frame and optionally cycle message
     ///
     /// `cycle_messages`: If true, cycle through messages every ~15 ticks (1.5 sec at 100ms)
+    // MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn tick(&mut self, cycle_messages: bool) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
 
         if cycle_messages {
             // Cycle message every 15 frames (~1.5 seconds at 100ms tick rate)
-            if self.animation_frame.is_multiple_of(15) {
+            if self.animation_frame % 15 == 0 {
                 self.message_index = (self.message_index + 1) % LOADING_MESSAGES.len();
                 self.message = LOADING_MESSAGES[self.message_index].to_string();
             }
