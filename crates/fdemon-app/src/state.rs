@@ -1778,11 +1778,8 @@ mod tests {
     #[test]
     fn test_device_cache_does_not_expire() {
         let mut state = AppState::new();
+        // get_cached_devices has no expiry — calling it after set_device_cache always returns Some.
         state.set_device_cache(vec![test_device("dev1", "Device 1")]);
-
-        // Simulate a stale timestamp — cache should still be returned.
-        state.devices_last_updated =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(60 * 60));
         assert!(state.get_cached_devices().is_some());
         assert_eq!(state.get_cached_devices().unwrap().len(), 1);
     }

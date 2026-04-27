@@ -447,8 +447,9 @@ mod tests {
         let mut state = make_state();
         state.devtools_view_state.inspector.loading = false;
         // Set last_fetch_time to 3 seconds ago (past the 2-second cooldown).
-        state.devtools_view_state.inspector.last_fetch_time =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        state.devtools_view_state.inspector.last_fetch_time = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(3))
+            .or_else(|| Some(std::time::Instant::now()));
 
         assert!(
             !state.devtools_view_state.inspector.is_fetch_debounced(),
@@ -1126,8 +1127,9 @@ mod tests {
             Some(DevToolsError::new("old error", "hint"));
         state.devtools_view_state.inspector.last_fetched_node_id = Some("old-node".to_string());
         state.devtools_view_state.inspector.pending_node_id = Some("old-pending".to_string());
-        state.devtools_view_state.inspector.layout_last_fetch_time =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+        state.devtools_view_state.inspector.layout_last_fetch_time = std::time::Instant::now()
+            .checked_sub(std::time::Duration::from_secs(10))
+            .or_else(|| Some(std::time::Instant::now()));
 
         let node: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
             "description": "NewRoot",
