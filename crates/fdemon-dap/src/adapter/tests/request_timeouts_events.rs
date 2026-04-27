@@ -56,6 +56,7 @@ impl MockTestBackend for FailingRestartBackend {
 ///
 /// Used to test that the timeout fires and returns an error rather than hanging.
 /// The timeout is very short (1 ms) in tests because we use `tokio::time::pause`.
+// Preserved as test scaffolding — see rustdoc above. Do not delete.
 #[allow(dead_code)]
 struct HangingGetVmBackend;
 
