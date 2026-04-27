@@ -375,7 +375,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_check_success() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // Bind a listener that speaks a minimal HTTP/1.1 200 response.
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -384,9 +384,15 @@ mod tests {
         tokio::spawn(async move {
             loop {
                 if let Ok((mut sock, _)) = listener.accept().await {
+                    // Drain the incoming request before responding. Windows
+                    // TCP RSTs sockets closed with un-read data, which would
+                    // race the client's response read.
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
                     let _ = sock
                         .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
                         .await;
+                    let _ = sock.shutdown().await;
                 }
             }
         });
