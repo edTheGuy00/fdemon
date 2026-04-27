@@ -35,6 +35,9 @@ fn make_update_debug_options(
     }
 }
 
+/// Shared log of `set_library_debuggable` calls: `(isolate_id, library_id, is_debuggable)` tuples.
+type SharedDebuggabilityLog = Arc<Mutex<Vec<(String, String, bool)>>>;
+
 /// A mock backend that records `set_library_debuggable` calls.
 ///
 /// `calls` accumulates `(isolate_id, library_id, is_debuggable)` tuples for
@@ -42,14 +45,14 @@ fn make_update_debug_options(
 /// returned by `get_isolate`.
 struct LibraryDebuggableMock {
     /// Records every `set_library_debuggable(isolate_id, library_id, is_debuggable)` call.
-    calls: Arc<Mutex<Vec<(String, String, bool)>>>,
+    calls: SharedDebuggabilityLog,
     /// Canned library list for a single isolate, keyed by isolate ID.
     isolate_libraries: Vec<serde_json::Value>,
 }
 
 impl LibraryDebuggableMock {
     /// Create a backend with the given library list for all isolates.
-    fn new(libraries: Vec<serde_json::Value>) -> (Self, Arc<Mutex<Vec<(String, String, bool)>>>) {
+    fn new(libraries: Vec<serde_json::Value>) -> (Self, SharedDebuggabilityLog) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let mock = Self {
             calls: calls.clone(),

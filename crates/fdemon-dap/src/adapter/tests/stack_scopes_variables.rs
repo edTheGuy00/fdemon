@@ -1612,7 +1612,7 @@ async fn get_globals_ref<B: crate::adapter::DebugBackend>(
 async fn test_globals_scope_returns_library_fields() {
     // GlobalsMockBackend: frame has code.owner pointing to Library "libraries/1".
     // Library has two fields: counter (Int 42) and label (String "hello").
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1644,7 +1644,7 @@ async fn test_globals_scope_returns_library_fields() {
 #[tokio::test]
 async fn test_globals_scope_variables_have_static_attribute() {
     // Each returned global variable should carry presentationHint.attributes: ["static"].
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1676,8 +1676,7 @@ async fn test_globals_scope_variables_have_static_attribute() {
 #[tokio::test]
 async fn test_globals_scope_expandable_variable_has_nonzero_ref() {
     // PlainInstance globals should have variablesReference > 0.
-    let (mut adapter, mut rx, thread_id) =
-        setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1703,7 +1702,7 @@ async fn test_globals_scope_expandable_variable_has_nonzero_ref() {
 #[tokio::test]
 async fn test_globals_scope_fallback_to_root_lib() {
     // Frame has no code.owner — adapter should fall back to isolate.rootLib.
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsFallbackBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsFallbackBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1731,7 +1730,7 @@ async fn test_globals_scope_fallback_to_root_lib() {
 #[tokio::test]
 async fn test_globals_scope_uninitialized_field_no_static_value() {
     // Field with no staticValue key → "<not initialized>" display.
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1759,7 +1758,7 @@ async fn test_globals_scope_uninitialized_field_no_static_value() {
 #[tokio::test]
 async fn test_globals_scope_sentinel_field_shows_not_initialized() {
     // Field with staticValue of type "Sentinel" → "<not initialized>" display.
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsUninitBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1786,7 +1785,7 @@ async fn test_globals_scope_sentinel_field_shows_not_initialized() {
 #[tokio::test]
 async fn test_globals_scope_const_field_has_constant_attributes() {
     // A const field should have presentationHint.attributes: ["static", "readOnly", "constant"].
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsConstBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsConstBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1826,7 +1825,7 @@ async fn test_globals_scope_const_field_has_constant_attributes() {
 #[tokio::test]
 async fn test_globals_scope_private_field_has_private_visibility() {
     // Private fields (starting with `_`) should have visibility: "private".
-    let (mut adapter, mut rx, thread_id) =
+    let (mut adapter, _rx, thread_id) =
         setup_adapter_with_isolate(GlobalsPrivateFieldBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
@@ -1867,8 +1866,7 @@ async fn test_globals_scope_private_field_has_private_visibility() {
 #[tokio::test]
 async fn test_globals_scope_class_owner_traverses_to_library() {
     // Frame where code.owner is a Class — must follow owner.library to get lib ID.
-    let (mut adapter, mut rx, thread_id) =
-        setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsClassOwnerBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1933,7 +1931,7 @@ async fn test_globals_scope_empty_library_returns_empty_list() {
         }
     }
 
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(EmptyLibBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(EmptyLibBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter
@@ -1955,7 +1953,7 @@ async fn test_globals_scope_empty_library_returns_empty_list() {
 #[tokio::test]
 async fn test_globals_scope_stale_after_resume_returns_error() {
     // Once the program resumes, globals scope references should be invalidated.
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     // Simulate resume.
@@ -2002,7 +2000,7 @@ async fn test_globals_scope_frame_index_not_in_store_returns_error() {
 async fn test_globals_scope_returns_success_not_empty_list_old_behavior() {
     // Regression test: the old stub returned an empty list (success but no data).
     // The new implementation should return actual fields from GlobalsMockBackend.
-    let (mut adapter, mut rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
+    let (mut adapter, _rx, thread_id) = setup_adapter_with_isolate(GlobalsMockBackend).await;
     let globals_ref = get_globals_ref(&mut adapter, thread_id).await;
 
     let vars_resp = adapter

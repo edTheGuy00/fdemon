@@ -96,19 +96,17 @@ impl MockTestBackend for FailingCallServiceBackend {
     }
 }
 
+/// Shared log of recorded `call_service` invocations: `(method, params)` pairs.
+type SharedCallLog = std::sync::Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>>;
+
 /// A backend that records the last `call_service` invocation for inspection.
 struct RecordingCallServiceBackend {
-    calls: std::sync::Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>>,
+    calls: SharedCallLog,
     result: serde_json::Value,
 }
 
 impl RecordingCallServiceBackend {
-    fn new(
-        result: serde_json::Value,
-    ) -> (
-        Self,
-        std::sync::Arc<std::sync::Mutex<Vec<(String, Option<serde_json::Value>)>>>,
-    ) {
+    fn new(result: serde_json::Value) -> (Self, SharedCallLog) {
         let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let backend = Self {
             calls: calls.clone(),
