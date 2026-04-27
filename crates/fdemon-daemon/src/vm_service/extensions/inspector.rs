@@ -447,8 +447,8 @@ mod tests {
     ///   - dispose failure → tracing::warn logged
     ///   - active_group still gets set to the new group
     ///   - group_counter is still incremented
-    /// This is enforced by the code structure: counter and active_group are
-    /// assigned unconditionally after the (now non-propagating) dispose attempt.
+    ///     This is enforced by the code structure: counter and active_group are
+    ///     assigned unconditionally after the (now non-propagating) dispose attempt.
     #[test]
     fn test_create_group_proceeds_after_dispose_failure_code_structure() {
         // Confirm the ObjectGroupManager type has the expected initial state

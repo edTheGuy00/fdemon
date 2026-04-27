@@ -203,8 +203,7 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
     if let Some(ref sdk_root) = path_resolution {
         match validate_sdk_path_lenient(sdk_root) {
             Ok(executable) => {
-                let version =
-                    read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
+                let version = read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
                 let channel = detect_channel(sdk_root).map(|c| c.to_string());
                 let sdk = FlutterSdk {
                     root: sdk_root.clone(),

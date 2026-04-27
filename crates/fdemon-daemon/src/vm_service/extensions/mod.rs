@@ -305,13 +305,13 @@ mod tests {
     #[test]
     fn test_parse_bool_response_true() {
         let json = json!({"enabled": "true", "type": "_extensionType"});
-        assert_eq!(parse_bool_extension_response(&json).unwrap(), true);
+        assert!(parse_bool_extension_response(&json).unwrap());
     }
 
     #[test]
     fn test_parse_bool_response_false() {
         let json = json!({"enabled": "false", "type": "_extensionType"});
-        assert_eq!(parse_bool_extension_response(&json).unwrap(), false);
+        assert!(!parse_bool_extension_response(&json).unwrap());
     }
 
     #[test]
@@ -337,7 +337,7 @@ mod tests {
     fn test_parse_bool_response_arbitrary_string_is_false() {
         // Only "true" maps to true; anything else is false
         let json = json!({"enabled": "yes"});
-        assert_eq!(parse_bool_extension_response(&json).unwrap(), false);
+        assert!(!parse_bool_extension_response(&json).unwrap());
     }
 
     // ── parse_data_extension_response ───────────────────────────────────────

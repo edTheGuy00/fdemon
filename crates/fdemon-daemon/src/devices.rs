@@ -651,7 +651,7 @@ Some trailing message"#;
         assert_eq!(groups.get("iOS").map(|v| v.len()), Some(2));
         assert_eq!(groups.get("Android").map(|v| v.len()), Some(1));
         assert_eq!(groups.get("Web").map(|v| v.len()), Some(1));
-        assert!(groups.get("Windows").is_none());
+        assert!(!groups.contains_key("Windows"));
     }
 
     #[tokio::test]

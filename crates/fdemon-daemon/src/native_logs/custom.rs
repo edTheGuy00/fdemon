@@ -447,11 +447,10 @@ mod tests {
 
         let mut events = Vec::new();
         // Collect all events with a short timeout.
-        loop {
-            match timeout(Duration::from_millis(500), handle.event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(event)) =
+            timeout(Duration::from_millis(500), handle.event_rx.recv()).await
+        {
+            events.push(event);
         }
 
         // Only the "allowed" tag should pass.
@@ -488,11 +487,10 @@ mod tests {
         let mut handle = capture.spawn().expect("handle should be Some");
 
         let mut events = Vec::new();
-        loop {
-            match timeout(Duration::from_millis(500), handle.event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(event)) =
+            timeout(Duration::from_millis(500), handle.event_rx.recv()).await
+        {
+            events.push(event);
         }
 
         assert!(
@@ -716,11 +714,8 @@ mod tests {
 
         let mut event_rx = handle.event_rx;
         let mut events = Vec::new();
-        loop {
-            match timeout(Duration::from_millis(500), event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                _ => break,
-            }
+        while let Ok(Some(event)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
+            events.push(event);
         }
 
         // Both lines should appear as log events (pattern matching doesn't consume lines).
