@@ -50,8 +50,4 @@ jobs:
         # Windows-specific tests (windows_tests.rs) run here on the windows-latest runner.
 
       - name: cargo clippy
-        # NOTE: `-D warnings` is temporarily dropped while pre-existing Rust 1.91 lints
-        # are cleaned up workspace-wide. Tracked at:
-        # workflow/plans/bugs/clippy-rust-191-cleanup/
-        # Restore -D warnings once that cleanup ships.
-        run: cargo clippy --workspace --all-targets
+        run: cargo clippy --workspace --all-targets -- -D warnings
