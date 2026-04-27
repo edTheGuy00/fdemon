@@ -89,7 +89,7 @@ impl FlutterProcess {
                     reason: format!(
                         "flutter spawn rejected an argument it could not safely escape (binary: {}). \
                          This usually means a dart-define value contains characters cmd.exe cannot \
-                         pass safely (% ^ & | < > unmatched \"). Check launch.toml.",
+                         pass safely (% ^ & | < > unmatched \"). Check .fdemon/launch.toml.",
                         flutter.path().display()
                     ),
                 },
