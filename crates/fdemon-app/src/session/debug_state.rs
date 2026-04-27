@@ -451,16 +451,20 @@ mod tests {
 
     #[test]
     fn test_reset_for_hot_restart_preserves_exception_mode() {
-        let mut state = DebugState::default();
-        state.exception_mode = ExceptionPauseMode::All;
+        let mut state = DebugState {
+            exception_mode: ExceptionPauseMode::All,
+            ..Default::default()
+        };
         state.reset_for_hot_restart();
         assert_eq!(state.exception_mode, ExceptionPauseMode::All);
     }
 
     #[test]
     fn test_reset_for_hot_restart_preserves_dap_attached() {
-        let mut state = DebugState::default();
-        state.dap_attached = true;
+        let mut state = DebugState {
+            dap_attached: true,
+            ..Default::default()
+        };
         state.reset_for_hot_restart();
         assert!(state.dap_attached);
     }

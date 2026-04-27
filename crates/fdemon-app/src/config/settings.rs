@@ -1087,23 +1087,29 @@ open_pattern = "nvim +$LINE $FILE"
 
     #[test]
     fn test_editor_display_name_configured() {
-        let mut settings = EditorSettings::default();
-        settings.command = "code".to_string();
+        let settings = EditorSettings {
+            command: "code".to_string(),
+            ..Default::default()
+        };
         assert_eq!(settings.editor_display_name(), "Visual Studio Code");
     }
 
     #[test]
     fn test_editor_display_name_unknown() {
-        let mut settings = EditorSettings::default();
-        settings.command = "my-custom-editor".to_string();
+        let settings = EditorSettings {
+            command: "my-custom-editor".to_string(),
+            ..Default::default()
+        };
         // Falls back to command name
         assert_eq!(settings.editor_display_name(), "my-custom-editor");
     }
 
     #[test]
     fn test_editor_resolve_with_configured_command() {
-        let mut settings = EditorSettings::default();
-        settings.command = "code".to_string();
+        let settings = EditorSettings {
+            command: "code".to_string(),
+            ..Default::default()
+        };
 
         let (cmd, pattern) = settings.resolve().unwrap();
         assert_eq!(cmd, "code");
@@ -1113,9 +1119,10 @@ open_pattern = "nvim +$LINE $FILE"
 
     #[test]
     fn test_editor_resolve_with_custom_pattern() {
-        let mut settings = EditorSettings::default();
-        settings.command = "code".to_string();
-        settings.open_pattern = "custom $FILE:$LINE".to_string();
+        let settings = EditorSettings {
+            command: "code".to_string(),
+            open_pattern: "custom $FILE:$LINE".to_string(),
+        };
 
         let (cmd, pattern) = settings.resolve().unwrap();
         assert_eq!(cmd, "code");
@@ -1386,18 +1393,18 @@ open_pattern = "zed $FILE:$LINE"
         save_settings(temp.path(), &settings).unwrap();
         let loaded = load_settings(temp.path());
 
-        assert_eq!(loaded.behavior.confirm_quit, false);
+        assert!(!loaded.behavior.confirm_quit);
         assert_eq!(loaded.watcher.debounce_ms, 2000);
-        assert_eq!(loaded.watcher.auto_reload, false);
+        assert!(!loaded.watcher.auto_reload);
         assert_eq!(loaded.watcher.paths, vec!["lib", "test"]);
         assert_eq!(loaded.watcher.extensions, vec!["dart", "yaml"]);
         assert_eq!(loaded.ui.log_buffer_size, 5000);
-        assert_eq!(loaded.ui.show_timestamps, false);
-        assert_eq!(loaded.ui.compact_logs, true);
+        assert!(!loaded.ui.show_timestamps);
+        assert!(loaded.ui.compact_logs);
         assert_eq!(loaded.ui.theme, "monokai");
-        assert_eq!(loaded.ui.stack_trace_collapsed, false);
+        assert!(!loaded.ui.stack_trace_collapsed);
         assert_eq!(loaded.ui.stack_trace_max_frames, 5);
-        assert_eq!(loaded.devtools.auto_open, true);
+        assert!(loaded.devtools.auto_open);
         assert_eq!(loaded.devtools.browser, "firefox");
         assert_eq!(loaded.editor.command, "nvim");
         assert_eq!(loaded.editor.open_pattern, "nvim +$LINE $FILE");
@@ -1671,8 +1678,10 @@ icons = "nerd_fonts"
         std::fs::create_dir_all(temp.path().join(".fdemon")).unwrap();
 
         // Save initial prefs with theme
-        let mut prefs = UserPreferences::default();
-        prefs.theme = Some("dark".to_string());
+        let prefs = UserPreferences {
+            theme: Some("dark".to_string()),
+            ..Default::default()
+        };
         save_user_preferences(temp.path(), &prefs).unwrap();
 
         // Save selection

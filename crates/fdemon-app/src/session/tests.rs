@@ -1,5 +1,6 @@
 //! Tests for the session module.
 
+#[allow(clippy::module_inception)]
 #[cfg(test)]
 mod tests {
     use fdemon_core::{performance::MemoryUsage, AppPhase, LogEntry, LogLevel, LogSource};

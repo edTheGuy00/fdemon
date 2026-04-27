@@ -1748,16 +1748,17 @@ mod tests {
         let (mut state, session_id) = make_state_with_session();
         state.settings.dap.suppress_reload_on_pause = false;
 
-        for event in [DebugEvent::PauseBreakpoint {
-            isolate: IsolateRef {
-                id: "isolates/1".into(),
-                name: None,
-            },
-            top_frame: None,
-            breakpoint: None,
-            pause_breakpoints: vec![],
-            at_async_suspension: false,
-        }] {
+        {
+            let event = DebugEvent::PauseBreakpoint {
+                isolate: IsolateRef {
+                    id: "isolates/1".into(),
+                    name: None,
+                },
+                top_frame: None,
+                breakpoint: None,
+                pause_breakpoints: vec![],
+                at_async_suspension: false,
+            };
             let result = handle_debug_event(&mut state, session_id, event);
             assert!(
                 result.message.is_none(),

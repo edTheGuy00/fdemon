@@ -782,16 +782,14 @@ mod tests {
     #[test]
     fn test_block_detection_with_ansi_prefixed_logger_output() {
         // Simulate actual Logger package output with ANSI codes (as Flutter daemon sends it)
-        let lines = vec![
-            "\x1b[38;5;196m┌───────────────────────────────────────────────────────────────\x1b[0m",
+        let lines = ["\x1b[38;5;196m┌───────────────────────────────────────────────────────────────\x1b[0m",
             "\x1b[38;5;196m│ RangeError (length): Invalid value: Not in inclusive range 0..2: 10\x1b[0m",
             "\x1b[38;5;196m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m",
             "\x1b[38;5;196m│ #0   List.[] (dart:core-patch/growable_array.dart)\x1b[0m",
             "\x1b[38;5;196m│ #1   triggerRangeError (package:flutter_deamon/errors/...)\x1b[0m",
             "\x1b[38;5;196m├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\x1b[0m",
             "\x1b[38;5;196m│ ⛔┄ Error triggered: Range Error\x1b[0m",
-            "\x1b[38;5;196m└───────────────────────────────────────────────────────────────\x1b[0m",
-        ];
+            "\x1b[38;5;196m└───────────────────────────────────────────────────────────────\x1b[0m"];
 
         assert!(is_block_start(lines[0]));
         for line in &lines[1..lines.len() - 1] {
@@ -836,7 +834,7 @@ mod tests {
     #[test]
     fn test_block_detection_with_flutter_machine_mode_output() {
         // Full Logger block as Flutter --machine mode outputs it (with backslash escapes)
-        let lines = vec![
+        let lines = [
             r"\┌───────────────────────────────────────\",
             r"\│ Null check operator used on a null value\",
             r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\",

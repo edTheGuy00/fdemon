@@ -495,7 +495,7 @@ mod tests {
         let absolute_dir = tempfile::tempdir().unwrap();
         let abs_path = absolute_dir.path().to_path_buf();
 
-        let resolved = resolve_watch_paths(&project_root, &[abs_path.clone()]);
+        let resolved = resolve_watch_paths(&project_root, std::slice::from_ref(&abs_path));
 
         assert_eq!(resolved.len(), 1);
         // The result must not start with project_root.

@@ -321,8 +321,10 @@ mod tests {
 
     #[test]
     fn test_merge_entries_evicts_oldest() {
-        let mut state = NetworkState::default();
-        state.max_entries = 3;
+        let mut state = NetworkState {
+            max_entries: 3,
+            ..Default::default()
+        };
         for i in 0..5 {
             state.merge_entries(vec![make_entry(&i.to_string(), "GET", Some(200))]);
         }
@@ -391,8 +393,10 @@ mod tests {
 
     #[test]
     fn test_reset_preserves_max_entries() {
-        let mut state = NetworkState::default();
-        state.max_entries = 100;
+        let mut state = NetworkState {
+            max_entries: 100,
+            ..Default::default()
+        };
         state.merge_entries(vec![make_entry("1", "GET", Some(200))]);
         state.reset();
         assert!(state.entries.is_empty());
@@ -401,9 +405,11 @@ mod tests {
 
     #[test]
     fn test_reset_preserves_recording() {
-        let mut state = NetworkState::default();
-        // Simulate network_auto_record = false set from config.
-        state.recording = false;
+        let mut state = NetworkState {
+            // Simulate network_auto_record = false set from config.
+            recording: false,
+            ..Default::default()
+        };
         state.merge_entries(vec![make_entry("1", "GET", Some(200))]);
         state.selected_index = Some(3);
 
@@ -439,8 +445,10 @@ mod tests {
 
     #[test]
     fn test_set_filter_clears_scroll_offset() {
-        let mut state = NetworkState::default();
-        state.scroll_offset = 5;
+        let mut state = NetworkState {
+            scroll_offset: 5,
+            ..Default::default()
+        };
         state.set_filter("api".to_string());
         assert_eq!(
             state.scroll_offset, 0,
@@ -450,17 +458,19 @@ mod tests {
 
     #[test]
     fn test_set_filter_clears_selected_detail() {
-        let mut state = NetworkState::default();
-        state.selected_index = Some(0);
-        state.selected_detail = Some(Box::new(HttpProfileEntryDetail {
-            entry: make_entry("1", "GET", Some(200)),
-            request_headers: vec![],
-            response_headers: vec![],
-            request_body: vec![],
-            response_body: vec![],
-            events: vec![],
-            connection_info: None,
-        }));
+        let mut state = NetworkState {
+            selected_index: Some(0),
+            selected_detail: Some(Box::new(HttpProfileEntryDetail {
+                entry: make_entry("1", "GET", Some(200)),
+                request_headers: vec![],
+                response_headers: vec![],
+                request_body: vec![],
+                response_body: vec![],
+                events: vec![],
+                connection_info: None,
+            })),
+            ..Default::default()
+        };
         state.set_filter("something".to_string());
         assert!(
             state.selected_detail.is_none(),
@@ -484,8 +494,10 @@ mod tests {
     #[test]
     fn test_eviction_without_filter_adjusts_selection() {
         // With no active filter, eviction must decrement selected_index correctly.
-        let mut state = NetworkState::default();
-        state.max_entries = 3;
+        let mut state = NetworkState {
+            max_entries: 3,
+            ..Default::default()
+        };
         // Add 3 entries: raw index 0=a, 1=b, 2=c
         state.merge_entries(vec![
             make_entry("a", "GET", Some(200)),
@@ -512,8 +524,10 @@ mod tests {
 
     #[test]
     fn test_eviction_clears_selection_when_selected_entry_is_evicted() {
-        let mut state = NetworkState::default();
-        state.max_entries = 2;
+        let mut state = NetworkState {
+            max_entries: 2,
+            ..Default::default()
+        };
         state.merge_entries(vec![
             make_entry("a", "GET", Some(200)),
             make_entry("b", "GET", Some(200)),

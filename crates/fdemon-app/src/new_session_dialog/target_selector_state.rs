@@ -363,6 +363,39 @@ impl TargetSelectorState {
     }
 }
 
+/// Calculate scroll offset to keep selection visible
+///
+/// # Arguments
+/// * `selected_index` - Index of currently selected item
+/// * `visible_height` - Number of items that fit in the visible area
+/// * `current_offset` - Current scroll offset
+///
+/// # Returns
+/// The new scroll offset that keeps the selection visible
+// TODO: deduplicate with device_list::calculate_scroll_offset — move to fdemon-core
+fn calculate_scroll_offset(
+    selected_index: usize,
+    visible_height: usize,
+    current_offset: usize,
+) -> usize {
+    if visible_height == 0 {
+        return 0;
+    }
+
+    // If selection is above visible area, scroll up
+    if selected_index < current_offset {
+        return selected_index;
+    }
+
+    // If selection is below visible area, scroll down
+    if selected_index >= current_offset + visible_height {
+        return selected_index - visible_height + 1;
+    }
+
+    // Selection is visible, keep current offset
+    current_offset
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Helper Functions
 // ─────────────────────────────────────────────────────────────────────────────
@@ -436,58 +469,31 @@ mod tests {
 
     #[test]
     fn test_set_connected_devices_clears_refreshing() {
-        let mut state = TargetSelectorState::default();
-        state.refreshing = true;
+        let mut state = TargetSelectorState {
+            refreshing: true,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![]);
         assert!(!state.refreshing);
     }
 
     #[test]
     fn test_set_bootable_devices_clears_bootable_refreshing() {
-        let mut state = TargetSelectorState::default();
-        state.bootable_refreshing = true;
+        let mut state = TargetSelectorState {
+            bootable_refreshing: true,
+            ..Default::default()
+        };
         state.set_bootable_devices(vec![], vec![]);
         assert!(!state.bootable_refreshing);
     }
 
     #[test]
     fn test_set_error_clears_refreshing() {
-        let mut state = TargetSelectorState::default();
-        state.refreshing = true;
+        let mut state = TargetSelectorState {
+            refreshing: true,
+            ..Default::default()
+        };
         state.set_error("boom".to_string());
         assert!(!state.refreshing);
     }
-}
-
-/// Calculate scroll offset to keep selection visible
-///
-/// # Arguments
-/// * `selected_index` - Index of currently selected item
-/// * `visible_height` - Number of items that fit in the visible area
-/// * `current_offset` - Current scroll offset
-///
-/// # Returns
-/// The new scroll offset that keeps the selection visible
-// TODO: deduplicate with device_list::calculate_scroll_offset — move to fdemon-core
-fn calculate_scroll_offset(
-    selected_index: usize,
-    visible_height: usize,
-    current_offset: usize,
-) -> usize {
-    if visible_height == 0 {
-        return 0;
-    }
-
-    // If selection is above visible area, scroll up
-    if selected_index < current_offset {
-        return selected_index;
-    }
-
-    // If selection is below visible area, scroll down
-    if selected_index >= current_offset + visible_height {
-        return selected_index - visible_height + 1;
-    }
-
-    // Selection is visible, keep current offset
-    current_offset
 }

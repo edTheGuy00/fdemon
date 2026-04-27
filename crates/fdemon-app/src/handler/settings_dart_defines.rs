@@ -261,8 +261,7 @@ mod tests {
             .dart_defines_modal
             .as_ref()
             .unwrap()
-            .active_pane
-            .clone();
+            .active_pane;
 
         handle_settings_dart_defines_switch_pane(&mut state);
 
@@ -271,8 +270,7 @@ mod tests {
             .dart_defines_modal
             .as_ref()
             .unwrap()
-            .active_pane
-            .clone();
+            .active_pane;
 
         assert_ne!(initial_pane, new_pane);
     }
@@ -455,11 +453,10 @@ mod tests {
         let configs = load_launch_configs(temp.path());
         assert!(!configs.is_empty());
         assert!(
-            configs[0]
+            !configs[0]
                 .config
                 .dart_defines
-                .get("SHOULD_NOT_SAVE")
-                .is_none(),
+                .contains_key("SHOULD_NOT_SAVE"),
             "Cancel must not persist in-flight changes to disk"
         );
     }

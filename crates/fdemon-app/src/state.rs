@@ -1463,8 +1463,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_returns_root_when_index_zero() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
 
         let desc = inspector.selected_node_description();
         assert_eq!(desc.as_deref(), Some("RootNode"));
@@ -1472,8 +1474,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_returns_correct_node() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         // Expand root and first child so that all three nodes are visible.
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
@@ -1485,8 +1489,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_third_node() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
         inspector.selected_index = 2;
@@ -1497,18 +1503,22 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_index_out_of_bounds() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_single_node());
-        inspector.selected_index = 99;
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            selected_index: 99,
+            ..Default::default()
+        };
         assert!(inspector.selected_node_description().is_none());
     }
 
     #[test]
     fn test_selected_node_description_collapsed_children_not_counted() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
-        // Root is NOT expanded — children are hidden, so only root is visible.
-        inspector.selected_index = 1; // index 1 is out of range
+        let inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            // Root is NOT expanded — children are hidden, so only root is visible.
+            selected_index: 1, // index 1 is out of range
+            ..Default::default()
+        };
 
         // Only root visible (index 0), index 1 should return None.
         assert!(inspector.selected_node_description().is_none());
@@ -1517,8 +1527,10 @@ mod tests {
     #[test]
     fn test_selected_node_description_no_allocation_path_matches_visible_nodes() {
         // Verify that selected_node_description agrees with visible_nodes().
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
 

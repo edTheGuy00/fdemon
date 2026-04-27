@@ -1303,11 +1303,8 @@ mod tests {
     ) -> Vec<Message> {
         let mut messages = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        loop {
-            match tokio::time::timeout_at(deadline, rx.recv()).await {
-                Ok(Some(msg)) => messages.push(msg),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            messages.push(msg);
         }
         messages
     }
