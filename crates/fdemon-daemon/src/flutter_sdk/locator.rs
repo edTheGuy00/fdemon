@@ -650,6 +650,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_flutter_wrapper_detection() {
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("my_app");
@@ -659,6 +660,9 @@ mod tests {
         fs::write(project.join("flutterw"), "#!/bin/sh\n").unwrap();
         let flutter_dir = project.join(".flutter");
         create_mock_sdk(&flutter_dir, "3.22.0");
+
+        // Clear FLUTTER_ROOT so Strategy 2 does not short-circuit before Strategy 9
+        std::env::remove_var("FLUTTER_ROOT");
 
         let result = find_flutter_sdk(&project, None).unwrap();
         assert_eq!(result.source, SdkSource::FlutterWrapper);
