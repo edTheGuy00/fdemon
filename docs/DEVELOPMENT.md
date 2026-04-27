@@ -32,16 +32,19 @@ Flutter Demon is organized as a Cargo workspace:
 Run these commands before committing changes:
 
 ```bash
-cargo fmt --all              # Format all crates
-cargo check --workspace      # Check all crates compile
-cargo test --workspace       # Test all crates
-cargo clippy --workspace     # Lint all crates
+cargo fmt --all -- --check                               # Check formatting (does not rewrite files)
+cargo check --workspace --all-targets                    # Check all crates compile
+cargo test --workspace                                   # Test all crates
+cargo clippy --workspace --all-targets -- -D warnings   # Lint all crates (warnings = errors)
 ```
 
-**Full verification (quality gate):**
+**Full verification (quality gate — must match CI):**
 
 ```bash
-cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings
+cargo fmt --all -- --check && \
+  cargo check --workspace --all-targets && \
+  cargo test --workspace && \
+  cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### Test Commands
@@ -147,10 +150,10 @@ Each task file should include a **Completion Summary** after implementation:
 
 Before a task is considered complete:
 
-- [ ] `cargo fmt` — Code is formatted
-- [ ] `cargo check` — No compilation errors
-- [ ] `cargo test` — All tests pass
-- [ ] `cargo clippy -- -D warnings` — No clippy warnings
+- [ ] `cargo fmt --all -- --check` — Code is formatted
+- [ ] `cargo check --workspace --all-targets` — No compilation errors
+- [ ] `cargo test --workspace` — All tests pass
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` — No clippy warnings
 
 ## CI / Continuous Integration
 
@@ -171,10 +174,10 @@ The CI pipeline runs on three operating systems for every push and pull request:
 Each OS runner executes the following steps in order:
 
 ```bash
-cargo fmt --all -- --check   # Formatting check
-cargo check --workspace      # Compilation check
-cargo test --workspace       # All unit tests
-cargo clippy --workspace -- -D warnings  # Lint (warnings treated as errors)
+cargo fmt --all -- --check                              # Formatting check
+cargo check --workspace --all-targets                   # Compilation check
+cargo test --workspace                                  # All unit tests
+cargo clippy --workspace --all-targets -- -D warnings  # Lint (warnings treated as errors)
 ```
 
 All four steps must pass on all three runners for CI to be green.
