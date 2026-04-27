@@ -212,12 +212,13 @@ mod tests {
 
     /// Build a SearchState with a manually set error message (bypassing regex).
     fn make_state_with_error(error_msg: &str) -> SearchState {
-        let mut state = SearchState::default();
         // Set a non-empty query so the error display branch is reached
-        state.query = "x".to_string();
-        state.is_active = true;
-        state.error = Some(error_msg.to_string());
-        state
+        SearchState {
+            query: "x".to_string(),
+            is_active: true,
+            error: Some(error_msg.to_string()),
+            ..Default::default()
+        }
     }
 
     #[test]

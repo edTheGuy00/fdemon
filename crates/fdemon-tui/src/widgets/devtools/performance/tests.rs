@@ -6,8 +6,10 @@ use fdemon_app::state::VmConnectionStatus;
 use fdemon_core::performance::{FrameTiming, MemoryUsage};
 
 fn make_test_performance() -> PerformanceState {
-    let mut perf = PerformanceState::default();
-    perf.monitoring_active = true;
+    let mut perf = PerformanceState {
+        monitoring_active: true,
+        ..Default::default()
+    };
     perf.memory_history.push(MemoryUsage {
         heap_usage: 50_000_000,
         heap_capacity: 128_000_000,
@@ -387,8 +389,10 @@ fn test_performance_panel_no_error_shows_generic_disconnected() {
 fn test_monitoring_inactive_shows_disconnected() {
     // When monitoring_active is false and vm_connected is true,
     // we should see the "starting..." message
-    let mut perf = PerformanceState::default();
-    perf.monitoring_active = false;
+    let perf = PerformanceState {
+        monitoring_active: false,
+        ..Default::default()
+    };
     let widget = PerformancePanel::new(
         &perf,
         true,

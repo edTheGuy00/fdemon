@@ -8,6 +8,8 @@ use ratatui::{buffer::Buffer, layout::Rect, style::Color};
 
 // ── Test helpers ──────────────────────────────────────────────────────────────
 
+// MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+#[allow(clippy::manual_is_multiple_of)]
 fn make_entry(id: &str, i: usize) -> HttpProfileEntry {
     HttpProfileEntry {
         id: id.to_string(),

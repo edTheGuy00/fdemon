@@ -333,9 +333,11 @@ mod tests {
 
     #[test]
     fn test_set_tab_resets_selection() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.selected_index = 5;
+        let mut state = TargetSelectorState {
+            loading: false,
+            selected_index: 5,
+            ..Default::default()
+        };
 
         state.set_tab(TargetTab::Bootable);
 
@@ -405,8 +407,10 @@ mod tests {
 
     #[test]
     fn test_set_bootable_devices_does_not_clear_error() {
-        let mut state = TargetSelectorState::default();
-        state.error = Some("Previous error".to_string());
+        let mut state = TargetSelectorState {
+            error: Some("Previous error".to_string()),
+            ..Default::default()
+        };
 
         state.set_bootable_devices(vec![], vec![]);
 
@@ -419,8 +423,10 @@ mod tests {
 
     #[test]
     fn test_set_connected_devices_clears_error() {
-        let mut state = TargetSelectorState::default();
-        state.error = Some("Previous error".to_string());
+        let mut state = TargetSelectorState {
+            error: Some("Previous error".to_string()),
+            ..Default::default()
+        };
 
         state.set_connected_devices(vec![]);
 
@@ -429,8 +435,10 @@ mod tests {
 
     #[test]
     fn test_select_next_empty_list() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         state.select_next();
 
@@ -440,8 +448,10 @@ mod tests {
 
     #[test]
     fn test_select_previous_empty_list() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         state.select_previous();
 
@@ -451,8 +461,10 @@ mod tests {
 
     #[test]
     fn test_selected_connected_device_wrong_tab() {
-        let mut state = TargetSelectorState::default();
-        state.active_tab = TargetTab::Bootable;
+        let mut state = TargetSelectorState {
+            active_tab: TargetTab::Bootable,
+            ..Default::default()
+        };
         state.connected_devices = vec![test_device_full("1", "iPhone", "ios", false)];
 
         assert!(state.selected_connected_device().is_none());
@@ -477,8 +489,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_renders() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone 15", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -549,9 +563,11 @@ mod tests {
     fn test_target_selector_renders_bootable_tab() {
         use fdemon_daemon::SimulatorState;
 
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.active_tab = TargetTab::Bootable;
+        let mut state = TargetSelectorState {
+            loading: false,
+            active_tab: TargetTab::Bootable,
+            ..Default::default()
+        };
         state.set_bootable_devices(
             vec![IosSimulator {
                 udid: "123".to_string(),
@@ -587,8 +603,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_unfocused() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -612,8 +630,10 @@ mod tests {
 
     #[test]
     fn test_navigation_uses_cached_list() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         // Create 10 devices
         let devices: Vec<Device> = (0..10)
@@ -643,8 +663,10 @@ mod tests {
 
     #[test]
     fn test_cache_invalidated_on_device_update() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         let devices = vec![test_device_full("1", "iPhone", "ios", false)];
         state.set_connected_devices(devices);
@@ -665,9 +687,11 @@ mod tests {
     fn test_cache_invalidated_on_bootable_update() {
         use fdemon_daemon::SimulatorState;
 
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.active_tab = TargetTab::Bootable;
+        let mut state = TargetSelectorState {
+            loading: false,
+            active_tab: TargetTab::Bootable,
+            ..Default::default()
+        };
 
         let ios_sims = vec![IosSimulator {
             udid: "123".to_string(),
@@ -695,8 +719,10 @@ mod tests {
     fn test_cache_invalidated_on_tab_switch() {
         use fdemon_daemon::SimulatorState;
 
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         // Set up both connected and bootable devices
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
@@ -726,8 +752,10 @@ mod tests {
 
     #[test]
     fn test_cache_repopulates_after_invalidation() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         let devices = vec![test_device_full("1", "iPhone", "ios", false)];
         state.set_connected_devices(devices);
@@ -756,8 +784,10 @@ mod tests {
 
     #[test]
     fn test_adjust_scroll_keeps_selection_visible() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         // Add 20 devices
         let devices: Vec<Device> = (0..20)
@@ -777,17 +807,21 @@ mod tests {
 
     #[test]
     fn test_scroll_resets_on_tab_switch() {
-        let mut state = TargetSelectorState::default();
-        state.scroll_offset = 5;
+        let mut state = TargetSelectorState {
+            scroll_offset: 5,
+            ..Default::default()
+        };
         state.set_tab(TargetTab::Bootable);
         assert_eq!(state.scroll_offset, 0);
     }
 
     #[test]
     fn test_scroll_resets_on_connected_devices_update() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.scroll_offset = 10;
+        let mut state = TargetSelectorState {
+            loading: false,
+            scroll_offset: 10,
+            ..Default::default()
+        };
 
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
         assert_eq!(state.scroll_offset, 0);
@@ -797,9 +831,11 @@ mod tests {
     fn test_scroll_resets_on_bootable_devices_update() {
         use fdemon_daemon::SimulatorState;
 
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.scroll_offset = 10;
+        let mut state = TargetSelectorState {
+            loading: false,
+            scroll_offset: 10,
+            ..Default::default()
+        };
 
         let ios_sims = vec![IosSimulator {
             udid: "123".to_string(),
@@ -815,8 +851,10 @@ mod tests {
 
     #[test]
     fn test_reset_scroll() {
-        let mut state = TargetSelectorState::default();
-        state.scroll_offset = 15;
+        let mut state = TargetSelectorState {
+            scroll_offset: 15,
+            ..Default::default()
+        };
 
         state.reset_scroll();
         assert_eq!(state.scroll_offset, 0);
@@ -824,8 +862,10 @@ mod tests {
 
     #[test]
     fn test_adjust_scroll_zero_height() {
-        let mut state = TargetSelectorState::default();
-        state.scroll_offset = 5;
+        let mut state = TargetSelectorState {
+            scroll_offset: 5,
+            ..Default::default()
+        };
 
         state.adjust_scroll(0);
         // Should not change when visible_height is 0
@@ -836,8 +876,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_compact_has_border() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -870,8 +912,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_compact_focused_border() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "Device", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -893,8 +937,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_compact_unfocused_border() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "Device", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -916,8 +962,10 @@ mod tests {
 
     #[test]
     fn test_target_selector_compact_content_readable() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![
             test_device_full("1", "iPhone 15", "ios", false),
             test_device_full("2", "Pixel 6", "android", false),
@@ -949,8 +997,10 @@ mod tests {
 
     #[test]
     fn test_render_full_writes_visible_height() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -977,8 +1027,10 @@ mod tests {
 
     #[test]
     fn test_render_compact_writes_visible_height() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -1005,8 +1057,10 @@ mod tests {
 
     #[test]
     fn test_render_corrects_stale_scroll_offset() {
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
 
         // 15 ios devices → flat list: header + 15 devices = 16 items
         // Flat index 0 = "iOS Devices" header, 1 = "Dev 0", 2 = "Dev 1", ...
@@ -1048,8 +1102,10 @@ mod tests {
     fn test_target_selector_renders_refreshing_glyph_when_state_set() {
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
         // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
         state.refreshing = true;
 
@@ -1083,9 +1139,11 @@ mod tests {
     fn test_target_selector_renders_bootable_refreshing_glyph_when_state_set() {
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
         // Use height 12 to ensure the tab bar renders fully and the refresh glyph is visible.
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
-        state.active_tab = TargetTab::Bootable;
+        let mut state = TargetSelectorState {
+            loading: false,
+            active_tab: TargetTab::Bootable,
+            ..Default::default()
+        };
         state.set_bootable_devices(vec![], vec![]);
         state.bootable_refreshing = true;
 
@@ -1119,8 +1177,10 @@ mod tests {
     fn test_target_selector_no_glyph_when_not_refreshing() {
         // render_full layout: Length(3) tab bar + Min(5) content + Length(1) footer
         // Use height 12 to ensure the tab bar renders fully.
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
         // refreshing defaults to false
 
@@ -1154,8 +1214,10 @@ mod tests {
     fn test_render_at_various_heights() {
         use ratatui::layout::{Constraint, Layout, Rect};
 
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "D1", "ios", false)]);
 
         let tool_availability = ToolAvailability::default();
@@ -1203,8 +1265,10 @@ mod tests {
     fn test_target_selector_compact_renders_refreshing_glyph() {
         // Use a height small enough to trigger compact mode via the caller (compact(true)).
         // compact mode renders a single-line tab bar via render_tabs_compact.
-        let mut state = TargetSelectorState::default();
-        state.loading = false;
+        let mut state = TargetSelectorState {
+            loading: false,
+            ..Default::default()
+        };
         state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
         state.refreshing = true;
         state.active_tab = TargetTab::Connected;
@@ -1240,8 +1304,10 @@ mod tests {
         // Case 1: Active tab is Connected, but Bootable is refreshing (inactive tab).
         // The glyph must appear next to the inactive Bootable label.
         {
-            let mut state = TargetSelectorState::default();
-            state.loading = false;
+            let mut state = TargetSelectorState {
+                loading: false,
+                ..Default::default()
+            };
             state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
             state.bootable_refreshing = true;
             state.active_tab = TargetTab::Connected;
@@ -1276,8 +1342,10 @@ mod tests {
         // Case 2: Active tab is Bootable, but Connected is refreshing (inactive tab).
         // The glyph must appear next to the inactive Connected label.
         {
-            let mut state = TargetSelectorState::default();
-            state.loading = false;
+            let mut state = TargetSelectorState {
+                loading: false,
+                ..Default::default()
+            };
             state.set_connected_devices(vec![test_device_full("1", "iPhone", "ios", false)]);
             state.refreshing = true;
             state.active_tab = TargetTab::Bootable;

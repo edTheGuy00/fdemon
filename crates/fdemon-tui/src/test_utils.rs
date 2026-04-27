@@ -9,7 +9,6 @@
 //! ```rust
 //! use crate::tui::test_utils::TestTerminal;
 //!
-//! #[test]
 //! fn test_header_renders_project_name() {
 //!     let mut term = TestTerminal::new();
 //!     let header = MainHeader::new(Some("my_project"));
