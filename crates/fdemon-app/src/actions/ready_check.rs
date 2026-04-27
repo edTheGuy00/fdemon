@@ -382,10 +382,12 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
 
         tokio::spawn(async move {
-            if let Ok((mut sock, _)) = listener.accept().await {
-                let _ = sock
-                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
-                    .await;
+            loop {
+                if let Ok((mut sock, _)) = listener.accept().await {
+                    let _ = sock
+                        .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                }
             }
         });
 
