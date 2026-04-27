@@ -7,6 +7,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{debug, error, info, warn};

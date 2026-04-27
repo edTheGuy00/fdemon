@@ -102,13 +102,9 @@ impl WidgetInspector<'_> {
         if total > viewport_height && viewport_height > 0 {
             let scroll_x = tree_inner.right().saturating_sub(1);
             // Top of scroll range indicator
-            let thumb_y = if total > 0 {
-                tree_inner.y
-                    + ((selected * viewport_height / total) as u16)
-                        .min(tree_inner.height.saturating_sub(1))
-            } else {
-                tree_inner.y
-            };
+            let thumb_y = tree_inner.y
+                + ((selected * viewport_height).checked_div(total).unwrap_or(0) as u16)
+                    .min(tree_inner.height.saturating_sub(1));
             if scroll_x < area.right() && thumb_y < tree_inner.bottom() {
                 if let Some(cell) = buf.cell_mut((scroll_x, thumb_y)) {
                     cell.set_symbol("█").set_fg(palette::BORDER_DIM);

@@ -454,6 +454,7 @@ impl Drop for FlutterProcess {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    #[cfg(unix)]
     use tokio::process::Command;
 
     fn default_flutter() -> FlutterExecutable {

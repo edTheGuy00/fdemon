@@ -406,10 +406,12 @@ mod tests {
 
     /// RAII guard that prepends `dir` to the PATH environment variable for
     /// the lifetime of the guard, then restores the original PATH on drop.
+    #[cfg(not(target_os = "windows"))]
     struct PathPrependGuard {
         original: std::ffi::OsString,
     }
 
+    #[cfg(not(target_os = "windows"))]
     impl PathPrependGuard {
         fn new(dir: &Path) -> Self {
             let original = std::env::var_os("PATH").unwrap_or_default();
@@ -426,6 +428,7 @@ mod tests {
         }
     }
 
+    #[cfg(not(target_os = "windows"))]
     impl Drop for PathPrependGuard {
         fn drop(&mut self) {
             std::env::set_var("PATH", &self.original);
@@ -433,6 +436,7 @@ mod tests {
     }
 
     /// Prepend `dir` to PATH for the lifetime of the returned guard.
+    #[cfg(not(target_os = "windows"))]
     fn path_prepend_guard(dir: &Path) -> PathPrependGuard {
         PathPrependGuard::new(dir)
     }
