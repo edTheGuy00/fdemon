@@ -711,6 +711,7 @@ name = "fdemon-dap"
 version = "0.4.2"
 dependencies = [
  "fdemon-core",
+ "percent-encoding",
  "rand 0.8.6",
  "serde",
  "serde_json",
