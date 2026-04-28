@@ -64,3 +64,32 @@ The accompanying inline comment is short and explanatory; the existing gated tes
 
 - Rewriting the gated tests with Windows-equivalent invocations (e.g. PowerShell `Write-Output`). Out of scope for this batched fix.
 - Adding equivalent Windows coverage for the production code path. Production `Command::new(<user-supplied>)` is platform-agnostic; the gated tests verify only the wrapper logic, which is exercised identically on Unix.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-daemon/src/native_logs/custom.rs` | Added `#[cfg(unix)]` before `#[tokio::test]` on 10 test functions that invoke Unix-only commands (`printf`, `echo`, `yes`, `printenv`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Attribute order**: Placed `#[cfg(unix)]` before `#[tokio::test]`, matching the existing codebase convention used by the already-gated tests (`test_custom_capture_working_dir`, `test_custom_capture_stderr_does_not_produce_events`, `test_custom_capture_concurrent_shutdown`). The task's example illustration showed the reverse order, but the file's established pattern takes precedence.
+
+2. **Tests left ungated**: `test_custom_capture_invalid_command`, `test_stdout_ready_logs_still_flow_after_match`, `test_spawn_with_readiness_none_behaves_like_spawn`, and `test_stdout_ready_invalid_regex_drops_tx` were left ungated as directed by the task (not in the audit list of 10).
+
+### Testing Performed
+
+- `cargo test -p fdemon-daemon native_logs::custom` — Passed (17/17 tests, all gated tests run on macOS)
+- `cargo clippy -p fdemon-daemon --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting changes needed)
+
+### Risks/Limitations
+
+1. **Ungated tests using Unix commands**: `test_stdout_ready_logs_still_flow_after_match` uses `printf` and `test_spawn_with_readiness_none_behaves_like_spawn` / `test_stdout_ready_invalid_regex_drops_tx` use `echo`, but were not in the audit list. If Windows CI is introduced, these may also need gating. This is outside scope of this task.

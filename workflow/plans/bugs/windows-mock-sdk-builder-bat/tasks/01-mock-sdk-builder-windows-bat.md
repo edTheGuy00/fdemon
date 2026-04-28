@@ -71,3 +71,30 @@ That is the entire change. No other line in `fixtures.rs` needs touching. No cal
 - Renaming `with_bat_file` or removing `create_bat_file`. The opt-in mechanism is still useful and orthogonal.
 - Refactoring callers to call `.with_bat_file()` explicitly — once `build()` self-heals on Windows, no caller needs to change.
 - Touching the production code that reads SDKs.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/sdk_detection/fixtures.rs` | Replaced `if self.create_bat_file` block with `let need_bat = cfg!(target_os = "windows") \|\| self.create_bat_file; if need_bat` so `flutter.bat` is automatically written on Windows regardless of whether `.with_bat_file()` was called |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact task spec applied verbatim**: The change is precisely the one-liner substitution described in the task. The `create_bat_file` flag is preserved unchanged for Unix hosts exercising Windows code paths.
+
+### Testing Performed
+
+- `cargo test --test sdk_detection` - Passed (103 passed, 0 failed, 23 ignored)
+- `cargo clippy -p flutter-demon --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **Windows-only coverage on CI**: The `cfg!(target_os = "windows")` branch is dead code on macOS/Linux; actual Windows host validation requires CI runners. No risks on Unix hosts.

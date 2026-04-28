@@ -91,3 +91,31 @@ The `use tokio::io::{AsyncReadExt, AsyncWriteExt}` import inside the spawned asy
 
 - Rewriting the gated tests with Windows-equivalent commands. That would require new fixtures and is not warranted for B2's coverage scope.
 - Adding integration-level coverage for the gated paths on Windows. Out of scope for this batched fix; the production `Command::new(<user-supplied>)` code path is platform-agnostic and already exercised on Unix.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/actions/ready_check.rs` | Added `#[cfg(unix)]` to `test_command_check_succeeds_on_true` and `test_command_check_timeout_on_false`; added request drain + `shutdown()` to `test_http_check_non_200_retries` mock server; added `AsyncReadExt` to the `use tokio::io` import in that test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import scope**: Added `AsyncReadExt` via a local `use tokio::io::{AsyncReadExt, AsyncWriteExt}` inside the `test_http_check_non_200_retries` test function rather than modifying any module-level import, matching the pattern in `test_http_check_success` (which already has `use tokio::io::{AsyncReadExt, AsyncWriteExt}` inline).
+2. **No production code changes**: All changes are confined to the `#[cfg(test)] mod tests` block, exactly as specified.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app actions::ready_check` — Passed (18 tests, 0 failed)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+
+### Risks/Limitations
+
+1. **Windows coverage gap**: The `true`/`false` command tests remain ungated on Windows but this is explicitly out of scope per the task. The production `run_command_check` code path is platform-agnostic.

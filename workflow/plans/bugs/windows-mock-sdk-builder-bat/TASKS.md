@@ -23,10 +23,10 @@ No cross-task dependencies. Wave 1 is the only wave.
 
 | # | Task | Status | Depends On | Est. Hours | Severity |
 |---|------|--------|------------|------------|----------|
-| 1 | [01-mock-sdk-builder-windows-bat](tasks/01-mock-sdk-builder-windows-bat.md) | Not Started | - | 0.25h | BLOCKER |
-| 2 | [02-ready-check-windows-fixes](tasks/02-ready-check-windows-fixes.md) | Not Started | - | 0.5h | BLOCKER + LATENT |
-| 3 | [03-custom-log-capture-windows-gates](tasks/03-custom-log-capture-windows-gates.md) | Not Started | - | 0.25h | BLOCKER |
-| 4 | [04-e2e-pty-test-gating-consistency](tasks/04-e2e-pty-test-gating-consistency.md) | Not Started | - | 0.25h | LATENT |
+| 1 | [01-mock-sdk-builder-windows-bat](tasks/01-mock-sdk-builder-windows-bat.md) | Done ✅ | - | 0.25h | BLOCKER |
+| 2 | [02-ready-check-windows-fixes](tasks/02-ready-check-windows-fixes.md) | Done ✅ | - | 0.5h | BLOCKER + LATENT |
+| 3 | [03-custom-log-capture-windows-gates](tasks/03-custom-log-capture-windows-gates.md) | Done ✅ | - | 0.25h | BLOCKER |
+| 4 | [04-e2e-pty-test-gating-consistency](tasks/04-e2e-pty-test-gating-consistency.md) | Done ✅ | - | 0.25h | LATENT |
 
 ## File Overlap Analysis
 

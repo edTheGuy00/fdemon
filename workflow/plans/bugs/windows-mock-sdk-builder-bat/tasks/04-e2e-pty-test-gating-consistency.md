@@ -59,3 +59,32 @@ The `#[cfg_attr]` should be placed AFTER any existing `#[serial]` and the existi
 - Removing or restructuring the existing `#[ignore]` attributes.
 - Adding new Windows-compatible PTY tests.
 - Refactoring `pty_utils.rs` to be Windows-compilable. (It already is — `expectrl` has a ConPTY backend; the runtime regex-matching is what's unreliable, and that's what the per-test ignore handles.)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** fix/detect-windows-bat
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `tests/e2e/settings_page.rs` | Added `#[cfg_attr(target_os = "windows", ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests")]` after the existing `#[ignore]` on all 28 `#[tokio::test]` functions |
+| `tests/e2e/debug_settings.rs` | Added the same `#[cfg_attr]` to the single `#[tokio::test]` (`debug_settings_rendering`) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement after existing `#[ignore]`**: The `#[cfg_attr]` is placed after the existing per-test `#[ignore]` attribute as specified in the task. On non-Windows platforms the first `#[ignore]` takes effect and the Windows reason is inert dead code. On Windows the ConPTY reason surfaces instead.
+2. **`debug_settings.rs` not in module tree**: The file is not currently wired into `tests/e2e.rs` (no `mod debug_settings;` declaration), so the test doesn't currently run anywhere. The annotation was added proactively as specified so it's correct if/when it gets included.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test --test e2e settings_page` - 28 ignored, 0 passed, 0 failed (same count as before)
+
+### Risks/Limitations
+
+1. **Dead annotation in debug_settings.rs**: Since `debug_settings.rs` is not included in the test module, the added `#[cfg_attr]` has no runtime effect yet. This is intentional — it's proactive gating as described in the task.
