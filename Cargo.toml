@@ -52,6 +52,7 @@ clap = { version = "4", features = ["derive"] }
 
 # URL parsing
 url = "2"
+percent-encoding = "2"
 
 # Process/path utilities
 which = "8"

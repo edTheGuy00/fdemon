@@ -651,10 +651,9 @@ pub fn resolve_package_uri(uri: &str, project_root: &Path) -> Option<PathBuf> {
             .and_then(|v| v.as_str())
             .unwrap_or("lib/");
         let root: PathBuf = if root_uri.starts_with("file://") {
-            // Absolute file URI — use the url crate for correct decoding.
-            url::Url::parse(root_uri)
-                .ok()
-                .and_then(|u| u.to_file_path().ok())?
+            // Absolute file URI — convert via the portable helper so Unix-style
+            // paths round-trip on Windows.
+            file_uri_to_pathbuf(root_uri)?
         } else {
             // Relative URI — resolve relative to the config directory.
             config_path.parent()?.join(root_uri)
@@ -773,34 +772,54 @@ pub fn extract_line_column(frame: &serde_json::Value) -> (Option<i32>, Option<i3
 /// DAP clients that use `pathFormat: "path"` (Zed, Helix) expect a plain
 /// filesystem path, **not** a `file://` URI.
 ///
-/// Uses [`url::Url::parse`] to correctly handle all `file://` URI forms,
-/// including percent-encoded characters and Windows drive-letter paths.
+/// Implementation note: we deliberately do **not** use [`url::Url::to_file_path`]
+/// because it is platform-specific and rejects Unix-style absolute paths on
+/// Windows (no drive letter). The Dart VM emits `file:///` URIs verbatim from
+/// the source files, which on Linux/macOS look like `/home/user/...`; that form
+/// must round-trip on every host so cross-platform debug sessions work.
 ///
-/// | Input URI                        | Output (Unix)                    |
-/// |----------------------------------|----------------------------------|
-/// | `file:///home/app/main.dart`     | `Some("/home/app/main.dart")`    |
-/// | `file:///C:/Users/app/main.dart` | `Some("C:\\Users\\app\\main.dart")` (Windows only) |
-/// | `file:///home/my%20app/main.dart`| `Some("/home/my app/main.dart")` |
-/// | `dart:core/list.dart`            | `None` (no local path in Phase 3) |
-/// | `package:myapp/main.dart`        | `None` (deferred to Phase 4)     |
-/// | anything else                    | `None`                           |
+/// | Input URI                          | Output                              |
+/// |------------------------------------|-------------------------------------|
+/// | `file:///home/app/main.dart`       | `Some("/home/app/main.dart")`       |
+/// | `file:///C:/Users/app/main.dart`   | `Some("C:/Users/app/main.dart")` on Windows; `Some("/C:/Users/app/main.dart")` elsewhere |
+/// | `file:///home/my%20app/main.dart`  | `Some("/home/my app/main.dart")`    |
+/// | `file://hostname/path`             | `None` (non-empty host)             |
+/// | `dart:core/list.dart`              | `None` (no local path in Phase 3)   |
+/// | `package:myapp/main.dart`          | `None` (deferred to Phase 4)        |
+/// | anything else                      | `None`                              |
 pub fn dart_uri_to_path(uri: &str) -> Option<String> {
-    if uri.starts_with("file://") {
-        // Use the `url` crate for correct cross-platform handling:
-        // - Strips `file://` properly (three slashes for absolute paths)
-        // - Decodes percent-encoded characters (e.g. %20 → space)
-        // - Handles Windows drive letters (file:///C:/path → C:\path on Windows)
-        url::Url::parse(uri)
-            .ok()
-            .and_then(|u| u.to_file_path().ok())
-            .map(|p| p.to_string_lossy().into_owned())
-    } else if uri.starts_with("dart:") || uri.starts_with("package:") {
-        // SDK and package URIs cannot be resolved to a local path in Phase 3.
-        // Phase 4 will add package resolution via .dart_tool/package_config.json.
-        None
-    } else {
-        None
+    if !uri.starts_with("file://") {
+        // dart:, package:, org-dartlang-sdk:, … are non-local.
+        return None;
     }
+    let parsed = url::Url::parse(uri).ok()?;
+    match parsed.host_str() {
+        None | Some("") | Some("localhost") => {}
+        _ => return None,
+    }
+    let decoded = percent_encoding::percent_decode_str(parsed.path())
+        .decode_utf8()
+        .ok()?
+        .into_owned();
+    if cfg!(windows) {
+        // /C:/Users/x → C:/Users/x — only on Windows do we strip the leading
+        // slash before a drive letter; on Unix `/C:/...` is a legal (if odd) path.
+        let bytes = decoded.as_bytes();
+        if bytes.len() >= 3
+            && bytes[0] == b'/'
+            && bytes[1].is_ascii_alphabetic()
+            && bytes[2] == b':'
+        {
+            return Some(decoded[1..].to_string());
+        }
+    }
+    Some(decoded)
+}
+
+/// Convert a `file://` URI to a [`PathBuf`]. Returns `None` for non-file URIs
+/// or URIs that fail [`dart_uri_to_path`]'s validation.
+fn file_uri_to_pathbuf(uri: &str) -> Option<std::path::PathBuf> {
+    dart_uri_to_path(uri).map(std::path::PathBuf::from)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

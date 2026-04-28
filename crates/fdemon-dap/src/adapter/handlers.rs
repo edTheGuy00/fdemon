@@ -2037,11 +2037,9 @@ fn read_package_config(project_root: &std::path::Path) -> Vec<(std::path::PathBu
 
         // Resolve the package root to an absolute path.
         let pkg_root: std::path::PathBuf = if root_uri.starts_with("file://") {
-            match url::Url::parse(root_uri)
-                .ok()
-                .and_then(|u| u.to_file_path().ok())
-            {
-                Some(p) => p,
+            // Use the portable helper so Unix-style file URIs work on Windows.
+            match crate::adapter::stack::dart_uri_to_path(root_uri) {
+                Some(p) => std::path::PathBuf::from(p),
                 None => continue,
             }
         } else {
