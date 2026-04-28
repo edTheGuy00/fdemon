@@ -499,9 +499,12 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_working_dir() {
         // `pwd` prints the current working directory; verify it matches working_dir.
+        // Unix-only: `pwd` is not a native Windows command and `/tmp` is not a
+        // valid Windows path (Git Bash translates it to a drive-prefixed form).
         let config = CustomSourceConfig {
             name: "pwd-test".to_string(),
             command: "pwd".to_string(),
