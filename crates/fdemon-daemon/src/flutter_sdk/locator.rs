@@ -442,9 +442,14 @@ mod tests {
     }
 
     /// Create a mock valid Flutter SDK directory structure.
+    ///
+    /// Creates `bin/flutter` on all platforms and `bin/flutter.bat` on Windows
+    /// so `validate_sdk_path` finds the platform-appropriate launcher.
     fn create_mock_sdk(root: &Path, version: &str) {
         fs::create_dir_all(root.join("bin/cache/dart-sdk")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), version).unwrap();
     }
 
@@ -780,6 +785,8 @@ mod tests {
         let fvm_sdk = tmp.path().join("fvm_cache/versions/3.19.0");
         fs::create_dir_all(fvm_sdk.join("bin/cache/dart-sdk")).unwrap();
         fs::write(fvm_sdk.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(fvm_sdk.join("bin/flutter.bat"), "@echo off").unwrap();
         // Create VERSION as a directory so read_version_file fails
         fs::create_dir_all(fvm_sdk.join("VERSION")).unwrap();
 

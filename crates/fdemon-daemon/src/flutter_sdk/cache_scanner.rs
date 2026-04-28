@@ -292,11 +292,14 @@ mod tests {
 
     /// Helper: create a minimal valid SDK directory in the cache.
     ///
-    /// Creates `<cache_dir>/<name>/bin/flutter` and `<cache_dir>/<name>/VERSION`.
+    /// Creates `<cache_dir>/<name>/bin/flutter` (and `flutter.bat` on Windows)
+    /// and `<cache_dir>/<name>/VERSION`.
     fn create_fake_sdk(cache_dir: &Path, name: &str, version: &str) -> PathBuf {
         let sdk_dir = cache_dir.join(name);
         fs::create_dir_all(sdk_dir.join("bin")).unwrap();
         fs::write(sdk_dir.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(sdk_dir.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(sdk_dir.join("VERSION"), version).unwrap();
         sdk_dir
     }
@@ -463,6 +466,8 @@ mod tests {
         let no_version = tmp.path().join("3.20.0");
         fs::create_dir_all(no_version.join("bin")).unwrap();
         fs::write(no_version.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(no_version.join("bin/flutter.bat"), "@echo off").unwrap();
         // No VERSION file
 
         let result = scan_installed_versions_from_path(tmp.path(), None);

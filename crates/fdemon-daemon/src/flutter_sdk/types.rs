@@ -257,6 +257,8 @@ mod tests {
         // Create expected structure
         fs::create_dir_all(root.join("bin/cache/dart-sdk")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), "3.19.0").unwrap();
 
         let result = validate_sdk_path(root);
@@ -293,6 +295,8 @@ mod tests {
         let root = tmp.path();
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), "3.19.0").unwrap();
         // No bin/cache/dart-sdk/ — should still succeed (fresh install)
 
