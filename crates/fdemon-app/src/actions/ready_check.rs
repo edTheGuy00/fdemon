@@ -408,7 +408,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_http_check_non_200_retries() {
-        use tokio::io::AsyncWriteExt;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         // Listener that always returns 503; check should time out rather than
         // immediately succeed.
@@ -418,9 +418,15 @@ mod tests {
         tokio::spawn(async move {
             loop {
                 if let Ok((mut sock, _)) = listener.accept().await {
+                    // Drain the incoming request before responding. Windows TCP RSTs
+                    // sockets closed with un-read data, which would race the client's
+                    // response read.
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
                     let _ = sock
                         .write_all(b"HTTP/1.1 503 Service Unavailable\r\n\r\n")
                         .await;
+                    let _ = sock.shutdown().await;
                 }
             }
         });
@@ -489,6 +495,7 @@ mod tests {
     // ── Command check ─────────────────────────────────────
 
     #[tokio::test]
+    #[cfg(unix)] // `true` / `false` are POSIX shell builtins, not native on Windows
     async fn test_command_check_succeeds_on_true() {
         let check = ReadyCheck::Command {
             command: "true".to_string(),
@@ -501,6 +508,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(unix)] // `true` / `false` are POSIX shell builtins, not native on Windows
     async fn test_command_check_timeout_on_false() {
         let check = ReadyCheck::Command {
             command: "false".to_string(),
