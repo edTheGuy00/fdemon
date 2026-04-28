@@ -289,6 +289,7 @@ mod tests {
 
     // ── Basic functionality ────────────────────────────────────────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_with_echo_command() {
         // `printf` outputs "hello\nworld\n" without a trailing extra newline issue.
@@ -314,6 +315,7 @@ mod tests {
         assert_eq!(events[0].tag, "test-source");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_process_exit() {
         // `echo` outputs one line and exits immediately.
@@ -336,6 +338,7 @@ mod tests {
             .expect("task did not complete after process exit");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_shutdown() {
         // `yes` produces infinite output — we must shut it down.
@@ -391,6 +394,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_with_env() {
         // `printenv MY_VAR` prints the value of MY_VAR.
@@ -421,6 +425,7 @@ mod tests {
         assert_eq!(event.tag, "env-test");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_tag_filtering_exclude() {
         // Use JSON format. Output two lines: one with tag "filtered", one "allowed".
@@ -464,6 +469,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_tag_filtering_include() {
         // Only "allowed" tag in include list; "other" should be dropped.
@@ -535,6 +541,7 @@ mod tests {
 
     // ── Factory function ───────────────────────────────────────────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_create_custom_log_capture_returns_box() {
         let config = make_config("echo", vec!["test"], OutputFormat::Raw);
@@ -614,6 +621,7 @@ mod tests {
     // ── Stdout readiness signaling ─────────────────────────────────────────
 
     /// When the ready_pattern matches a stdout line, ready_tx is fired.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_fires_on_match() {
         let config = CustomSourceConfig {
@@ -643,6 +651,7 @@ mod tests {
 
     /// When the process exits before the pattern matches, ready_tx is dropped
     /// and the receiver gets a RecvError.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_no_match_drops_tx() {
         let config = CustomSourceConfig {
@@ -670,6 +679,7 @@ mod tests {
     }
 
     /// When no ready_pattern is set, ready_tx is dropped when the process exits.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_none_no_signal() {
         let config = CustomSourceConfig {
