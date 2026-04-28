@@ -60,6 +60,10 @@ async fn navigate_down(
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: expectrl cannot find 'System Settings' in stream after comma key. Comma key handler verified by unit tests (test_comma_opens_settings_from_startup_mode). Settings render verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_settings_opens_on_comma_key() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -88,6 +92,10 @@ async fn test_settings_opens_on_comma_key() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Escape key handler verified by unit tests (test_escape_closes_settings)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_settings_closes_on_escape() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -114,6 +122,10 @@ async fn test_settings_closes_on_escape() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. q key handler verified by unit tests (test_q_closes_settings)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_settings_closes_on_q_key() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -137,6 +149,10 @@ async fn test_settings_closes_on_q_key() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Tab rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_settings_shows_all_four_tabs() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -168,6 +184,10 @@ async fn test_settings_shows_all_four_tabs() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Number key tab switching verified by unit tests (test_number_keys_jump_to_tab)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_tab_switching_with_number_keys() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -200,6 +220,10 @@ async fn test_tab_switching_with_number_keys() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Tab key navigation verified by unit tests (test_tab_navigation)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_tab_switching_with_tab_key() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -232,6 +256,10 @@ async fn test_tab_switching_with_tab_key() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Tab wrapping verified by unit tests (test_settings_view_state_tab_navigation)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_tab_wrapping_at_boundaries() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -264,6 +292,10 @@ async fn test_tab_wrapping_at_boundaries() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. VSCode tab rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_vscode_tab_shows_readonly_indicator() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -293,6 +325,10 @@ async fn test_vscode_tab_shows_readonly_indicator() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Selection reset verified by unit tests (test_tab_change_resets_selection_and_editing)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_selection_resets_on_tab_change() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -326,6 +362,10 @@ async fn test_selection_resets_on_tab_change() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Arrow key navigation verified by unit tests (test_item_navigation)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_arrow_keys_navigate_settings() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -361,6 +401,10 @@ async fn test_arrow_keys_navigate_settings() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. j/k navigation verified by unit tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_jk_keys_navigate_settings() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -388,6 +432,10 @@ async fn test_jk_keys_navigate_settings() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Selection wrapping verified by unit tests (test_settings_view_state_item_selection)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_selection_wraps_at_top_boundary() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -416,6 +464,10 @@ async fn test_selection_wraps_at_top_boundary() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Selection wrapping verified by unit tests (test_settings_view_state_item_selection)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_selection_wraps_at_bottom_boundary() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -447,6 +499,10 @@ async fn test_selection_wraps_at_bottom_boundary() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. PageUp/PageDown keys accepted by settings handler."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_page_up_down_navigation() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -473,6 +529,10 @@ async fn test_page_up_down_navigation() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Home/End navigate to first/last item via unit tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_home_end_navigation() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -500,6 +560,10 @@ async fn test_home_end_navigation() {
 #[serial]
 #[allow(non_snake_case)]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. gg/G navigation works via settings key handler unit tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_gg_G_vim_navigation() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -532,6 +596,10 @@ async fn test_gg_G_vim_navigation() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Selection highlighting verified by settings_panel widget tests (test_selected_row_has_accent_bar)."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_selected_item_highlighted() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -559,6 +627,10 @@ async fn test_selected_item_highlighted() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY issue: Enter key not triggering toggle. Toggle verified working via unit tests"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_dirty_indicator_appears_on_change() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -595,6 +667,10 @@ async fn test_dirty_indicator_appears_on_change() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Readonly/lock icon rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_readonly_items_have_lock_icon() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -643,6 +719,10 @@ async fn test_readonly_items_have_lock_icon() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. User prefs tab rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_override_indicator_shows_for_user_prefs() {
     // This test requires a project with both project settings and user overrides
     // For now, test the User Prefs tab structure
@@ -669,6 +749,10 @@ async fn test_override_indicator_shows_for_user_prefs() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Value rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_value_types_display_correctly() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -700,6 +784,10 @@ async fn test_value_types_display_correctly() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Section header rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_section_headers_visible() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -730,6 +818,10 @@ async fn test_section_headers_visible() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY stream timing: open_settings() helper fails. Footer/help text rendering verified by settings_panel widget tests."]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_help_text_visible() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -761,6 +853,10 @@ async fn test_help_text_visible() {
 #[tokio::test]
 #[serial]
 #[ignore = "Snapshot unstable due to varying ANSI escape sequences in headless PTY"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_snapshot_settings_page_project_tab() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
@@ -862,6 +958,10 @@ async fn test_toggle_boolean_setting(setting_name: &str, down_count: usize) {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY issue: Enter/Space keys not triggering toggle. Toggle verified working via unit tests (test_settings_toggle_bool_flips_value)"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_toggle_auto_start() {
     test_toggle_boolean_setting("Auto Start", 0).await;
 }
@@ -872,6 +972,10 @@ async fn test_toggle_auto_start() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY issue: Enter/Space keys not triggering toggle. Toggle verified working via unit tests"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_toggle_auto_reload() {
     test_toggle_boolean_setting("Auto Reload", 4).await;
 }
@@ -882,6 +986,10 @@ async fn test_toggle_auto_reload() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY issue: Enter/Space keys not triggering toggle. Toggle verified working via unit tests"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_toggle_devtools_auto_open() {
     test_toggle_boolean_setting("Auto Open DevTools", 12).await;
 }
@@ -892,6 +1000,10 @@ async fn test_toggle_devtools_auto_open() {
 #[tokio::test]
 #[serial]
 #[ignore = "E2E PTY issue: Enter/Space keys not triggering toggle. Toggle verified working via unit tests"]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_toggle_stack_trace_collapsed() {
     test_toggle_boolean_setting("Collapse Stack Traces", 10).await;
 }

@@ -8,6 +8,10 @@ mod debug_settings_test {
     #[tokio::test]
     #[serial]
     #[ignore = "Debug test - run manually"]
+    #[cfg_attr(
+        target_os = "windows",
+        ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+    )]
     async fn debug_settings_rendering() {
         let fixture = TestFixture::simple_app();
         let mut session = FdemonSession::spawn(&fixture.path()).expect("spawn fdemon");
