@@ -184,21 +184,34 @@ Supported launch.json fields:
 
 Flutter Demon auto-launches a session at startup when **either**:
 
-- any configuration in `launch.toml` sets `auto_start = true`, **or**
-- `settings.local.toml` holds a `last_device` from a previous run.
+- any configuration in `launch.toml` sets `auto_start = true` (per-config explicit intent), **or**
+- `[behavior] auto_launch = true` is set in `config.toml` **AND** a valid `last_device` is cached in `settings.local.toml` (cache-based opt-in).
 
-Otherwise, the New Session dialog opens for the user to pick a config and device manually.
+Otherwise, the New Session dialog opens. The cached `last_device` (if any) pre-selects in the dialog but does not trigger a launch.
 
 Once the auto-launch gate fires, the **selection priority** below decides which config + device pair to use. When the gate fires via the cache and the cached device is no longer connected, the cascade falls through to Tier 3 / Tier 4 — see the "Cache Updates" note for behavior in that edge case.
 
 **Selection priority (first matching tier wins):**
 
-1. **Explicit intent** — first launch config with `auto_start = true`. The `device` field resolves via the matcher (see [Device Selection](#device-selection)). If the configured device is not found among connected devices, Flutter Demon picks the first available device (still using the auto_start config — stays on Tier 1) and writes a warning to the fdemon log file. This tier always beats the cache.
-2. **Remembered last selection** — if `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. Used only when no config has `auto_start = true`. If the saved device is no longer connected, this tier returns no match and falls through to Tier 3, writing a warning to the fdemon log file.
-3. **First available** — first config in `launch.toml` (or `launch.json`) + first discovered device.
-4. **Bare `flutter run`** — if no configs exist at all.
+| # | Trigger | Device | Config |
+|---|---------|--------|--------|
+| 1 | `auto_start = true` in `launch.toml` | matched via `device` field, fallback first | the auto_start config |
+| 2 | `[behavior] auto_launch = true` + valid cache | `last_device` from `settings.local.toml` | `last_config` if still valid, else first |
+| 3 | `[behavior] auto_launch = true` + stale/missing cache | first available device | first launch config (if any) |
+| 4 | (only when `launch.toml` is empty) | first available device | none (bare flutter run) |
 
-**When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful. The cache is now also the trigger that lets the New Session dialog be skipped on subsequent runs — pick a device once, and Flutter Demon remembers it the next time you launch.
+More detail on each tier:
+
+- **Tier 1 (explicit intent):** The `device` field resolves via the matcher (see [Device Selection](#device-selection)). If the configured device is not found among connected devices, Flutter Demon picks the first available device (still using the auto_start config — stays on Tier 1) and writes a warning to the fdemon log file. This tier always beats the cache.
+- **Tier 2 (cache opt-in):** Used only when `[behavior] auto_launch = true` and no config has `auto_start = true`. If `settings.local.toml` holds `last_device` + `last_config` and the device is still connected, that selection is used. If the saved device is no longer connected, this tier returns no match and falls through to Tier 3, writing a warning to the fdemon log file.
+- **Tier 3 (first available):** First config in `launch.toml` (or `launch.json`) + first discovered device.
+- **Tier 4 (bare `flutter run`):** Used when no configs exist at all.
+
+> **Note:** `[behavior] auto_launch` is a *new* field (added after v0.5.0). The deprecated `[behavior] auto_start` (removed in v0.5.0) is unrelated; `auto_launch` is not a revival of that flag.
+
+**Headless mode:** In headless mode (`fdemon --headless`), cache-based auto-launch (Tier 2) is **always disabled** — it is designed for interactive terminal sessions only. Headless honoring of `auto_start = true` (Tier 1) is fully supported.
+
+**When is the cache updated?** Whenever a session starts successfully — both auto-launch and manual NewSessionDialog launches update `last_device` and `last_config`. Previously only auto-launches did; this was a bug that made the dialog feel forgetful. The cache is now also used to pre-select the default device in the New Session dialog, so your last choice is always remembered.
 
 ### User Preferences (settings.local.toml)
 
@@ -238,13 +251,25 @@ Control general application behavior.
 ```toml
 [behavior]
 confirm_quit = true     # Show confirmation dialog when quitting with active sessions
+auto_launch = false     # Set true to auto-launch on the device cached in settings.local.toml
 ```
 
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `confirm_quit` | `boolean` | `true` | If `true`, shows confirmation dialog when quitting with running apps. If `false`, quits immediately. |
+| `auto_launch` | `boolean` | `false` | When `true`, fdemon auto-launches the cached `last_device` from `settings.local.toml` on startup if no `launch.toml` configuration has `auto_start = true`. When `false` (default), the cache is preserved across runs but only used to pre-select a default in the New Session dialog. Per-config `auto_start = true` always wins regardless of this flag. Has no effect in headless mode. |
 
-> **Removed in v0.5.0:** `[behavior] auto_start` — it was redundant with per-config `auto_start` in `launch.toml`, and its documented semantics never matched the code. Existing configs with the flag load cleanly but the flag has no effect; fdemon logs a one-time deprecation warning. Use per-config `auto_start = true` on the launch configuration you want to auto-launch.
+**Example:**
+
+```toml
+[behavior]
+confirm_quit = true
+auto_launch = false   # set true to auto-launch on cached last_device
+```
+
+> **Removed in v0.5.0:** `[behavior] auto_start` — it was redundant with per-config `auto_start` in `launch.toml`, and its documented semantics never matched the code. Existing configs with the flag load cleanly but the flag has no effect; fdemon logs a one-time deprecation warning. Use per-config `auto_start = true` on the launch configuration you want to auto-launch, or `[behavior] auto_launch = true` to opt into cache-based auto-launch.
+
+> **Behavior change (post-v0.5.0):** Cache-driven auto-launch is now opt-in via `[behavior] auto_launch = true`. If you were relying on `settings.local.toml` to silently auto-launch on each run (the behavior introduced by commit `c5879fa`), add `auto_launch = true` to `[behavior]` in your `config.toml`. This change does **not** affect users who use per-config `auto_start = true` — that path is unchanged.
 
 ### Watcher Settings
 
