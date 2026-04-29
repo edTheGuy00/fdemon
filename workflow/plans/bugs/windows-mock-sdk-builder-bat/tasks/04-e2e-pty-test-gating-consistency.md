@@ -64,27 +64,18 @@ The `#[cfg_attr]` should be placed AFTER any existing `#[serial]` and the existi
 
 ## Completion Summary
 
-**Status:** Done
-**Branch:** fix/detect-windows-bat
+**Status:** Reverted
+
+### What happened
+
+Originally landed in `e9d020b`, then reverted in a follow-up commit after Windows clippy reported `unused_attributes` (`-D warnings` => failure) on every test that carried both the existing `#[ignore = "..."]` and the newly added `#[cfg_attr(target_os = "windows", ignore = "...")]`. With both attributes present, Windows expansion produces two stacked `#[ignore]`s on the same item — clippy flags the second as dead.
+
+The pattern works in `tests/e2e/tui_interaction.rs` and `tests/e2e/tui_workflows.rs` (the reference) only because those tests have no pre-existing `#[ignore]`. In `settings_page.rs` and `debug_settings.rs` every test already has an unconditional `#[ignore]`, so the additional Windows-specific `ignore` is redundant — both at runtime (the test was already skipped) and per clippy.
+
+### Net effect
+
+These tests remain ignored on every platform via their existing per-test `#[ignore = "..."]` attributes. The "if someone removes `#[ignore]` later, Windows will fail" defensive intent of this task is unmet; if that scenario actually arises in the future, the right move at that moment is to add a `#[cfg(not(target_os = "windows"))]` gate or replace the unconditional `#[ignore]` with split `#[cfg_attr(not(windows), ignore = ...)]` + `#[cfg_attr(windows, ignore = ...)]` (only one `ignore` active per platform).
 
 ### Files Modified
 
-| File | Changes |
-|------|---------|
-| `tests/e2e/settings_page.rs` | Added `#[cfg_attr(target_os = "windows", ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests")]` after the existing `#[ignore]` on all 28 `#[tokio::test]` functions |
-| `tests/e2e/debug_settings.rs` | Added the same `#[cfg_attr]` to the single `#[tokio::test]` (`debug_settings_rendering`) |
-
-### Notable Decisions/Tradeoffs
-
-1. **Placement after existing `#[ignore]`**: The `#[cfg_attr]` is placed after the existing per-test `#[ignore]` attribute as specified in the task. On non-Windows platforms the first `#[ignore]` takes effect and the Windows reason is inert dead code. On Windows the ConPTY reason surfaces instead.
-2. **`debug_settings.rs` not in module tree**: The file is not currently wired into `tests/e2e.rs` (no `mod debug_settings;` declaration), so the test doesn't currently run anywhere. The annotation was added proactively as specified so it's correct if/when it gets included.
-
-### Testing Performed
-
-- `cargo fmt --all -- --check` - Passed
-- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
-- `cargo test --test e2e settings_page` - 28 ignored, 0 passed, 0 failed (same count as before)
-
-### Risks/Limitations
-
-1. **Dead annotation in debug_settings.rs**: Since `debug_settings.rs` is not included in the test module, the added `#[cfg_attr]` has no runtime effect yet. This is intentional — it's proactive gating as described in the task.
+None (revert restores pre-task state).
