@@ -158,11 +158,20 @@ pub struct BehaviorSettings {
     /// Ask before quitting with running apps
     #[serde(default = "default_true")]
     pub confirm_quit: bool,
+    /// When true, fdemon auto-launches the cached `last_device` on startup
+    /// (only if `launch.toml` does not have an `auto_start = true` config —
+    /// per-config intent always wins). Default false: cache is "remembered
+    /// for the dialog" only, not a launch trigger.
+    #[serde(default)]
+    pub auto_launch: bool,
 }
 
 impl Default for BehaviorSettings {
     fn default() -> Self {
-        Self { confirm_quit: true }
+        Self {
+            confirm_quit: true,
+            auto_launch: false,
+        }
     }
 }
 
@@ -1331,6 +1340,22 @@ mod tests {
         assert_eq!(settings.watcher.debounce_ms, 500);
         assert!(settings.watcher.auto_reload);
         assert_eq!(settings.ui.log_buffer_size, 10_000);
+    }
+
+    #[test]
+    fn behavior_settings_auto_launch_defaults_false() {
+        let s: BehaviorSettings = toml::from_str("").unwrap();
+        assert!(!s.auto_launch);
+        assert!(s.confirm_quit);
+    }
+
+    #[test]
+    fn behavior_settings_auto_launch_round_trips() {
+        let toml_in = "auto_launch = true\nconfirm_quit = false";
+        let s: BehaviorSettings = toml::from_str(toml_in).unwrap();
+        assert!(s.auto_launch);
+        let toml_out = toml::to_string(&s).unwrap();
+        assert!(toml_out.contains("auto_launch = true"));
     }
 
     #[test]

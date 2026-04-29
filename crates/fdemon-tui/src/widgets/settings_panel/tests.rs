@@ -171,8 +171,9 @@ fn test_project_settings_items_count() {
     let settings = Settings::default();
     let items = project_settings_items(&settings);
 
-    // Should have 33 items across 8 sections (includes DevTools + DevTools Logging + DAP Server)
-    assert_eq!(items.len(), 33);
+    // Should have 34 items across 8 sections (includes DevTools + DevTools Logging + DAP Server +
+    // behavior.auto_launch added in cache-auto-launch-gate)
+    assert_eq!(items.len(), 34);
 }
 
 #[test]

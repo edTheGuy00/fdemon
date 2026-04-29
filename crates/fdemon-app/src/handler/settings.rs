@@ -13,6 +13,11 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.behavior.confirm_quit = *v;
             }
         }
+        "behavior.auto_launch" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.behavior.auto_launch = *v;
+            }
+        }
 
         // Watcher
         "watcher.paths" => {
