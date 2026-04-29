@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use fdemon_app::config::{
-    self, get_first_auto_start, load_all_configs, load_last_selection, LoadedConfigs,
+    self, get_first_auto_start, has_cached_last_device, load_all_configs, LoadedConfigs,
 };
 use fdemon_app::state::{AppState, UiMode};
 
@@ -17,16 +17,6 @@ pub enum StartupAction {
     Ready,
     /// Auto-start detected — runner will send StartAutoLaunch message
     AutoStart { configs: LoadedConfigs },
-}
-
-/// Returns `true` when `settings.local.toml` exists in `project_path` and
-/// contains a non-empty `last_device` value.
-///
-/// A missing file, a parse failure, or an empty string all return `false`.
-fn has_cached_last_device(project_path: &Path) -> bool {
-    load_last_selection(project_path)
-        .and_then(|s| s.device_id)
-        .is_some_and(|d| !d.is_empty())
 }
 
 /// Initialize startup state.

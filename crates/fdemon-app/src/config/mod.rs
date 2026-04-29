@@ -40,3 +40,13 @@ pub use writer::{
     save_fdemon_configs, update_config_dart_defines, update_config_flavor, update_config_mode,
     ConfigAutoSaver,
 };
+
+/// Returns `true` when `settings.local.toml` exists in `project_path` and
+/// contains a non-empty `last_device` value.
+///
+/// A missing file, a parse failure, or an empty string all return `false`.
+pub fn has_cached_last_device(project_path: &std::path::Path) -> bool {
+    load_last_selection(project_path)
+        .and_then(|s| s.device_id)
+        .is_some_and(|d| !d.is_empty())
+}
