@@ -102,6 +102,12 @@ pub enum UpdateAction {
         configs: LoadedConfigs,
         /// Flutter executable to use for device discovery.
         flutter: FlutterExecutable,
+        /// Whether the cached `last_device` selection (Tier 2) is allowed.
+        ///
+        /// When `false`, `find_auto_launch_target` skips `try_cached_selection`
+        /// and falls through to Tier 3 (first config + first device) or
+        /// Tier 4 (bare flutter run). Propagated from `Message::StartAutoLaunch`.
+        cache_allowed: bool,
     },
 
     /// Discover available emulators
