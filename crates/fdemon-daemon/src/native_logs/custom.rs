@@ -289,6 +289,7 @@ mod tests {
 
     // ── Basic functionality ────────────────────────────────────────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_with_echo_command() {
         // `printf` outputs "hello\nworld\n" without a trailing extra newline issue.
@@ -314,6 +315,7 @@ mod tests {
         assert_eq!(events[0].tag, "test-source");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_process_exit() {
         // `echo` outputs one line and exits immediately.
@@ -336,6 +338,7 @@ mod tests {
             .expect("task did not complete after process exit");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_shutdown() {
         // `yes` produces infinite output — we must shut it down.
@@ -391,6 +394,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_with_env() {
         // `printenv MY_VAR` prints the value of MY_VAR.
@@ -421,6 +425,7 @@ mod tests {
         assert_eq!(event.tag, "env-test");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_tag_filtering_exclude() {
         // Use JSON format. Output two lines: one with tag "filtered", one "allowed".
@@ -447,11 +452,10 @@ mod tests {
 
         let mut events = Vec::new();
         // Collect all events with a short timeout.
-        loop {
-            match timeout(Duration::from_millis(500), handle.event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(event)) =
+            timeout(Duration::from_millis(500), handle.event_rx.recv()).await
+        {
+            events.push(event);
         }
 
         // Only the "allowed" tag should pass.
@@ -465,6 +469,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_tag_filtering_include() {
         // Only "allowed" tag in include list; "other" should be dropped.
@@ -488,11 +493,10 @@ mod tests {
         let mut handle = capture.spawn().expect("handle should be Some");
 
         let mut events = Vec::new();
-        loop {
-            match timeout(Duration::from_millis(500), handle.event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(event)) =
+            timeout(Duration::from_millis(500), handle.event_rx.recv()).await
+        {
+            events.push(event);
         }
 
         assert!(
@@ -501,9 +505,12 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_custom_capture_working_dir() {
         // `pwd` prints the current working directory; verify it matches working_dir.
+        // Unix-only: `pwd` is not a native Windows command and `/tmp` is not a
+        // valid Windows path (Git Bash translates it to a drive-prefixed form).
         let config = CustomSourceConfig {
             name: "pwd-test".to_string(),
             command: "pwd".to_string(),
@@ -534,6 +541,7 @@ mod tests {
 
     // ── Factory function ───────────────────────────────────────────────────
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_create_custom_log_capture_returns_box() {
         let config = make_config("echo", vec!["test"], OutputFormat::Raw);
@@ -613,6 +621,7 @@ mod tests {
     // ── Stdout readiness signaling ─────────────────────────────────────────
 
     /// When the ready_pattern matches a stdout line, ready_tx is fired.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_fires_on_match() {
         let config = CustomSourceConfig {
@@ -642,6 +651,7 @@ mod tests {
 
     /// When the process exits before the pattern matches, ready_tx is dropped
     /// and the receiver gets a RecvError.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_no_match_drops_tx() {
         let config = CustomSourceConfig {
@@ -669,6 +679,7 @@ mod tests {
     }
 
     /// When no ready_pattern is set, ready_tx is dropped when the process exits.
+    #[cfg(unix)]
     #[tokio::test]
     async fn test_stdout_ready_pattern_none_no_signal() {
         let config = CustomSourceConfig {
@@ -716,11 +727,8 @@ mod tests {
 
         let mut event_rx = handle.event_rx;
         let mut events = Vec::new();
-        loop {
-            match timeout(Duration::from_millis(500), event_rx.recv()).await {
-                Ok(Some(event)) => events.push(event),
-                _ => break,
-            }
+        while let Ok(Some(event)) = timeout(Duration::from_millis(500), event_rx.recv()).await {
+            events.push(event);
         }
 
         // Both lines should appear as log events (pattern matching doesn't consume lines).

@@ -480,6 +480,9 @@ async fn fetch_and_send_alloc_profile(
 mod tests {
     use super::*;
 
+    // FIXME: see clippy-rust-191-cleanup — asserts constant invariant that
+    // allocation profiling minimum (1000ms) is always >= memory polling minimum (500ms).
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn test_performance_poll_constants_are_reasonable() {
         assert_eq!(PERF_POLL_MIN_MS, 500, "perf poll minimum should be 500ms");
@@ -493,6 +496,10 @@ mod tests {
         );
     }
 
+    // FIXME: see clippy-rust-191-cleanup — asserts constant invariants that
+    // profile perf minimum (2000ms) > debug perf minimum (500ms) and
+    // profile alloc minimum (5000ms) > debug alloc minimum (1000ms).
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn test_profile_mode_constants_are_reasonable() {
         assert_eq!(

@@ -220,8 +220,10 @@ mod tests {
 
     #[test]
     fn test_debug_overlay_state_partial_update() {
-        let mut state = DebugOverlayState::default();
-        state.repaint_rainbow = Some(true);
+        let state = DebugOverlayState {
+            repaint_rainbow: Some(true),
+            ..Default::default()
+        };
         assert_eq!(state.repaint_rainbow, Some(true));
         // Other fields should remain None.
         assert_eq!(state.debug_paint, None);

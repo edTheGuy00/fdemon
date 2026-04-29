@@ -78,7 +78,7 @@ fn compute_cwd(project_root: &Path, workspace_root: &Path) -> String {
 
     // Compute the relative path from workspace_root to project_root.
     match canonical_project.strip_prefix(&canonical_workspace) {
-        Ok(rel) => rel.to_string_lossy().into_owned(),
+        Ok(rel) => rel.to_string_lossy().replace('\\', "/"),
         // If the prefix strip fails (shouldn't happen, but be safe), fall back.
         Err(_) => "${workspaceFolder}".to_string(),
     }

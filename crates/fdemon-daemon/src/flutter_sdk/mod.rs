@@ -43,10 +43,14 @@
 
 pub mod cache_scanner;
 mod channel;
+pub(crate) mod diagnostics;
 mod locator;
 mod types;
 pub mod version_managers;
 pub mod version_probe;
+
+#[cfg(all(test, target_os = "windows"))]
+mod windows_tests;
 
 pub use cache_scanner::{
     resolve_fvm_cache_path, scan_installed_versions, scan_installed_versions_from_path,

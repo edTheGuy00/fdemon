@@ -421,7 +421,11 @@ mod tests {
         // Set cache with old timestamp (> 30s ago) — cache no longer expires,
         // so devices should still be shown immediately with a background refresh.
         state.device_cache = Some(vec![test_device_full("1", "iPhone", "ios", false)]);
-        state.devices_last_updated = Some(Instant::now() - Duration::from_secs(60));
+        state.devices_last_updated = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(60))
+                .unwrap_or_else(Instant::now),
+        );
 
         let result = handle_open_new_session_dialog(&mut state);
 
@@ -454,7 +458,11 @@ mod tests {
             test_device_full("2", "Pixel", "android", false),
         ];
         state.device_cache = Some(devices.clone());
-        state.devices_last_updated = Some(Instant::now() - Duration::from_secs(5));
+        state.devices_last_updated = Some(
+            Instant::now()
+                .checked_sub(Duration::from_secs(5))
+                .unwrap_or_else(Instant::now),
+        );
 
         handle_open_new_session_dialog(&mut state);
 

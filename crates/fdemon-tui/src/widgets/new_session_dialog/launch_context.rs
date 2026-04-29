@@ -1252,7 +1252,7 @@ mod launch_context_tests {
             "VSCode config flavor value should be shown"
         );
         assert!(
-            state.is_field_editable(super::super::state::LaunchContextField::Flavor) == false,
+            !state.is_field_editable(super::super::state::LaunchContextField::Flavor),
             "Flavor field should not be editable with VSCode config"
         );
     }
@@ -2041,7 +2041,7 @@ mod launch_context_tests {
             "button slot should be 3 rows"
         );
         // 5 spacers(1) + 5 fields(4) + 1 button spacer(1) = 26
-        let expected_button_y = area.y + (5 * 1) + (5 * 4) + 1;
+        let expected_button_y = area.y + 5 + (5 * 4) + 1;
         assert_eq!(
             chunks[LAUNCH_BUTTON_SLOT].y, expected_button_y,
             "button slot y position"

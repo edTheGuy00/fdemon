@@ -7,6 +7,8 @@ use super::*;
 
 // ── Sample-based chart (rich MemorySample data) ───────────────────────────────
 
+// MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+#[allow(clippy::manual_is_multiple_of)]
 /// Render the stacked braille chart from `MemorySample` data.
 pub(super) fn render_sample_chart(
     samples: &RingBuffer<MemorySample>,
@@ -108,7 +110,7 @@ pub(super) fn render_sample_chart(
         let alloc_y = byte_to_dot_y(sample.allocated);
         canvas_allocated.set(dot_x, alloc_y);
         // Dashed appearance: also skip every other column
-        if dot_x.is_multiple_of(2) && alloc_y + 1 < dot_h {
+        if dot_x % 2 == 0 && alloc_y + 1 < dot_h {
             canvas_allocated.set(dot_x, alloc_y + 1);
         }
 
@@ -161,6 +163,8 @@ pub(super) fn render_sample_chart(
 
 // ── History-based chart (fallback with MemoryUsage data) ─────────────────────
 
+// MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+#[allow(clippy::manual_is_multiple_of)]
 /// Render a simplified chart from `MemoryUsage` data (fallback when no samples).
 pub(super) fn render_history_chart(
     history: &RingBuffer<MemoryUsage>,
@@ -220,7 +224,7 @@ pub(super) fn render_history_chart(
         // Capacity line (dashed)
         let alloc_y = byte_to_dot_y(mem.heap_capacity);
         canvas_allocated.set(dot_x, alloc_y);
-        if dot_x.is_multiple_of(2) && alloc_y + 1 < dot_h {
+        if dot_x % 2 == 0 && alloc_y + 1 < dot_h {
             canvas_allocated.set(dot_x, alloc_y + 1);
         }
     }

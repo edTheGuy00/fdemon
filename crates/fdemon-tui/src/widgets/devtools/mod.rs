@@ -384,8 +384,10 @@ mod tests {
 
     #[test]
     fn test_devtools_view_renders_performance_panel() {
-        let mut state = DevToolsViewState::default();
-        state.active_panel = DevToolsPanel::Performance;
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
@@ -395,8 +397,10 @@ mod tests {
 
     #[test]
     fn test_tab_bar_highlights_active_panel() {
-        let mut state = DevToolsViewState::default();
-        state.active_panel = DevToolsPanel::Performance;
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
@@ -428,9 +432,11 @@ mod tests {
 
     #[test]
     fn test_overlay_indicators_shown_when_active() {
-        let mut state = DevToolsViewState::default();
-        state.overlay_repaint_rainbow = true;
-        state.overlay_debug_paint = true;
+        let state = DevToolsViewState {
+            overlay_repaint_rainbow: true,
+            overlay_debug_paint: true,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
@@ -449,8 +455,10 @@ mod tests {
 
     #[test]
     fn test_overlay_perf_overlay_shown_when_active() {
-        let mut state = DevToolsViewState::default();
-        state.overlay_performance = true;
+        let state = DevToolsViewState {
+            overlay_performance: true,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
@@ -510,8 +518,10 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_connected_shows_nothing() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Connected;
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Connected,
+            ..Default::default()
+        };
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
@@ -523,8 +533,10 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_disconnected() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Disconnected;
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Disconnected,
+            ..Default::default()
+        };
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
@@ -538,10 +550,12 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_reconnecting_shows_attempt_counter() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Reconnecting {
-            attempt: 2,
-            max_attempts: 10,
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Reconnecting {
+                attempt: 2,
+                max_attempts: 10,
+            },
+            ..Default::default()
         };
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut label = String::new();
@@ -560,8 +574,10 @@ mod tests {
 
     #[test]
     fn test_connection_indicator_timed_out() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::TimedOut;
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::TimedOut,
+            ..Default::default()
+        };
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut label = String::new();
         let result = widget.connection_indicator_text(&mut label);
@@ -575,8 +591,10 @@ mod tests {
 
     #[test]
     fn test_tab_bar_shows_disconnected_indicator() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Disconnected;
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Disconnected,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
@@ -591,10 +609,12 @@ mod tests {
 
     #[test]
     fn test_tab_bar_shows_reconnecting_indicator() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Reconnecting {
-            attempt: 3,
-            max_attempts: 10,
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Reconnecting {
+                attempt: 3,
+                max_attempts: 10,
+            },
+            ..Default::default()
         };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
@@ -610,8 +630,10 @@ mod tests {
 
     #[test]
     fn test_tab_bar_no_indicator_when_connected() {
-        let mut state = DevToolsViewState::default();
-        state.connection_status = VmConnectionStatus::Connected;
+        let state = DevToolsViewState {
+            connection_status: VmConnectionStatus::Connected,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
@@ -724,8 +746,10 @@ mod tests {
     #[test]
     fn test_devtools_panel_network_tab_small_terminal() {
         // Network tab at small terminal size
-        let mut state = DevToolsViewState::default();
-        state.active_panel = DevToolsPanel::Network;
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Network,
+            ..Default::default()
+        };
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 10));
@@ -738,8 +762,10 @@ mod tests {
         // Performance panel compact mode: height=1 after the header is consumed.
         // At 6 total rows: 3 for tab bar, leaving 3 for the panel content.
         // At the extreme: 4 total rows gives 1 row for the panel.
-        let mut state = DevToolsViewState::default();
-        state.active_panel = DevToolsPanel::Performance;
+        let state = DevToolsViewState {
+            active_panel: DevToolsPanel::Performance,
+            ..Default::default()
+        };
 
         // 4 rows total: min-size guard passes (>= 3 height, >= 20 width).
         // Tab bar takes 3 rows, panel gets 1 row → compact summary path.

@@ -60,7 +60,17 @@ impl FlutterProcess {
             });
         }
 
-        info!("Spawning Flutter: flutter {}", args.join(" "));
+        info!(
+            binary = %flutter.path().display(),
+            cwd = %project_path.display(),
+            "Spawning flutter session"
+        );
+        debug!(
+            binary = %flutter.path().display(),
+            args = ?args,
+            cwd = %project_path.display(),
+            "Spawning flutter session (with args)"
+        );
 
         // Spawn the Flutter process
         let mut child = flutter
@@ -72,14 +82,20 @@ impl FlutterProcess {
             .stderr(Stdio::piped())
             .kill_on_drop(true) // Critical: cleanup on drop
             .spawn()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Error::FlutterNotFound
-                } else {
-                    Error::ProcessSpawn {
-                        reason: e.to_string(),
-                    }
-                }
+            .map_err(|e| match e.kind() {
+                std::io::ErrorKind::NotFound => Error::FlutterNotFound,
+                #[cfg(target_os = "windows")]
+                std::io::ErrorKind::InvalidInput => Error::ProcessSpawn {
+                    reason: format!(
+                        "flutter spawn rejected an argument it could not safely escape (binary: {}). \
+                         This usually means a dart-define value contains characters cmd.exe cannot \
+                         pass safely (% ^ & | < > unmatched \"). Check .fdemon/launch.toml.",
+                        flutter.path().display()
+                    ),
+                },
+                _ => Error::ProcessSpawn {
+                    reason: format!("{} (binary: {})", e, flutter.path().display()),
+                },
             })?;
 
         let pid = child.id();
@@ -438,6 +454,7 @@ impl Drop for FlutterProcess {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    #[cfg(unix)]
     use tokio::process::Command;
 
     fn default_flutter() -> FlutterExecutable {

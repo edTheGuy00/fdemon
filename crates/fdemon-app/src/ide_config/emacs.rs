@@ -46,7 +46,7 @@ impl IdeConfigGenerator for EmacsGenerator {
     /// the generated file in the loading instructions.
     fn generate(&self, port: u16, project_root: &Path) -> Result<String> {
         let path = self.config_path(project_root);
-        Ok(generate_elisp(port, path.display().to_string()))
+        Ok(generate_elisp(port, to_lisp_path(&path)))
     }
 
     /// Regenerate the file from scratch (overwrite semantics).
@@ -56,7 +56,7 @@ impl IdeConfigGenerator for EmacsGenerator {
     /// is derived from `project_root` so the user can copy-paste a working path.
     fn merge_config(&self, _existing: &str, port: u16, project_root: &Path) -> Result<String> {
         let path = self.config_path(project_root);
-        Ok(generate_elisp(port, path.display().to_string()))
+        Ok(generate_elisp(port, to_lisp_path(&path)))
     }
 
     /// Display name used in log messages.
@@ -68,6 +68,14 @@ impl IdeConfigGenerator for EmacsGenerator {
 // ─────────────────────────────────────────────────────────────────
 // Elisp generation
 // ─────────────────────────────────────────────────────────────────
+
+/// Render `path` as a forward-slash string suitable for embedding in Elisp.
+///
+/// Emacs accepts `/` on Windows, and `\` would be misinterpreted as escape
+/// sequences (e.g. `\f`, `\n`, `\U`) in Elisp string literals.
+fn to_lisp_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
 
 /// Produce the full Elisp file content.
 ///
@@ -200,10 +208,11 @@ mod tests {
         let existing = "(some old elisp)";
         let result = gen.merge_config(existing, 12345, dir.path()).unwrap();
         let expected_path = dir.path().join(".fdemon/dap-emacs.el");
+        let expected = expected_path.to_string_lossy().replace('\\', "/");
         assert!(
-            result.contains(&expected_path.display().to_string()),
+            result.contains(&expected),
             "expected absolute path '{}' in merged output",
-            expected_path.display()
+            expected
         );
         // Ensure the old relative placeholder is gone
         assert!(

@@ -748,12 +748,14 @@ impl LoadingState {
     /// Tick animation frame and optionally cycle message
     ///
     /// `cycle_messages`: If true, cycle through messages every ~15 ticks (1.5 sec at 100ms)
+    // MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+    #[allow(clippy::manual_is_multiple_of)]
     pub fn tick(&mut self, cycle_messages: bool) {
         self.animation_frame = self.animation_frame.wrapping_add(1);
 
         if cycle_messages {
             // Cycle message every 15 frames (~1.5 seconds at 100ms tick rate)
-            if self.animation_frame.is_multiple_of(15) {
+            if self.animation_frame % 15 == 0 {
                 self.message_index = (self.message_index + 1) % LOADING_MESSAGES.len();
                 self.message = LOADING_MESSAGES[self.message_index].to_string();
             }
@@ -1463,8 +1465,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_returns_root_when_index_zero() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
 
         let desc = inspector.selected_node_description();
         assert_eq!(desc.as_deref(), Some("RootNode"));
@@ -1472,8 +1476,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_returns_correct_node() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         // Expand root and first child so that all three nodes are visible.
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
@@ -1485,8 +1491,10 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_third_node() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
         inspector.selected_index = 2;
@@ -1497,18 +1505,22 @@ mod tests {
 
     #[test]
     fn test_selected_node_description_index_out_of_bounds() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_single_node());
-        inspector.selected_index = 99;
+        let inspector = InspectorState {
+            root: Some(make_single_node()),
+            selected_index: 99,
+            ..Default::default()
+        };
         assert!(inspector.selected_node_description().is_none());
     }
 
     #[test]
     fn test_selected_node_description_collapsed_children_not_counted() {
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
-        // Root is NOT expanded — children are hidden, so only root is visible.
-        inspector.selected_index = 1; // index 1 is out of range
+        let inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            // Root is NOT expanded — children are hidden, so only root is visible.
+            selected_index: 1, // index 1 is out of range
+            ..Default::default()
+        };
 
         // Only root visible (index 0), index 1 should return None.
         assert!(inspector.selected_node_description().is_none());
@@ -1517,8 +1529,10 @@ mod tests {
     #[test]
     fn test_selected_node_description_no_allocation_path_matches_visible_nodes() {
         // Verify that selected_node_description agrees with visible_nodes().
-        let mut inspector = InspectorState::default();
-        inspector.root = Some(make_tree_with_three_nodes());
+        let mut inspector = InspectorState {
+            root: Some(make_tree_with_three_nodes()),
+            ..Default::default()
+        };
         inspector.expanded.insert("root-id".to_string());
         inspector.expanded.insert("child-1-id".to_string());
 
@@ -1764,11 +1778,8 @@ mod tests {
     #[test]
     fn test_device_cache_does_not_expire() {
         let mut state = AppState::new();
+        // get_cached_devices has no expiry — calling it after set_device_cache always returns Some.
         state.set_device_cache(vec![test_device("dev1", "Device 1")]);
-
-        // Simulate a stale timestamp — cache should still be returned.
-        state.devices_last_updated =
-            Some(std::time::Instant::now() - std::time::Duration::from_secs(60 * 60));
         assert!(state.get_cached_devices().is_some());
         assert_eq!(state.get_cached_devices().unwrap().len(), 1);
     }

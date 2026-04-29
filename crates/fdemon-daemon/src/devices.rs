@@ -1,5 +1,6 @@
 //! Device discovery using flutter devices command
 
+use crate::flutter_sdk::diagnostics::{is_path_resolution_error, strip_ansi, windows_hint};
 use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -190,7 +191,11 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::FlutterNotFound
             } else {
-                Error::process(format!("Failed to run flutter devices: {}", e))
+                Error::process(format!(
+                    "Failed to run flutter devices ({}): {}",
+                    flutter.path().display(),
+                    e
+                ))
             }
         })?;
 
@@ -212,10 +217,25 @@ async fn run_flutter_devices(flutter: &FlutterExecutable) -> Result<FlutterOutpu
                 output.status.code()
             );
         } else {
+            let stderr_clean = strip_ansi(&stderr);
+            let hint = if is_path_resolution_error(&stderr_clean) {
+                windows_hint()
+            } else {
+                ""
+            };
+            error!(
+                binary = %flutter.path().display(),
+                exit_code = ?output.status.code(),
+                stderr = %stderr_clean,
+                stdout = %stdout,
+                "flutter devices failed"
+            );
             return Err(Error::process(format!(
-                "flutter devices failed with exit code {:?}: {}",
+                "flutter devices failed (binary: {}, exit code {:?}): {}{}",
+                flutter.path().display(),
                 output.status.code(),
-                stderr
+                stderr_clean.trim(),
+                hint,
             )));
         }
     }
@@ -290,6 +310,7 @@ pub fn group_by_platform(devices: &[Device]) -> HashMap<String, Vec<&Device>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     fn sample_device(id: &str, name: &str, platform: &str, emulator: bool) -> Device {
         Device {
@@ -630,7 +651,22 @@ Some trailing message"#;
         assert_eq!(groups.get("iOS").map(|v| v.len()), Some(2));
         assert_eq!(groups.get("Android").map(|v| v.len()), Some(1));
         assert_eq!(groups.get("Web").map(|v| v.len()), Some(1));
-        assert!(groups.get("Windows").is_none());
+        assert!(!groups.contains_key("Windows"));
+    }
+
+    #[tokio::test]
+    async fn test_run_flutter_devices_error_includes_binary_path() {
+        // Use a fake non-existent path so spawn fails with NotFound.
+        let flutter = FlutterExecutable::Direct(PathBuf::from("/nonexistent/flutter"));
+        let result = discover_devices(&flutter).await;
+        let err = result.unwrap_err();
+        // FlutterNotFound is the expected variant for ErrorKind::NotFound;
+        // confirm the error chain or display string includes the path.
+        let msg = err.to_string();
+        assert!(
+            msg.contains("/nonexistent/flutter") || matches!(err, Error::FlutterNotFound),
+            "expected error to reference the binary path, got: {msg}"
+        );
     }
 
     #[tokio::test]

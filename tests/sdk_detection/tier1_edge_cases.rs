@@ -578,6 +578,13 @@ fn test_sdk_version_file_empty() {
         )
         .unwrap();
     }
+    // validate_sdk_path requires bin/flutter.bat on Windows.
+    #[cfg(target_os = "windows")]
+    fs::write(
+        sdk_root.join("bin").join("flutter.bat"),
+        "@echo off\nrem mock flutter.bat\n",
+    )
+    .unwrap();
     // Empty VERSION file (0 bytes)
     fs::write(sdk_root.join("VERSION"), "").unwrap();
 

@@ -50,12 +50,22 @@ impl std::fmt::Display for SdkSource {
     }
 }
 
-/// How to invoke the Flutter binary.
+/// Represents how to invoke the Flutter binary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FlutterExecutable {
-    /// Unix shell script or direct executable — invoke directly
+    /// Direct invocation of the binary by absolute path.
     Direct(PathBuf),
-    /// Windows .bat file — requires `cmd /c` wrapper
+    /// Windows `.bat` shim path.
+    ///
+    /// **Operationally identical to `Direct`** — both variants spawn via
+    /// `Command::new(path)` directly. The Rust stdlib (≥ 1.77.2, our
+    /// declared MSRV) handles `.bat` argument escaping safely per
+    /// CVE-2024-24576, so no `cmd /c` wrapper is needed.
+    ///
+    /// Retained as a separate variant for backward compatibility with
+    /// callers that pattern-match on it. New code should rely on the path's
+    /// extension (`.bat` / `.cmd`) for batch-file detection rather than the
+    /// variant tag.
     WindowsBatch(PathBuf),
 }
 
@@ -67,18 +77,20 @@ impl FlutterExecutable {
         }
     }
 
-    /// Configures a [`tokio::process::Command`] for this executable type.
+    /// Configures a [`tokio::process::Command`] for this executable.
     ///
-    /// - `Direct`: `Command::new(path)` — invoked directly
-    /// - `WindowsBatch`: `Command::new("cmd").args(["/c", path])` — requires cmd wrapper
+    /// Both variants invoke the resolved absolute path directly via
+    /// `Command::new(path)`. Rust's stdlib (≥ 1.77.2 — our MSRV) handles
+    /// `.bat` / `.cmd` invocation safely per CVE-2024-24576 when the program
+    /// path has an explicit extension. The previous `cmd /c <path>` wrapper
+    /// (removed in #32/#34's fix) caused quote-stripping failures on paths
+    /// containing whitespace.
+    ///
+    /// The two variants are operationally identical at this layer; callers
+    /// distinguish batch files via the path extension if needed.
     pub fn command(&self) -> tokio::process::Command {
         match self {
-            Self::Direct(path) => tokio::process::Command::new(path),
-            Self::WindowsBatch(path) => {
-                let mut cmd = tokio::process::Command::new("cmd");
-                cmd.args(["/c", &*path.to_string_lossy()]);
-                cmd
-            }
+            Self::Direct(path) | Self::WindowsBatch(path) => tokio::process::Command::new(path),
         }
     }
 }
@@ -245,6 +257,8 @@ mod tests {
         // Create expected structure
         fs::create_dir_all(root.join("bin/cache/dart-sdk")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), "3.19.0").unwrap();
 
         let result = validate_sdk_path(root);
@@ -281,6 +295,8 @@ mod tests {
         let root = tmp.path();
         fs::create_dir_all(root.join("bin")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), "3.19.0").unwrap();
         // No bin/cache/dart-sdk/ — should still succeed (fresh install)
 
@@ -399,12 +415,21 @@ mod tests {
         assert_eq!(exe.path(), Path::new("C:\\flutter\\bin\\flutter.bat"));
     }
 
-    #[cfg(not(target_os = "windows"))]
     #[test]
-    fn test_flutter_executable_direct_command() {
-        let exe = FlutterExecutable::Direct(PathBuf::from("/usr/local/flutter/bin/flutter"));
-        // Just ensure it builds a command without panicking
-        let _cmd = exe.command();
+    fn test_flutter_executable_direct_command_invokes_path() {
+        let path = PathBuf::from("/usr/local/flutter/bin/flutter");
+        let exe = FlutterExecutable::Direct(path.clone());
+        let cmd = exe.command();
+        assert_eq!(cmd.as_std().get_program(), path.as_os_str());
+    }
+
+    #[test]
+    fn test_flutter_executable_windows_batch_command_invokes_path() {
+        let path = PathBuf::from("C:\\flutter\\bin\\flutter.bat");
+        let exe = FlutterExecutable::WindowsBatch(path.clone());
+        let cmd = exe.command();
+        // After the fix, WindowsBatch invokes the .bat directly (not cmd.exe)
+        assert_eq!(cmd.as_std().get_program(), path.as_os_str());
     }
 
     #[test]

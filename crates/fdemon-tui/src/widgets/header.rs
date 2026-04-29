@@ -356,7 +356,7 @@ mod tests {
 
         // Should not overflow - verify no panic and content fits
         let content = term.content();
-        assert!(content.len() > 0, "Should render without panic");
+        assert!(!content.is_empty(), "Should render without panic");
         // The header renders the full name but it gets truncated by the terminal width
         // Verify basic rendering worked without panic
         assert!(

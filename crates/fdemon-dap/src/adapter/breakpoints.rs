@@ -679,6 +679,8 @@ impl Default for BreakpointManager {
 /// assert!(evaluate_hit_condition(4, "% 2 == 0"));
 /// assert!(!evaluate_hit_condition(3, "% 2 == 0"));
 /// ```
+// MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+#[allow(clippy::manual_is_multiple_of)]
 pub fn evaluate_hit_condition(hit_count: u64, condition: &str) -> bool {
     let condition = condition.trim();
 
@@ -689,7 +691,7 @@ pub fn evaluate_hit_condition(hit_count: u64, condition: &str) -> bool {
         // Accept "% N" or "% N == 0"
         let modulus_str = rest.split_whitespace().next().unwrap_or("");
         return match modulus_str.parse::<u64>() {
-            Ok(n) if n > 0 => hit_count.is_multiple_of(n),
+            Ok(n) if n > 0 => hit_count % n == 0,
             // Parse failure or zero divisor → safe default: stop
             _ => true,
         };

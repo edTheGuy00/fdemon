@@ -1,7 +1,7 @@
 //! # Flutter SDK Locator
 //!
 //! Top-level detection chain that resolves the Flutter SDK for a given project.
-//! Walks 11 strategies in strict priority order, returning the first valid SDK found.
+//! Walks 12 strategies in strict priority order, returning the first valid SDK found.
 //!
 //! ## Priority Order
 //!
@@ -16,18 +16,17 @@
 //! 9. flutter_wrapper (`flutterw` + `.flutter/`)
 //! 10. System PATH (`which flutter` → resolve symlinks → SDK root)
 //! 11. Lenient PATH fallback (binary on PATH but VERSION file missing/unreadable)
+//! 12. Binary-only fallback (shim installers: scoop, winget — executable found but SDK root not canonical)
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use fdemon_core::prelude::*;
 
 use super::{
     channel::detect_channel,
     types::{
-        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterSdk, SdkSource,
+        read_version_file, validate_sdk_path, validate_sdk_path_lenient, FlutterExecutable,
+        FlutterSdk, SdkSource,
     },
     version_managers,
 };
@@ -184,9 +183,14 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
         Err(e) => debug!("SDK detection: flutter_wrapper — error: {e}"),
     }
 
+    // Cache PATH-resolution result once for strategies 10, 11, and 12.
+    let path_resolution = try_system_path();
+
     // Strategy 10: System PATH
-    if let Some(sdk_root) = try_system_path() {
-        if let Some(sdk) = try_resolve_sdk(sdk_root, |_| SdkSource::SystemPath, "system PATH") {
+    if let Some(ref sdk_root) = path_resolution {
+        if let Some(sdk) =
+            try_resolve_sdk(sdk_root.clone(), |_| SdkSource::SystemPath, "system PATH")
+        {
             return Ok(sdk);
         }
     } else {
@@ -196,14 +200,13 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
     // Strategy 11: Lenient PATH fallback — binary on PATH but VERSION file missing/unreadable.
     // Re-scans PATH using the same logic as strategy 10 but skips the VERSION file requirement.
     // Uses SdkSource::PathInferred to distinguish from a fully resolved SdkSource::SystemPath.
-    if let Some(sdk_root) = try_system_path() {
-        match validate_sdk_path_lenient(&sdk_root) {
+    if let Some(ref sdk_root) = path_resolution {
+        match validate_sdk_path_lenient(sdk_root) {
             Ok(executable) => {
-                let version =
-                    read_version_file(&sdk_root).unwrap_or_else(|_| "unknown".to_string());
-                let channel = detect_channel(&sdk_root).map(|c| c.to_string());
+                let version = read_version_file(sdk_root).unwrap_or_else(|_| "unknown".to_string());
+                let channel = detect_channel(sdk_root).map(|c| c.to_string());
                 let sdk = FlutterSdk {
-                    root: sdk_root,
+                    root: sdk_root.clone(),
                     executable,
                     source: SdkSource::PathInferred,
                     version,
@@ -219,6 +222,36 @@ pub fn find_flutter_sdk(project_path: &Path, explicit_path: Option<&Path>) -> Re
             }
             Err(e) => debug!("SDK detection: lenient PATH fallback — invalid: {e}"),
         }
+    }
+
+    // Strategy 12: Binary-only fallback for shim installers (scoop, winget, etc.)
+    // When `which::which("flutter")` resolved a binary but the inferred SDK root
+    // failed both strict and lenient validation, the binary itself is still a
+    // working executable — package-manager shims like scoop's `shims/` and
+    // winget's `Links/` simply don't follow the canonical `<root>/bin/flutter`
+    // layout. We construct a FlutterSdk with placeholder metadata so the engine
+    // can spawn flutter; SDK-root-dependent features (channel detection, version
+    // pinning) gracefully degrade.
+    if let Ok(binary_path) = which::which("flutter") {
+        let canonical_binary = dunce::canonicalize(&binary_path).unwrap_or(binary_path);
+        let executable = flutter_executable_from_binary_path(&canonical_binary);
+        let root = canonical_binary
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| canonical_binary.clone());
+        let sdk = FlutterSdk {
+            root,
+            executable,
+            source: SdkSource::PathInferred,
+            version: "unknown".to_string(),
+            channel: None,
+        };
+        info!(
+            source = %sdk.source,
+            binary = %canonical_binary.display(),
+            "Flutter SDK resolved (binary-only fallback — shim installer detected)"
+        );
+        return Ok(sdk);
     }
 
     warn!("SDK detection: all strategies exhausted, Flutter SDK not found");
@@ -285,6 +318,27 @@ fn try_resolve_sdk(
 // Strategy Helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Construct the platform-appropriate `FlutterExecutable` variant from a
+/// canonical binary path. Used by Strategy 12's binary-only fallback.
+///
+/// On Windows, returns `WindowsBatch(path)` if the path's extension is
+/// `.bat` or `.cmd`, otherwise `Direct(path)`. On non-Windows, always
+/// returns `Direct(path)`.
+fn flutter_executable_from_binary_path(path: &Path) -> FlutterExecutable {
+    #[cfg(target_os = "windows")]
+    {
+        let is_batch = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("bat") || s.eq_ignore_ascii_case("cmd"))
+            .unwrap_or(false);
+        if is_batch {
+            return FlutterExecutable::WindowsBatch(path.to_path_buf());
+        }
+    }
+    FlutterExecutable::Direct(path.to_path_buf())
+}
+
 /// Strategy 1: Return the explicitly configured SDK path if provided.
 fn try_explicit_config(explicit_path: Option<&Path>) -> Option<PathBuf> {
     explicit_path.map(|p| p.to_path_buf())
@@ -295,57 +349,47 @@ fn try_flutter_root_env() -> Option<PathBuf> {
     std::env::var_os("FLUTTER_ROOT").map(PathBuf::from)
 }
 
-/// Strategy 10: Find `flutter` on the system PATH and resolve to the SDK root.
+/// Strategy 10: Resolve `flutter` on the system PATH using `which::which`,
+/// then walk up to the SDK root.
 ///
-/// On Unix: searches PATH for `flutter`, resolves symlinks, then walks up
-/// from the binary to find the SDK root (`<root>/bin/flutter` → `<root>/`).
+/// `which` respects `PATHEXT` on Windows (so it finds `flutter.bat`, `.cmd`,
+/// or `.exe` according to the user's `PATHEXT` ordering) and follows symlinks
+/// on Unix. It returns the absolute path to the binary; we then canonicalize
+/// it (via `dunce::canonicalize` to avoid `\\?\` UNC prefixes on Windows) and
+/// walk up two parents to find the SDK root (`<root>/bin/flutter`).
 ///
-/// On Windows: searches PATH for `flutter.bat` or `flutter.exe`.
+/// **Security note:** PATH-based binary resolution trusts every directory on
+/// `PATH`. Users in security-sensitive environments (multi-tenant boxes,
+/// shared developer machines) should pin an absolute SDK path via
+/// `[flutter] sdk_path` in `.fdemon/config.toml` to bypass PATH lookup
+/// entirely.
 fn try_system_path() -> Option<PathBuf> {
-    let path_var = std::env::var_os("PATH")?;
-
-    for dir in std::env::split_paths(&path_var) {
-        if let Some(sdk_root) = find_flutter_in_dir(&dir) {
-            return Some(sdk_root);
+    match which::which("flutter") {
+        Ok(binary_path) => {
+            debug!(path = %binary_path.display(), "SDK detection: which resolved flutter");
+            resolve_sdk_root_from_binary(&binary_path)
         }
-    }
-
-    None
-}
-
-/// Check if a directory contains the flutter binary and return the SDK root.
-fn find_flutter_in_dir(dir: &Path) -> Option<PathBuf> {
-    #[cfg(target_os = "windows")]
-    {
-        // Try flutter.bat first, then flutter.exe
-        for name in &["flutter.bat", "flutter.exe"] {
-            let candidate = dir.join(name);
-            if candidate.is_file() {
-                if let Some(sdk_root) = resolve_sdk_root_from_binary(&candidate) {
-                    return Some(sdk_root);
-                }
-            }
+        Err(e) => {
+            debug!("SDK detection: which::which(\"flutter\") failed: {e}");
+            None
         }
-        None
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        let candidate = dir.join("flutter");
-        if candidate.is_file() {
-            return resolve_sdk_root_from_binary(&candidate);
-        }
-        None
     }
 }
 
 /// Given a path to a flutter binary, resolve the SDK root directory.
 ///
-/// Expects the binary to be at `<root>/bin/flutter`.
+/// Expects the binary to be at `<root>/bin/flutter` (or `flutter.bat` on Windows).
 /// Canonicalizes the path to follow symlinks, then walks up two levels.
+///
+/// Uses [`dunce::canonicalize`] instead of [`std::fs::canonicalize`] to avoid
+/// `\\?\` UNC-prefixed paths on Windows. UNC prefixes are valid Win32 paths but
+/// are not understood by `cmd.exe` — leaving them in place would break any
+/// downstream invocation that flows through cmd. `dunce::canonicalize` returns
+/// the same value as `fs::canonicalize` on Unix, so this is a transparent
+/// upgrade for non-Windows targets.
 pub(crate) fn resolve_sdk_root_from_binary(binary_path: &Path) -> Option<PathBuf> {
-    // canonicalize → parent (bin/) → parent (root/)
-    let canonical = fs::canonicalize(binary_path).ok()?;
+    // dunce::canonicalize → parent (bin/) → parent (root/)
+    let canonical = dunce::canonicalize(binary_path).ok()?;
     canonical.parent()?.parent().map(|p| p.to_path_buf())
 }
 
@@ -360,10 +404,52 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
+    /// RAII guard that prepends `dir` to the PATH environment variable for
+    /// the lifetime of the guard, then restores the original PATH on drop.
+    #[cfg(not(target_os = "windows"))]
+    struct PathPrependGuard {
+        original: std::ffi::OsString,
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl PathPrependGuard {
+        fn new(dir: &Path) -> Self {
+            let original = std::env::var_os("PATH").unwrap_or_default();
+            let sep = if cfg!(target_os = "windows") {
+                ";"
+            } else {
+                ":"
+            };
+            let mut new_path = std::ffi::OsString::from(dir);
+            new_path.push(sep);
+            new_path.push(&original);
+            std::env::set_var("PATH", new_path);
+            Self { original }
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    impl Drop for PathPrependGuard {
+        fn drop(&mut self) {
+            std::env::set_var("PATH", &self.original);
+        }
+    }
+
+    /// Prepend `dir` to PATH for the lifetime of the returned guard.
+    #[cfg(not(target_os = "windows"))]
+    fn path_prepend_guard(dir: &Path) -> PathPrependGuard {
+        PathPrependGuard::new(dir)
+    }
+
     /// Create a mock valid Flutter SDK directory structure.
+    ///
+    /// Creates `bin/flutter` on all platforms and `bin/flutter.bat` on Windows
+    /// so `validate_sdk_path` finds the platform-appropriate launcher.
     fn create_mock_sdk(root: &Path, version: &str) {
         fs::create_dir_all(root.join("bin/cache/dart-sdk")).unwrap();
         fs::write(root.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(root.join("bin/flutter.bat"), "@echo off").unwrap();
         fs::write(root.join("VERSION"), version).unwrap();
     }
 
@@ -421,11 +507,11 @@ mod tests {
         create_mock_sdk(&sdk_root, "3.22.0");
 
         // Test the helper function directly — it resolves the SDK root from the binary path.
-        // Canonicalize sdk_root as well since on macOS /var → /private/var is followed by
-        // fs::canonicalize inside resolve_sdk_root_from_binary.
+        // Use dunce::canonicalize to match the implementation (avoids \\?\ UNC prefix on Windows;
+        // on macOS follows /var → /private/var symlinks just like fs::canonicalize).
         let binary = sdk_root.join("bin/flutter");
         let resolved = resolve_sdk_root_from_binary(&binary);
-        let expected = fs::canonicalize(&sdk_root).ok();
+        let expected = dunce::canonicalize(&sdk_root).ok();
         assert_eq!(resolved, expected);
     }
 
@@ -573,6 +659,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_flutter_wrapper_detection() {
         let tmp = TempDir::new().unwrap();
         let project = tmp.path().join("my_app");
@@ -583,6 +670,9 @@ mod tests {
         let flutter_dir = project.join(".flutter");
         create_mock_sdk(&flutter_dir, "3.22.0");
 
+        // Clear FLUTTER_ROOT so Strategy 2 does not short-circuit before Strategy 9
+        std::env::remove_var("FLUTTER_ROOT");
+
         let result = find_flutter_sdk(&project, None).unwrap();
         assert_eq!(result.source, SdkSource::FlutterWrapper);
         assert_eq!(result.version, "3.22.0");
@@ -590,17 +680,18 @@ mod tests {
 
     #[cfg(not(target_os = "windows"))]
     #[test]
-    fn test_system_path_strategy_uses_find_flutter_in_dir() {
+    fn test_resolve_sdk_root_from_binary_finds_sdk_root() {
         let tmp = TempDir::new().unwrap();
         let sdk_root = tmp.path().join("flutter-sdk");
         create_mock_sdk(&sdk_root, "3.24.0");
 
-        // find_flutter_in_dir looks for `flutter` binary in a dir.
+        // resolve_sdk_root_from_binary canonicalizes the binary path (following symlinks)
+        // and walks up two parents to the SDK root.
         // Canonicalize sdk_root so macOS /var → /private/var symlink is resolved.
-        let bin_dir = sdk_root.join("bin");
-        let result = find_flutter_in_dir(&bin_dir);
-        let expected = fs::canonicalize(&sdk_root).ok();
-        // The binary exists; canonicalize should succeed and return the SDK root
+        let binary = sdk_root.join("bin/flutter");
+        let result = resolve_sdk_root_from_binary(&binary);
+        let expected = dunce::canonicalize(&sdk_root).ok();
+        // The binary exists; dunce::canonicalize should succeed and return the SDK root
         assert_eq!(result, expected);
     }
 
@@ -639,6 +730,48 @@ mod tests {
         assert_eq!(sdk.version, "unknown");
     }
 
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    #[serial]
+    fn test_strategy_12_binary_only_fallback_when_inferred_root_invalid() {
+        // Simulate a shim layout: <temp>/scoop/shims/flutter (Unix-ish for cross-platform test).
+        // The key property is that `which::which("flutter")` resolves the binary but
+        // resolve_sdk_root_from_binary() walks up two parents to <temp>/scoop — which has no
+        // bin/flutter — so strategies 10 and 11 both fail, and Strategy 12 fires.
+        let temp = TempDir::new().unwrap();
+        let shims = temp.path().join("scoop").join("shims");
+        fs::create_dir_all(&shims).unwrap();
+
+        // Create a fake flutter binary (executable on Unix; the test only inspects
+        // path resolution, not spawn).
+        let binary = shims.join("flutter");
+        fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&binary).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&binary, perms).unwrap();
+        }
+
+        // Prepend shims to PATH and clear FLUTTER_ROOT so strategies 1-9 fail.
+        let _guard = path_prepend_guard(&shims);
+        std::env::remove_var("FLUTTER_ROOT");
+
+        // walk-up-2 from <temp>/scoop/shims/flutter is <temp>/scoop — which has no
+        // bin/flutter, so strategies 10 and 11 both fail and Strategy 12 fires.
+        let project = TempDir::new().unwrap();
+        let sdk = find_flutter_sdk(project.path(), None).unwrap();
+        assert_eq!(sdk.source, SdkSource::PathInferred);
+        assert_eq!(sdk.version, "unknown");
+        assert!(sdk.channel.is_none());
+        // The executable must be the canonical binary path itself.
+        assert!(
+            sdk.executable.path().ends_with("flutter")
+                || sdk.executable.path().ends_with("flutter.bat")
+        );
+    }
+
     #[test]
     #[serial]
     fn test_unreadable_version_file_falls_through_to_next_strategy() {
@@ -652,6 +785,8 @@ mod tests {
         let fvm_sdk = tmp.path().join("fvm_cache/versions/3.19.0");
         fs::create_dir_all(fvm_sdk.join("bin/cache/dart-sdk")).unwrap();
         fs::write(fvm_sdk.join("bin/flutter"), "#!/bin/sh\n").unwrap();
+        #[cfg(target_os = "windows")]
+        fs::write(fvm_sdk.join("bin/flutter.bat"), "@echo off").unwrap();
         // Create VERSION as a directory so read_version_file fails
         fs::create_dir_all(fvm_sdk.join("VERSION")).unwrap();
 

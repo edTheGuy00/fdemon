@@ -629,14 +629,16 @@ mod tests {
     fn test_dap_settings_items_reflect_custom_settings() {
         use crate::config::DapSettings;
 
-        let mut settings = Settings::default();
-        settings.dap = DapSettings {
-            enabled: true,
-            auto_start_in_ide: false,
-            port: 4711,
-            bind_address: "0.0.0.0".to_string(),
-            suppress_reload_on_pause: false,
-            auto_configure_ide: true,
+        let settings = Settings {
+            dap: DapSettings {
+                enabled: true,
+                auto_start_in_ide: false,
+                port: 4711,
+                bind_address: "0.0.0.0".to_string(),
+                suppress_reload_on_pause: false,
+                auto_configure_ide: true,
+            },
+            ..Default::default()
         };
 
         let items = project_settings_items(&settings);

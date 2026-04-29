@@ -6,7 +6,7 @@ This document provides the development workflow, build commands, and tooling inf
 
 **Language:** Rust
 **Build Tool:** Cargo (workspace with 4 library crates + 1 binary)
-**Minimum Rust Version:** 1.70+
+**Minimum Rust Version:** 1.77.2
 
 ### Workspace Structure
 
@@ -32,16 +32,19 @@ Flutter Demon is organized as a Cargo workspace:
 Run these commands before committing changes:
 
 ```bash
-cargo fmt --all              # Format all crates
-cargo check --workspace      # Check all crates compile
-cargo test --workspace       # Test all crates
-cargo clippy --workspace     # Lint all crates
+cargo fmt --all -- --check                               # Check formatting (does not rewrite files)
+cargo check --workspace --all-targets                    # Check all crates compile
+cargo test --workspace                                   # Test all crates
+cargo clippy --workspace --all-targets -- -D warnings   # Lint all crates (warnings = errors)
 ```
 
-**Full verification (quality gate):**
+**Full verification (quality gate — must match CI):**
 
 ```bash
-cargo fmt --all && cargo check --workspace && cargo test --workspace && cargo clippy --workspace -- -D warnings
+cargo fmt --all -- --check && \
+  cargo check --workspace --all-targets && \
+  cargo test --workspace && \
+  cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 ### Test Commands
@@ -147,10 +150,39 @@ Each task file should include a **Completion Summary** after implementation:
 
 Before a task is considered complete:
 
-- [ ] `cargo fmt` — Code is formatted
-- [ ] `cargo check` — No compilation errors
-- [ ] `cargo test` — All tests pass
-- [ ] `cargo clippy -- -D warnings` — No clippy warnings
+- [ ] `cargo fmt --all -- --check` — Code is formatted
+- [ ] `cargo check --workspace --all-targets` — No compilation errors
+- [ ] `cargo test --workspace` — All tests pass
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` — No clippy warnings
+
+## CI / Continuous Integration
+
+Flutter Demon uses GitHub Actions for continuous integration. The workflow file is at `.github/workflows/ci.yml`.
+
+### OS Matrix
+
+The CI pipeline runs on three operating systems for every push and pull request:
+
+| Runner | Platform |
+|--------|----------|
+| `ubuntu-latest` | Linux |
+| `macos-latest` | macOS |
+| `windows-latest` | Windows |
+
+### Quality Gate
+
+Each OS runner executes the following steps in order:
+
+```bash
+cargo fmt --all -- --check                              # Formatting check
+cargo check --workspace --all-targets                   # Compilation check
+cargo test --workspace                                  # All unit tests
+cargo clippy --workspace --all-targets -- -D warnings  # Lint (warnings treated as errors)
+```
+
+All four steps must pass on all three runners for CI to be green.
+
+---
 
 ## Dependencies
 
@@ -225,7 +257,7 @@ cargo run -- /path/to/flutter/app
 
 ### Build Fails
 
-1. Ensure Rust 1.70+ is installed: `rustup update`
+1. Ensure Rust 1.77.2+ is installed: `rustup update`
 2. Clear build cache: `cargo clean && cargo build`
 
 ### Tests Fail
@@ -239,3 +271,16 @@ Fix all warnings before committing:
 ```bash
 cargo clippy --fix --allow-dirty
 ```
+
+### Windows: `flutter devices` Fails With "The system cannot find the path specified."
+
+This error occurs when the Flutter SDK is installed via a package manager shim (Chocolatey, scoop, winget) or to a non-standard location that fdemon cannot resolve automatically.
+
+**Fix**: Set the `sdk_path` key in `.fdemon/config.toml` to the absolute path of your Flutter SDK root:
+
+```toml
+[flutter]
+sdk_path = "C:\\flutter"
+```
+
+Replace `C:\\flutter` with the actual path to your Flutter SDK (the directory that contains `bin\flutter.bat`). After saving the file, restart fdemon.

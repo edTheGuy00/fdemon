@@ -132,7 +132,7 @@ pub fn docker_build(dockerfile: &str, tag: &str, project_root: &Path) -> Result<
     // blocking the test suite when a version-manager installer hangs.
     const BUILD_TIMEOUT_SECS: u64 = 600;
 
-    let mut child = Command::new("docker")
+    let child = Command::new("docker")
         .args([
             "build",
             "--platform",
@@ -324,7 +324,7 @@ pub fn docker_exec(image_tag: &str, command: &[&str]) -> Result<DockerTestResult
 ///
 /// Returns a [`DockerTestResult`] with exit code `-1` when the timeout fires.
 fn run_with_timeout(
-    mut child: Child,
+    child: Child,
     container_name: &str,
     timeout_secs: u64,
 ) -> Result<DockerTestResult, String> {

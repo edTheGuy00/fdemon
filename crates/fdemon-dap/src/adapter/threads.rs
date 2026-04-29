@@ -774,7 +774,7 @@ mod tests {
         map.add_session(1, "Pixel 7");
         let thread_id = map.add_isolate(1, "isolates/1", Some("main")).unwrap();
         assert!(
-            thread_id >= 1000 && thread_id < 2000,
+            (1000..2000).contains(&thread_id),
             "Thread ID {} must be in session 0 range [1000, 2000)",
             thread_id
         );
@@ -794,11 +794,11 @@ mod tests {
             "Same isolate ID in different sessions must get different thread IDs"
         );
         assert!(
-            tid0 >= 1000 && tid0 < 2000,
+            (1000..2000).contains(&tid0),
             "Session 0 thread in range [1000, 2000)"
         );
         assert!(
-            tid1 >= 2000 && tid1 < 3000,
+            (2000..3000).contains(&tid1),
             "Session 1 thread in range [2000, 3000)"
         );
     }
@@ -980,8 +980,8 @@ mod tests {
         let tid_session1 = map.add_isolate(2, "isolates/b", Some("main")).unwrap();
 
         // Confirm IDs are in the expected ranges.
-        assert!(tid_session0 >= 1000 && tid_session0 < 2000);
-        assert!(tid_session1 >= 2000 && tid_session1 < 3000);
+        assert!((1000..2000).contains(&tid_session0));
+        assert!((2000..3000).contains(&tid_session1));
 
         // Routing returns the correct session.
         let (sid0, iso0) = map.lookup_thread(tid_session0).unwrap();

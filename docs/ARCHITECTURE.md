@@ -256,6 +256,16 @@ flutter-demon/
 │   │       ├── simulators.rs     # iOS simulator utilities
 │   │       ├── tool_availability.rs  # Tool detection (adb, xcrun simctl, idevicesyslog)
 │   │       ├── test_utils.rs     # Test helpers
+│   │       ├── flutter_sdk/      # Flutter SDK detection and executable abstraction
+│   │       │   ├── mod.rs        # Public API: find_flutter_sdk(), FlutterSdk
+│   │       │   ├── locator.rs    # 12-strategy locator (env vars, PATH via which, version managers, shim fallback)
+│   │       │   ├── types.rs      # FlutterExecutable enum (Direct, WindowsBatch) + validate_sdk_path
+│   │       │   ├── diagnostics.rs  # Shared diagnostic helpers: windows_hint(), is_path_resolution_error(), strip_ansi()
+│   │       │   ├── version_probe.rs  # flutter --version parsing
+│   │       │   ├── cache_scanner.rs  # Version-manager cache directory scanning
+│   │       │   ├── channel.rs    # Flutter channel detection
+│   │       │   ├── version_managers.rs  # fvm, asdf, mise strategy helpers
+│   │       │   └── windows_tests.rs  # Windows-only integration tests
 │   │       ├── native_logs/      # Native platform log capture
 │   │       │   ├── mod.rs        # NativeLogCapture trait, shared types, platform dispatch
 │   │       │   ├── android.rs    # adb logcat capture
@@ -444,12 +454,50 @@ flutter-demon/
 | `simulators.rs` | iOS simulator utilities |
 | `tool_availability.rs` | Tool detection (`adb`, `xcrun simctl`, `idevicesyslog`, `log`). `IosLogTool` enum selects the iOS capture backend at runtime. |
 | `test_utils.rs` | Test helpers for device/emulator testing |
+| `flutter_sdk/mod.rs` | Public API: `find_flutter_sdk()`, `FlutterSdk` — entry point for SDK detection |
+| `flutter_sdk/locator.rs` | 12-strategy locator: explicit config, env vars, version managers (`fvm`, `asdf`, `mise`), system PATH, binary-only shim fallback. Strategy 10 uses `which::which("flutter")` for PATHEXT-aware discovery on Windows. See source for full strategy list. |
+| `flutter_sdk/types.rs` | `FlutterExecutable` enum and `validate_sdk_path` / `validate_sdk_path_lenient` |
+| `flutter_sdk/diagnostics.rs` | Shared diagnostic helpers used by `devices.rs` and `emulators.rs` — `windows_hint()` (Windows-only, hints at `[flutter] sdk_path`), `is_path_resolution_error()` (stderr predicate to gate the hint), `strip_ansi()` (cleans Flutter CLI color codes from stderr before user-facing display). |
+| `flutter_sdk/version_probe.rs` | Parses `flutter --version` output |
+| `flutter_sdk/cache_scanner.rs` | Scans version-manager cache directories |
+| `flutter_sdk/channel.rs` | Flutter channel detection |
+| `flutter_sdk/version_managers.rs` | fvm / asdf / mise strategy helpers |
 | `native_logs/mod.rs` | `NativeLogCapture` trait, `NativeLogHandle`, shared types (`NativeLogEvent`, `AndroidLogConfig`, `MacOsLogConfig`, `IosLogConfig`), and `create_native_log_capture()` platform dispatch |
 | `native_logs/android.rs` | `AndroidLogCapture` — spawns `adb logcat`, parses logcat output |
 | `native_logs/macos.rs` | `MacOsLogCapture` — spawns `log stream`, parses macOS unified log output |
 | `native_logs/ios.rs` | `IosLogCapture` — simulator via `xcrun simctl log stream`, physical via `idevicesyslog` (macOS-only, `#[cfg(target_os = "macos")]`) |
 | `native_logs/custom.rs` | `CustomLogCapture` — spawns user-defined commands, reads stdout through format parsers; `CustomSourceConfig` — config for a single custom source; `create_custom_log_capture()` factory |
 | `native_logs/formats.rs` | `parse_line()` dispatch — routes raw output lines to `parse_raw()`, `parse_json()`, `parse_logcat_threadtime()`, or `parse_syslog()` based on `OutputFormat` |
+
+**Flutter SDK Detection (`flutter_sdk/`):**
+
+`find_flutter_sdk()` runs up to 12 ordered strategies (explicit config, environment variables, version managers, system PATH, binary-only shim fallback). Strategy 10 uses `which::which("flutter")` which respects `PATHEXT` on Windows to correctly locate `flutter.bat`, `flutter.cmd`, or `flutter.exe`. Path normalization uses `dunce::canonicalize` instead of `std::fs::canonicalize` to avoid `\\?\`-prefixed UNC paths that `cmd.exe` cannot consume.
+
+| # | Strategy | Description |
+|---|----------|-------------|
+| 1 | Explicit config | `[flutter] sdk_path` in `.fdemon/config.toml` |
+| 2 | `FLUTTER_ROOT` env | Environment variable set by the user or CI |
+| 3 | FVM modern | `.fvmrc` in project tree |
+| 4 | FVM legacy | `.fvm/fvm_config.json` + symlink |
+| 5 | Puro | `.puro.json` in project tree |
+| 6 | asdf | `.tool-versions` in project tree |
+| 7 | mise | `.mise.toml` in project tree |
+| 8 | proto | `.prototools` in project tree |
+| 9 | flutter_wrapper | `flutterw` script + `.flutter/` directory |
+| 10 | System PATH | `which::which("flutter")` → resolve symlinks → SDK root |
+| 11 | Lenient PATH fallback | Binary on PATH but `VERSION` file missing or unreadable |
+| 12 | Binary-only fallback (shim-installer support) | Last resort. When `which::which("flutter")` succeeds but the inferred SDK root fails both strict and lenient validation, returns a `FlutterSdk` with `source = SdkSource::PathInferred`, `version = "unknown"`. This unblocks scoop and winget Flutter installations that don't follow the canonical `<root>/bin/flutter` layout. |
+
+**Diagnostic hints are content-gated.** `devices.rs` and `emulators.rs` only append the Windows-specific `windows_hint()` (which directs users to set `[flutter] sdk_path` in `.fdemon/config.toml`) when the failure's stderr matches a path-resolution error pattern (via `is_path_resolution_error()`). This prevents the hint from misleading users when `flutter` exits non-zero for unrelated reasons (e.g., adb crashed, license not accepted, network proxy errors).
+
+`FlutterExecutable` has two variants:
+
+| Variant | When produced | Runtime invocation |
+|---------|---------------|--------------------|
+| `Direct(PathBuf)` | Unix or Windows `.exe` | `Command::new(path)` |
+| `WindowsBatch(PathBuf)` | Windows `.bat` / `.cmd` | `Command::new(path)` |
+
+Both variants invoke the resolved absolute path directly via `Command::new`. The `WindowsBatch` discriminant is a metadata marker (callers and logs can distinguish batch from native executables) — the runtime invocation is identical to `Direct`. The previous `cmd /c <path>` wrapper has been removed; direct invocation is safe because the workspace MSRV is 1.77.2, which includes the CVE-2024-24576 fix for `.bat` argument escaping.
 
 **Platform Support:**
 

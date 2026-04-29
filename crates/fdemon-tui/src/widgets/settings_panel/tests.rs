@@ -519,9 +519,9 @@ fn test_toggle_bool_twice() {
     // Toggle twice should return to original
     if let SettingValue::Bool(ref mut val) = item.value {
         *val = !*val;
-        assert_eq!(*val, false);
+        assert!(!(*val));
         *val = !*val;
-        assert_eq!(*val, true);
+        assert!(*val);
     }
 }
 

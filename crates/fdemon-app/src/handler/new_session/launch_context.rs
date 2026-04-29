@@ -621,15 +621,18 @@ mod tests {
     /// handlers that call `state.flutter_executable()` can proceed past the
     /// SDK guard in unit tests.
     fn state_with_sdk() -> AppState {
-        let mut state = AppState::default();
-        state.resolved_sdk = Some(fdemon_daemon::test_utils::fake_flutter_sdk());
-        state
+        AppState {
+            resolved_sdk: Some(fdemon_daemon::test_utils::fake_flutter_sdk()),
+            ..Default::default()
+        }
     }
 
     #[test]
     fn test_flavor_selected_no_config_creates_default() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         // No config selected
         assert!(state
             .new_session_dialog_state
@@ -674,8 +677,10 @@ mod tests {
 
     #[test]
     fn test_flavor_cleared_no_config_no_create() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Clear flavor (set to None) - should NOT create config
         let result = handle_flavor_selected(&mut state, None);
@@ -696,8 +701,10 @@ mod tests {
 
     #[test]
     fn test_flavor_selected_existing_config_no_create() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add and select existing config
         state
@@ -740,8 +747,10 @@ mod tests {
 
     #[test]
     fn test_flavor_selected_vscode_config_no_save() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add VSCode config (read-only)
         state
@@ -770,8 +779,10 @@ mod tests {
 
     #[test]
     fn test_dart_defines_updated_no_config_creates_default() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         // No config selected
         assert!(state
             .new_session_dialog_state
@@ -823,8 +834,10 @@ mod tests {
 
     #[test]
     fn test_dart_defines_cleared_no_config_no_create() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Clear dart-defines (empty vec) - should NOT create config
         let result = handle_dart_defines_updated(&mut state, vec![]);
@@ -845,8 +858,10 @@ mod tests {
 
     #[test]
     fn test_dart_defines_updated_existing_config_no_create() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add and select existing config
         state
@@ -891,8 +906,10 @@ mod tests {
 
     #[test]
     fn test_dart_defines_vscode_config_no_save() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add VSCode config (read-only)
         state
@@ -1144,8 +1161,10 @@ mod tests {
     fn test_entry_point_selected_sets_path() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add FDemon config so auto-save can trigger
         state
@@ -1182,8 +1201,10 @@ mod tests {
     fn test_entry_point_selected_default_clears() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         state.new_session_dialog_state.launch_context.entry_point =
             Some(PathBuf::from("lib/old.dart"));
 
@@ -1200,8 +1221,10 @@ mod tests {
     fn test_entry_point_selected_none_clears() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         state.new_session_dialog_state.launch_context.entry_point =
             Some(PathBuf::from("lib/old.dart"));
 
@@ -1218,8 +1241,10 @@ mod tests {
     fn test_entry_point_selected_auto_creates_config() {
         use std::path::PathBuf;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         // No config selected
         assert!(state
             .new_session_dialog_state
@@ -1264,8 +1289,10 @@ mod tests {
 
     #[test]
     fn test_entry_point_cleared_no_config_no_create() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Clear entry point (set to default) - should NOT create config
         let result = handle_entry_point_selected(&mut state, Some("(default)".to_string()));
@@ -1286,8 +1313,10 @@ mod tests {
 
     #[test]
     fn test_entry_point_selected_vscode_config_no_save() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Add VSCode config (read-only)
         state
@@ -1317,8 +1346,10 @@ mod tests {
     fn test_entry_point_selected_closes_modal() {
         use crate::new_session_dialog::FuzzyModalState;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Simulate modal being open
         state.new_session_dialog_state.fuzzy_modal =
@@ -1374,8 +1405,10 @@ mod tests {
     fn test_handle_launch_blocks_device_with_running_session() {
         use fdemon_core::AppPhase;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Create a session for the test device and set it to Running
         let device = test_device();
@@ -1419,8 +1452,10 @@ mod tests {
     fn test_handle_launch_blocks_device_with_initializing_session() {
         // Default phase for a new session is Initializing — it should block device reuse
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Create a session — default phase is Initializing
         let device = test_device();
@@ -1489,8 +1524,10 @@ mod tests {
     fn test_handle_launch_blocks_device_with_reloading_session() {
         use fdemon_core::AppPhase;
 
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Create a session for the test device and set it to Reloading
         let device = test_device();
@@ -1596,8 +1633,10 @@ mod tests {
 
     #[test]
     fn test_handle_launch_returns_spawn_pre_app_when_pre_app_sources() {
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
 
         // Enable native logs with a pre-app source
         state.settings.native_logs.enabled = true;
@@ -1762,8 +1801,10 @@ mod tests {
     fn test_launch_gates_when_non_shared_pre_app_present() {
         // Non-shared pre-app sources always require the gate regardless of
         // whether any shared sources are running.
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         state.settings.native_logs.enabled = true;
         // Add one shared (running) and one non-shared pre-app source
         state
@@ -1803,8 +1844,10 @@ mod tests {
     fn test_launch_gates_when_shared_pre_app_not_yet_running() {
         // First session scenario: the shared source has never been started yet.
         // The gate must fire.
-        let mut state = AppState::default();
-        state.ui_mode = UiMode::NewSessionDialog;
+        let mut state = AppState {
+            ui_mode: UiMode::NewSessionDialog,
+            ..Default::default()
+        };
         state.settings.native_logs.enabled = true;
         state
             .settings

@@ -239,6 +239,10 @@ async fn test_full_session_lifecycle() {
 /// This verifies the basic user journey without requiring a real Flutter daemon.
 #[tokio::test]
 #[serial]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_simplified_lifecycle_headless() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("Failed to spawn fdemon");
@@ -452,6 +456,10 @@ async fn test_key_handling_robustness() {
 /// pressing Escape in NewSessionDialog quits immediately.
 #[tokio::test]
 #[serial]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_device_selector_quit_flow() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("Failed to spawn fdemon");
@@ -522,6 +530,10 @@ async fn test_quit_cancel_flow() {
 /// without requiring explicit confirmation.
 #[tokio::test]
 #[serial]
+#[cfg_attr(
+    target_os = "windows",
+    ignore = "PTY regex matching on Windows ConPTY is unreliable; TUI rendering verified by widget unit tests"
+)]
 async fn test_double_q_quick_quit() {
     let fixture = TestFixture::simple_app();
     let mut session = FdemonSession::spawn(&fixture.path()).expect("Failed to spawn fdemon");

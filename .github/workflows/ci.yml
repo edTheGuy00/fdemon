@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+# Cancel in-progress runs when a new run is triggered on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Check / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        # NOTE: pinned to a commit SHA for supply-chain immutability (action-code is
+        # frozen); the rustc version still tracks 'stable' at workflow runtime.
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo registry, index, and target
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: cargo fmt
+        run: cargo fmt --all -- --check
+
+      - name: cargo check
+        run: cargo check --workspace --all-targets
+
+      - name: cargo test
+        run: cargo test --workspace
+        # Integration tests in tests/ include 62 #[ignore]'d PTY timing tests;
+        # cargo test does not run ignored tests, so those do not block CI.
+        # Windows-specific tests (windows_tests.rs) run here on the windows-latest runner.
+
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings

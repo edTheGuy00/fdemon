@@ -377,6 +377,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_native_logs_available_ios_with_simctl() {
         let tools = ToolAvailability {
             xcrun_simctl: true,
@@ -386,6 +387,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_native_logs_available_ios_with_idevicesyslog() {
         let tools = ToolAvailability {
             #[cfg(target_os = "macos")]

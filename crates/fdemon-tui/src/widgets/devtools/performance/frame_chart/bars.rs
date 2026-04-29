@@ -148,6 +148,8 @@ impl FrameChart<'_> {
         }
     }
 
+    // MSRV guard: `is_multiple_of` requires Rust 1.87; MSRV is 1.77.2 — suppress the lint.
+    #[allow(clippy::manual_is_multiple_of)]
     /// Draw the 16ms dashed budget line across the chart area.
     pub(super) fn render_budget_line(&self, area: Rect, buf: &mut Buffer, budget_y: u16) {
         if budget_y < area.y || budget_y >= area.bottom() {
@@ -177,7 +179,7 @@ impl FrameChart<'_> {
             if let Some(cell) = buf.cell_mut((x, budget_y)) {
                 // Skip cells that are part of bar columns (avoid overwriting bars)
                 // Use dashed '╌' for every other cell to create a dashed effect
-                if (x - line_start_x).is_multiple_of(2) {
+                if (x - line_start_x) % 2 == 0 {
                     cell.set_char('╌').set_style(line_style);
                 }
             }

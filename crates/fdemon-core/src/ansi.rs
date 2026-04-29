@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn test_strip_flutter_machine_mode_full_block() {
         // Full Logger block as Flutter --machine mode outputs it
-        let lines = vec![
+        let lines = [
             r"\┌───────────────────────────────────────\",
             r"\│ Null check operator used on a null value\",
             r"\├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄\",
@@ -467,7 +467,7 @@ mod tests {
             r"\└───────────────────────────────────────\",
         ];
 
-        let expected = vec![
+        let expected = [
             "┌───────────────────────────────────────",
             "│ Null check operator used on a null value",
             "├┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄",

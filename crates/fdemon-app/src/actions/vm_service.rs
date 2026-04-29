@@ -354,6 +354,9 @@ mod tests {
         );
     }
 
+    // FIXME: see clippy-rust-191-cleanup — asserts constant invariant that
+    // MAX_HEARTBEAT_FAILURES (3) is > 1, required for the counter-reset logic to be observable.
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn test_heartbeat_counter_reset_on_reconnection() {
         // The counter reset to 0 on Reconnecting/Reconnected events is only

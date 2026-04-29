@@ -326,6 +326,103 @@ fn bare_flutter_run(devices: &[Device]) -> AutoLaunchSuccess {
     }
 }
 
+/// Timeout for tool availability checks
+const TOOL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Spawn tool availability check in background (Phase 4, Task 05)
+pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
+    tokio::spawn(async move {
+        let availability = match timeout(TOOL_CHECK_TIMEOUT, ToolAvailability::check()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                tracing::warn!(
+                    "Tool availability check timed out after {:?}, assuming no tools available",
+                    TOOL_CHECK_TIMEOUT
+                );
+                ToolAvailability::default()
+            }
+        };
+
+        let _ = msg_tx
+            .send(Message::ToolAvailabilityChecked { availability })
+            .await;
+    });
+}
+
+/// Spawn bootable device discovery in background (Phase 4, Task 05)
+pub fn spawn_bootable_device_discovery(
+    msg_tx: mpsc::Sender<Message>,
+    tool_availability: ToolAvailability,
+) {
+    tokio::spawn(async move {
+        // Discover iOS simulators and Android AVDs in parallel
+        let (ios_result, android_result) = tokio::join!(
+            fdemon_daemon::list_ios_simulators(),
+            fdemon_daemon::list_android_avds(&tool_availability)
+        );
+
+        let ios_simulators = ios_result.unwrap_or_default();
+        let android_avds = android_result.unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::BootableDevicesDiscovered {
+                ios_simulators,
+                android_avds,
+            })
+            .await;
+    });
+}
+
+/// Spawn device boot in background (Phase 4, Task 05)
+pub fn spawn_device_boot(
+    msg_tx: mpsc::Sender<Message>,
+    device_id: String,
+    platform: fdemon_core::Platform,
+    tool_availability: ToolAvailability,
+) {
+    tokio::spawn(async move {
+        use fdemon_core::Platform;
+        let result = match platform {
+            Platform::IOS => fdemon_daemon::boot_simulator(&device_id).await,
+            Platform::Android => fdemon_daemon::boot_avd(&device_id, &tool_availability).await,
+        };
+
+        match result {
+            Ok(()) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootCompleted {
+                        device_id: device_id.clone(),
+                    })
+                    .await;
+            }
+            Err(e) => {
+                let _ = msg_tx
+                    .send(Message::DeviceBootFailed {
+                        device_id,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        }
+    });
+}
+
+/// Spawn entry point discovery in background (Phase 3, Task 09)
+pub fn spawn_entry_point_discovery(msg_tx: mpsc::Sender<Message>, project_path: PathBuf) {
+    tokio::spawn(async move {
+        // Use spawn_blocking since discover_entry_points is sync I/O
+        let entry_points = tokio::task::spawn_blocking(move || {
+            fdemon_core::discovery::discover_entry_points(&project_path)
+        })
+        .await
+        .unwrap_or_default();
+
+        let _ = msg_tx
+            .send(Message::EntryPointsDiscovered { entry_points })
+            .await;
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -541,101 +638,4 @@ mod tests {
             "try_cached_selection should return None when cached device is not in device list"
         );
     }
-}
-
-/// Timeout for tool availability checks
-const TOOL_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Spawn tool availability check in background (Phase 4, Task 05)
-pub fn spawn_tool_availability_check(msg_tx: mpsc::Sender<Message>) {
-    tokio::spawn(async move {
-        let availability = match timeout(TOOL_CHECK_TIMEOUT, ToolAvailability::check()).await {
-            Ok(result) => result,
-            Err(_elapsed) => {
-                tracing::warn!(
-                    "Tool availability check timed out after {:?}, assuming no tools available",
-                    TOOL_CHECK_TIMEOUT
-                );
-                ToolAvailability::default()
-            }
-        };
-
-        let _ = msg_tx
-            .send(Message::ToolAvailabilityChecked { availability })
-            .await;
-    });
-}
-
-/// Spawn bootable device discovery in background (Phase 4, Task 05)
-pub fn spawn_bootable_device_discovery(
-    msg_tx: mpsc::Sender<Message>,
-    tool_availability: ToolAvailability,
-) {
-    tokio::spawn(async move {
-        // Discover iOS simulators and Android AVDs in parallel
-        let (ios_result, android_result) = tokio::join!(
-            fdemon_daemon::list_ios_simulators(),
-            fdemon_daemon::list_android_avds(&tool_availability)
-        );
-
-        let ios_simulators = ios_result.unwrap_or_default();
-        let android_avds = android_result.unwrap_or_default();
-
-        let _ = msg_tx
-            .send(Message::BootableDevicesDiscovered {
-                ios_simulators,
-                android_avds,
-            })
-            .await;
-    });
-}
-
-/// Spawn device boot in background (Phase 4, Task 05)
-pub fn spawn_device_boot(
-    msg_tx: mpsc::Sender<Message>,
-    device_id: String,
-    platform: fdemon_core::Platform,
-    tool_availability: ToolAvailability,
-) {
-    tokio::spawn(async move {
-        use fdemon_core::Platform;
-        let result = match platform {
-            Platform::IOS => fdemon_daemon::boot_simulator(&device_id).await,
-            Platform::Android => fdemon_daemon::boot_avd(&device_id, &tool_availability).await,
-        };
-
-        match result {
-            Ok(()) => {
-                let _ = msg_tx
-                    .send(Message::DeviceBootCompleted {
-                        device_id: device_id.clone(),
-                    })
-                    .await;
-            }
-            Err(e) => {
-                let _ = msg_tx
-                    .send(Message::DeviceBootFailed {
-                        device_id,
-                        error: e.to_string(),
-                    })
-                    .await;
-            }
-        }
-    });
-}
-
-/// Spawn entry point discovery in background (Phase 3, Task 09)
-pub fn spawn_entry_point_discovery(msg_tx: mpsc::Sender<Message>, project_path: PathBuf) {
-    tokio::spawn(async move {
-        // Use spawn_blocking since discover_entry_points is sync I/O
-        let entry_points = tokio::task::spawn_blocking(move || {
-            fdemon_core::discovery::discover_entry_points(&project_path)
-        })
-        .await
-        .unwrap_or_default();
-
-        let _ = msg_tx
-            .send(Message::EntryPointsDiscovered { entry_points })
-            .await;
-    });
 }

@@ -48,6 +48,7 @@ use super::ready_check::ReadyCheckResult;
 /// 2. One [`Message::NativeLog`] per captured line.
 /// 3. [`Message::NativeLogCaptureStopped`] when the capture process exits.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
 pub(super) fn spawn_native_log_capture(
     session_id: SessionId,
     platform: String,
@@ -913,6 +914,7 @@ async fn resolve_android_pid(device_serial: &str, app_id: &Option<String>) -> Op
 /// the bundle identifier (e.g., `"com.example.myApp"` → `"myApp"`).
 /// Falls back to `"Runner"` (Flutter's default macOS app name) when no
 /// `app_id` is available.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn derive_macos_process_name(app_id: &Option<String>) -> String {
     if let Some(id) = app_id {
         if let Some(name) = id.rsplit('.').next() {
@@ -932,6 +934,7 @@ fn derive_macos_process_name(app_id: &Option<String>) -> String {
 /// Unlike macOS, the process name does not correspond to the bundle ID.
 /// The `_app_id` parameter is kept for API consistency with
 /// [`derive_macos_process_name`] and `derive_android_process_name`.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn derive_ios_process_name(_app_id: &Option<String>) -> String {
     "Runner".to_string()
 }
@@ -948,6 +951,7 @@ fn derive_ios_process_name(_app_id: &Option<String>) -> String {
 ///    newer Apple Silicon devices).
 ///
 /// Falls back to `false` (physical device) if detection is ambiguous.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn is_ios_simulator(device_name: &str, device_id: &str) -> bool {
     // Heuristic 1: device name contains "simulator" (case-insensitive)
     if device_name.to_lowercase().contains("simulator") {
@@ -1303,11 +1307,8 @@ mod tests {
     ) -> Vec<Message> {
         let mut messages = Vec::new();
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
-        loop {
-            match tokio::time::timeout_at(deadline, rx.recv()).await {
-                Ok(Some(msg)) => messages.push(msg),
-                Ok(None) | Err(_) => break,
-            }
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, rx.recv()).await {
+            messages.push(msg);
         }
         messages
     }

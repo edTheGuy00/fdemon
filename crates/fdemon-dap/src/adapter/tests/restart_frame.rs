@@ -29,17 +29,17 @@ fn make_restart_frame_request(seq: i64, frame_id: i64) -> DapRequest {
     }
 }
 
+/// Shared log of recorded `resume` calls: `(isolate_id, step, frame_index)` tuples.
+type SharedResumeLog = Arc<Mutex<Vec<(String, Option<StepMode>, Option<i32>)>>>;
+
 /// A backend that records the arguments passed to `resume`.
 struct RecordingBackend {
     /// Recorded as `(isolate_id, step, frame_index)` per call.
-    calls: Arc<Mutex<Vec<(String, Option<StepMode>, Option<i32>)>>>,
+    calls: SharedResumeLog,
 }
 
 impl RecordingBackend {
-    fn new() -> (
-        Self,
-        Arc<Mutex<Vec<(String, Option<StepMode>, Option<i32>)>>>,
-    ) {
+    fn new() -> (Self, SharedResumeLog) {
         let calls = Arc::new(Mutex::new(Vec::new()));
         (
             Self {

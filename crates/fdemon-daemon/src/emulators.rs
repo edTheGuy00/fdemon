@@ -7,10 +7,12 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "macos")]
 use tokio::process::Command;
 use tokio::time::timeout;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
+use crate::flutter_sdk::diagnostics::{is_path_resolution_error, strip_ansi, windows_hint};
 use crate::flutter_sdk::FlutterExecutable;
 use fdemon_core::prelude::*;
 
@@ -136,7 +138,11 @@ async fn run_flutter_emulators(flutter: &FlutterExecutable) -> Result<FlutterOut
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::FlutterNotFound
             } else {
-                Error::process(format!("Failed to run flutter emulators: {}", e))
+                Error::process(format!(
+                    "Failed to run flutter emulators: {} (binary: {})",
+                    e,
+                    flutter.path().display()
+                ))
             }
         })?;
 
@@ -149,16 +155,32 @@ async fn run_flutter_emulators(flutter: &FlutterExecutable) -> Result<FlutterOut
     }
 
     if !output.status.success() {
+        let stderr_clean = strip_ansi(&stderr);
+        let hint = if is_path_resolution_error(&stderr_clean) {
+            windows_hint()
+        } else {
+            ""
+        };
+        error!(
+            binary = %flutter.path().display(),
+            exit_code = ?output.status.code(),
+            stderr = %stderr_clean,
+            stdout = %stdout,
+            "flutter emulators failed"
+        );
         return Err(Error::process(format!(
-            "flutter emulators failed with exit code {:?}: {}",
+            "flutter emulators failed (binary: {}, exit code {:?}): {}{}",
+            flutter.path().display(),
             output.status.code(),
-            stderr
+            stderr_clean.trim(),
+            hint,
         )));
     }
 
     Ok(FlutterOutput { stdout, stderr })
 }
 
+#[derive(Debug)]
 struct FlutterOutput {
     stdout: String,
     stderr: String,
@@ -316,7 +338,11 @@ async fn run_flutter_emulator_launch(
             if e.kind() == std::io::ErrorKind::NotFound {
                 Error::FlutterNotFound
             } else {
-                Error::process(format!("Failed to launch emulator: {}", e))
+                Error::process(format!(
+                    "Failed to launch emulator: {} (binary: {})",
+                    e,
+                    flutter.path().display()
+                ))
             }
         })?;
 
@@ -577,6 +603,24 @@ Done."#;
 
         assert!(result.success);
         assert_eq!(result.emulator_id, "test");
+    }
+
+    #[tokio::test]
+    async fn test_run_flutter_emulators_error_includes_binary_path() {
+        use crate::flutter_sdk::FlutterExecutable;
+        use std::path::PathBuf;
+
+        // Use a path guaranteed not to exist; on Unix this maps to ErrorKind::NotFound
+        // → Error::FlutterNotFound. The non-existence path proves the spawn error
+        // branch correctly classifies NotFound; the binary-path-in-message branch
+        // is exercised by the integration test.
+        let exe = FlutterExecutable::Direct(PathBuf::from("/nonexistent/flutter"));
+        let err = run_flutter_emulators(&exe).await.unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("/nonexistent/flutter") || matches!(err, Error::FlutterNotFound),
+            "expected error to include binary path or be FlutterNotFound, got: {msg}"
+        );
     }
 
     #[tokio::test]

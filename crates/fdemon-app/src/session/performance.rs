@@ -448,8 +448,10 @@ mod tests {
 
     #[test]
     fn test_deselect_frame_clears_selection() {
-        let mut state = PerformanceState::default();
-        state.selected_frame = Some(3);
+        let mut state = PerformanceState {
+            selected_frame: Some(3),
+            ..Default::default()
+        };
         state.deselect_frame();
         assert_eq!(state.selected_frame, None);
     }

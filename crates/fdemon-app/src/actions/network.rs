@@ -461,6 +461,10 @@ mod tests {
         );
     }
 
+    // FIXME: see clippy-rust-191-cleanup — asserts constant invariants that evaluate to
+    // `assert!(true)` at compile time. The assertions guard that profile mode minimum (3000ms)
+    // is strictly greater than debug mode minimum (500ms).
+    #[allow(clippy::assertions_on_constants)]
     #[test]
     fn test_profile_network_constants_are_reasonable() {
         assert_eq!(

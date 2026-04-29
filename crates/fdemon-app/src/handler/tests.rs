@@ -8,6 +8,14 @@ use crate::state::{
 };
 use fdemon_core::{AppPhase, DaemonEvent};
 
+/// Return type of [`make_custom_source_started`] and [`make_shared_source_started`].
+/// Tuple of (message, shutdown receiver, task-slot Arc).
+type SourceStartedResult = (
+    Message,
+    tokio::sync::watch::Receiver<bool>,
+    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+);
+
 /// Helper function to create a test Device with minimal required fields
 fn test_device(id: &str, name: &str) -> fdemon_daemon::Device {
     fdemon_daemon::Device {
@@ -1957,15 +1965,15 @@ fn test_settings_toggle_bool_flips_value() {
     update(&mut state, Message::SettingsToggleBool);
 
     // Value should be flipped to false
-    assert_eq!(
-        state.settings.watcher.auto_reload, false,
+    assert!(
+        !state.settings.watcher.auto_reload,
         "auto_reload should be flipped to false"
     );
 
     // Test flipping back
     update(&mut state, Message::SettingsToggleBool);
-    assert_eq!(
-        state.settings.watcher.auto_reload, true,
+    assert!(
+        state.settings.watcher.auto_reload,
         "auto_reload should be flipped back to true"
     );
 }
@@ -4635,8 +4643,7 @@ fn get_selected_frame(state: &AppState, session_id: crate::session::SessionId) -
     state
         .session_manager
         .get(session_id)
-        .map(|h| h.session.performance.selected_frame)
-        .flatten()
+        .and_then(|h| h.session.performance.selected_frame)
 }
 
 #[test]
@@ -6967,9 +6974,8 @@ fn test_native_log_capture_started_for_closed_session_sends_shutdown() {
         },
     );
 
-    assert_eq!(
+    assert!(
         *shutdown_rx.borrow_and_update(),
-        true,
         "shutdown_tx should have been sent true when session is missing"
     );
 }
@@ -7993,11 +7999,7 @@ fn test_native_log_tag_observed_even_when_level_filtered() {
 fn make_custom_source_started(
     session_id: crate::session::SessionId,
     name: &str,
-) -> (
-    Message,
-    tokio::sync::watch::Receiver<bool>,
-    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-) {
+) -> SourceStartedResult {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let task_handle: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(None));
@@ -8178,9 +8180,8 @@ fn test_custom_source_started_for_closed_session_sends_shutdown() {
         },
     );
 
-    assert_eq!(
+    assert!(
         *shutdown_rx.borrow_and_update(),
-        true,
         "shutdown_tx should have been signalled true when session is missing"
     );
 }
@@ -8915,11 +8916,7 @@ fn test_pre_app_source_progress_noop_for_missing_session() {
 fn make_shared_source_started(
     name: &str,
     task: Option<tokio::task::JoinHandle<()>>,
-) -> (
-    Message,
-    tokio::sync::watch::Receiver<bool>,
-    std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
-) {
+) -> SourceStartedResult {
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     let task_slot: std::sync::Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>> =
         std::sync::Arc::new(std::sync::Mutex::new(task));
@@ -9415,9 +9412,8 @@ fn test_shared_source_started_duplicate_is_rejected() {
         );
 
         // The duplicate's shutdown channel must have received `true`.
-        assert_eq!(
+        assert!(
             *shutdown_rx2.borrow(),
-            true,
             "dedup guard must signal the duplicate to shut down"
         );
 
@@ -9969,9 +9965,8 @@ fn test_session_switch_in_devtools_unpauses_existing_perf_task() {
     let _result = update(&mut state, Message::SelectSessionByIndex(1));
 
     // perf_pause should now be false (unpaused)
-    assert_eq!(
-        *perf_pause_rx.borrow(),
-        false,
+    assert!(
+        !(*perf_pause_rx.borrow()),
         "Session switch in DevTools must unpause existing perf task"
     );
 }
@@ -10004,9 +9999,8 @@ fn test_session_switch_in_devtools_unpauses_network_when_on_network_panel() {
 
     let _result = update(&mut state, Message::SelectSessionByIndex(1));
 
-    assert_eq!(
-        *net_pause_rx.borrow(),
-        false,
+    assert!(
+        !(*net_pause_rx.borrow()),
         "Session switch on Network panel must unpause network task"
     );
 }

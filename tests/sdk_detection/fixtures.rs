@@ -116,8 +116,11 @@ impl MockSdkBuilder {
             .unwrap();
         }
 
-        // Optional: bin/flutter.bat
-        if self.create_bat_file {
+        // bin/flutter.bat is required by validate_sdk_path on Windows; opt-in on
+        // other platforms via .with_bat_file() for tests exercising Windows-path
+        // code paths from a Unix host.
+        let need_bat = cfg!(target_os = "windows") || self.create_bat_file;
+        if need_bat {
             fs::write(
                 self.root.join("bin").join("flutter.bat"),
                 "@echo off\nrem mock flutter.bat\n",
