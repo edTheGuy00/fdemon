@@ -1440,9 +1440,11 @@ All checks run concurrently. Each has an independent `timeout_s` (default: 30 s)
 4. main.rs: If multiple, show project selector
 5. app::run_with_project(): Initialize logging
 6. tui::run_with_project(): Initialize terminal
-7. tui::run_with_project(): Load settings
-8. tui::run_with_project(): Show device selector (if auto_start=false)
-9. tui::run_with_project(): Spawn Flutter process
+7. tui::run_with_project(): Load settings (config.toml + launch.toml + settings.local.toml)
+8. tui::run_with_project(): Auto-launch gate — fires when launch.toml has auto_start=true,
+   OR when [behavior] auto_launch=true AND a valid last_device is cached.
+   Otherwise: show New Session dialog. (See docs/CONFIGURATION.md for the full priority table.)
+9. tui::run_with_project(): Spawn Flutter process (if auto-launch fired)
 10. tui::run_loop(): Enter main event loop
 ```
 
