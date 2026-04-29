@@ -178,11 +178,10 @@ fn dispatch_startup_action(engine: &mut Engine, action: startup::StartupAction) 
             // discovery and auto-launches the session. spawn_device_discovery()
             // is NOT called here — the StartAutoLaunch handler dispatches
             // DiscoverDevicesAndAutoLaunch internally.
-            // cache_allowed: false — placeholder for Task 03, which will read
-            // the real value from settings.behavior.auto_launch.
+            let cache_allowed = engine.settings.behavior.auto_launch;
             engine.process_message(Message::StartAutoLaunch {
                 configs,
-                cache_allowed: false,
+                cache_allowed,
             });
         }
         startup::StartupAction::Ready => {
