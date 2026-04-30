@@ -1001,6 +1001,13 @@ pub struct AppState {
     /// Re-initialized via `show_flutter_version()` when the panel is opened,
     /// which snapshots the current `resolved_sdk` at open time.
     pub flutter_version_state: FlutterVersionState,
+
+    /// Set to `true` when `emit_migration_nudge` reported that the cache-auto-launch
+    /// migration condition applies. Drives a one-line banner above the New Session
+    /// dialog so users see the change without needing to inspect the log file.
+    /// Cleared when the dialog is dismissed or `ui_mode` transitions away from
+    /// `UiMode::Startup`.
+    pub show_migration_banner: bool,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1059,6 +1066,7 @@ impl AppState {
             shared_source_handles: Vec::new(),
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
+            show_migration_banner: false,
         }
     }
 
@@ -1124,6 +1132,9 @@ impl AppState {
     /// Hide the new session dialog
     pub fn hide_new_session_dialog(&mut self) {
         self.ui_mode = UiMode::Normal;
+        // Clear the migration banner so it doesn't re-appear if the dialog is
+        // re-opened later in the same process (e.g. via n key in Normal mode).
+        self.show_migration_banner = false;
     }
 
     // ─────────────────────────────────────────────────────────
@@ -2177,5 +2188,38 @@ mod tests {
             .version_list
             .installed_versions
             .is_empty());
+    }
+
+    // ── Migration banner field tests (Task 04) ────────────────────────────────
+
+    /// The `show_migration_banner` field must default to `false` so the banner
+    /// does not appear on processes where the migration condition does not apply.
+    #[test]
+    fn show_migration_banner_defaults_to_false() {
+        let state = AppState::default();
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must default to false"
+        );
+    }
+
+    /// `hide_new_session_dialog` must clear `show_migration_banner` so the
+    /// banner does not persist if the dialog is re-opened in the same process.
+    #[test]
+    fn hide_new_session_dialog_clears_migration_banner() {
+        let mut state = AppState {
+            show_migration_banner: true,
+            ..AppState::default()
+        };
+        state.hide_new_session_dialog();
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must be cleared when the dialog is dismissed"
+        );
+        assert_eq!(
+            state.ui_mode,
+            UiMode::Normal,
+            "ui_mode must return to Normal after hide_new_session_dialog"
+        );
     }
 }

@@ -55,17 +55,19 @@ pub fn startup_flutter(
 
     // Migration nudge: user has a cached device but didn't opt in. Tell them
     // this once so they understand why fdemon didn't auto-launch like it used to.
-    // Task 04 can promote _migration_applied into state.show_migration_banner when ready.
-    let _migration_applied = emit_migration_nudge(NudgeMode::Tui, project_path, settings);
+    let migration_applied = emit_migration_nudge(NudgeMode::Tui, project_path, settings);
 
     if has_auto_start_config || cache_trigger {
         // Return AutoStart — runner will send StartAutoLaunch message
+        // Don't set show_migration_banner: the dialog is never shown on this path.
         return StartupAction::AutoStart { configs };
     }
 
     // Default: show NewSessionDialog at startup (Startup mode)
     state.show_new_session_dialog(configs);
     state.ui_mode = UiMode::Startup; // Override to Startup mode
+                                     // Only set the banner when the dialog is actually displayed.
+    state.show_migration_banner = migration_applied;
 
     // Return Ready - the runner will trigger tool availability and device discovery
     StartupAction::Ready
@@ -434,6 +436,93 @@ auto_start = true
         assert!(
             matches!(result, StartupAction::Ready),
             "Expected Ready when last_device is empty string"
+        );
+    }
+
+    // ── Migration banner tests (Task 04) ─────────────────────────────────────
+
+    /// B1: Migration condition met (cache + no auto_launch + no auto_start) on
+    /// the Ready path → `show_migration_banner` must be `true` after the call.
+    #[test]
+    fn migration_banner_set_on_ready_path_when_condition_met() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Cache present
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "iphone-15""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let settings = Settings::default(); // auto_launch = false
+
+        // Condition: cache present, no auto_start config, auto_launch = false
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when migration condition applies"
+        );
+        assert!(
+            state.show_migration_banner,
+            "show_migration_banner must be true when migration condition applies and dialog is shown"
+        );
+    }
+
+    /// B2: Migration condition NOT met (auto_launch = true, so no nudge) →
+    /// `show_migration_banner` must remain `false`.
+    #[test]
+    fn migration_banner_not_set_when_auto_launch_opted_in() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Cache present, but user has opted in
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "iphone-15""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_launch = true; // opted in → AutoStart fires, no nudge
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // auto_launch = true means the gate fires (AutoStart), so dialog is not shown
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when auto_launch = true"
+        );
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must be false on the AutoStart path"
+        );
+    }
+
+    /// B3: No cache, no auto_start, auto_launch = false → Ready shown but nudge
+    /// condition does NOT apply → `show_migration_banner` must be `false`.
+    #[test]
+    fn migration_banner_not_set_when_no_cache() {
+        let temp = tempdir().unwrap();
+        // No .fdemon dir — no cache at all
+
+        let mut state = AppState::new();
+        let settings = Settings::default();
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when no cache"
+        );
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must be false when no cache is present"
         );
     }
 }

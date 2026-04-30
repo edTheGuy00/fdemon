@@ -90,12 +90,12 @@ pub fn emit_migration_nudge(
     }
 
     EMITTED.get_or_init(|| match mode {
-        NudgeMode::Tui => tracing::info!(
+        NudgeMode::Tui => tracing::warn!(
             "settings.local.toml has a cached last_device but [behavior] auto_launch \
              is not set in config.toml. Auto-launch via cache is now opt-in. \
              Set `[behavior] auto_launch = true` to restore the previous behavior."
         ),
-        NudgeMode::Headless => tracing::info!(
+        NudgeMode::Headless => tracing::warn!(
             "settings.local.toml has a cached last_device. Headless mode is intentionally \
              cache-blind — it picks the first available device or honors per-config \
              `auto_start = true` in launch.toml. The `[behavior] auto_launch` flag \
