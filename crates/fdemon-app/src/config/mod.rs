@@ -64,7 +64,7 @@ pub enum NudgeMode {
 /// Returns `true` if the nudge condition applies (cache present, no
 /// auto_start config, `auto_launch` flag unset) — useful for callers
 /// that want to drive secondary UI (e.g., a TUI banner). The actual
-/// `tracing::info!` emission is gated by a process-level `OnceLock`,
+/// `tracing::warn!` emission is gated by a process-level `OnceLock`,
 /// so the log line appears at most once per process.
 ///
 /// The returned `bool` reflects the condition itself, not whether

@@ -408,9 +408,8 @@ pub enum Message {
         ///
         /// When `false`, `find_auto_launch_target` skips `try_cached_selection`
         /// and falls through to Tier 3 (first config + first device) or
-        /// Tier 4 (bare flutter run). Hard-coded to `false` by Task 02
-        /// construction sites; Task 03 / Task 04 replace with the real
-        /// `settings.behavior.auto_launch` value.
+        /// Tier 4 (bare flutter run). Populated from
+        /// `settings.behavior.auto_launch` when `StartAutoLaunch` is emitted.
         cache_allowed: bool,
     },
 

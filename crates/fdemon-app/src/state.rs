@@ -1005,8 +1005,7 @@ pub struct AppState {
     /// Set to `true` when `emit_migration_nudge` reported that the cache-auto-launch
     /// migration condition applies. Drives a one-line banner above the New Session
     /// dialog so users see the change without needing to inspect the log file.
-    /// Cleared when the dialog is dismissed or `ui_mode` transitions away from
-    /// `UiMode::Startup`.
+    /// Cleared when the New Session dialog is dismissed.
     pub show_migration_banner: bool,
 }
 
