@@ -50,15 +50,17 @@ pub fn Configuration() -> impl IntoView {
 
             // ── Behavior Settings ────────────────────────────────────
             <Section title="Behavior Settings">
-                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true     # Show confirmation when quitting with active sessions" />
+                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true     # Show confirmation when quitting with active sessions\nauto_launch = false     # Set true to auto-launch on the device cached in settings.local.toml" />
                 <SettingsTable entries=vec![
                     ("confirm_quit", "boolean", "true", "If true, shows confirmation dialog when quitting with running apps"),
+                    ("auto_launch", "boolean", "false", "When true, fdemon auto-launches the cached last_device on startup if no launch.toml config has auto_start = true. When false (default), the cache only pre-selects a default in the New Session dialog. Has no effect in headless mode."),
                 ] />
                 <div class="bg-amber-900/20 border border-amber-800 p-4 rounded-lg text-amber-200 text-sm">
                     <p class="font-medium mb-1">"Deprecated: "<code class="text-amber-300">"[behavior] auto_start"</code></p>
                     <p>
                         "Removed in v0.5.0. Use per-config "<code class="text-amber-300">"auto_start = true"</code>
-                        " in "<code class="text-amber-300">".fdemon/launch.toml"</code>" instead. Existing configs that still set the flag load without error \u{2014} Flutter Demon logs a one-time deprecation warning and ignores the value."
+                        " in "<code class="text-amber-300">".fdemon/launch.toml"</code>" instead. Existing configs that still set the flag load without error \u{2014} Flutter Demon logs a one-time deprecation warning and ignores the value. "
+                        <code class="text-amber-300">"[behavior] auto_launch"</code>" is a "<em>"new"</em>" field, not a revival of "<code class="text-amber-300">"auto_start"</code>"."
                     </p>
                 </div>
             </Section>
@@ -250,15 +252,20 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                     <li>
                         "any configuration in "
                         <code class="text-blue-400 bg-slate-900 px-1 rounded">"launch.toml"</code>
-                        " sets "<code class="text-blue-400">"auto_start = true"</code>", or"
+                        " sets "<code class="text-blue-400">"auto_start = true"</code>" (per-config explicit intent), "
+                        <strong class="text-white">"or"</strong>
                     </li>
                     <li>
-                        <code class="text-blue-400 bg-slate-900 px-1 rounded">"settings.local.toml"</code>
-                        " holds a "<code class="text-blue-400">"last_device"</code>" from a previous run."
+                        <code class="text-blue-400 bg-slate-900 px-1 rounded">"[behavior] auto_launch = true"</code>
+                        " is set in "<code class="text-blue-400">"config.toml"</code>" "
+                        <strong class="text-white">"and"</strong>
+                        " a valid "<code class="text-blue-400">"last_device"</code>" is cached in "
+                        <code class="text-blue-400">"settings.local.toml"</code>" (cache-based opt-in)."
                     </li>
                 </ul>
                 <p class="text-slate-400 mt-2 text-sm">
-                    "Otherwise, the New Session dialog opens for manual selection. When the gate fires via the cache and the cached device is no longer connected, the cascade falls through to Tier 3 / Tier 4."
+                    "Otherwise, the New Session dialog opens. The cached "
+                    <code class="text-blue-400">"last_device"</code>" (if any) pre-selects in the dialog but does not trigger a launch."
                 </p>
 
                 <h4 class="font-bold text-white mt-4">"Selection Priority"</h4>
@@ -271,17 +278,18 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                         " is not connected, Flutter Demon uses the first available device (still Tier 1) and writes a warning to the fdemon log file."
                     </li>
                     <li>
-                        <strong class="text-white">"Remembered last selection"</strong>
-                        " \u{2014} if "<code class="text-blue-400">"settings.local.toml"</code>
-                        " holds "<code class="text-blue-400">"last_device"</code>" + "
+                        <strong class="text-white">"Cache opt-in"</strong>
+                        " \u{2014} reachable only when "<code class="text-blue-400">"[behavior] auto_launch = true"</code>
+                        " and no config has "<code class="text-blue-400">"auto_start = true"</code>
+                        ". If "<code class="text-blue-400">"settings.local.toml"</code>" holds "
+                        <code class="text-blue-400">"last_device"</code>" + "
                         <code class="text-blue-400">"last_config"</code>
-                        " and the device is still connected, that selection is used. Reachable only when no config has "
-                        <code class="text-blue-400">"auto_start = true"</code>
-                        ". Falls through to Tier 3 if the saved device has been disconnected, writing a warning to the fdemon log file."
+                        " and the device is still connected, that selection is used. Falls through to Tier 3 if the saved device has been disconnected, writing a warning to the fdemon log file."
                     </li>
                     <li>
                         <strong class="text-white">"First available"</strong>
-                        " \u{2014} first config in "<code class="text-blue-400">"launch.toml"</code>
+                        " \u{2014} reachable only when "<code class="text-blue-400">"[behavior] auto_launch = true"</code>
+                        " and the cache is stale or missing. First config in "<code class="text-blue-400">"launch.toml"</code>
                         " (or "<code class="text-blue-400">"launch.json"</code>") + first discovered device."
                     </li>
                     <li>
@@ -291,13 +299,23 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                     </li>
                 </ol>
 
+                <div class="bg-blue-900/20 border border-blue-800 p-4 rounded-lg text-blue-200 text-sm mt-4">
+                    <p class="font-medium mb-1">"Headless mode"</p>
+                    <p>
+                        "In headless mode ("<code class="text-blue-400">"fdemon --headless"</code>"), cache-based auto-launch (Tier 2) is "
+                        <strong>"always disabled"</strong>" \u{2014} it is designed for interactive terminal sessions only. Headless honoring of "
+                        <code class="text-blue-400">"auto_start = true"</code>" (Tier 1) is fully supported."
+                    </p>
+                </div>
+
                 <h4 class="font-bold text-white mt-4">"Cache Updates"</h4>
                 <p class="text-slate-400 text-sm">
                     <code class="text-blue-400">"last_device"</code>" and "
                     <code class="text-blue-400">"last_config"</code>
                     " are written to "<code class="text-blue-400">"settings.local.toml"</code>
                     " whenever a session starts successfully \u{2014} from both auto-launch and manual selections in the New Session dialog. "
-                    "The cache is also the trigger that lets the New Session dialog be skipped on subsequent runs \u{2014} pick a device once, and Flutter Demon remembers it the next time you launch."
+                    "The cache pre-selects the default device in the New Session dialog so your last choice is remembered, but it only triggers an auto-launch when "
+                    <code class="text-blue-400">"[behavior] auto_launch = true"</code>"."
                 </p>
 
                 <h3 class="text-lg font-bold text-white mt-6">"Dart Defines"</h3>
@@ -388,7 +406,7 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
             // ── Complete Example ──────────────────────────────────────
             <Section title="Complete Example">
                 <h3 class="text-lg font-bold text-white">"config.toml"</h3>
-                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true\n\n[watcher]\npaths = [\"lib\", \"packages/core/lib\"]\ndebounce_ms = 500\nauto_reload = true\nextensions = [\"dart\"]\n\n[ui]\nlog_buffer_size = 15000\nshow_timestamps = true\ncompact_logs = false\nstack_trace_collapsed = true\nstack_trace_max_frames = 3\n\n[devtools]\nauto_open = false\n\n[editor]\ncommand = \"\"  # Auto-detect" />
+                <CodeBlock language="toml" code="[behavior]\nconfirm_quit = true\nauto_launch = false   # set true to auto-launch on cached last_device\n\n[watcher]\npaths = [\"lib\", \"packages/core/lib\"]\ndebounce_ms = 500\nauto_reload = true\nextensions = [\"dart\"]\n\n[ui]\nlog_buffer_size = 15000\nshow_timestamps = true\ncompact_logs = false\nstack_trace_collapsed = true\nstack_trace_max_frames = 3\n\n[devtools]\nauto_open = false\n\n[editor]\ncommand = \"\"  # Auto-detect" />
 
                 <h3 class="text-lg font-bold text-white mt-6">"launch.toml"</h3>
                 <CodeBlock language="toml" code="[[configurations]]\nname = \"Dev (iOS)\"\ndevice = \"iphone\"\nmode = \"debug\"\nflavor = \"development\"\nentry_point = \"lib/main_dev.dart\"\nauto_start = true\n\n[configurations.dart_defines]\nAPI_URL = \"https://dev.api.example.com\"\nDEBUG_MODE = \"true\"\n\n[[configurations]]\nname = \"Production\"\ndevice = \"auto\"\nmode = \"release\"\nflavor = \"production\"\nentry_point = \"lib/main_prod.dart\"\nextra_args = [\"--obfuscate\", \"--split-debug-info=build/symbols\"]\n\n[configurations.dart_defines]\nAPI_URL = \"https://api.example.com\"" />
@@ -401,6 +419,7 @@ dedupe_threshold_ms = 100      # Dedup threshold for matching logs (ms)" />
                     <Tip title="Keep secrets out of config files" text="Use extra_args = [\"--dart-define-from-file=secrets.json\"] for sensitive values. Don't commit API keys." />
                     <Tip title="Tune debounce for your project" text="Fast iterations: 300ms. Large projects: 1000ms to avoid reload spam during batch file changes." />
                     <Tip title="Set auto_start for your main config" text="Mark your primary development configuration with auto_start = true for instant startup." />
+                    <Tip title="Opt into cache-based auto-launch deliberately" text="Set [behavior] auto_launch = true only if you want fdemon to silently relaunch your last-used device on every run. The default (false) keeps the cache as a dialog memory aid \u{2014} no surprises." />
                     <Tip title="Keep .vscode/launch.json for team compat" text="If your team uses VSCode, maintain launch.json alongside launch.toml. Flutter Demon imports both." />
                 </div>
             </Section>
