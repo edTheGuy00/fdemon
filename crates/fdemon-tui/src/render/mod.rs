@@ -131,7 +131,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 &state.new_session_dialog_state,
                 &state.tool_availability,
                 &icons,
-            );
+            )
+            .migration_banner(state.show_migration_banner);
             frame.render_widget(dialog, area);
         }
         // Legacy DeviceSelector removed - use NewSessionDialog instead

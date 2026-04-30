@@ -882,7 +882,10 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         // ─────────────────────────────────────────────────────────
         // Auto-Launch Messages (Startup Flow Consistency)
         // ─────────────────────────────────────────────────────────
-        Message::StartAutoLaunch { configs } => {
+        Message::StartAutoLaunch {
+            configs,
+            cache_allowed,
+        } => {
             // Guard against concurrent auto-launch (already in loading mode)
             if state.ui_mode == UiMode::Loading {
                 return UpdateResult::none();
@@ -895,7 +898,11 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
 
             // Show loading overlay on top of normal UI
             state.set_loading_phase("Starting...");
-            UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch { configs, flutter })
+            UpdateResult::action(UpdateAction::DiscoverDevicesAndAutoLaunch {
+                configs,
+                flutter,
+                cache_allowed,
+            })
         }
 
         Message::AutoLaunchProgress { message } => {

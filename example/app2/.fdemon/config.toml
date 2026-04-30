@@ -3,6 +3,7 @@
 
 [behavior]
 confirm_quit = true     # Ask before quitting with running apps
+# auto_launch = true    # Set true to auto-launch on the device cached in settings.local.toml
 
 [watcher]
 paths = ["lib"]

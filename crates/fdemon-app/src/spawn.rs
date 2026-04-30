@@ -143,6 +143,7 @@ pub fn spawn_auto_launch(
     configs: LoadedConfigs,
     project_path: PathBuf,
     flutter: FlutterExecutable,
+    cache_allowed: bool,
 ) {
     tokio::spawn(async move {
         // Step 1: Update progress
@@ -200,7 +201,20 @@ pub fn spawn_auto_launch(
             .await;
 
         // Step 4: Try to find best device/config combination
-        let success = find_auto_launch_target(&configs, &devices, &project_path);
+        let Some(success) =
+            find_auto_launch_target(&configs, &devices, &project_path, cache_allowed)
+        else {
+            tracing::error!(
+                "Auto-launch resolution returned no target \
+                 (devices may have been emptied between check and call)"
+            );
+            let _ = msg_tx
+                .send(Message::AutoLaunchResult {
+                    result: Err("Auto-launch resolution failed".to_string()),
+                })
+                .await;
+            return;
+        };
 
         // Step 5: Send result
         let _ = msg_tx
@@ -211,34 +225,44 @@ pub fn spawn_auto_launch(
     });
 }
 
-/// Find the best device/config combination for auto-launch
+/// Find the best device/config combination for auto-launch.
 ///
 /// Priority order:
 /// 1. `launch.toml` config with `auto_start = true` — always wins over cached selection
-/// 2. `settings.local.toml` cached `last_device` / `last_config` — used when no auto_start config
-/// 3. First launch config + first device (fallback when cache is stale or missing)
+/// 2. `settings.local.toml` cached `last_device` / `last_config` — gated by `cache_allowed`
+/// 3. First launch config + first device (fallback when cache is stale, missing, or disabled)
 /// 4. Bare flutter run with first device (no configs at all)
+///
+/// When `cache_allowed = false`, Tier 2 is skipped entirely and the function
+/// falls through directly to Tier 3 or Tier 4.
+///
+/// Returns `None` only when no tier produces a result — in practice, this
+/// happens only when `devices` is empty. Callers should typically pre-filter
+/// empty device lists before invoking this function.
 pub fn find_auto_launch_target(
     configs: &LoadedConfigs,
     devices: &[Device],
     project_path: &Path,
-) -> AutoLaunchSuccess {
-    // Priority 1: launch.toml config with auto_start = true
+    cache_allowed: bool,
+) -> Option<AutoLaunchSuccess> {
+    // Tier 1: launch.toml config with auto_start = true — always wins
     if let Some(result) = try_auto_start_config(configs, devices) {
-        return result;
+        return Some(result);
     }
 
-    // Priority 2: settings.local.toml cached selection (only when no auto_start config)
-    if let Some(result) = try_cached_selection(configs, devices, project_path) {
-        return result;
+    // Tier 2: settings.local.toml cached selection — gated by caller's cache_allowed flag
+    if cache_allowed {
+        if let Some(result) = try_cached_selection(configs, devices, project_path) {
+            return Some(result);
+        }
     }
 
-    // Priority 3: first launch config + first device
+    // Tier 3: first launch config + first device
     if let Some(result) = try_first_config(configs, devices) {
-        return result;
+        return Some(result);
     }
 
-    // Priority 4: bare flutter run with first device
+    // Tier 4: bare flutter run with first device
     bare_flutter_run(devices)
 }
 
@@ -316,14 +340,13 @@ fn try_first_config(configs: &LoadedConfigs, devices: &[Device]) -> Option<AutoL
 }
 
 /// Priority 4: bare `flutter run` — no config, just the first device.
-fn bare_flutter_run(devices: &[Device]) -> AutoLaunchSuccess {
-    AutoLaunchSuccess {
-        device: devices
-            .first()
-            .expect("devices non-empty; checked at spawn_auto_launch line 137")
-            .clone(),
+///
+/// Returns `None` when `devices` is empty.
+fn bare_flutter_run(devices: &[Device]) -> Option<AutoLaunchSuccess> {
+    Some(AutoLaunchSuccess {
+        device: devices.first()?.clone(),
         config: None,
-    }
+    })
 }
 
 /// Timeout for tool availability checks
@@ -462,7 +485,8 @@ mod tests {
         let devices = vec![make_device("device1", "android")];
         let project_path = Path::new("/tmp/test");
 
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees a non-empty device list");
 
         assert_eq!(result.device.id, "device1");
         assert!(result.config.is_none()); // No configs = bare run
@@ -499,7 +523,8 @@ mod tests {
             make_device("macos-device", "macos"),
         ];
 
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees Tier 1 resolves");
 
         // Should resolve via auto_start, not cache
         assert_eq!(result.device.id, "android-device-1");
@@ -531,7 +556,8 @@ mod tests {
             make_device("ios-device-1", "ios"),
         ];
 
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees Tier 2 cache resolves");
 
         // Should use cached device
         assert_eq!(result.device.id, "android-device-1");
@@ -561,7 +587,8 @@ mod tests {
         // Only one device available, not the cached one
         let devices = vec![make_device("ios-device-1", "ios")];
 
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees Tier 3 resolves");
 
         // Should fall through to first config + first device
         assert_eq!(result.device.id, "ios-device-1");
@@ -592,7 +619,8 @@ mod tests {
             make_device("android-device-1", "android"),
         ];
 
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees Tier 1 auto_start resolves");
 
         // auto_start=true + device="auto" → first device
         assert_eq!(result.device.id, "ios-device-1");
@@ -626,7 +654,8 @@ mod tests {
 
         // Full cascade: Tier 1 skipped (no auto_start), Tier 2 skipped (cache invalid, warns to
         // log file via tracing), Tier 3 resolves to first config + first device.
-        let result = find_auto_launch_target(&configs, &devices, project_path);
+        let result = find_auto_launch_target(&configs, &devices, project_path, true)
+            .expect("test setup guarantees Tier 3 resolves after stale cache");
 
         assert_eq!(result.device.id, "ios-1");
         assert_eq!(result.config.as_ref().unwrap().name, "MyConfig");
@@ -637,5 +666,101 @@ mod tests {
             cached.is_none(),
             "try_cached_selection should return None when cached device is not in device list"
         );
+    }
+
+    /// T6: cache_allowed=false skips Tier 2 and falls through to Tier 3
+    ///
+    /// launch.toml has no auto_start config.
+    /// settings.local.toml has a valid last_device pointing to a real device.
+    /// cache_allowed = false → Tier 2 skipped → Tier 3 fires (first config + first device).
+    #[test]
+    fn cache_allowed_false_skips_tier2_falls_to_tier3() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Write a valid cached selection pointing to the second device.
+        // With cache_allowed=true this would resolve "ios-device-2"; we want
+        // cache_allowed=false to ignore it and return the first device instead.
+        crate::config::save_last_selection(project_path, None, Some("ios-device-2")).unwrap();
+
+        // One non-auto_start config (so Tier 1 is not triggered).
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("Dev", "auto", false));
+        configs.is_empty = false;
+
+        let devices = vec![
+            make_device("ios-device-1", "ios"),
+            make_device("ios-device-2", "ios"),
+        ];
+
+        // cache_allowed=false: Tier 1 skipped (no auto_start), Tier 2 skipped (gated),
+        // Tier 3 resolves to first config + first device.
+        let result = find_auto_launch_target(&configs, &devices, project_path, false)
+            .expect("test setup guarantees Tier 3 resolves when cache_allowed=false");
+
+        assert_eq!(
+            result.device.id, "ios-device-1",
+            "cache_allowed=false should skip Tier 2 and use Tier 3 (first device)"
+        );
+        assert_eq!(
+            result.config.as_ref().unwrap().name,
+            "Dev",
+            "Tier 3 should select the first config"
+        );
+    }
+
+    /// T7: cache_allowed=false does not prevent Tier 1 from firing
+    ///
+    /// launch.toml has auto_start=true. settings.local.toml has a valid cached
+    /// last_device pointing to a different device than the auto_start config expects.
+    /// cache_allowed=false should have no effect on Tier 1.
+    #[test]
+    fn cache_allowed_false_still_honors_tier1() {
+        let temp = tempdir().unwrap();
+        let project_path = temp.path();
+
+        // Valid cache pointing to the android device.
+        crate::config::save_last_selection(project_path, None, Some("android-device-1")).unwrap();
+
+        // auto_start config targeting "ios-device-1".
+        let mut configs = LoadedConfigs::default();
+        configs
+            .configs
+            .push(make_sourced_config("ProdIos", "ios-device-1", true));
+        configs.is_empty = false;
+
+        let devices = vec![
+            make_device("ios-device-1", "ios"),
+            make_device("android-device-1", "android"),
+        ];
+
+        // cache_allowed=false: Tier 1 fires before cache check is even reached.
+        let result = find_auto_launch_target(&configs, &devices, project_path, false)
+            .expect("test setup guarantees Tier 1 resolves regardless of cache_allowed");
+
+        assert_eq!(
+            result.device.id, "ios-device-1",
+            "Tier 1 (auto_start config) must fire regardless of cache_allowed"
+        );
+        assert_eq!(
+            result.config.as_ref().unwrap().name,
+            "ProdIos",
+            "auto_start config name must be used"
+        );
+    }
+
+    /// None branch: empty device list causes all tiers to return None.
+    ///
+    /// All tiers depend on at least one device being present. When `devices` is
+    /// empty, every tier short-circuits and the function returns `None`.
+    #[test]
+    fn find_auto_launch_target_returns_none_on_empty_devices() {
+        let temp = tempfile::tempdir().unwrap();
+        let configs = LoadedConfigs::default();
+        let devices: Vec<Device> = vec![];
+        let result = find_auto_launch_target(&configs, &devices, temp.path(), true);
+        assert!(result.is_none());
     }
 }

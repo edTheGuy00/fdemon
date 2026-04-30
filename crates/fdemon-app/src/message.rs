@@ -404,6 +404,13 @@ pub enum Message {
     StartAutoLaunch {
         /// Pre-loaded configs to avoid re-loading in handler
         configs: LoadedConfigs,
+        /// Whether the cached `last_device` selection (Tier 2) is allowed.
+        ///
+        /// When `false`, `find_auto_launch_target` skips `try_cached_selection`
+        /// and falls through to Tier 3 (first config + first device) or
+        /// Tier 4 (bare flutter run). Populated from
+        /// `settings.behavior.auto_launch` when `StartAutoLaunch` is emitted.
+        cache_allowed: bool,
     },
 
     /// Update loading screen message during auto-launch

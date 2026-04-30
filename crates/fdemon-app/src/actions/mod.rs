@@ -97,8 +97,18 @@ pub fn handle_action(
             spawn::spawn_bootable_device_discovery(msg_tx, tool_availability);
         }
 
-        UpdateAction::DiscoverDevicesAndAutoLaunch { configs, flutter } => {
-            spawn::spawn_auto_launch(msg_tx, configs, project_path.to_path_buf(), flutter);
+        UpdateAction::DiscoverDevicesAndAutoLaunch {
+            configs,
+            flutter,
+            cache_allowed,
+        } => {
+            spawn::spawn_auto_launch(
+                msg_tx,
+                configs,
+                project_path.to_path_buf(),
+                flutter,
+                cache_allowed,
+            );
         }
 
         UpdateAction::SpawnSession {

@@ -160,6 +160,9 @@ pub struct NewSessionDialog<'a> {
     state: &'a NewSessionDialogState,
     tool_availability: &'a ToolAvailability,
     icons: &'a IconSet,
+    /// When `true`, a one-line migration banner is rendered above the dialog
+    /// informing the user that cache-driven auto-launch is now opt-in.
+    show_migration_banner: bool,
 }
 
 impl<'a> NewSessionDialog<'a> {
@@ -178,7 +181,14 @@ impl<'a> NewSessionDialog<'a> {
             state,
             tool_availability,
             icons,
+            show_migration_banner: false,
         }
+    }
+
+    /// Set whether to render the migration banner above the dialog.
+    pub fn migration_banner(mut self, show: bool) -> Self {
+        self.show_migration_banner = show;
+        self
     }
 
     /// Determine the appropriate layout mode for the given area
@@ -607,6 +617,21 @@ impl<'a> NewSessionDialog<'a> {
         .split(popup_layout[1])[1]
     }
 
+    /// Render a one-line migration banner above the dialog.
+    ///
+    /// Called only when `show_migration_banner` is `true`. The banner occupies
+    /// the topmost row of the provided area and uses `STATUS_YELLOW` to draw
+    /// the user's eye to the opt-in change.
+    fn render_migration_banner(area: Rect, buf: &mut Buffer) {
+        let banner = Paragraph::new(
+            "\u{26a0} Cache-driven auto-launch is now opt-in. \
+             Set `[behavior] auto_launch = true` in `.fdemon/config.toml` to restore.",
+        )
+        .style(Style::default().fg(palette::STATUS_YELLOW))
+        .alignment(Alignment::Center);
+        banner.render(area, buf);
+    }
+
     /// Render footer with abbreviated keybindings (for vertical layout)
     fn render_footer_compact(&self, area: Rect, buf: &mut Buffer) {
         // Fill background with SURFACE color
@@ -654,15 +679,41 @@ impl<'a> NewSessionDialog<'a> {
 
 impl Widget for NewSessionDialog<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
-        match Self::layout_mode(area) {
-            LayoutMode::TooSmall => {
-                Self::render_too_small(area, buf);
+        if self.show_migration_banner {
+            // Reserve the top row for the migration banner; give the rest to the
+            // dialog so its responsive layout calculations remain accurate.
+            let chunks = Layout::vertical([
+                Constraint::Length(1), // banner
+                Constraint::Min(0),    // dialog
+            ])
+            .split(area);
+
+            Self::render_migration_banner(chunks[0], buf);
+
+            // Render dialog in the remaining area
+            let dialog_area = chunks[1];
+            match Self::layout_mode(dialog_area) {
+                LayoutMode::TooSmall => {
+                    Self::render_too_small(dialog_area, buf);
+                }
+                LayoutMode::Horizontal => {
+                    self.render_horizontal(dialog_area, buf);
+                }
+                LayoutMode::Vertical => {
+                    self.render_vertical(dialog_area, buf);
+                }
             }
-            LayoutMode::Horizontal => {
-                self.render_horizontal(area, buf);
-            }
-            LayoutMode::Vertical => {
-                self.render_vertical(area, buf);
+        } else {
+            match Self::layout_mode(area) {
+                LayoutMode::TooSmall => {
+                    Self::render_too_small(area, buf);
+                }
+                LayoutMode::Horizontal => {
+                    self.render_horizontal(area, buf);
+                }
+                LayoutMode::Vertical => {
+                    self.render_vertical(area, buf);
+                }
             }
         }
     }

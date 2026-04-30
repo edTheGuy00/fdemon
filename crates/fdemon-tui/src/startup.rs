@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use fdemon_app::config::{
-    self, get_first_auto_start, load_all_configs, load_last_selection, LoadedConfigs,
+    self, emit_migration_nudge, get_first_auto_start, has_cached_last_device, load_all_configs,
+    LoadedConfigs, NudgeMode,
 };
 use fdemon_app::state::{AppState, UiMode};
 
@@ -19,23 +20,14 @@ pub enum StartupAction {
     AutoStart { configs: LoadedConfigs },
 }
 
-/// Returns `true` when `settings.local.toml` exists in `project_path` and
-/// contains a non-empty `last_device` value.
-///
-/// A missing file, a parse failure, or an empty string all return `false`.
-fn has_cached_last_device(project_path: &Path) -> bool {
-    load_last_selection(project_path)
-        .and_then(|s| s.device_id)
-        .is_some_and(|d| !d.is_empty())
-}
-
 /// Initialize startup state.
 ///
 /// The auto-start gate fires when **either** of these conditions holds:
 ///
 /// 1. **Explicit config:** any launch config in `launch.toml` has `auto_start = true`.
 /// 2. **Cached last device:** `settings.local.toml` exists and contains a
-///    non-empty `last_device` field (written by Task 02's symmetric persistence).
+///    non-empty `last_device` field (written by Task 02's symmetric persistence),
+///    **and** `settings.behavior.auto_launch == true` (opt-in gate).
 ///
 /// When the gate fires, returns `StartupAction::AutoStart` so the runner can
 /// send `Message::StartAutoLaunch`. `find_auto_launch_target`'s 4-tier cascade
@@ -48,25 +40,34 @@ fn has_cached_last_device(project_path: &Path) -> bool {
 /// and returns `StartupAction::Ready`.
 pub fn startup_flutter(
     state: &mut AppState,
-    _settings: &config::Settings,
+    settings: &config::Settings,
     project_path: &Path,
 ) -> StartupAction {
     // Load configs upfront
     let configs = load_all_configs(project_path);
 
-    // Gate: fire AutoStart when an explicit auto_start config exists OR a
-    // cached last_device is present (makes find_auto_launch_target Tier 2 reachable).
     let has_auto_start_config = get_first_auto_start(&configs).is_some();
-    let cache_trigger = !has_auto_start_config && has_cached_last_device(project_path);
+    let has_cache = has_cached_last_device(project_path);
+    let cache_opt_in = settings.behavior.auto_launch;
+
+    // Cache-trigger requires explicit opt-in via [behavior] auto_launch = true
+    let cache_trigger = !has_auto_start_config && cache_opt_in && has_cache;
+
+    // Migration nudge: user has a cached device but didn't opt in. Tell them
+    // this once so they understand why fdemon didn't auto-launch like it used to.
+    let migration_applied = emit_migration_nudge(NudgeMode::Tui, project_path, settings);
 
     if has_auto_start_config || cache_trigger {
         // Return AutoStart — runner will send StartAutoLaunch message
+        // Don't set show_migration_banner: the dialog is never shown on this path.
         return StartupAction::AutoStart { configs };
     }
 
     // Default: show NewSessionDialog at startup (Startup mode)
     state.show_new_session_dialog(configs);
     state.ui_mode = UiMode::Startup; // Override to Startup mode
+                                     // Only set the banner when the dialog is actually displayed.
+    state.show_migration_banner = migration_applied;
 
     // Return Ready - the runner will trigger tool availability and device discovery
     StartupAction::Ready
@@ -251,12 +252,12 @@ auto_start = false
         }
     }
 
-    // ── Cache-gate tests (G1 / G2 / G3) ─────────────────────────────────────
+    // ── Cache-gate tests (G1 / G2 / G3 / G4 / G5) ───────────────────────────
 
-    /// G1: Cache with last_device = "foo", no auto_start configs → AutoStart fires.
-    /// UI mode must NOT be Startup (we did not show the new-session dialog).
+    /// G1: Cache with last_device = "foo", no auto_start configs, auto_launch = false
+    /// (default) → Ready. Cache alone must NOT fire the gate without opt-in.
     #[test]
-    fn test_startup_flutter_cache_last_device_triggers_auto_start() {
+    fn cache_alone_does_not_trigger_auto_start() {
         let temp = tempdir().unwrap();
         let fdemon_dir = temp.path().join(".fdemon");
         std::fs::create_dir_all(&fdemon_dir).unwrap();
@@ -269,20 +270,148 @@ auto_start = false
         .unwrap();
 
         let mut state = AppState::new();
-        let settings = Settings::default();
+        let settings = Settings::default(); // auto_launch = false
 
         let result = startup_flutter(&mut state, &settings, temp.path());
 
-        // Cache-gate fires → AutoStart
+        // Cache without opt-in → NewSessionDialog shown, Ready returned
+        assert_eq!(state.ui_mode, UiMode::Startup);
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when last_device is set but auto_launch = false, got AutoStart"
+        );
+    }
+
+    /// G2: Cache with last_device = "foo", no auto_start configs, auto_launch = true
+    /// → AutoStart fires. Opt-in + cache = auto-launch.
+    #[test]
+    fn cache_with_auto_launch_triggers_auto_start() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a settings.local.toml with a non-empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "foo""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_launch = true; // opt in
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // Cache + opt-in → AutoStart fires
         assert!(
             matches!(result, StartupAction::AutoStart { .. }),
-            "Expected AutoStart when last_device is set, got Ready"
+            "Expected AutoStart when last_device is set and auto_launch = true"
         );
         // NewSessionDialog was NOT shown
         assert_ne!(state.ui_mode, UiMode::Startup);
     }
 
-    /// G2: Cache file present but last_device = "", no auto_start configs → Ready.
+    /// G3: Cache present with last_device = "foo" AND an auto_start config,
+    /// auto_launch = false → AutoStart fires (auto_start config path; cache flag irrelevant).
+    #[test]
+    fn auto_start_config_beats_cache_regardless_of_flag() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a launch.toml with auto_start = true
+        std::fs::write(
+            fdemon_dir.join("launch.toml"),
+            r#"
+[[configurations]]
+name = "AutoDev"
+device = "auto"
+auto_start = true
+"#,
+        )
+        .unwrap();
+
+        // Also write a settings.local.toml with a non-empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "foo""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let settings = Settings::default(); // auto_launch = false
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // auto_start config takes priority regardless of auto_launch flag
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when auto_start config is present"
+        );
+        assert_ne!(state.ui_mode, UiMode::Startup);
+    }
+
+    /// G4: Cache present AND auto_start config AND auto_launch = true → AutoStart fires.
+    #[test]
+    fn auto_start_config_beats_cache_with_flag_set() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Write a launch.toml with auto_start = true
+        std::fs::write(
+            fdemon_dir.join("launch.toml"),
+            r#"
+[[configurations]]
+name = "AutoDev"
+device = "auto"
+auto_start = true
+"#,
+        )
+        .unwrap();
+
+        // Also write a settings.local.toml with a non-empty last_device
+        std::fs::write(
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "foo""#,
+        )
+        .unwrap();
+
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_launch = true;
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // auto_start config present → AutoStart regardless
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when auto_start config and auto_launch = true"
+        );
+        assert_ne!(state.ui_mode, UiMode::Startup);
+    }
+
+    /// G5: No cache, auto_launch = false, no auto_start configs → Ready (dialog shown).
+    #[test]
+    fn nothing_set_shows_dialog() {
+        let temp = tempdir().unwrap();
+        // No .fdemon dir at all
+
+        let mut state = AppState::new();
+        let settings = Settings::default(); // auto_launch = false
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // Nothing configured → NewSessionDialog
+        assert_eq!(state.ui_mode, UiMode::Startup);
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when nothing is configured"
+        );
+    }
+
+    /// Cache file present but last_device = "", no auto_start configs → Ready.
     /// Empty string is treated as "no cache" — gate must NOT fire.
     #[test]
     fn test_startup_flutter_empty_cached_last_device_shows_dialog() {
@@ -310,43 +439,90 @@ auto_start = false
         );
     }
 
-    /// G3: Cache present with last_device = "foo" AND an auto_start config →
-    /// AutoStart still fires (auto_start path takes priority; cache doesn't matter).
+    // ── Migration banner tests (Task 04) ─────────────────────────────────────
+
+    /// B1: Migration condition met (cache + no auto_launch + no auto_start) on
+    /// the Ready path → `show_migration_banner` must be `true` after the call.
     #[test]
-    fn test_startup_flutter_auto_start_config_takes_priority_over_cache() {
+    fn migration_banner_set_on_ready_path_when_condition_met() {
         let temp = tempdir().unwrap();
         let fdemon_dir = temp.path().join(".fdemon");
         std::fs::create_dir_all(&fdemon_dir).unwrap();
 
-        // Write a launch.toml with auto_start = true
+        // Cache present
         std::fs::write(
-            fdemon_dir.join("launch.toml"),
-            r#"
-[[configurations]]
-name = "AutoDev"
-device = "auto"
-auto_start = true
-"#,
+            fdemon_dir.join("settings.local.toml"),
+            r#"last_device = "iphone-15""#,
         )
         .unwrap();
 
-        // Also write a settings.local.toml with a non-empty last_device
+        let mut state = AppState::new();
+        let settings = Settings::default(); // auto_launch = false
+
+        // Condition: cache present, no auto_start config, auto_launch = false
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        assert!(
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when migration condition applies"
+        );
+        assert!(
+            state.show_migration_banner,
+            "show_migration_banner must be true when migration condition applies and dialog is shown"
+        );
+    }
+
+    /// B2: Migration condition NOT met (auto_launch = true, so no nudge) →
+    /// `show_migration_banner` must remain `false`.
+    #[test]
+    fn migration_banner_not_set_when_auto_launch_opted_in() {
+        let temp = tempdir().unwrap();
+        let fdemon_dir = temp.path().join(".fdemon");
+        std::fs::create_dir_all(&fdemon_dir).unwrap();
+
+        // Cache present, but user has opted in
         std::fs::write(
             fdemon_dir.join("settings.local.toml"),
-            r#"last_device = "foo""#,
+            r#"last_device = "iphone-15""#,
         )
         .unwrap();
+
+        let mut state = AppState::new();
+        let mut settings = Settings::default();
+        settings.behavior.auto_launch = true; // opted in → AutoStart fires, no nudge
+
+        let result = startup_flutter(&mut state, &settings, temp.path());
+
+        // auto_launch = true means the gate fires (AutoStart), so dialog is not shown
+        assert!(
+            matches!(result, StartupAction::AutoStart { .. }),
+            "Expected AutoStart when auto_launch = true"
+        );
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must be false on the AutoStart path"
+        );
+    }
+
+    /// B3: No cache, no auto_start, auto_launch = false → Ready shown but nudge
+    /// condition does NOT apply → `show_migration_banner` must be `false`.
+    #[test]
+    fn migration_banner_not_set_when_no_cache() {
+        let temp = tempdir().unwrap();
+        // No .fdemon dir — no cache at all
 
         let mut state = AppState::new();
         let settings = Settings::default();
 
         let result = startup_flutter(&mut state, &settings, temp.path());
 
-        // Both conditions active → AutoStart fires (auto_start config path)
         assert!(
-            matches!(result, StartupAction::AutoStart { .. }),
-            "Expected AutoStart when auto_start config is present"
+            matches!(result, StartupAction::Ready),
+            "Expected Ready when no cache"
         );
-        assert_ne!(state.ui_mode, UiMode::Startup);
+        assert!(
+            !state.show_migration_banner,
+            "show_migration_banner must be false when no cache is present"
+        );
     }
 }

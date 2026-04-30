@@ -88,6 +88,11 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .value(SettingValue::Bool(settings.behavior.confirm_quit))
             .default(SettingValue::Bool(true))
             .section("Behavior"),
+        SettingItem::new("behavior.auto_launch", "Auto-launch on cached device")
+            .description("Auto-launch the last-used device on startup (takes effect on next fdemon launch; skipped if launch.toml has auto_start)")
+            .value(SettingValue::Bool(settings.behavior.auto_launch))
+            .default(SettingValue::Bool(false))
+            .section("Behavior"),
         // ─────────────────────────────────────────────────────────
         // Watcher Section
         // ─────────────────────────────────────────────────────────
@@ -507,6 +512,19 @@ pub fn vscode_config_items(config: &LaunchConfig, idx: usize) -> Vec<SettingItem
 mod tests {
     use super::*;
     use crate::config::Settings;
+
+    #[test]
+    fn test_behavior_auto_launch_item_present() {
+        let settings = Settings::default();
+        let items = project_settings_items(&settings);
+        let item = items
+            .iter()
+            .find(|i| i.id == "behavior.auto_launch")
+            .expect("behavior.auto_launch item should be present in Behavior section");
+        assert_eq!(item.section, "Behavior");
+        assert_eq!(item.value, SettingValue::Bool(false));
+        assert_eq!(item.default, SettingValue::Bool(false));
+    }
 
     #[test]
     fn test_default_panel_options_match_enum_variants() {

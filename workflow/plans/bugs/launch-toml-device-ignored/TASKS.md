@@ -8,7 +8,7 @@ Plan: [BUG.md](./BUG.md)
 |---|------|------|-------|------------|
 | 01 | Alias `"macos"` ↔ `"darwin"` (and other display-string aliases) in `Device::matches` | [tasks/01-fix-platform-alias-matching.md](./tasks/01-fix-platform-alias-matching.md) | implementor | — |
 | 02 | Surface "configured device not found" warning in the user-visible log buffer (keep `devices.first()` fallback) | [tasks/02-surface-device-miss-warning.md](./tasks/02-surface-device-miss-warning.md) | implementor | — |
-| 03 | Wire `launch.toml` into headless auto-start (reuse `find_auto_launch_target`); fall back to `devices.first()` if no config | [tasks/03-headless-launch-toml-auto-launch.md](./tasks/03-headless-launch-toml-auto-launch.md) | implementor | — |
+| 03 | ⚠️ SUPERSEDED 2026-04-29 — wiring absorbed by [`cache-auto-launch-gate` Task 04](../cache-auto-launch-gate/tasks/04-headless-gate.md). Close as resolved-by-absorption when reviewed. ~~Wire `launch.toml` into headless auto-start (reuse `find_auto_launch_target`); fall back to `devices.first()` if no config~~ | [tasks/03-headless-launch-toml-auto-launch.md](./tasks/03-headless-launch-toml-auto-launch.md) | implementor | — |
 
 ## Wave Plan
 
