@@ -162,11 +162,56 @@ Implementor's call. Document the chosen trigger in the Completion Summary.
 
 ## Acceptance
 
-- [ ] Helper in `crates/fdemon-app/src/config/mod.rs` emits `tracing::warn!` (not `info!`) for both `NudgeMode::Tui` and `NudgeMode::Headless`.
-- [ ] `AppState` has `pub show_migration_banner: bool` with `Default` set to `false`.
-- [ ] `startup_flutter` sets `state.show_migration_banner = true` only on the `Ready` (dialog-shown) path when the migration condition applied.
-- [ ] New Session dialog renders a one-line banner above the dialog when `state.show_migration_banner == true`.
-- [ ] Banner clears on dialog dismissal or `ui_mode` transition (implementor's choice — document in Completion Summary).
-- [ ] All existing tests pass; new tests cover the field default, the `Ready`-path setting, and the non-applicable case.
-- [ ] `cargo clippy --workspace -- -D warnings` clean.
-- [ ] Manual smoke confirms WARN-level log + banner appearance in TUI.
+- [x] Helper in `crates/fdemon-app/src/config/mod.rs` emits `tracing::warn!` (not `info!`) for both `NudgeMode::Tui` and `NudgeMode::Headless`.
+- [x] `AppState` has `pub show_migration_banner: bool` with `Default` set to `false`.
+- [x] `startup_flutter` sets `state.show_migration_banner = true` only on the `Ready` (dialog-shown) path when the migration condition applied.
+- [x] New Session dialog renders a one-line banner above the dialog when `state.show_migration_banner == true`.
+- [x] Banner clears on dialog dismissal or `ui_mode` transition (implementor's choice — document in Completion Summary).
+- [x] All existing tests pass; new tests cover the field default, the `Ready`-path setting, and the non-applicable case.
+- [x] `cargo clippy --workspace -- -D warnings` clean.
+- [ ] Manual smoke confirms WARN-level log + banner appearance in TUI (not verified — no Flutter project available in this environment).
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a4c01aed04c423e32
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/mod.rs` | Bumped both `tracing::info!` arms to `tracing::warn!` inside `emit_migration_nudge` |
+| `crates/fdemon-app/src/state.rs` | Added `pub show_migration_banner: bool` field to `AppState` (doc comment + `false` in `with_settings` constructor); cleared it in `hide_new_session_dialog`; added 2 new unit tests |
+| `crates/fdemon-tui/src/startup.rs` | Replaced `let _migration_applied` with `let migration_applied`; stored result in `state.show_migration_banner` only on the `Ready` path; added 3 new unit tests |
+| `crates/fdemon-tui/src/render/mod.rs` | Chained `.migration_banner(state.show_migration_banner)` onto the `NewSessionDialog` builder in the `UiMode::Startup | UiMode::NewSessionDialog` branch |
+| `crates/fdemon-tui/src/widgets/new_session_dialog/mod.rs` | Added `show_migration_banner: bool` field to `NewSessionDialog`; added `.migration_banner(bool)` builder method; added `render_migration_banner` helper; updated `Widget::render` to split the area and render the banner row above the dialog when the flag is set |
+
+### Notable Decisions/Tradeoffs
+
+1. **Clear trigger — `hide_new_session_dialog`:** The banner is cleared in `AppState::hide_new_session_dialog`, which is the common dismiss path used by device selection, Esc, and `HideNewSessionDialog` messages. This is defense-in-depth: the `OnceLock` in `emit_migration_nudge` already ensures the log line fires at most once per process; the clear ensures the banner also doesn't re-appear if the user re-opens the dialog via the `n` key in Normal mode. The auto-start path never sets the flag, so no clearing is needed there.
+
+2. **Widget builder pattern:** Added `show_migration_banner: bool` as a field (default `false`) with a `.migration_banner(bool)` builder method rather than as a constructor argument, matching the existing pattern used by other builder methods in this codebase (`LogView::wrap_mode`, `TargetSelector::compact`, etc.).
+
+3. **Banner renders above the dialog, not inside it:** The `Widget::render` implementation splits the total area using `Constraint::Length(1)` (banner) + `Constraint::Min(0)` (dialog), then passes the reduced area to the layout-mode dispatch. This preserves the dialog's responsive layout calculations — the dialog sees one less row and will use its compact or vertical modes as appropriate.
+
+4. **Unicode escape for the warning sign:** Used `\u{26a0}` (U+26A0 WARNING SIGN) rather than a raw emoji literal to avoid potential source-encoding issues in the CI matrix.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all existing tests + 5 new tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+**New tests:**
+- `fdemon-app::state::tests::show_migration_banner_defaults_to_false` - Passed
+- `fdemon-app::state::tests::hide_new_session_dialog_clears_migration_banner` - Passed
+- `fdemon-tui::startup::tests::migration_banner_set_on_ready_path_when_condition_met` - Passed
+- `fdemon-tui::startup::tests::migration_banner_not_set_when_auto_launch_opted_in` - Passed
+- `fdemon-tui::startup::tests::migration_banner_not_set_when_no_cache` - Passed
+
+### Risks/Limitations
+
+1. **Manual smoke not performed:** No Flutter project is available in this CI/worktree environment, so the WARN-level log and banner visual were verified via code review and unit tests only. The unit tests cover all logic paths; the render path is exercised through the existing `test_dialog_renders` test (which now exercises `show_migration_banner = false` by default).

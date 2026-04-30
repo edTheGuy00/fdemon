@@ -142,3 +142,39 @@ The CODE_STANDARDS.md and review acknowledge that `tracing::info!` content is ha
 - [ ] Existing G1–G5 tests in `crates/fdemon-tui/src/startup.rs` still pass.
 - [ ] All workspace tests pass; `cargo clippy` clean.
 - [ ] Smoke test: running `fdemon` twice in the same process (e.g., via a test harness) emits the log only once. (If process-restart-required, the log appears once per restart — also acceptable per the spec.)
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/mod.rs` | Added `pub enum NudgeMode { Tui, Headless }` and `pub fn emit_migration_nudge(mode, project_path, settings) -> bool` with `OnceLock` gate. Added 4 unit tests covering true/false return value conditions. |
+| `crates/fdemon-tui/src/startup.rs` | Added `emit_migration_nudge` and `NudgeMode` to imports. Replaced inline `tracing::info!` block with `let _migration_applied = emit_migration_nudge(NudgeMode::Tui, project_path, settings);`. |
+| `src/headless/runner.rs` | Replaced inline `tracing::info!` block (and local variable computation) with `let _ = emit_migration_nudge(NudgeMode::Headless, &project_path, &engine.settings);`. Added sibling-bug coordination header comment above `headless_auto_start`. Updated imports to remove `get_first_auto_start` and `has_cached_last_device` (now internal to helper). |
+
+### Notable Decisions/Tradeoffs
+
+1. **Local variables preserved in startup.rs**: `has_auto_start_config`, `has_cache`, `cache_opt_in`, and `cache_trigger` are still needed for the startup gate logic. The helper independently re-computes them — this is intentional (the helper is self-contained). The condition is simple and the duplication is minimal (4 lines).
+
+2. **Tests target return value, not log emission**: Per task spec and CODE_STANDARDS.md, `tracing::info!` emission is not asserted. Tests validate the `bool` return value contract. The `OnceLock` being static means log-emission tests would be fragile across test binary invocations — this limitation is documented in test body comments.
+
+3. **Headless message text**: Explicitly avoids referencing `[behavior] auto_launch` as a remediation, since that flag does not apply in headless mode (C2 finding). The TUI message still references it as the opt-in mechanism.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app config` - Passed (519 tests)
+- `cargo test -p fdemon-tui startup` - Passed (12 tests, all G1–G5 pass)
+- `cargo test --workspace` - Passed (0 failures across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **OnceLock static in test binary**: The `EMITTED` OnceLock in `emit_migration_nudge` is process-global. If tests within the same binary call `emit_migration_nudge` with conditions satisfied, only the first invocation emits the log. The return value tests avoid relying on emission order. The smoke test (running fdemon twice) would require two separate process invocations to verify — acceptable per spec.

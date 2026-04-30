@@ -85,7 +85,35 @@ Both edits are documentation/string changes. No tests need updating. `cargo test
 
 ## Acceptance
 
-- [ ] `crates/fdemon-app/src/settings_items.rs` description for `behavior.auto_launch` includes the substring `takes effect on next fdemon launch`.
-- [ ] `workflow/plans/bugs/launch-toml-device-ignored/TASKS.md` Task 03 entry is annotated SUPERSEDED with a date (2026-04-29) and a back-reference link/path to `cache-auto-launch-gate` Task 04.
-- [ ] Existing `test_behavior_auto_launch_item_present` still passes.
-- [ ] `cargo clippy --workspace -- -D warnings` clean.
+- [x] `crates/fdemon-app/src/settings_items.rs` description for `behavior.auto_launch` includes the substring `takes effect on next fdemon launch`.
+- [x] `workflow/plans/bugs/launch-toml-device-ignored/TASKS.md` Task 03 entry is annotated SUPERSEDED with a date (2026-04-29) and a back-reference link/path to `cache-auto-launch-gate` Task 04.
+- [x] Existing `test_behavior_auto_launch_item_present` still passes.
+- [x] `cargo clippy --workspace -- -D warnings` clean.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/settings_items.rs` | Updated `behavior.auto_launch` `.description(...)` string to include `"takes effect on next fdemon launch; "` clause before the existing `skipped if launch.toml has auto_start` text |
+| `workflow/plans/bugs/launch-toml-device-ignored/TASKS.md` | Annotated Task 03 row with Option A inline prefix: `⚠️ SUPERSEDED 2026-04-29 — wiring absorbed by [cache-auto-launch-gate Task 04](...). Close as resolved-by-absorption when reviewed.` with original description struck through |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A (inline prefix) chosen for TASKS.md annotation**: The sibling TASKS.md had no existing "Status Updates" section, making Option A (inline table cell prefix) the more discoverable choice per the task's own guidance. The original description text is retained with strikethrough for context.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app settings_items` - Passed (7 tests, including `test_behavior_auto_launch_item_present`)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **String-only change**: The description update is purely cosmetic — no logic, no tests broken. The existing test checks `id == "behavior.auto_launch"` but not the description text, so no test updates were needed.

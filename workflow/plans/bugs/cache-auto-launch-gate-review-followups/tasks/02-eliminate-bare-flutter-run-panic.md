@@ -142,10 +142,40 @@ else {
 
 ## Acceptance
 
-- [ ] `bare_flutter_run` returns `Option<AutoLaunchSuccess>`; no `.expect()` or `.unwrap()` in its body.
-- [ ] `find_auto_launch_target` returns `Option<AutoLaunchSuccess>`; doc comment describes the `None` semantics; no `# Panics` section needed.
-- [ ] `spawn_auto_launch` handles the `None` branch with a sensible early-return + error log.
-- [ ] `headless_auto_start` handles the `None` branch with `tracing::error!` + `HeadlessEvent::error` + early-return.
-- [ ] No `expect("...line 137")`-style panic remains anywhere in `spawn.rs`.
-- [ ] All existing `spawn::tests` updated for `Option` return; new test `find_auto_launch_target_returns_none_on_empty_devices` passes.
-- [ ] `cargo clippy --workspace -- -D warnings` clean.
+- [x] `bare_flutter_run` returns `Option<AutoLaunchSuccess>`; no `.expect()` or `.unwrap()` in its body.
+- [x] `find_auto_launch_target` returns `Option<AutoLaunchSuccess>`; doc comment describes the `None` semantics; no `# Panics` section needed.
+- [x] `spawn_auto_launch` handles the `None` branch with a sensible early-return + error log.
+- [x] `headless_auto_start` handles the `None` branch with `tracing::error!` + `HeadlessEvent::error` + early-return.
+- [x] No `expect("...line 137")`-style panic remains anywhere in `spawn.rs`.
+- [x] All existing `spawn::tests` updated for `Option` return; new test `find_auto_launch_target_returns_none_on_empty_devices` passes.
+- [x] `cargo clippy --workspace -- -D warnings` clean.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/spawn.rs` | Changed `bare_flutter_run` to return `Option<AutoLaunchSuccess>` using `?` instead of `expect`. Changed `find_auto_launch_target` to return `Option<AutoLaunchSuccess>` and updated doc comment. Updated `spawn_auto_launch` call site with `let Some(...) else { ... }` guard. Updated 8 existing test call sites with `.expect("...")`. Added new test `find_auto_launch_target_returns_none_on_empty_devices`. |
+| `src/headless/runner.rs` | Updated `headless_auto_start` call site from bare destructure to `let Some(...) = ... else { tracing::error!(...); HeadlessEvent::error(...).emit(); return; }`. Updated 3 headless test call sites with `.expect("...")`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`.expect()` in tests**: Used descriptive `.expect("test setup guarantees ...")` messages rather than bare `.unwrap()` per CODE_STANDARDS guidance on error context.
+2. **`spawn_auto_launch` guard placement**: The `None` branch in `spawn_auto_launch` is defense-in-depth — the `is_empty()` guard at line 185 already prevents this in normal operation. The `let Some(...) else` pattern makes the structural guarantee explicit at the type level.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app spawn::tests` — Passed (10 tests)
+- `cargo test --workspace` — Passed (all test suites, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (clean)
+
+### Risks/Limitations
+
+1. **Headless `None` branch unreachable in practice**: The `is_empty()` guard at line 296 of `headless_auto_start` runs before `find_auto_launch_target` is called, so the new `else` branch is purely defensive. No test exercises it directly because the test harness cannot inject empty devices after the guard; this is documented in the task spec.
