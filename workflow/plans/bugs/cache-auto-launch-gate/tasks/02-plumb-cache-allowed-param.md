@@ -106,10 +106,48 @@ All test constructors of `Message::StartAutoLaunch { configs }` need the new fie
 
 ## Acceptance
 
-- [ ] `Message::StartAutoLaunch` has `cache_allowed: bool` field.
-- [ ] `UpdateAction::DiscoverDevicesAndAutoLaunch` has `cache_allowed: bool` field.
-- [ ] `spawn_auto_launch` and `find_auto_launch_target` both accept `cache_allowed: bool`.
-- [ ] `find_auto_launch_target` skips `try_cached_selection` when `cache_allowed == false`.
-- [ ] All existing tests updated to pass `cache_allowed: true` and still pass.
-- [ ] New tests cover `cache_allowed: false` (skips Tier 2) and Tier 1's invariance.
-- [ ] `crates/fdemon-tui/src/runner.rs:181` (`dispatch_startup_action`) constructs `StartAutoLaunch` with `cache_allowed: false` — placeholder for Task 03.
+- [x] `Message::StartAutoLaunch` has `cache_allowed: bool` field.
+- [x] `UpdateAction::DiscoverDevicesAndAutoLaunch` has `cache_allowed: bool` field.
+- [x] `spawn_auto_launch` and `find_auto_launch_target` both accept `cache_allowed: bool`.
+- [x] `find_auto_launch_target` skips `try_cached_selection` when `cache_allowed == false`.
+- [x] All existing tests updated to pass `cache_allowed: true` and still pass.
+- [x] New tests cover `cache_allowed: false` (skips Tier 2) and Tier 1's invariance.
+- [x] `crates/fdemon-tui/src/runner.rs:181` (`dispatch_startup_action`) constructs `StartAutoLaunch` with `cache_allowed: false` — placeholder for Task 03.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `cache_allowed: bool` field to `Message::StartAutoLaunch` with doc comment |
+| `crates/fdemon-app/src/handler/mod.rs` | Added `cache_allowed: bool` field to `UpdateAction::DiscoverDevicesAndAutoLaunch` with doc comment |
+| `crates/fdemon-app/src/handler/update.rs` | Match arm for `Message::StartAutoLaunch` destructures and propagates `cache_allowed` into `UpdateAction` |
+| `crates/fdemon-app/src/handler/tests.rs` | Updated all 3 `Message::StartAutoLaunch { configs }` constructions to include `cache_allowed: true` |
+| `crates/fdemon-app/src/actions/mod.rs` | Match arm for `UpdateAction::DiscoverDevicesAndAutoLaunch` passes `cache_allowed` to `spawn_auto_launch` |
+| `crates/fdemon-app/src/spawn.rs` | `spawn_auto_launch` and `find_auto_launch_target` accept `cache_allowed: bool`; Tier 2 gated on flag; existing tests updated; 2 new tests added |
+| `crates/fdemon-tui/src/runner.rs` | `dispatch_startup_action` constructs `StartAutoLaunch` with `cache_allowed: false` (placeholder for Task 03) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Hard-coded `cache_allowed: false` at construction sites**: Per task spec, all current construction sites use `false`. This intentionally disables Tier 2 (cached selection) as a temporary state until Tasks 03 + 04 land and read the real setting.
+2. **Existing tests use `cache_allowed: true`**: This preserves pre-existing test semantics (those tests exercise cache-based behavior that remains valid with `true`).
+3. **No behavioral change for Tier 1 (auto_start config)**: The `cache_allowed` flag has no effect when a `launch.toml` config with `auto_start = true` is found — Tier 1 always wins.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app spawn::tests` - Passed (9 tests, including 2 new)
+- `cargo test -p fdemon-app handler::tests` - Passed (317 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test --workspace` - Passed (all crates, zero failures)
+
+### Risks/Limitations
+
+1. **Temporary breakage of cache-based auto-launch**: As documented in the task, `cache_allowed: false` at all construction sites means Tier 2 is currently always skipped. This is intentional and short-lived — Tasks 03 + 04 replace the hard-coded value with `settings.behavior.auto_launch`.

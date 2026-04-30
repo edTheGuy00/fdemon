@@ -89,8 +89,36 @@ confirm_quit = true     # Ask before quitting with running apps
 
 ## Acceptance
 
-- [ ] `docs/CONFIGURATION.md` Auto-Start Behavior section accurately describes the new gate.
-- [ ] Behavior Settings table includes `auto_launch` row with default and description.
-- [ ] Migration callout present.
-- [ ] `example/app2/.fdemon/config.toml` has the commented discoverability line.
-- [ ] No code changes; CI green.
+- [x] `docs/CONFIGURATION.md` Auto-Start Behavior section accurately describes the new gate.
+- [x] Behavior Settings table includes `auto_launch` row with default and description.
+- [x] Migration callout present.
+- [x] `example/app2/.fdemon/config.toml` has the commented discoverability line.
+- [x] No code changes; CI green.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Rewrote "Auto-Start Behavior" section (§183-214) to describe the new 2-condition gate and 4-tier priority table. Added Tier 3 row for `auto_launch=true` + stale cache. Added headless mode note. Added `auto_launch` property row to Behavior Settings table, code example block, and migration callout. Updated removal note to mention the new `auto_launch` opt-in. |
+| `example/app2/.fdemon/config.toml` | Added `# auto_launch = true` commented discoverability line under `[behavior]` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tier 3 vs "stale cache" phrasing:** The task's priority table lists Tier 3 as `auto_launch=true` + stale/missing cache. I kept this accurate — when `auto_launch=true` is set but there's no valid cached device, it still falls through to first-available rather than prompting the dialog.
+2. **Headless note placement:** Added the headless mode note directly in the Auto-Start Behavior section (not just Behavior Settings) so users reading about the gate logic see it immediately.
+3. **Migration callout wording:** Used `post-v0.5.0` rather than `<next-version>` since the task didn't specify a version number and the change is already shipped on the working branch.
+
+### Testing Performed
+
+- `cargo test --workspace --lib` - Passed (882 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **Docs only:** No code was changed. Docs accurately describe the behavior implemented in Tasks 01-04.

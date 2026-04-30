@@ -15,12 +15,12 @@ Decisions locked in (BUG.md §"Decisions"):
 
 | # | Task | File | Agent | Depends on |
 |---|------|------|-------|------------|
-| 01 | Add `[behavior] auto_launch` field to `BehaviorSettings` + Settings Panel row | [tasks/01-add-auto-launch-field.md](./tasks/01-add-auto-launch-field.md) | implementor | — |
-| 02 | Plumb `cache_allowed: bool` through `Message::StartAutoLaunch` → `UpdateAction::DiscoverDevicesAndAutoLaunch` → `spawn_auto_launch` → `find_auto_launch_target`; skip Tier 2 when disallowed | [tasks/02-plumb-cache-allowed-param.md](./tasks/02-plumb-cache-allowed-param.md) | implementor | — |
-| 03 | Re-gate TUI `startup_flutter` so `cache_trigger` requires `settings.behavior.auto_launch == true`; pass real value as `cache_allowed`; emit migration `info!` | [tasks/03-tui-startup-gate.md](./tasks/03-tui-startup-gate.md) | implementor | 01, 02 |
-| 04 | Headless: reuse `find_auto_launch_target` with hard-wired `cache_allowed = false`; emit migration `info!` (sibling-bug coordination required) | [tasks/04-headless-gate.md](./tasks/04-headless-gate.md) | implementor | 02 + sibling `launch-toml-device-ignored` Task 03 |
-| 05 | Docs: rewrite `docs/CONFIGURATION.md` Auto-Start Behavior section; add commented-out `# auto_launch = true` line to `example/app2/.fdemon/config.toml` | [tasks/05-docs-and-example.md](./tasks/05-docs-and-example.md) | implementor | 01, 02, 03, 04 |
-| 06 | `docs/ARCHITECTURE.md` startup-sequence line update for the new gate condition | [tasks/06-architecture-doc.md](./tasks/06-architecture-doc.md) | doc_maintainer | 01, 02, 03, 04 |
+| 01 | ✅ Done — Add `[behavior] auto_launch` field to `BehaviorSettings` + Settings Panel row | [tasks/01-add-auto-launch-field.md](./tasks/01-add-auto-launch-field.md) | implementor | — |
+| 02 | ✅ Done — Plumb `cache_allowed: bool` through `Message::StartAutoLaunch` → `UpdateAction::DiscoverDevicesAndAutoLaunch` → `spawn_auto_launch` → `find_auto_launch_target`; skip Tier 2 when disallowed | [tasks/02-plumb-cache-allowed-param.md](./tasks/02-plumb-cache-allowed-param.md) | implementor | — |
+| 03 | ✅ Done — Re-gate TUI `startup_flutter` so `cache_trigger` requires `settings.behavior.auto_launch == true`; pass real value as `cache_allowed`; emit migration `info!` | [tasks/03-tui-startup-gate.md](./tasks/03-tui-startup-gate.md) | implementor | 01, 02 |
+| 04 | ✅ Done — Headless: reuse `find_auto_launch_target` with hard-wired `cache_allowed = false`; emit migration `info!` (**absorbed sibling Task 03 wiring inline** — option (b)) | [tasks/04-headless-gate.md](./tasks/04-headless-gate.md) | implementor | 02 + sibling `launch-toml-device-ignored` Task 03 |
+| 05 | ✅ Done — Docs: rewrite `docs/CONFIGURATION.md` Auto-Start Behavior section; add commented-out `# auto_launch = true` line to `example/app2/.fdemon/config.toml` | [tasks/05-docs-and-example.md](./tasks/05-docs-and-example.md) | implementor | 01, 02, 03, 04 |
+| 06 | ✅ Done — `docs/ARCHITECTURE.md` startup-sequence line update for the new gate condition | [tasks/06-architecture-doc.md](./tasks/06-architecture-doc.md) | doc_maintainer | 01, 02, 03, 04 |
 
 ---
 

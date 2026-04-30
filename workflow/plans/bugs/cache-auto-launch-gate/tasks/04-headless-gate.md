@@ -85,8 +85,45 @@ Add `crates/fdemon-app` integration test (or place in `src/headless/runner.rs::t
 
 ## Acceptance
 
-- [ ] Headless calls `find_auto_launch_target(.., cache_allowed: false)`.
-- [ ] Migration `info!` fires in headless when conditions are met.
-- [ ] Headless test asserts cache does NOT drive headless auto-launch (regardless of `auto_launch` flag).
-- [ ] Sibling bug's Task 03 successfully merged (or absorbed inline if blocked).
-- [ ] No regression in CI/script users of `fdemon --headless`.
+- [x] Headless calls `find_auto_launch_target(.., cache_allowed: false)`.
+- [x] Migration `info!` fires in headless when conditions are met.
+- [x] Headless test asserts cache does NOT drive headless auto-launch (regardless of `auto_launch` flag).
+- [x] Sibling bug's Task 03 successfully merged (or absorbed inline if blocked).
+- [x] No regression in CI/script users of `fdemon --headless`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-adbc5c07f9a274a9a
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/mod.rs` | Added public `has_cached_last_device()` helper (moved from TUI-private, option b) |
+| `crates/fdemon-tui/src/startup.rs` | Removed private `has_cached_last_device` fn; updated imports to use shared helper from `fdemon-app::config`; removed unused `load_last_selection` import |
+| `src/headless/runner.rs` | Rewrote `headless_auto_start` to load configs, call `find_auto_launch_target` with `cache_allowed: false`, emit migration `info!`; updated imports; added 3 headless gate tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option (b) for `has_cached_last_device`**: Moved to `crates/fdemon-app/src/config/mod.rs` as a public helper rather than duplicating the 4-line function inline. This makes it available to both TUI and headless without duplication. The TUI startup.rs was updated to use the shared symbol.
+
+2. **Absorbing sibling Task 03 wiring**: The sibling `launch-toml-device-ignored` Task 03 was not implemented anywhere, so we absorbed the wiring inline as described in the orchestrator instructions. `headless_auto_start` now loads configs via `load_all_configs`, calls `find_auto_launch_target` (not `spawn_auto_launch` — headless does synchronous device discovery directly then resolves inline), and drives session creation from the `AutoLaunchSuccess` result.
+
+3. **Synchronous resolution path**: Headless already does synchronous `devices::discover_devices()` in `headless_auto_start`. Rather than switching to the async `spawn_auto_launch` (which goes through the message bus), we kept the direct approach and called `find_auto_launch_target` directly after discovery. This preserves the existing headless flow and avoids message-bus latency.
+
+4. **`cache_allowed = false` hard-wired**: Per decision 2(b), headless never reads `engine.settings.behavior.auto_launch` for the cache gate. The value is read only for the migration `info!` message (to tell users the opt-in flag exists).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test --workspace` — Passed (all crates, 4069+ tests total, 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo test -p flutter-demon -- headless` — Passed (14 tests including 3 new headless gate tests: `headless_ignores_cache_uses_first_device`, `headless_ignores_auto_launch_flag_still_uses_first_device`, `headless_tier1_auto_start_config_wins`)
+
+### Risks/Limitations
+
+1. **No real device discovery in tests**: The headless gate tests use `find_auto_launch_target` directly rather than calling `headless_auto_start` end-to-end (which would require a real Flutter SDK and devices). This is intentional and consistent with the rest of the test suite's approach.

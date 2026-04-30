@@ -78,7 +78,29 @@ The Startup Sequence summary in `docs/ARCHITECTURE.md` (Data Flow section, line 
 
 ## Acceptance
 
-- [ ] Line 1444 (and surrounding context as needed) reflects the new gate condition.
-- [ ] No other sections of ARCHITECTURE.md changed.
-- [ ] Reference to `docs/CONFIGURATION.md` for the full table.
-- [ ] No grep hits for stale "if auto_start=false" phrasing.
+- [x] Line 1444 (and surrounding context as needed) reflects the new gate condition.
+- [x] No other sections of ARCHITECTURE.md changed.
+- [x] Reference to `docs/CONFIGURATION.md` for the full table.
+- [x] No grep hits for stale "if auto_start=false" phrasing.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** plan/cache-auto-launch-gate
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Updated Startup Sequence step 7 to list the three settings files loaded, and replaced step 8's single `auto_start=false` bullet with the two-condition auto-launch gate description plus a reference to `docs/CONFIGURATION.md`. Step 9 updated to note it only fires if auto-launch fired. |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Deferred detail to CONFIGURATION.md**: The full four-tier priority table lives in `docs/CONFIGURATION.md` (Task 05). ARCHITECTURE.md references it rather than duplicating, keeping the startup sequence readable and the detail canonical in one place.
