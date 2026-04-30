@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use fdemon_app::config::{
-    self, get_first_auto_start, has_cached_last_device, load_all_configs, LoadedConfigs,
+    self, emit_migration_nudge, get_first_auto_start, has_cached_last_device, load_all_configs,
+    LoadedConfigs, NudgeMode,
 };
 use fdemon_app::state::{AppState, UiMode};
 
@@ -54,13 +55,8 @@ pub fn startup_flutter(
 
     // Migration nudge: user has a cached device but didn't opt in. Tell them
     // this once so they understand why fdemon didn't auto-launch like it used to.
-    if !has_auto_start_config && has_cache && !cache_opt_in {
-        tracing::info!(
-            "settings.local.toml has a cached last_device but [behavior] auto_launch \
-             is not set in config.toml. Auto-launch via cache is now opt-in. \
-             Set `[behavior] auto_launch = true` to restore the previous behavior."
-        );
-    }
+    // Task 04 can promote _migration_applied into state.show_migration_banner when ready.
+    let _migration_applied = emit_migration_nudge(NudgeMode::Tui, project_path, settings);
 
     if has_auto_start_config || cache_trigger {
         // Return AutoStart — runner will send StartAutoLaunch message

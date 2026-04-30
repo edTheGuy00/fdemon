@@ -9,9 +9,7 @@ use tokio::sync::mpsc;
 use tracing::{error, info, warn};
 
 use fdemon_app::{
-    config::{
-        get_first_auto_start, has_cached_last_device, load_all_configs, should_auto_start_dap,
-    },
+    config::{emit_migration_nudge, load_all_configs, should_auto_start_dap, NudgeMode},
     message::{AutoLaunchSuccess, Message},
     spawn::find_auto_launch_target,
     state::AppState,
@@ -241,6 +239,15 @@ fn spawn_stdin_reader_blocking(msg_tx: mpsc::Sender<Message>) {
     info!("Stdin reader exiting");
 }
 
+/// **Sibling-bug coordination note (added 2026-04-29):**
+/// The `find_auto_launch_target` integration in this function was originally
+/// scoped to sibling bug `launch-toml-device-ignored` Task 03. It was absorbed
+/// inline by `cache-auto-launch-gate` Task 04 (option b) on 2026-04-29 because
+/// the sibling task had not been implemented anywhere. When the sibling bug's
+/// Task 03 is reviewed next, close it as resolved-by-absorption. See:
+/// - workflow/plans/bugs/cache-auto-launch-gate/tasks/04-headless-gate.md
+/// - workflow/plans/bugs/launch-toml-device-ignored/TASKS.md (Task 03)
+///
 /// Auto-start in headless mode: discover devices and create session.
 ///
 /// Headless always passes `cache_allowed = false` to `find_auto_launch_target`
@@ -268,17 +275,9 @@ async fn headless_auto_start(engine: &mut Engine) {
     // Migration nudge: user has a cached device but the flag is not set. In
     // headless mode the cache is never consulted, so this helps CI/script users
     // understand why fdemon didn't pick the previously-used device.
-    let has_auto_start_config = get_first_auto_start(&configs).is_some();
-    let has_cache = has_cached_last_device(&project_path);
-    let cache_opt_in = engine.settings.behavior.auto_launch;
-
-    if !has_auto_start_config && has_cache && !cache_opt_in {
-        tracing::info!(
-            "settings.local.toml has a cached last_device but [behavior] auto_launch \
-             is not set in config.toml. Auto-launch via cache is now opt-in. \
-             Set `[behavior] auto_launch = true` to restore the previous behavior."
-        );
-    }
+    // The headless message explicitly avoids referencing [behavior] auto_launch
+    // as a remediation since that flag does NOT apply in headless mode.
+    let _ = emit_migration_nudge(NudgeMode::Headless, &project_path, &engine.settings);
 
     // Discover devices
     info!("Discovering devices for headless auto-start...");
