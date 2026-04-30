@@ -301,8 +301,17 @@ async fn headless_auto_start(engine: &mut Engine) {
 
             // Resolve target via the 4-tier cascade.
             // cache_allowed is hard-wired to false: headless is always cache-blind.
-            let AutoLaunchSuccess { device, config } =
-                find_auto_launch_target(&configs, &result.devices, &project_path, false);
+            let Some(AutoLaunchSuccess { device, config }) =
+                find_auto_launch_target(&configs, &result.devices, &project_path, false)
+            else {
+                tracing::error!("Auto-launch resolution returned no target");
+                HeadlessEvent::error(
+                    "Auto-launch resolution returned no target".to_string(),
+                    true,
+                )
+                .emit();
+                return;
+            };
 
             info!("Auto-starting with device: {} ({})", device.name, device.id);
 
@@ -580,7 +589,8 @@ mod tests {
         let devices = vec![make_device("device-1"), make_device("device-2")];
 
         // cache_allowed=false (headless hard-wire): cache is skipped, Tier 4 fires
-        let result = find_auto_launch_target(&configs, &devices, project_path, false);
+        let result = find_auto_launch_target(&configs, &devices, project_path, false)
+            .expect("test setup guarantees Tier 4 resolves with non-empty devices");
 
         assert_eq!(
             result.device.id, "device-1",
@@ -614,7 +624,8 @@ mod tests {
         let devices = vec![make_device("device-1"), make_device("device-2")];
 
         // Regardless of what auto_launch would be, headless always uses false
-        let result = find_auto_launch_target(&configs, &devices, project_path, false);
+        let result = find_auto_launch_target(&configs, &devices, project_path, false)
+            .expect("test setup guarantees Tier 4 resolves with non-empty devices");
 
         assert_eq!(
             result.device.id, "device-1",
@@ -653,7 +664,8 @@ auto_start = true
         let devices = vec![make_device("device-1"), make_device("device-2")];
 
         // cache_allowed=false but Tier 1 fires before cache is consulted
-        let result = find_auto_launch_target(&configs, &devices, project_path, false);
+        let result = find_auto_launch_target(&configs, &devices, project_path, false)
+            .expect("test setup guarantees Tier 1 auto_start resolves");
 
         assert_eq!(
             result.device.id, "device-2",
