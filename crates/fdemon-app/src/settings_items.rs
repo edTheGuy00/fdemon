@@ -89,7 +89,7 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
             .default(SettingValue::Bool(true))
             .section("Behavior"),
         SettingItem::new("behavior.auto_launch", "Auto-launch on cached device")
-            .description("Auto-launch the last-used device on startup (skipped if launch.toml has auto_start)")
+            .description("Auto-launch the last-used device on startup (takes effect on next fdemon launch; skipped if launch.toml has auto_start)")
             .value(SettingValue::Bool(settings.behavior.auto_launch))
             .default(SettingValue::Bool(false))
             .section("Behavior"),
