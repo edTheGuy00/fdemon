@@ -4,7 +4,7 @@ exclude = ["website"]
 resolver = "2"
 
 [workspace.package]
-version = "0.4.2"
+version = "0.4.3"
 edition = "2021"
 license = "BSL-1.1"
 # Minimum Rust version required for safe .bat/.cmd invocation via Command::new(path)
