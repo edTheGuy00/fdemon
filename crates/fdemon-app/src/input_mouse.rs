@@ -66,7 +66,7 @@ impl KeyModSet {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MouseInput {
     /// Primary button pressed at `(x, y)`.
-    Click {
+    Press {
         x: u16,
         y: u16,
         button: MouseButton,
@@ -99,7 +99,7 @@ impl MouseInput {
     /// Returns the `(x, y)` cell coordinate of the event regardless of variant.
     pub fn position(&self) -> (u16, u16) {
         match *self {
-            MouseInput::Click { x, y, .. }
+            MouseInput::Press { x, y, .. }
             | MouseInput::Release { x, y, .. }
             | MouseInput::Drag { x, y, .. }
             | MouseInput::Scroll { x, y, .. } => (x, y),
@@ -109,7 +109,7 @@ impl MouseInput {
     /// Returns the modifier set attached to the event.
     pub fn modifiers(&self) -> KeyModSet {
         match *self {
-            MouseInput::Click { modifiers, .. }
+            MouseInput::Press { modifiers, .. }
             | MouseInput::Release { modifiers, .. }
             | MouseInput::Drag { modifiers, .. }
             | MouseInput::Scroll { modifiers, .. } => modifiers,
@@ -122,8 +122,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_click_constructible_and_eq() {
-        let a = MouseInput::Click {
+    fn test_press_constructible_and_eq() {
+        let a = MouseInput::Press {
             x: 10,
             y: 5,
             button: MouseButton::Left,
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn test_position_returns_xy_for_each_variant() {
-        let click = MouseInput::Click {
+        let click = MouseInput::Press {
             x: 1,
             y: 2,
             button: MouseButton::Left,
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn test_modifiers_returns_attached_modset() {
         let mods = KeyModSet::new(true, false, true);
-        let click = MouseInput::Click {
+        let click = MouseInput::Press {
             x: 0,
             y: 0,
             button: MouseButton::Left,
@@ -206,13 +206,13 @@ mod tests {
 
     #[test]
     fn test_debug_format_contains_variant_name() {
-        let click = MouseInput::Click {
+        let click = MouseInput::Press {
             x: 0,
             y: 0,
             button: MouseButton::Left,
             modifiers: KeyModSet::NONE,
         };
         let s = format!("{:?}", click);
-        assert!(s.contains("Click"));
+        assert!(s.contains("Press"));
     }
 }

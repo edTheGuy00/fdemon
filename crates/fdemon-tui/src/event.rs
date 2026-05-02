@@ -39,7 +39,7 @@ pub(crate) fn mouse_event_to_input(ev: MouseEvent) -> Option<MouseInput> {
     let y = ev.row;
 
     match ev.kind {
-        MouseEventKind::Down(button) => Some(MouseInput::Click {
+        MouseEventKind::Down(button) => Some(MouseInput::Press {
             x,
             y,
             button: ct_button_to_abstract(button),
@@ -267,7 +267,7 @@ mod tests {
     // --- Mouse conversion tests ---
 
     #[test]
-    fn test_mouse_down_left_converts_to_click() {
+    fn test_mouse_down_left_converts_to_press() {
         let ev = MouseEvent {
             kind: MouseEventKind::Down(CtMouseButton::Left),
             column: 5,
@@ -277,7 +277,7 @@ mod tests {
         let input = mouse_event_to_input(ev).expect("must convert");
         assert_eq!(
             input,
-            MouseInput::Click {
+            MouseInput::Press {
                 x: 5,
                 y: 10,
                 button: MouseButton::Left,

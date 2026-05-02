@@ -10152,7 +10152,7 @@ fn test_update_mouse_message_is_no_op() {
 
     let mut state = AppState::new();
     let original_phase = state.phase;
-    let mouse = MouseInput::Click {
+    let mouse = MouseInput::Press {
         x: 0,
         y: 0,
         button: MouseButton::Left,

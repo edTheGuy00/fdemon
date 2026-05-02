@@ -35,8 +35,8 @@ mod tests {
     use super::*;
     use crate::input_mouse::{KeyModSet, MouseButton, ScrollDir};
 
-    fn make_click() -> MouseInput {
-        MouseInput::Click {
+    fn make_press() -> MouseInput {
+        MouseInput::Press {
             x: 0,
             y: 0,
             button: MouseButton::Left,
@@ -71,7 +71,7 @@ mod tests {
     }
 
     #[test]
-    fn test_click_no_op_in_every_mode() {
+    fn test_press_no_op_in_every_mode() {
         for mode in [
             UiMode::Startup,
             UiMode::Normal,
@@ -85,7 +85,7 @@ mod tests {
             UiMode::FlutterVersion,
             UiMode::DevTools,
         ] {
-            assert_noop(mode, make_click());
+            assert_noop(mode, make_press());
         }
     }
 
