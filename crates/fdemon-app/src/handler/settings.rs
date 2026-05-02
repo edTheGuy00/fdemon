@@ -331,14 +331,14 @@ mod tests {
         let mut settings = Settings::default();
         assert!(settings.ui.enable_mouse, "default should be true");
 
-        let item = SettingItem::new("ui.enable_mouse", "Mouse Support")
-            .value(SettingValue::Bool(false));
+        let item =
+            SettingItem::new("ui.enable_mouse", "Mouse Support").value(SettingValue::Bool(false));
 
         apply_project_setting(&mut settings, &item);
         assert!(!settings.ui.enable_mouse);
 
-        let item = SettingItem::new("ui.enable_mouse", "Mouse Support")
-            .value(SettingValue::Bool(true));
+        let item =
+            SettingItem::new("ui.enable_mouse", "Mouse Support").value(SettingValue::Bool(true));
         apply_project_setting(&mut settings, &item);
         assert!(settings.ui.enable_mouse);
     }

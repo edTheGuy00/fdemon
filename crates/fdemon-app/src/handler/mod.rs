@@ -7,6 +7,7 @@
 //! - `session`: Session state helpers
 //! - `session_lifecycle`: Session lifecycle handlers
 //! - `keys`: Key event handlers for UI modes
+//! - `mouse`: Mouse event handlers for UI modes
 //! - `helpers`: Utility functions
 //! - `new_session`: NewSessionDialog handlers
 //! - `settings`: Settings helpers
@@ -25,6 +26,7 @@ pub(crate) mod flutter_version;
 pub(crate) mod helpers;
 pub(crate) mod keys;
 pub(crate) mod log_view;
+pub(crate) mod mouse;
 pub(crate) mod new_session;
 pub(crate) mod scroll;
 pub(crate) mod session;

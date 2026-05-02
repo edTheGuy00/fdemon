@@ -2,6 +2,7 @@
 
 use crate::config::{FlutterMode, LaunchConfig, LoadedConfigs};
 use crate::input_key::InputKey;
+use crate::input_mouse::MouseInput;
 use crate::new_session_dialog::{DartDefine, FuzzyModalType, TargetTab};
 use crate::session::{NetworkDetailTab, SessionId};
 use crate::state::DevToolsPanel;
@@ -68,6 +69,13 @@ pub struct AutoLaunchSuccess {
 pub enum Message {
     /// Keyboard event from terminal
     Key(InputKey),
+
+    /// Mouse event from terminal (click, release, drag, scroll).
+    ///
+    /// Routed to [`crate::handler::mouse::handle_mouse`] which dispatches
+    /// per `UiMode` to a concrete `Message`. Mouse events are no-ops in
+    /// Phase 1; later phases populate the dispatcher.
+    Mouse(MouseInput),
 
     /// Event from Flutter daemon with session context (multi-session mode)
     SessionDaemon {

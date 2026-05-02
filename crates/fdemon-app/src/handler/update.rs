@@ -57,6 +57,14 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             }
         }
 
+        Message::Mouse(input) => {
+            if let Some(msg) = super::mouse::handle_mouse(state, input) {
+                UpdateResult::message(msg)
+            } else {
+                UpdateResult::none()
+            }
+        }
+
         Message::SessionDaemon { session_id, event } => {
             handle_session_daemon_event(state, session_id, event)
         }

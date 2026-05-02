@@ -10145,3 +10145,21 @@ fn test_background_device_discovery_failure_clears_refreshing() {
         "background failure must clear the refreshing flag"
     );
 }
+
+#[test]
+fn test_update_mouse_message_is_no_op() {
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+
+    let mut state = AppState::new();
+    let original_phase = state.phase;
+    let mouse = MouseInput::Click {
+        x: 0,
+        y: 0,
+        button: MouseButton::Left,
+        modifiers: KeyModSet::NONE,
+    };
+    let result = update(&mut state, Message::Mouse(mouse));
+    assert!(result.message.is_none());
+    assert!(result.action.is_none());
+    assert_eq!(state.phase, original_phase);
+}
