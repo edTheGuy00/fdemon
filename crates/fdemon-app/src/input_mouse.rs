@@ -179,9 +179,10 @@ mod tests {
 
     #[test]
     fn test_keymodset_none_is_empty() {
-        assert!(!KeyModSet::NONE.shift);
-        assert!(!KeyModSet::NONE.ctrl);
-        assert!(!KeyModSet::NONE.alt);
+        let none = KeyModSet::NONE;
+        assert!(!none.shift);
+        assert!(!none.ctrl);
+        assert!(!none.alt);
     }
 
     #[test]
