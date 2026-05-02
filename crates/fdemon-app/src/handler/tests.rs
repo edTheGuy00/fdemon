@@ -10163,3 +10163,25 @@ fn test_update_mouse_message_is_no_op() {
     assert!(result.action.is_none());
     assert_eq!(state.phase, original_phase);
 }
+
+#[test]
+fn test_mouse_message_returns_none_result_and_does_not_mutate_state() {
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+
+    let mut state = AppState::new();
+    let before_mode = state.ui_mode;
+    let before_phase = state.phase;
+
+    let input = MouseInput::Press {
+        x: 0,
+        y: 0,
+        button: MouseButton::Left,
+        modifiers: KeyModSet::NONE,
+    };
+    let result = update(&mut state, Message::Mouse(input));
+
+    assert!(result.message.is_none(), "update should not produce a follow-up message");
+    assert!(result.action.is_none(), "update should not request a side effect");
+    assert_eq!(state.ui_mode, before_mode, "ui_mode must not change");
+    assert_eq!(state.phase, before_phase, "phase must not change");
+}
