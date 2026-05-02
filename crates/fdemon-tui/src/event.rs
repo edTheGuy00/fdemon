@@ -1,4 +1,17 @@
-//! Terminal event polling
+//! Terminal event handling for the TUI.
+//!
+//! This module has three responsibilities:
+//!
+//! * **Key conversion** — maps crossterm [`KeyEvent`]s to the abstract
+//!   [`InputKey`] type defined in `fdemon-app`, filtering out key kinds other
+//!   than `Press` and key codes not represented in [`InputKey`].
+//! * **Mouse conversion** — maps crossterm [`MouseEvent`]s to the abstract
+//!   [`MouseInput`] type. `Moved` events are dropped at this boundary (high
+//!   volume, no consumer); all other event kinds are exhaustively mapped.
+//! * **Polling** — wraps `crossterm::event::poll` with a fixed 50 ms timeout,
+//!   translates the accepted event into a [`Message`] for the TEA bus, and
+//!   emits a [`Message::Tick`] on every timeout so the engine can drive
+//!   time-based updates (animations, debounce expiry, etc.).
 
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton as CtMouseButton,
@@ -85,7 +98,13 @@ pub(crate) fn mouse_event_to_input(ev: MouseEvent) -> Option<MouseInput> {
     }
 }
 
-/// Convert crossterm KeyEvent to InputKey
+/// Convert a crossterm [`KeyEvent`] into the abstract [`InputKey`] used by
+/// the TEA handler layer.
+///
+/// Returns `None` for key codes not represented in [`InputKey`] (e.g. Insert,
+/// F13+, and any future crossterm variants). Callers should pass only
+/// `KeyEventKind::Press` events; key repeats and releases are filtered earlier
+/// in [`poll`].
 pub fn key_event_to_input(key: KeyEvent) -> Option<InputKey> {
     match key.code {
         KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -112,7 +131,20 @@ pub fn key_event_to_input(key: KeyEvent) -> Option<InputKey> {
     }
 }
 
-/// Poll for terminal events with timeout
+/// Poll the terminal for the next available event with a short timeout.
+///
+/// Returns:
+/// * `Ok(Some(Message))` — a translated key or mouse event, or a
+///   [`Message::Tick`] when the 50 ms timeout elapses (used to drive
+///   animations and debounce expiry).
+/// * `Ok(None)` — the event was filtered out (e.g. `KeyEventKind::Repeat`,
+///   `MouseEventKind::Moved`, resize events, or an unmapped key code).
+/// * `Err(_)` — an I/O error from crossterm; callers should treat this as
+///   fatal and shut down the event loop.
+///
+/// This is the single integration point between crossterm and the TEA loop.
+/// All event filtering happens here so the engine never sees raw terminal
+/// events.
 pub fn poll() -> Result<Option<Message>> {
     // Poll with 50ms timeout (20 FPS)
     if event::poll(Duration::from_millis(50))? {
