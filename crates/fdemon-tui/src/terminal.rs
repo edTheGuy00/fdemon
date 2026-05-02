@@ -50,8 +50,6 @@ pub fn install_panic_hook() {
 /// doesn't support mouse, or stdout write failed). The caller should log
 /// the failure and continue — the rest of the application works without
 /// mouse support.
-// Called by runner.rs once task-06 wires up the enable_mouse setting.
-#[allow(dead_code)]
 pub fn enable_mouse_capture() -> Result<()> {
     execute!(stdout(), EnableMouseCapture).map_err(|e| {
         warn!("failed to enable mouse capture: {e}");

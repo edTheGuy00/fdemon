@@ -8,7 +8,7 @@
 
 use std::path::Path;
 
-use tracing::error;
+use tracing::{error, warn};
 
 use fdemon_app::config::should_auto_start_dap;
 use fdemon_app::message::Message;
@@ -28,6 +28,14 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
+
+    // Enable mouse capture if the user has it on (default true). Failures are
+    // logged and ignored so the rest of the TUI still works.
+    if engine.settings.ui.enable_mouse {
+        if let Err(e) = terminal::enable_mouse_capture() {
+            warn!("mouse capture disabled: {e}");
+        }
+    }
 
     // TUI-specific startup: detect auto-start or show NewSessionDialog
     let startup_result =
@@ -49,6 +57,11 @@ pub async fn run_with_project(project_path: &Path) -> Result<()> {
 
     // Shutdown engine (stops watcher, cleans up sessions)
     engine.shutdown().await;
+
+    // Disable mouse capture before restoring the terminal so the user's shell
+    // does not inherit raw mouse-reporting state. Safe to call unconditionally
+    // — the AtomicBool guard makes it a no-op when capture was never enabled.
+    terminal::disable_mouse_capture();
 
     // Restore terminal (TUI-specific)
     ratatui::restore();
@@ -109,6 +122,14 @@ pub async fn run_with_project_and_dap(
     // Initialize terminal (TUI-specific)
     let mut term = ratatui::init();
 
+    // Enable mouse capture if the user has it on (default true). Failures are
+    // logged and ignored so the rest of the TUI still works.
+    if engine.settings.ui.enable_mouse {
+        if let Err(e) = terminal::enable_mouse_capture() {
+            warn!("mouse capture disabled: {e}");
+        }
+    }
+
     // TUI-specific startup: detect auto-start or show NewSessionDialog
     let startup_result =
         startup::startup_flutter(&mut engine.state, &engine.settings, &engine.project_path);
@@ -130,6 +151,11 @@ pub async fn run_with_project_and_dap(
     // Shutdown engine (stops watcher, cleans up sessions)
     engine.shutdown().await;
 
+    // Disable mouse capture before restoring the terminal so the user's shell
+    // does not inherit raw mouse-reporting state. Safe to call unconditionally
+    // — the AtomicBool guard makes it a no-op when capture was never enabled.
+    terminal::disable_mouse_capture();
+
     // Restore terminal (TUI-specific)
     ratatui::restore();
 
@@ -144,7 +170,8 @@ pub async fn run() -> Result<()> {
     let dummy_path = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let mut engine = Engine::new(dummy_path);
 
-    // Initialize terminal
+    // Demo mode does not enable mouse capture — settings are dummy values
+    // and the path is not a user-facing entry point.
     let mut term = ratatui::init();
 
     // Run the main loop
