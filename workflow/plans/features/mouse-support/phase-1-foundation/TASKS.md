@@ -4,7 +4,7 @@
 
 Phase 1 lays down the plumbing for mouse support without changing user-visible behavior. Mouse events flow from the terminal through a new abstract `MouseInput` type onto the existing TEA message bus, are silently consumed by a no-op `handle_mouse` dispatcher, and the entire feature is gated behind a new `[ui] enable_mouse` setting (default `true`). Mouse-capture enable/disable runs at the right points in the runner lifecycle and through the panic hook, with an `AtomicBool` guard against the crossterm #613 disable-without-enable Windows panic.
 
-When Phase 1 is done, a user can scroll/click anywhere in fdemon and nothing changes — but the terminal is never left in a broken state on crash, and `enable_mouse = false` truly disables capture (no escape sequences emitted). Phases 2+ rewrite `handle_mouse` to do real work.
+When Phase 1 is done, mouse capture is on by default but no fdemon TEA-state changes in response to clicks or wheel events — `handle_mouse` is a no-op for every `UiMode`. Note that enabling capture itself **does** change the terminal's behavior visibly: wheel events that previously scrolled the host terminal's scrollback are now consumed by fdemon (and silently discarded for now), and many terminals require `Shift+drag` for native text selection while capture is on. Users who prefer the previous behavior can set `enable_mouse = false` to fully disable capture (no escape sequences emitted). The terminal is never left in a broken state on crash. Phases 2+ rewrite `handle_mouse` to do real work.
 
 **Total Tasks:** 6
 **Estimated Hours:** 7–11 hours

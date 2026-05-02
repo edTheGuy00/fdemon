@@ -203,7 +203,7 @@ These coordinate-dependent messages are new pure handlers; they do not require n
    - Unit-test the `AtomicBool` guard: calling `disable_mouse_capture()` without a prior `enable` is a no-op and does not error.
    - Unit-test that `update()` consumes `Message::Mouse` without changing state when `handle_mouse` returns `None`.
 
-**Milestone**: A user can scroll the wheel inside fdemon and nothing changes — no crashes, no terminal corruption on Ctrl-C, and `enable_mouse = false` truly disables the capture.
+**Milestone**: Mouse events flow through the TEA bus and are consumed without any fdemon state change — `handle_mouse` is a no-op for every `UiMode`. Wheel events are intentionally captured (so they no longer move host-terminal scrollback when fdemon is focused); users who want native scrollback / native text selection without `Shift+drag` can set `enable_mouse = false`. Ctrl-C and panic paths leave the terminal usable.
 
 ---
 
@@ -443,7 +443,7 @@ enable_mouse = true
 
 ### Phase 1 Complete When:
 - [ ] `cargo test --workspace` includes ≥ 8 new tests covering input conversion and lifecycle guards
-- [ ] Mouse events flow into the engine and are silently consumed (no behavior change)
+- [ ] Mouse events flow into the engine and produce no fdemon TEA-state change (terminal-mode side effects of enabling capture are documented in `docs/CONFIGURATION.md`)
 - [ ] `enable_mouse = false` truly disables capture (verified by checking no escape sequences are written)
 - [ ] Ctrl+C and panic in any code path leave the terminal usable (manual test on macOS + Linux)
 - [ ] No clippy warnings, no fmt diff, all OS runners green in CI
