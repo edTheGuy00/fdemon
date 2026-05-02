@@ -68,6 +68,7 @@ pub mod handler;
 pub mod hyperlinks;
 pub mod ide_config;
 pub(crate) mod input_key;
+pub(crate) mod input_mouse;
 pub mod log_view_state;
 pub mod message;
 pub mod new_session_dialog;
@@ -99,6 +100,9 @@ pub use actions::SessionTaskMap;
 
 // Re-export input key type used by TUI for event conversion
 pub use input_key::InputKey;
+
+// Re-export mouse input types used by TUI for event conversion
+pub use input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
 
 /// Re-exported from `fdemon-daemon` for crates that depend on `fdemon-app`
 /// but not `fdemon-daemon` directly (e.g., `fdemon-tui`).
