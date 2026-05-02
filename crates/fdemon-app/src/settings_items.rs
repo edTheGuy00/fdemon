@@ -166,6 +166,11 @@ pub fn project_settings_items(settings: &Settings) -> Vec<SettingItem> {
                 options: vec!["unicode".to_string(), "nerd_fonts".to_string()],
             })
             .section("UI"),
+        SettingItem::new("ui.enable_mouse", "Mouse Support")
+            .description("Enable mouse interactions (click, scroll). Restart required.")
+            .value(SettingValue::Bool(settings.ui.enable_mouse))
+            .default(SettingValue::Bool(true))
+            .section("UI"),
         SettingItem::new("ui.stack_trace_collapsed", "Collapse Stack Traces")
             .description("Start stack traces collapsed")
             .value(SettingValue::Bool(settings.ui.stack_trace_collapsed))

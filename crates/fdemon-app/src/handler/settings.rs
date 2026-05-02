@@ -82,6 +82,11 @@ pub fn apply_project_setting(settings: &mut Settings, item: &SettingItem) {
                 settings.ui.stack_trace_max_frames = *v as usize;
             }
         }
+        "ui.enable_mouse" => {
+            if let SettingValue::Bool(v) = &item.value {
+                settings.ui.enable_mouse = *v;
+            }
+        }
 
         // DevTools
         "devtools.auto_open" => {
@@ -319,6 +324,23 @@ mod tests {
 
         apply_project_setting(&mut settings, &item);
         assert_eq!(settings.ui.theme, "dark");
+    }
+
+    #[test]
+    fn test_apply_setting_toggles_enable_mouse() {
+        let mut settings = Settings::default();
+        assert!(settings.ui.enable_mouse, "default should be true");
+
+        let item = SettingItem::new("ui.enable_mouse", "Mouse Support")
+            .value(SettingValue::Bool(false));
+
+        apply_project_setting(&mut settings, &item);
+        assert!(!settings.ui.enable_mouse);
+
+        let item = SettingItem::new("ui.enable_mouse", "Mouse Support")
+            .value(SettingValue::Bool(true));
+        apply_project_setting(&mut settings, &item);
+        assert!(settings.ui.enable_mouse);
     }
 
     #[test]
