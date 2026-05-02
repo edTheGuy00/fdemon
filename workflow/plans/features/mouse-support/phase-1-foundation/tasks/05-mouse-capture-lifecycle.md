@@ -195,3 +195,33 @@ We deliberately do NOT unit-test the actual `EnableMouseCapture` execute call. I
 - **Why log via `tracing` instead of `eprintln!`?** CODE_STANDARDS.md forbids `eprintln!` because stdout/stderr are owned by the TUI. `tracing::warn!` routes to the file-based log via `tracing-appender`, which is the project convention.
 - **`serial_test` is already a dev-dependency.** See workspace `Cargo.toml` line 68 — no new dep needed.
 - **`install_panic_hook()` ordering.** ratatui's own `init()` may install its own panic hook later; whichever runs first on panic is fine, since both call `ratatui::restore()` (idempotent) and our `disable_mouse_capture()` is also idempotent. The user's existing call site (in `runner.rs`) calls `install_panic_hook()` *before* `ratatui::init()`, so our hook wraps theirs and runs second on panic. The ordering does not matter for correctness — only that *both* run.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/terminal.rs` | Full rewrite: added `MOUSE_CAPTURE_ON: AtomicBool`, `enable_mouse_capture() -> Result<()>`, `disable_mouse_capture()`, updated `install_panic_hook()` to call `disable_mouse_capture()` before `ratatui::restore()`, added 3 unit tests gated with `serial_test::serial` |
+| `crates/fdemon-tui/Cargo.toml` | Added `serial_test.workspace = true` to `[dev-dependencies]` (was missing despite being needed by the new tests) |
+
+### Notable Decisions/Tradeoffs
+
+1. **`#[allow(dead_code)]` on `enable_mouse_capture`**: Clippy's `-D warnings` flag fires on the public function since no crate calls it yet (Task 06 will wire it up). Added `#[allow(dead_code)]` with a comment to suppress it cleanly until then. The alternative (removing the annotation) would fail the acceptance criterion that clippy passes.
+
+2. **`serial_test` added to `fdemon-tui` dev-deps**: The task notes say "already a dev-dependency" referring to the workspace Cargo.toml, but `fdemon-tui`'s own Cargo.toml did not list it. Added it there so the `serial_test::serial` attribute compiles.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui --all-targets` - Passed
+- `cargo test -p fdemon-tui terminal` - Passed (39 tests, 3 new: `test_disable_without_enable_is_noop`, `test_disable_after_simulated_enable_clears_flag`, `test_repeated_disable_calls_are_safe`)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`enable_mouse_capture` not yet called**: The function is implemented but not connected to any call site. Task 06 will wire it to the runner based on the `enable_mouse` config setting.

@@ -265,3 +265,31 @@ mod tests {
 - **No `Moved` variant.** This is a deliberate omission documented at the top of the module.
 - **`Copy` is safe.** All fields are `Copy` (`u16`, enum, small bitset), keeping ergonomics good and avoiding unnecessary clones in the hit-test path.
 - **Module visibility is `pub(crate)`.** Outside crates use the re-exports from `fdemon_app` root, matching the existing `input_key` pattern.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1882d6ad45f4f17e
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/input_mouse.rs` | New file: `MouseInput`, `MouseButton`, `ScrollDir`, `KeyModSet` types with full derives, `position()` and `modifiers()` helpers, 8 unit tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub(crate) mod input_mouse;` declaration; added `pub use input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};` re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exact specification compliance**: Implemented the file contents verbatim as specified in the task, including all doc comments and deliberate omissions (`Moved` variant).
+2. **No external deps added**: All types are pure Rust stdlib — no `crossterm` import, no new `Cargo.toml` entries.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo test -p fdemon-app input_mouse` - Passed (8 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **No consumers yet**: `MouseInput` is defined but not yet wired into `Message` or any handler — this is intentional per task scope; subsequent tasks (02 through 06) handle that.

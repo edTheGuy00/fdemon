@@ -113,3 +113,36 @@ Unit-testing the runner end-to-end requires a real terminal, which CI does not p
 - **Don't enable mouse before render-first-frame.** It is fine either way (the `?1000h ?1006h` sequence does not interfere with the alternate screen), but enabling immediately after `ratatui::init()` and before any draw keeps the order easy to reason about: init → enable → draw.
 - **Settings are read once at startup.** Toggling `enable_mouse` via the settings panel during a session has no immediate effect; the description "Restart required" (set in Task 03) communicates this to users.
 - **`selector.rs` deliberately untouched.** The project selector runs *before* the engine exists, has no settings, and is short-lived. Adding mouse there is a Phase 5 stretch goal at most. Not in this task.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a457e4f7835671ef9
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/runner.rs` | Added `warn` to tracing import; inserted `enable_mouse_capture()` (gated on `engine.settings.ui.enable_mouse`) after `ratatui::init()` in both `run_with_project` and `run_with_project_and_dap`; inserted `disable_mouse_capture()` before each `ratatui::restore()`; added demo-mode comment to `run()` |
+| `crates/fdemon-tui/src/terminal.rs` | Removed the `#[allow(dead_code)]` attribute and the placeholder comment from `enable_mouse_capture()` — the function is now actively called |
+| `crates/fdemon-tui/src/widgets/settings_panel/tests.rs` | Updated `test_project_settings_items_count` expected count from 34 to 35 (pre-existing failure from Task 03 adding `ui.enable_mouse`) |
+| `crates/fdemon-tui/src/render/snapshots/*.snap` | Updated four insta snapshots from `v0.4.2` to `v0.4.3` (pre-existing failure from version bump) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Fixed pre-existing test failures alongside task scope**: The settings count test and four snapshot tests were failing before this task. Since both failures are directly caused by earlier Phase 1 tasks (Task 03 adding the setting; the version bump), fixing them here keeps the suite green without risk of surprising the orchestrator.
+2. **Removed `#[allow(dead_code)]`**: The attribute was added in Task 05 as a scaffold marker. Removing it now that the function is wired is a clean housekeeping step — clippy confirms no warnings result.
+3. **`warn` imported via `use tracing::{error, warn}`**: The task offered a choice between adding to the import or using the fully-qualified path; merging into a single `use` statement produces the cleaner diff.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui --all-targets` - Passed
+- `cargo test -p fdemon-tui` - Passed (888 tests; 0 failed)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No automated end-to-end test**: The runner cannot be integration-tested without a real TTY; manual smoke testing (as prescribed in the task) is required before Phase 1 sign-off.
+2. **Settings read once at startup**: `enable_mouse` is evaluated at `ratatui::init()` time; in-session toggle via the settings panel requires a restart (communicated to users by the "Restart required" description added in Task 03).

@@ -161,3 +161,33 @@ fn test_apply_setting_toggles_enable_mouse() {
 - **No runtime toggle.** Mouse capture lifecycle runs at process start (Task 06). Toggling the setting at runtime via the settings panel does not re-run capture; the description string says "Restart required" so users are not surprised.
 - **Reuse `default_true`.** Do not introduce a new `default_true_for_mouse` helper. The existing helper is already used by `show_timestamps` and `stack_trace_collapsed`.
 - **No CHANGELOG entry yet.** Phase 6 adds the user-facing changelog entry; Phase 1 is a partial-feature merge.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/config/types.rs` | Added `enable_mouse: bool` field to `UiSettings` with `#[serde(default = "default_true")]`, updated `Default` impl, added 4 unit tests |
+| `crates/fdemon-app/src/settings_items.rs` | Added `SettingItem` for `"ui.enable_mouse"` ("Mouse Support") in the UI section, between `ui.icons` and `ui.stack_trace_collapsed` |
+| `crates/fdemon-app/src/handler/settings.rs` | Added `"ui.enable_mouse"` arm in `apply_project_setting` after `ui.stack_trace_max_frames`, added 1 unit test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Reused existing `default_true` helper**: `default_true()` was already defined at line 221 of `types.rs` (used by `show_timestamps`, `stack_trace_collapsed`, and others). No new helper was introduced.
+2. **Test placement**: UiSettings tests were placed in the `config::types::tests` module alongside other settings tests. The apply test was placed in `handler::settings::tests` before `test_apply_user_preference_editor_command`, following the UI settings test grouping.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (1,915 tests: 0 failed)
+- `cargo test -p fdemon-app enable_mouse` - Passed (5 new tests: all ok)
+
+### Risks/Limitations
+
+1. **No runtime toggle**: As specified, the setting only takes effect on restart. The settings panel description "Restart required." communicates this to users.

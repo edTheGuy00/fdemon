@@ -293,3 +293,32 @@ fn test_xy_coordinate_propagation() {
 - **Helper visibility = `pub(crate)`.** Keeps the conversion functions reachable for tests within `fdemon-tui` but not exposed to dependents.
 - **Modifier limitations.** `KeyModSet` deliberately covers only Shift / Ctrl / Alt. Phase 2+ Shift+wheel is the only modifier-aware mouse mapping in the near term.
 - **No allocation in the hot path.** Conversion uses only `Copy` types — no `String`, no `Vec`. Benchmarks should remain identical to keyboard-only event polling.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/event.rs` | Added `key_modifiers_to_set`, `ct_button_to_abstract`, `mouse_event_to_input` helpers; extended `poll()` with `Event::Mouse` arm; updated imports; added 10 mouse unit tests; removed redundant `use crossterm::event::KeyEvent` in test module (now in scope from top-level import) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Exhaustive match on `MouseEventKind`**: No `_` catch-all arm in `mouse_event_to_input` as required by acceptance criteria AC-1. The compiler will force any new crossterm variant to be handled explicitly.
+2. **Import consolidation**: Removed the `use crossterm::event::KeyEvent;` line from the test module since `KeyEvent` is now brought in via the top-level `use crossterm::event::{..., KeyEvent, ...}` import. This avoids a redundant import warning.
+3. **`KeyEventKind` in `poll()`**: Updated the existing `event::KeyEventKind::Press` reference to `KeyEventKind::Press` since `KeyEventKind` is now imported at the top level.
+
+### Testing Performed
+
+- `cargo check -p fdemon-tui --all-targets` - Passed
+- `cargo test -p fdemon-tui event` - Passed (23 tests: 11 existing keyboard + 10 new mouse + 2 unrelated network)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`KeyModifiers::SUPER` availability**: The test `test_modifiers_drops_unmapped` relies on `KeyModifiers::SUPER` being a valid constant in crossterm 0.29 — confirmed it compiles and the test passes.

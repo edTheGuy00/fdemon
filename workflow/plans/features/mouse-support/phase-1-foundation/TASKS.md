@@ -34,12 +34,14 @@ When Phase 1 is done, a user can scroll/click anywhere in fdemon and nothing cha
 
 | # | Task | Status | Depends On | Est. Hours | Crate |
 |---|------|--------|------------|------------|-------|
-| 1 | [01-input-mouse-type](tasks/01-input-mouse-type.md) | Not Started | — | 1–2h | `fdemon-app` |
-| 2 | [02-message-and-handler-shell](tasks/02-message-and-handler-shell.md) | Not Started | 1 | 1–2h | `fdemon-app` |
-| 3 | [03-enable-mouse-setting](tasks/03-enable-mouse-setting.md) | Not Started | — | 1h | `fdemon-app` |
-| 4 | [04-tui-event-conversion](tasks/04-tui-event-conversion.md) | Not Started | 1, 2 | 1–2h | `fdemon-tui` |
-| 5 | [05-mouse-capture-lifecycle](tasks/05-mouse-capture-lifecycle.md) | Not Started | — | 2–3h | `fdemon-tui` |
-| 6 | [06-wire-runners](tasks/06-wire-runners.md) | Not Started | 5 | 1h | `fdemon-tui` |
+| 1 | [01-input-mouse-type](tasks/01-input-mouse-type.md) | Done ⚠️ | — | 1–2h | `fdemon-app` |
+| 2 | [02-message-and-handler-shell](tasks/02-message-and-handler-shell.md) | Done | 1 | 1–2h | `fdemon-app` |
+| 3 | [03-enable-mouse-setting](tasks/03-enable-mouse-setting.md) | Done | — | 1h | `fdemon-app` |
+| 4 | [04-tui-event-conversion](tasks/04-tui-event-conversion.md) | Done | 1, 2 | 1–2h | `fdemon-tui` |
+| 5 | [05-mouse-capture-lifecycle](tasks/05-mouse-capture-lifecycle.md) | Done | — | 2–3h | `fdemon-tui` |
+| 6 | [06-wire-runners](tasks/06-wire-runners.md) | Done | 5 | 1h | `fdemon-tui` |
+
+> **Concern (Task 01):** `cargo clippy -p fdemon-app --all-targets -- -D warnings` fails with three `assertions_on_constants` errors in `crates/fdemon-app/src/input_mouse.rs` lines 182–184 (e.g. `assert!(!KeyModSet::NONE.shift)`). Surfaced during Task 02 validation. Must be fixed before Phase 1 success criteria are met (replace `assert!` on consts with `assert_eq!` against runtime-bound copies, or `#[allow(clippy::assertions_on_constants)]` on the test module).
 
 ## File Overlap Analysis
 
