@@ -10191,3 +10191,353 @@ fn test_mouse_message_returns_none_result_and_does_not_mutate_state() {
     assert_eq!(state.ui_mode, before_mode, "ui_mode must not change");
     assert_eq!(state.phase, before_phase, "phase must not change");
 }
+
+// ─ Mouse scroll routing through update() ─────────────────────────────────────
+//
+// Integration tests that drive `update(state, Message::Mouse(Scroll {...}))` for
+// each `UiMode` (and key sub-states) and assert the resulting
+// `UpdateResult::message`. These catch dispatcher misrouting that per-submodule
+// unit tests can miss — e.g. a typo in `mouse/mod.rs::handle_scroll` that sends
+// `Settings` input to `new_session::handle_scroll`.
+
+mod mouse_scroll {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
+    use crate::message::{InspectorNav, NetworkNav};
+    use crate::state::DevToolsPanel;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    fn scroll_input(direction: ScrollDir, modifiers: KeyModSet) -> MouseInput {
+        MouseInput::Scroll {
+            x: 0,
+            y: 0,
+            direction,
+            modifiers,
+        }
+    }
+
+    fn assert_scroll_routes_to(
+        state: &mut AppState,
+        dir: ScrollDir,
+        mods: KeyModSet,
+        expected: Message,
+    ) {
+        let result = update(state, Message::Mouse(scroll_input(dir, mods)));
+        match result.message {
+            Some(actual) => assert!(
+                std::mem::discriminant(&actual) == std::mem::discriminant(&expected),
+                "expected {:?}, got {:?}",
+                expected,
+                actual
+            ),
+            None => panic!("expected Some({:?}), got None", expected),
+        }
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    fn assert_scroll_routes_to_nothing(state: &mut AppState, dir: ScrollDir, mods: KeyModSet) {
+        let result = update(state, Message::Mouse(scroll_input(dir, mods)));
+        assert!(
+            result.message.is_none(),
+            "expected None, got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none());
+    }
+
+    // ── Acceptance-criteria test cases ────────────────────────────────────────
+
+    // 1. UiMode::Normal (no tag filter), Up no mods → Message::ScrollUp
+    #[test]
+    fn mouse_scroll_normal_plain_up_produces_scroll_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::ScrollUp,
+        );
+    }
+
+    // 2. UiMode::Normal (no tag filter), Down Shift-only → Message::PageDown
+    #[test]
+    fn mouse_scroll_normal_shift_down_produces_page_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to(&mut state, ScrollDir::Down, shift, Message::PageDown);
+    }
+
+    // 3. UiMode::Normal (tag_filter_visible == true), Up no mods → Message::TagFilterMoveUp
+    #[test]
+    fn mouse_scroll_normal_tag_filter_visible_up_produces_tag_filter_move_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+        state.tag_filter_visible = true;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::TagFilterMoveUp,
+        );
+    }
+
+    // 4. UiMode::DevTools, Inspector panel, Down no mods → Message::DevToolsInspectorNavigate(InspectorNav::Down)
+    #[test]
+    fn mouse_scroll_devtools_inspector_down_produces_inspector_navigate_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Inspector;
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Down, KeyModSet::NONE)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Down))
+            ),
+            "expected DevToolsInspectorNavigate(Down), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 5. UiMode::DevTools, Performance panel, Up Shift-only → None
+    #[test]
+    fn mouse_scroll_devtools_performance_shift_up_produces_none() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Performance;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to_nothing(&mut state, ScrollDir::Up, shift);
+    }
+
+    // 6. UiMode::DevTools, Network panel (filter inactive), Up no mods → Message::NetworkNavigate(NetworkNav::Up)
+    #[test]
+    fn mouse_scroll_devtools_network_plain_up_produces_network_navigate_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        // No session = filter_input_active defaults to false (no selected session).
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Up, KeyModSet::NONE)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::NetworkNavigate(NetworkNav::Up))
+            ),
+            "expected NetworkNavigate(Up), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 7. UiMode::DevTools, Network panel (filter inactive), Down Shift-only → Message::NetworkNavigate(NetworkNav::PageDown)
+    #[test]
+    fn mouse_scroll_devtools_network_shift_down_produces_network_navigate_page_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::DevTools;
+        state.devtools_view_state.active_panel = DevToolsPanel::Network;
+        let shift = KeyModSet::new(true, false, false);
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Down, shift)),
+        );
+        assert!(
+            matches!(
+                result.message,
+                Some(Message::NetworkNavigate(NetworkNav::PageDown))
+            ),
+            "expected NetworkNavigate(PageDown), got {:?}",
+            result.message
+        );
+        assert!(result.action.is_none(), "scroll must not produce an action");
+    }
+
+    // 8. UiMode::Settings (no modal, not editing), Up no mods → Message::SettingsPrevItem
+    #[test]
+    fn mouse_scroll_settings_plain_up_produces_settings_prev_item() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        // No modal, not editing — main list navigation.
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::SettingsPrevItem,
+        );
+    }
+
+    // 9. UiMode::FlutterVersion, Down no mods → Message::FlutterVersionDown
+    #[test]
+    fn mouse_scroll_flutter_version_plain_down_produces_flutter_version_down() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::FlutterVersion;
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::FlutterVersionDown,
+        );
+    }
+
+    // 10. UiMode::LinkHighlight, Up Shift-only → Message::PageUp
+    #[test]
+    fn mouse_scroll_link_highlight_shift_up_produces_page_up() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::LinkHighlight;
+        let shift = KeyModSet::new(true, false, false);
+        assert_scroll_routes_to(&mut state, ScrollDir::Up, shift, Message::PageUp);
+    }
+
+    // 11. UiMode::Startup, TargetSelector pane, Down no mods → Message::NewSessionDialogDeviceDown
+    #[test]
+    fn mouse_scroll_startup_target_selector_down_produces_device_down() {
+        let mut state = AppState::new();
+        // Explicitly set Startup mode. AppState::new() defaults to Normal.
+        state.ui_mode = UiMode::Startup;
+        // Default focused_pane is TargetSelector.
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::NewSessionDialogDeviceDown,
+        );
+    }
+
+    // 12. UiMode::SearchInput, any wheel input → no message (explicit no-op)
+    #[test]
+    fn mouse_scroll_search_input_any_direction_produces_none() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::SearchInput;
+        for dir in [
+            ScrollDir::Up,
+            ScrollDir::Down,
+            ScrollDir::Left,
+            ScrollDir::Right,
+        ] {
+            for mods in [KeyModSet::NONE, KeyModSet::new(true, false, false)] {
+                assert_scroll_routes_to_nothing(&mut state, dir, mods);
+            }
+        }
+    }
+
+    // ── Additional: modal-precedence smoke test through update() ─────────────
+
+    // Settings with dart-defines modal open → DartDefinesUp/Down, not SettingsPrevItem/NextItem
+    #[test]
+    fn mouse_scroll_settings_dart_defines_modal_open_routes_to_dart_defines_nav() {
+        use crate::new_session_dialog::DartDefine;
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Settings;
+        state.settings_view_state.dart_defines_modal =
+            Some(crate::new_session_dialog::DartDefinesModalState::new(vec![
+                DartDefine::new("K", "V"),
+            ]));
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::SettingsDartDefinesUp,
+        );
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::SettingsDartDefinesDown,
+        );
+    }
+
+    // NewSessionDialog with fuzzy modal open → FuzzyUp/Down, not DeviceUp/Down
+    #[test]
+    fn mouse_scroll_new_session_dialog_fuzzy_modal_open_routes_to_fuzzy_nav() {
+        use crate::new_session_dialog::{FuzzyModalState, FuzzyModalType};
+
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::NewSessionDialog;
+        state.new_session_dialog_state.fuzzy_modal =
+            Some(FuzzyModalState::new(FuzzyModalType::Config, vec![]));
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Up,
+            KeyModSet::NONE,
+            Message::NewSessionDialogFuzzyUp,
+        );
+        assert_scroll_routes_to(
+            &mut state,
+            ScrollDir::Down,
+            KeyModSet::NONE,
+            Message::NewSessionDialogFuzzyDown,
+        );
+    }
+
+    // ── Press / Release / Drag remain no-ops through update() ────────────────
+
+    // Phase 3+ variants: Press, Release, Drag produce no message in any mode
+    // (integration-path agreement with the per-module tests in mouse/mod.rs).
+    #[test]
+    fn mouse_press_release_drag_no_op_through_update_in_all_modes() {
+        fn make_press() -> MouseInput {
+            MouseInput::Press {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+        fn make_release() -> MouseInput {
+            MouseInput::Release {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+        fn make_drag() -> MouseInput {
+            MouseInput::Drag {
+                x: 0,
+                y: 0,
+                button: MouseButton::Left,
+                modifiers: KeyModSet::NONE,
+            }
+        }
+
+        for mode in [
+            UiMode::Startup,
+            UiMode::Normal,
+            UiMode::NewSessionDialog,
+            UiMode::EmulatorSelector,
+            UiMode::ConfirmDialog,
+            UiMode::Loading,
+            UiMode::SearchInput,
+            UiMode::LinkHighlight,
+            UiMode::Settings,
+            UiMode::FlutterVersion,
+            UiMode::DevTools,
+        ] {
+            let mut state = AppState::new();
+            state.ui_mode = mode;
+            for input in [make_press(), make_release(), make_drag()] {
+                let result = update(&mut state, Message::Mouse(input));
+                assert!(
+                    result.message.is_none(),
+                    "expected no-op for {:?} + {:?}",
+                    mode,
+                    input
+                );
+                assert!(
+                    result.action.is_none(),
+                    "expected no action for {:?} + {:?}",
+                    mode,
+                    input
+                );
+            }
+        }
+    }
+}
