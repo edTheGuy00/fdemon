@@ -56,6 +56,14 @@ impl KeyModSet {
     pub const fn new(shift: bool, ctrl: bool, alt: bool) -> Self {
         Self { shift, ctrl, alt }
     }
+
+    /// Returns `true` when only the Shift modifier is held (no Ctrl, no Alt).
+    ///
+    /// Used by mouse scroll handlers to detect Shift+wheel for page-scroll
+    /// without false-firing when Ctrl or Alt is also held.
+    pub const fn is_shift_only(self) -> bool {
+        self.shift && !self.ctrl && !self.alt
+    }
 }
 
 /// Abstract mouse input event.
@@ -203,6 +211,15 @@ mod tests {
     fn test_scroll_dir_variants_distinct() {
         assert_ne!(ScrollDir::Up, ScrollDir::Down);
         assert_ne!(ScrollDir::Left, ScrollDir::Right);
+    }
+
+    #[test]
+    fn test_is_shift_only_distinguishes_pure_shift_from_combos() {
+        assert!(KeyModSet::new(true, false, false).is_shift_only());
+        assert!(!KeyModSet::new(false, false, false).is_shift_only());
+        assert!(!KeyModSet::new(true, true, false).is_shift_only());
+        assert!(!KeyModSet::new(true, false, true).is_shift_only());
+        assert!(!KeyModSet::new(true, true, true).is_shift_only());
     }
 
     #[test]

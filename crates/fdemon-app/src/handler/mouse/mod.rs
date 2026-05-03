@@ -1,32 +1,50 @@
 //! Mouse event handlers for different UI modes.
 //!
 //! Mirrors [`crate::handler::keys`] — converts a [`MouseInput`] into a
-//! concrete [`Message`] based on the current [`UiMode`]. Phase 1 of the
-//! mouse-support feature implements this as a no-op shell so events flow
-//! into the engine without behavior changes; later phases populate per-mode
-//! dispatch (scroll wheel, region hit-testing, dialog clicks).
+//! concrete [`Message`] based on the current [`UiMode`]. Phase 2 wires
+//! per-mode scroll routing; Phase 3+ adds click hit-testing.
 
-use crate::input_mouse::MouseInput;
+mod devtools;
+mod flutter_version;
+mod link_highlight;
+mod new_session;
+mod normal;
+mod settings;
+
+use crate::input_mouse::{KeyModSet, MouseInput, ScrollDir};
 use crate::message::Message;
 use crate::state::{AppState, UiMode};
 
 /// Convert a mouse event to a follow-up message based on the current UI mode.
 ///
-/// Returns `None` in Phase 1 — every variant is intentionally unhandled.
-/// Phase 2 introduces scroll-wheel routing, Phase 3+ adds click hit-testing.
-pub fn handle_mouse(state: &AppState, _input: MouseInput) -> Option<Message> {
+/// In Phase 2 only [`MouseInput::Scroll`] produces messages; the press,
+/// release, and drag variants are reserved for Phase 3+ click hit-testing
+/// and currently return `None` for every mode.
+pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
+    match input {
+        MouseInput::Scroll {
+            direction,
+            modifiers,
+            ..
+        } => handle_scroll(state, direction, modifiers),
+        // Phase 3+ wires button-press dispatch (region hit-testing).
+        MouseInput::Press { .. } | MouseInput::Release { .. } | MouseInput::Drag { .. } => None,
+    }
+}
+
+fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match state.ui_mode {
-        UiMode::Startup
-        | UiMode::Normal
-        | UiMode::NewSessionDialog
-        | UiMode::EmulatorSelector
+        UiMode::Normal => normal::handle_scroll(state, dir, mods),
+        UiMode::DevTools => devtools::handle_scroll(state, dir, mods),
+        UiMode::Settings => settings::handle_scroll(state, dir, mods),
+        UiMode::Startup | UiMode::NewSessionDialog => new_session::handle_scroll(state, dir, mods),
+        UiMode::LinkHighlight => link_highlight::handle_scroll(state, dir, mods),
+        UiMode::FlutterVersion => flutter_version::handle_scroll(state, dir, mods),
+        // Modes with no scrollable surface — explicitly no-op.
+        UiMode::SearchInput
         | UiMode::ConfirmDialog
-        | UiMode::Loading
-        | UiMode::SearchInput
-        | UiMode::LinkHighlight
-        | UiMode::Settings
-        | UiMode::FlutterVersion
-        | UiMode::DevTools => None,
+        | UiMode::EmulatorSelector
+        | UiMode::Loading => None,
     }
 }
 
