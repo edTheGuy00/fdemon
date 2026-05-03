@@ -10,11 +10,7 @@ use crate::input_mouse::{KeyModSet, ScrollDir};
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::state::{AppState, DevToolsPanel};
 
-pub(super) fn handle_scroll(
-    state: &AppState,
-    dir: ScrollDir,
-    mods: KeyModSet,
-) -> Option<Message> {
+pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match state.devtools_view_state.active_panel {
         DevToolsPanel::Inspector => handle_inspector_scroll(dir, mods),
         DevToolsPanel::Performance => None,
@@ -36,11 +32,7 @@ fn handle_inspector_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     }
 }
 
-fn handle_network_scroll(
-    state: &AppState,
-    dir: ScrollDir,
-    mods: KeyModSet,
-) -> Option<Message> {
+fn handle_network_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     // Filter input mode swallows scroll, mirroring keys.rs:417-425 which
     // routes only Esc/Enter/Backspace/Char into the filter buffer.
     let filter_active = state
@@ -172,7 +164,12 @@ mod tests {
             .filter_input_active = true;
 
         // Every direction/modifier must be a no-op while filter input is active.
-        for dir in [ScrollDir::Up, ScrollDir::Down, ScrollDir::Left, ScrollDir::Right] {
+        for dir in [
+            ScrollDir::Up,
+            ScrollDir::Down,
+            ScrollDir::Left,
+            ScrollDir::Right,
+        ] {
             for mods in [
                 KeyModSet::NONE,
                 KeyModSet::new(true, false, false),
@@ -194,9 +191,7 @@ mod tests {
         let inspector = state_with_panel(DevToolsPanel::Inspector);
         let network = state_with_panel(DevToolsPanel::Network);
         for s in [&inspector, &network] {
-            assert!(
-                handle_scroll(s, ScrollDir::Up, KeyModSet::new(false, true, false)).is_none()
-            );
+            assert!(handle_scroll(s, ScrollDir::Up, KeyModSet::new(false, true, false)).is_none());
             assert!(
                 handle_scroll(s, ScrollDir::Down, KeyModSet::new(false, false, true)).is_none()
             );
