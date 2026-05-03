@@ -108,20 +108,17 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_no_op_in_stub_modes() {
-        // Modes whose scroll handlers are still stubs or have no scrollable
-        // surface return None for every scroll input. This list shrinks as
-        // each Phase 2 task lands a real per-mode handler.
+    fn test_scroll_no_op_in_non_scrollable_modes() {
+        // Modes with no scrollable surface — scroll is a no-op.
+        // Modes with real per-mode handlers (Normal, DevTools, Settings,
+        // LinkHighlight, FlutterVersion, Startup, NewSessionDialog) are
+        // covered by their own submodule tests and the positive assertions
+        // below.
         for mode in [
-            UiMode::Startup,
-            UiMode::NewSessionDialog,
             UiMode::EmulatorSelector,
             UiMode::ConfirmDialog,
             UiMode::Loading,
             UiMode::SearchInput,
-            UiMode::LinkHighlight,
-            UiMode::Settings,
-            UiMode::FlutterVersion,
         ] {
             assert_noop(mode, make_scroll_up());
         }
