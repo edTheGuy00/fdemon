@@ -109,8 +109,9 @@ mod tests {
 
     #[test]
     fn test_scroll_no_op_in_stub_modes() {
-        // Modes whose scroll handlers are still stubs (Phase 2 tasks 03-06
-        // will populate them one by one; this list shrinks as each task lands).
+        // Modes whose scroll handlers are still stubs or have no scrollable
+        // surface return None for every scroll input. This list shrinks as
+        // each Phase 2 task lands a real per-mode handler.
         for mode in [
             UiMode::Startup,
             UiMode::NewSessionDialog,
@@ -121,7 +122,6 @@ mod tests {
             UiMode::LinkHighlight,
             UiMode::Settings,
             UiMode::FlutterVersion,
-            UiMode::DevTools,
         ] {
             assert_noop(mode, make_scroll_up());
         }
@@ -129,13 +129,26 @@ mod tests {
 
     #[test]
     fn test_scroll_normal_mode_returns_scroll_up() {
-        // Normal-mode scroll is now wired (Phase 2 task 02).
+        // Normal-mode scroll is wired (Phase 2 task 02).
         let state = state_in_mode(UiMode::Normal);
         let msg = handle_mouse(&state, make_scroll_up());
         assert!(
             matches!(msg, Some(Message::ScrollUp)),
             "expected ScrollUp for Normal + scroll-up, got {:?}",
             msg
+        );
+    }
+
+    #[test]
+    fn test_devtools_scroll_routes_to_inspector_nav() {
+        // DevTools mode with default (Inspector) panel produces a real message,
+        // not a no-op. Exact routing is covered by devtools.rs unit tests.
+        let state = state_in_mode(UiMode::DevTools);
+        let result = handle_mouse(&state, make_scroll_up());
+        assert!(
+            matches!(result, Some(Message::DevToolsInspectorNavigate(_))),
+            "DevTools scroll-up in Inspector panel should produce InspectorNavigate, got {:?}",
+            result
         );
     }
 }
