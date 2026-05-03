@@ -148,4 +148,24 @@ mod tests {
             result
         );
     }
+
+    #[test]
+    fn test_scroll_produces_message_in_link_highlight_mode() {
+        let state = state_in_mode(UiMode::LinkHighlight);
+        let scroll_up = make_scroll_up();
+        assert!(
+            handle_mouse(&state, scroll_up).is_some(),
+            "LinkHighlight plain scroll-up should produce a message"
+        );
+    }
+
+    #[test]
+    fn test_scroll_produces_message_in_flutter_version_mode() {
+        let state = state_in_mode(UiMode::FlutterVersion);
+        let scroll_up = make_scroll_up();
+        assert!(
+            handle_mouse(&state, scroll_up).is_some(),
+            "FlutterVersion scroll-up should produce a message"
+        );
+    }
 }
