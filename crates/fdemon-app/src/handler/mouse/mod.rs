@@ -108,10 +108,11 @@ mod tests {
     }
 
     #[test]
-    fn test_scroll_no_op_in_every_mode() {
+    fn test_scroll_no_op_in_stub_modes() {
+        // Modes whose scroll handlers are still stubs (Phase 2 tasks 03-06
+        // will populate them one by one; this list shrinks as each task lands).
         for mode in [
             UiMode::Startup,
-            UiMode::Normal,
             UiMode::NewSessionDialog,
             UiMode::EmulatorSelector,
             UiMode::ConfirmDialog,
@@ -124,5 +125,17 @@ mod tests {
         ] {
             assert_noop(mode, make_scroll_up());
         }
+    }
+
+    #[test]
+    fn test_scroll_normal_mode_returns_scroll_up() {
+        // Normal-mode scroll is now wired (Phase 2 task 02).
+        let state = state_in_mode(UiMode::Normal);
+        let msg = handle_mouse(&state, make_scroll_up());
+        assert!(
+            matches!(msg, Some(Message::ScrollUp)),
+            "expected ScrollUp for Normal + scroll-up, got {:?}",
+            msg
+        );
     }
 }
