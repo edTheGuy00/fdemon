@@ -106,25 +106,26 @@ All existing tests must continue to pass without modification.
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** feat/mouse-support
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/mouse/flutter_version.rs` | <!-- one-line comment added --> |
-| `crates/fdemon-app/src/handler/mouse/new_session.rs` | <!-- one-line comment added --> |
+| `crates/fdemon-app/src/handler/mouse/flutter_version.rs` | Added two-line comment inside `handle_scroll` body explaining `_mods` is intentionally ignored (no page-step analogue, cites keys.rs:332-355) |
+| `crates/fdemon-app/src/handler/mouse/new_session.rs` | Added three-line comment inside `handle_scroll` body explaining `_mods` is intentionally ignored (no Shift+anything binding, cites keys.rs:793-896) |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <!-- Rationale -->
+1. **Multi-line vs single-line comments**: The task spec said "one-line comment" but the example in the task itself used a two-line wrapped comment for `flutter_version.rs` and a three-line comment for `new_session.rs`. Used the multi-line form to fit within the project's standard line length and match the examples given in the task spec exactly.
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — Passed/Failed
-- `cargo test -p fdemon-app handler::mouse` — Passed/Failed
-- `cargo clippy --workspace --all-targets -- -D warnings` — Passed/Failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo test -p fdemon-app handler::mouse::flutter_version` — Passed (4 tests)
+- `cargo test -p fdemon-app handler::mouse::new_session` — Passed (9 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 

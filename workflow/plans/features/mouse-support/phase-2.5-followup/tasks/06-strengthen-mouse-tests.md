@@ -141,26 +141,29 @@ cargo test --workspace
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** feat/mouse-support
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/tests.rs` | Added doc comment on `assert_scroll_routes_to`; added `scroll_during_reload_does_not_block` test |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `///` doc comment on `assert_scroll_routes_to` naming discriminant limitation and recommending `matches!` for data-carrying variants; added `scroll_during_reload_does_not_block` test in `mod mouse_scroll` |
 
 ### Notable Decisions/Tradeoffs
 
-1. **Busy-session wiring approach:** <!-- describe how the test constructed a busy session, or note if downgraded to TODO -->
+1. **Busy-session wiring approach:** Implemented the full test (not downgraded to TODO). The existing test infrastructure (`test_device()` + `session_manager.create_session()` + direct `.phase = AppPhase::Reloading` assignment) is sufficient in ~12 LOC — well under the 30 LOC threshold in the task notes. The test also calls `state.session_manager.any_session_busy()` as a sanity-check assertion before driving `update()`.
+
+2. **`fdemon_core::AppPhase::Reloading` fully-qualified path:** Used the fully-qualified path instead of relying on a use import, since `AppPhase` is already imported at the top-level `use` in `tests.rs` via `fdemon_core::{AppPhase, DaemonEvent}`. The direct `AppPhase::Reloading` short form works fine.
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — Passed/Failed
-- `cargo test -p fdemon-app handler::tests::mouse_scroll` — Passed/Failed (X tests)
-- `cargo test --workspace` — Passed/Failed
-- `cargo clippy --workspace --all-targets -- -D warnings` — Passed/Failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo test -p fdemon-app handler::tests::mouse_scroll` — Passed (16 tests)
+- `cargo test --workspace` — Passed (all crates, zero failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo check --workspace --all-targets` — Passed
 
 ### Risks/Limitations
 
-1. **Test depends on existing busy-session helpers.** If those helpers are absent, the `scroll_during_reload` test may need to be downgraded to a comment-only TODO (decision documented above).
+1. **None identified.** The busy-session wiring was straightforward using existing helpers. The new test exercises the exact `update()` path through `Message::Mouse(Scroll{..})` → `handle_mouse()` → `handle_scroll()` → `Message::ScrollUp`, confirming no `is_busy` gate exists in that path.

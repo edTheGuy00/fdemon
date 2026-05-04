@@ -131,27 +131,28 @@ cargo test --workspace
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** feat/mouse-support
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/mouse/devtools.rs` | <!-- summary --> |
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | Changed `handle_inspector_scroll` guard from `if !mods.shift && (mods.ctrl \|\| mods.alt)` to `if mods.shift \|\| mods.ctrl \|\| mods.alt`. Updated inline comment and module `//!` doc. Added `inspector_any_modifier_combination_returns_none` test. |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <!-- Rationale -->
+1. **Uniform modifier discipline**: The guard is now a single `||` expression matching every other handler (normal.rs, link_highlight.rs, handle_network_scroll). Shift-only is now a no-op for Inspector; prior behavior (single-step on Shift+wheel) was a Phase 2 divergence caught in review.
+2. **Comment spacing**: The task's example used two spaces before inline comments (`// Shift`), but `cargo fmt` normalizes to one space. Used single-space alignment to pass the formatter.
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — Passed/Failed
-- `cargo check --workspace --all-targets` — Passed/Failed
-- `cargo test -p fdemon-app handler::mouse::devtools` — Passed/Failed
-- `cargo test --workspace` — Passed/Failed
-- `cargo clippy --workspace --all-targets -- -D warnings` — Passed/Failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo check --workspace --all-targets` — Passed
+- `cargo test -p fdemon-app handler::mouse::devtools` — Passed (9 tests)
+- `cargo test --workspace` — Passed (all suites green)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
-1. **Behavior change for users:** Shift+wheel in Inspector no longer single-steps the tree. Documented as intentional in the new module doc.
+1. **Behavior change for users:** Shift+wheel in Inspector no longer single-steps the tree. Documented as intentional in the new module doc. Users retain keyboard `j`/`k`/`Up`/`Down` navigation.

@@ -33,12 +33,12 @@ The dart-defines mouse-vs-keyboard reconciliation is intentionally deferred: thi
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-fix-inspector-modifier-rule](tasks/01-fix-inspector-modifier-rule.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 2 | [02-document-dart-defines-divergence](tasks/02-document-dart-defines-divergence.md) | Not Started | — | 0.25h | `fdemon-app` |
-| 3 | [03-stub-mouse-docs](tasks/03-stub-mouse-docs.md) | Not Started | — | 0.75h | docs |
-| 4 | [04-mod-rs-doc-and-coverage](tasks/04-mod-rs-doc-and-coverage.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 5 | [05-comment-ignored-mods](tasks/05-comment-ignored-mods.md) | Not Started | — | 0.25h | `fdemon-app` |
-| 6 | [06-strengthen-mouse-tests](tasks/06-strengthen-mouse-tests.md) | Not Started | — | 0.5h | `fdemon-app` |
+| 1 | [01-fix-inspector-modifier-rule](tasks/01-fix-inspector-modifier-rule.md) | Done | — | 0.5h | `fdemon-app` |
+| 2 | [02-document-dart-defines-divergence](tasks/02-document-dart-defines-divergence.md) | Done | — | 0.25h | `fdemon-app` |
+| 3 | [03-stub-mouse-docs](tasks/03-stub-mouse-docs.md) | Done | — | 0.75h | docs |
+| 4 | [04-mod-rs-doc-and-coverage](tasks/04-mod-rs-doc-and-coverage.md) | Done | — | 0.5h | `fdemon-app` |
+| 5 | [05-comment-ignored-mods](tasks/05-comment-ignored-mods.md) | Done | — | 0.25h | `fdemon-app` |
+| 6 | [06-strengthen-mouse-tests](tasks/06-strengthen-mouse-tests.md) | Done | — | 0.5h | `fdemon-app` |
 
 ## File Overlap Analysis
 
@@ -81,10 +81,10 @@ All 15 task pairs have zero shared write files — Wave 1 is fully parallelizabl
 
 Phase 2.5 is complete when:
 
-- [ ] `cargo fmt --all -- --check` passes
-- [ ] `cargo check --workspace --all-targets` passes
-- [ ] `cargo test --workspace` passes
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes
+- [x] `cargo fmt --all -- --check` passes
+- [x] `cargo check --workspace --all-targets` passes
+- [x] `cargo test --workspace` passes
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` passes
 - [ ] `crates/fdemon-app/src/handler/mouse/devtools.rs::handle_inspector_scroll` rejects `Shift+Ctrl+wheel` and `Shift+Alt+wheel` with `None`, matching `normal.rs` / `link_highlight.rs` / `handle_network_scroll`. A test asserts the new behavior.
 - [ ] `crates/fdemon-app/src/handler/mouse/devtools.rs` module doc no longer claims "Inspector → tree row navigation (Up/Down only; no page step)" without acknowledging that Shift falls through to single-step (or, since the new rule rejects all modifier combos for Inspector, the doc accurately reflects that).
 - [ ] `crates/fdemon-app/src/handler/mouse/settings.rs:21` (the `DartDefinesPane::Edit => None` arm) carries an inline comment explaining that the divergence from `new_session.rs` is intentional and pointing to the rationale.

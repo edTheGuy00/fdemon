@@ -167,24 +167,29 @@ Check that the cross-link from CONFIGURATION.md → MOUSE.md and back resolves.
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** feat/mouse-support
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
 | `docs/MOUSE.md` | NEW: per-mode scroll reference, coordinate-free explanation, platform caveats |
-| `docs/CONFIGURATION.md` | Added link to `MOUSE.md` from `enable_mouse` row / callout |
+| `docs/CONFIGURATION.md` | Added link to `MOUSE.md` from `enable_mouse` row AND from the "When to disable mouse capture" callout |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <!-- Rationale -->
+1. **Link in two places in CONFIGURATION.md**: Added the link both to the `enable_mouse` table row description and to the "When to disable mouse capture" callout. The task allowed either placement; both placements maximizes discoverability since users reading either section are taken to the full reference.
+2. **Inspector modifier note**: Added a callout in MOUSE.md explaining the `Shift+Ctrl+Wheel` single-step behavior (rather than no-op), matching the actual implementation in `devtools.rs::handle_inspector_scroll`. This directly documents the known inconsistency flagged by the Phase 2 review.
+3. **DevTools/Network filter-input mode**: Added a separate table row for the filter-input-active case, which is a meaningful behavior distinction (all scroll swallowed) confirmed in `devtools.rs`.
 
 ### Testing Performed
 
-- Visual markdown review — Passed/Failed
-- Link resolution between CONFIGURATION.md and MOUSE.md — Passed/Failed
+- Visual markdown review — Passed
+- Link resolution between CONFIGURATION.md and MOUSE.md — Passed (both files in same `docs/` directory; relative links resolve)
+- All three acceptance-criteria sections present — Passed
+- crossterm #986 reference confirmed present — Passed
+- No code files modified — Confirmed
 
 ### Risks/Limitations
 

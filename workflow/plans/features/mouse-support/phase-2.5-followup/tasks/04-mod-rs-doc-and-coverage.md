@@ -137,24 +137,26 @@ Expected: 4 + 2 = 6 positive-assertion tests in `mod.rs::tests`, all passing. Pl
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** worktree-agent-a5fa889b2a12c1fac
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/mouse/mod.rs` | <!-- summary --> |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `///` doc comment to `handle_scroll`; added `test_scroll_settings_routes_to_settings_prev_item` and `test_scroll_new_session_dialog_routes_to_device_up` tests |
 
 ### Notable Decisions/Tradeoffs
 
-1. **<Decision>**: <!-- Rationale -->
+1. **Sub-task B already satisfied**: `UiMode::EmulatorSelector` was already present in the `test_scroll_no_op_in_non_scrollable_modes` array (line 118) from the Phase 2 merge. No change was needed.
+2. **NewSessionDialog default pane confirmed**: Verified `NewSessionDialogState::new()` sets `focused_pane = DialogPane::TargetSelector` (state.rs line 736), so the positive assertion for `NewSessionDialogDeviceUp` is correct without needing explicit pane setup.
+3. **Doc comment matches task spec exactly**: The `///` doc comment references `KeyModSet::is_shift_only` and `docs/MOUSE.md` per acceptance criterion 1.
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — Passed/Failed
-- `cargo test -p fdemon-app handler::mouse::tests` — Passed/Failed (X tests)
-- `cargo clippy --workspace --all-targets -- -D warnings` — Passed/Failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo test -p fdemon-app handler::mouse::tests` — Passed (8 tests: 6 positive assertions + 1 no-op sweep for 4 modes + 1 press no-op for all 11 modes)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 

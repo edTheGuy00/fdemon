@@ -73,14 +73,14 @@ The existing `dart_defines_edit_pane_swallows_scroll` test must still pass witho
 
 ## Completion Summary
 
-**Status:** <!-- Done / Blocked / Failed -->
-**Branch:** <!-- current branch name -->
+**Status:** Done
+**Branch:** feat/mouse-support
 
 ### Files Modified
 
 | File | Changes |
 |------|---------|
-| `crates/fdemon-app/src/handler/mouse/settings.rs` | <!-- summary --> |
+| `crates/fdemon-app/src/handler/mouse/settings.rs` | Replaced single-line comment on `DartDefinesPane::Edit` arm with 10-line block documenting the keyboard-handler-driven asymmetry, with cross-references to `new_session.rs`, `keys.rs:733-770`, `keys.rs:839-866`, and `keys.rs:851-855`. |
 
 ### Notable Decisions/Tradeoffs
 
@@ -88,9 +88,9 @@ The existing `dart_defines_edit_pane_swallows_scroll` test must still pass witho
 
 ### Testing Performed
 
-- `cargo fmt --all -- --check` — Passed/Failed
-- `cargo test -p fdemon-app handler::mouse::settings` — Passed/Failed
-- `cargo clippy --workspace --all-targets -- -D warnings` — Passed/Failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo test -p fdemon-app handler::mouse::settings` — Passed (11 tests, including `dart_defines_edit_pane_swallows_scroll`)
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` — Passed
 
 ### Risks/Limitations
 
