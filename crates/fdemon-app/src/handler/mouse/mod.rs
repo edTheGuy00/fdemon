@@ -11,15 +11,17 @@ mod new_session;
 mod normal;
 mod settings;
 
-use crate::input_mouse::{KeyModSet, MouseInput, ScrollDir};
+use crate::input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
 use crate::message::Message;
 use crate::state::{AppState, UiMode};
 
 /// Convert a mouse event to a follow-up message based on the current UI mode.
 ///
-/// In Phase 2 only [`MouseInput::Scroll`] produces messages; the press,
-/// release, and drag variants are reserved for Phase 3+ click hit-testing
-/// and currently return `None` for every mode.
+/// In Phase 2 only [`MouseInput::Scroll`] produced messages. Phase 3 adds
+/// click hit-testing via [`handle_press`]: `Normal` mode queries the
+/// per-frame [`crate::mouse_regions::MouseRegions`] registry and returns the
+/// matched region's message. Other modes remain no-op for press events until
+/// Phase 4/5.
 pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
     match input {
         MouseInput::Scroll {
@@ -27,8 +29,32 @@ pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
             modifiers,
             ..
         } => handle_scroll(state, direction, modifiers),
-        // Phase 3+ wires button-press dispatch (region hit-testing).
-        MouseInput::Press { .. } | MouseInput::Release { .. } | MouseInput::Drag { .. } => None,
+        MouseInput::Press {
+            x,
+            y,
+            button,
+            modifiers,
+        } => handle_press(state, x, y, button, modifiers),
+        // Phase 4+ may wire drag-to-select etc. — currently no-op.
+        MouseInput::Release { .. } | MouseInput::Drag { .. } => None,
+    }
+}
+
+/// Route a button press to the appropriate per-mode handler.
+///
+/// Phase 3 only wires [`UiMode::Normal`]. DevTools/Settings/dialog modes
+/// are wired in Phase 4/5 — they return `None` until then.
+fn handle_press(
+    state: &AppState,
+    x: u16,
+    y: u16,
+    button: MouseButton,
+    mods: KeyModSet,
+) -> Option<Message> {
+    match state.ui_mode {
+        UiMode::Normal => normal::handle_press(state, x, y, button, mods),
+        // Phase 5 wires DevTools/Settings/dialog modes; for now, no-op.
+        _ => None,
     }
 }
 
@@ -100,8 +126,11 @@ mod tests {
         );
     }
 
+    /// With no regions registered, press returns `None` in every mode.
+    /// This is the "without regions" baseline; normal-mode positive
+    /// behaviour is covered by `normal.rs` unit tests.
     #[test]
-    fn test_press_no_op_in_every_mode() {
+    fn test_press_no_op_in_every_mode_without_regions() {
         for mode in [
             UiMode::Startup,
             UiMode::Normal,
@@ -117,6 +146,43 @@ mod tests {
         ] {
             assert_noop(mode, make_press());
         }
+    }
+
+    #[test]
+    fn test_press_dispatches_to_normal_handler_in_normal_mode() {
+        let state = state_in_mode(UiMode::Normal);
+        // No registered regions, so press returns None — but the dispatcher
+        // must call into normal::handle_press, not return None unconditionally.
+        // We test this transitively via the normal-mode unit tests above.
+        let result = handle_mouse(&state, make_press());
+        assert!(result.is_none(), "no regions registered → no message");
+    }
+
+    #[test]
+    fn test_press_no_op_in_devtools_mode_phase_3() {
+        // Phase 3 only wires Normal mode for clicks. DevTools/Settings/dialogs
+        // come in Phase 4/5.
+        let state = state_in_mode(UiMode::DevTools);
+        assert!(handle_mouse(&state, make_press()).is_none());
+    }
+
+    #[test]
+    fn test_release_and_drag_remain_no_op() {
+        let state = state_in_mode(UiMode::Normal);
+        let release = MouseInput::Release {
+            x: 0,
+            y: 0,
+            button: MouseButton::Left,
+            modifiers: KeyModSet::NONE,
+        };
+        let drag = MouseInput::Drag {
+            x: 0,
+            y: 0,
+            button: MouseButton::Left,
+            modifiers: KeyModSet::NONE,
+        };
+        assert!(handle_mouse(&state, release).is_none());
+        assert!(handle_mouse(&state, drag).is_none());
     }
 
     #[test]
