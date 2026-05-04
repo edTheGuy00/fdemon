@@ -139,6 +139,12 @@ const SHORTCUTS_DEF: &[(&str, fn() -> Message)] = &[
     ("Quit", || Message::RequestQuit),
 ];
 
+/// Width in terminal cells of the non-clickable prefix of each shortcut segment:
+/// `'[' (1) + key_char (1) + ']' (1) + ' ' (1)`. The full segment is this prefix plus the
+/// trailing label text (e.g., `"Run  "`). Used in `register_shortcut_clicks` to advance the
+/// cursor between adjacent shortcuts.
+const SHORTCUT_SEGMENT_PREFIX: u16 = 4;
+
 /// Width in terminal cells of the clickable `[X` portion of each shortcut.
 /// Only the bracket and letter are clickable, not the closing bracket or label.
 const SHORTCUT_CLICK_WIDTH: u16 = 2;
@@ -156,11 +162,12 @@ fn register_shortcut_clicks(ctx: &mut MouseCtx<'_>, shortcuts_x: u16, row_y: u16
 
         // Full segment width: `[` (1) + letter (1) + `] ` (2) + label_text
         // where label already includes trailing spaces (e.g., "Run  " = 5 chars).
-        let segment_width: u16 = (4 + label.len()) as u16;
+        let segment_width: u16 = u16::try_from(SHORTCUT_SEGMENT_PREFIX as usize + label.len())
+            .expect("shortcut label fits in u16 segment width");
         cursor_x = cursor_x.saturating_add(segment_width);
 
         // Skip if the clickable cells fall outside the visible area.
-        if click_x + SHORTCUT_CLICK_WIDTH > area.x + area.width {
+        if click_x.saturating_add(SHORTCUT_CLICK_WIDTH) > area.x.saturating_add(area.width) {
             continue;
         }
 
