@@ -47,10 +47,10 @@ pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
 /// the keyboard handler at `handler/keys.rs:105-126` which intercepts all
 /// key events at the `handle_key_normal` entry point when `tag_filter_visible`
 /// is set. Lifting the gate here means future per-mode handlers (Phase 4/5)
-/// for DevTools, Settings, and dialog modes inherit it for free.
+/// for Settings and dialog modes inherit it for free.
 ///
-/// Phase 3 only wires [`UiMode::Normal`]. DevTools/Settings/dialog modes
-/// are wired in Phase 4/5 — they return `None` until then.
+/// Phase 3 wires [`UiMode::Normal`]. Phase 4 adds [`UiMode::DevTools`].
+/// Settings/dialog modes are wired in Phase 5 — they return `None` until then.
 fn handle_press(
     state: &AppState,
     x: u16,
@@ -66,7 +66,8 @@ fn handle_press(
 
     match state.ui_mode {
         UiMode::Normal => normal::handle_press(state, x, y, button, mods),
-        // Phase 5 wires DevTools/Settings/dialog modes; for now, no-op.
+        UiMode::DevTools => devtools::handle_press(state, x, y, button, mods),
+        // Phase 5 wires Settings/dialog modes; for now, no-op.
         _ => None,
     }
 }
@@ -223,9 +224,9 @@ mod tests {
     }
 
     #[test]
-    fn test_press_no_op_in_devtools_mode_phase_3() {
-        // Phase 3 only wires Normal mode for clicks. DevTools/Settings/dialogs
-        // come in Phase 4/5.
+    fn test_press_no_op_in_devtools_mode_without_regions() {
+        // Phase 4 wires DevTools mode for clicks. With no regions registered,
+        // press returns None (no match in empty registry).
         let state = state_in_mode(UiMode::DevTools);
         assert!(handle_mouse(&state, make_press()).is_none());
     }

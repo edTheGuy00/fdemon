@@ -1,15 +1,72 @@
-//! Scroll routing for `UiMode::DevTools`.
+//! Mouse event handlers for `UiMode::DevTools`.
 //!
-//! Dispatches by `state.devtools_view_state.active_panel`:
+//! **Scroll** dispatches by `state.devtools_view_state.active_panel`:
 //! - Inspector → tree row navigation (Up/Down with no modifiers; any modifier
 //!   returns None because there is no page-step analogue for the inspector tree)
 //! - Performance → no-op (frame timeline is keyboard Left/Right only)
 //! - Network → request-list navigation (Up/Down; Shift → PageUp/PageDown);
 //!   no-op when filter input is active
+//!
+//! **Press** hit-tests against the per-frame region registry (populated during
+//! `render::view()`). The Network filter-input gate drops clicks while the user
+//! is typing a filter pattern.
 
-use crate::input_mouse::{KeyModSet, ScrollDir};
+use crate::input_mouse::{KeyModSet, MouseButton, ScrollDir};
 use crate::message::{InspectorNav, Message, NetworkNav};
 use crate::state::{AppState, DevToolsPanel};
+
+/// Hit-test a left/middle click in `UiMode::DevTools` against the per-frame
+/// region registry. Returns the matched region's resolved [`Message`].
+///
+/// **Filter-input gate.** When the Network panel's filter input is active
+/// (the user is typing a filter pattern), all clicks are silently
+/// dropped — mirroring [`handle_network_scroll`]'s behaviour.
+///
+/// **Right-click reserved.** As in [`normal::handle_press`], right-click
+/// returns `None` for future context-menu support.
+///
+/// [`normal::handle_press`]: super::normal::handle_press
+/// [`handle_network_scroll`]: handle_network_scroll
+pub(super) fn handle_press(
+    state: &AppState,
+    x: u16,
+    y: u16,
+    button: MouseButton,
+    _mods: KeyModSet,
+) -> Option<Message> {
+    // Right-click reserved.
+    if matches!(button, MouseButton::Right) {
+        return None;
+    }
+
+    // Filter-input gate (Network panel only).
+    if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+        let filter_active = state
+            .session_manager
+            .selected()
+            .map(|h| h.session.network.filter_input_active)
+            .unwrap_or(false);
+        if filter_active {
+            return None;
+        }
+    }
+
+    // ── Hit-test against the registry ────────────────────────────────────
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    // Guard puts the registry back on Drop, including on early-return paths.
+    let regions = state.mouse_regions.take_guard();
+    let action_opt = regions.hit_test(x, y, button).and_then(|entry| {
+        let action = match button {
+            MouseButton::Left => entry.on_left.as_ref(),
+            MouseButton::Middle => entry.on_middle.as_ref(),
+            MouseButton::Right => None,
+        };
+        action.map(|a| a.resolve(x, y))
+    });
+    drop(regions);
+
+    action_opt
+}
 
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match state.devtools_view_state.active_panel {
@@ -234,5 +291,133 @@ mod tests {
             assert!(handle_scroll(&s, ScrollDir::Left, KeyModSet::NONE).is_none());
             assert!(handle_scroll(&s, ScrollDir::Right, KeyModSet::NONE).is_none());
         }
+    }
+}
+
+#[cfg(test)]
+mod press_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton};
+    use crate::message::Message;
+    use crate::mouse_regions::{MouseAction, MouseRect};
+
+    fn state_in_devtools_panel(panel: DevToolsPanel) -> AppState {
+        let mut s = AppState::new();
+        s.ui_mode = crate::state::UiMode::DevTools;
+        s.devtools_view_state.active_panel = panel;
+        s
+    }
+
+    #[test]
+    fn left_click_on_recorded_region_returns_emit_message() {
+        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(matches!(
+            result,
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
+        ));
+    }
+
+    #[test]
+    fn right_click_is_noop() {
+        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_press(&state, 0, 0, MouseButton::Right, KeyModSet::NONE);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn click_in_network_panel_with_filter_active_is_noop() {
+        use fdemon_daemon::Device;
+
+        let mut state = state_in_devtools_panel(DevToolsPanel::Network);
+        let device = Device {
+            id: "d".into(),
+            name: "Dev".into(),
+            platform: "android".into(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .filter_input_active = true;
+
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::ToggleNetworkRecording),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(result.is_none(), "filter-active suppresses clicks");
+    }
+
+    #[test]
+    fn click_in_inspector_with_network_filter_active_is_not_gated() {
+        // Filter-active applies only to Network panel; clicks in
+        // Inspector/Performance must still resolve.
+        use fdemon_daemon::Device;
+
+        let mut state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let device = Device {
+            id: "d".into(),
+            name: "Dev".into(),
+            platform: "android".into(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .filter_input_active = true; // unrelated to current panel
+
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::SwitchDevToolsPanel(DevToolsPanel::Performance)),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(matches!(
+            result,
+            Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
+        ));
+    }
+
+    #[test]
+    fn click_outside_any_region_is_none() {
+        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let result = handle_press(&state, 100, 100, MouseButton::Left, KeyModSet::NONE);
+        assert!(result.is_none());
     }
 }
