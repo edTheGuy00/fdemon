@@ -61,3 +61,30 @@ cargo test -p fdemon-app input_mouse::tests::test_keymodset_none_is_empty
 
 - This issue was documented but unresolved at the end of Phase 1 (TASKS.md note in `phase-1-foundation/TASKS.md`).
 - The fix is mechanical and self-contained. No risk to other tests.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/input_mouse.rs` | Bound `KeyModSet::NONE` to a local `let none` variable in `test_keymodset_none_is_empty`, replacing three constant-expression assertions with runtime-variable assertions |
+
+### Notable Decisions/Tradeoffs
+
+1. **No `#[allow(...)]` attribute**: As directed by the task, no suppress attribute was used. The fix introduces a local binding so clippy no longer sees the assertions as operating on constant expressions.
+
+### Testing Performed
+
+- `cargo clippy -p fdemon-app --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+- `cargo test -p fdemon-app input_mouse::tests::test_keymodset_none_is_empty` - Passed (1 test)
+
+### Risks/Limitations
+
+1. **None**: The change is purely mechanical; the test still verifies the same three properties on the same constant value, just via an intermediate binding.

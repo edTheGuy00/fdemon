@@ -73,3 +73,26 @@ cargo test --workspace
 
 - Look at the existing test patterns in `handler/tests.rs` for how `AppState` is constructed and how `update()` is called in this file — match the prevailing style.
 - The implementation under test is in `handler/update.rs:60-66`; if you find any logic there that does mutate state for `Message::Mouse`, that itself is a bug and the test should fail — flag it rather than weakening the assertion.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `test_mouse_message_returns_none_result_and_does_not_mutate_state` test at end of file |
+
+### Notable Decisions/Tradeoffs
+
+1. **Pre-existing overlapping test**: `test_update_mouse_message_is_no_op` already existed at end of file and partially covered the contract (no message, no action, phase unchanged) but lacked the `ui_mode` assertion and the exact name required by the Phase 1 success criteria. Rather than rename/modify the existing test (which would risk surprising future readers), the new required test was appended alongside it. Both now pass and provide complementary coverage.
+2. **Inline `use` style**: The `use crate::input_mouse::{...}` import was placed inline inside the test function body, matching the exact pattern of the pre-existing `test_update_mouse_message_is_no_op` test directly above it.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app test_mouse_message_returns_none_result_and_does_not_mutate_state` - Passed (1 test)
+- `cargo test --workspace` - Passed (all crates green, 0 failures)

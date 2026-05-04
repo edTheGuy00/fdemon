@@ -63,3 +63,32 @@ No code changes. Visual diff review only.
 - This is a documentation-only, workflow-only change. No code is touched.
 - Why we are not flipping the default: see the orchestrator session decision (default `true` confirmed). The full discoverability story (e.g., a one-time first-launch hint) is out of scope for Phase 1.5; revisit in a later phase if user reports indicate confusion.
 - The cross-reference to `docs/CONFIGURATION.md` in the suggested success-criteria rewording presumes Task 05 (document-enable-mouse-config) has landed or will land in the same wave. If Task 05 has not yet landed when you write this rewording, adjust the cross-reference accordingly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/mouse-support/phase-1-foundation/TASKS.md` | Rewrote Phase 1 overview paragraph (line 7) to accurately distinguish "no fdemon TEA-state change" from "no terminal-visible change"; explicitly documents that capture intercepts wheel events and requires Shift+drag for text selection |
+| `workflow/plans/features/mouse-support/PLAN.md` | Rewrote Phase 1 milestone (line 206) to describe the TEA-bus no-op accurately while calling out the intentional capture side-effects; rewrote Phase 1 success criterion (line 446) to use "no fdemon TEA-state change" with a cross-reference to `docs/CONFIGURATION.md` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Cross-reference to docs/CONFIGURATION.md retained**: Task 05 (document-enable-mouse-config) had not landed when this task ran, but the cross-reference is forward-looking and accurate — it describes where the documentation will live once Task 05 completes. Kept the reference rather than omitting it, as the task notes say "adjust accordingly" not "remove."
+2. **Line 92 smoke-test entry left unchanged**: The acceptance criteria scopes the fix to the "Phase 1 overview" paragraph. Line 92 ("click anywhere → no behavior change, no crash") is in the manual smoke test checklist and refers to the absence of a crash, not the broad claim about user-visible impact. It was not changed per AC scope.
+
+### Testing Performed
+
+- Visual diff review of both modified files — confirms "nothing changes" (unqualified) is gone from PLAN.md and TASKS.md overview
+- `grep -n "nothing changes"` across both files returned "NOT FOUND (expected)"
+- No code changes; no build required
+
+### Risks/Limitations
+
+1. **No code impact**: This is a documentation-only change in workflow plan files. Zero risk of regression.

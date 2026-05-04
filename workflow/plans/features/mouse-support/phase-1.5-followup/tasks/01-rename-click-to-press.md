@@ -65,3 +65,38 @@ All three should pass without modification beyond the rename.
 
 - This is purely additive forward-compatibility hygiene. No public API has consumers yet; renaming is risk-free.
 - If any other crate (e.g., headless mode, MCP integration) ever references `MouseInput::Click`, this rename would break it — but as of `feat/mouse-support` HEAD, no such consumer exists.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/input_mouse.rs` | Renamed `Click` variant to `Press` in enum definition, `position()` match arm, `modifiers()` match arm, and all four tests that constructed `MouseInput::Click`. Test `test_click_constructible_and_eq` renamed to `test_press_constructible_and_eq`; debug-format assertion updated to check for `"Press"`. |
+| `crates/fdemon-tui/src/event.rs` | Updated `mouse_event_to_input` to produce `MouseInput::Press` from `MouseEventKind::Down`. Test `test_mouse_down_left_converts_to_click` renamed to `test_mouse_down_left_converts_to_press` and assertion updated. |
+| `crates/fdemon-app/src/handler/mouse.rs` | Helper `make_click()` renamed to `make_press()`, using `MouseInput::Press`. Test `test_click_no_op_in_every_mode` renamed to `test_press_no_op_in_every_mode`. |
+| `crates/fdemon-app/src/handler/tests.rs` | One occurrence of `MouseInput::Click` in `test_update_mouse_message_is_no_op` updated to `MouseInput::Press`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Extra occurrence in handler/tests.rs**: The task scope listed three files but `handler/tests.rs` contained an additional use of `MouseInput::Click`. It was updated to maintain consistency and satisfy the grep acceptance criterion.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app input_mouse` - Passed (8 tests)
+- `cargo test -p fdemon-app handler::mouse` - Passed (2 tests)
+- `cargo test -p fdemon-tui event` - Passed (23 tests)
+- `cargo test --workspace` - Passed (all crates, no failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - 3 pre-existing `assertions_on_constants` errors in `input_mouse.rs:182-184` (flagged by task notes as Task 02 responsibility; no new issues introduced)
+- `grep -r "MouseInput::Click" crates/ tests/` - Zero results
+
+### Risks/Limitations
+
+1. **Pre-existing clippy failure**: `assertions_on_constants` errors at `input_mouse.rs:182-184` were present before this task and are explicitly noted as Task 02's responsibility. This task introduces no new clippy issues.

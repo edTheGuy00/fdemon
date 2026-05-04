@@ -61,3 +61,31 @@ Visual review only. Optional: render the markdown locally to confirm table forma
 - `docs/CONFIGURATION.md` is unmanaged (not subject to `doc_maintainer` content boundaries), so this can be done by the default implementor.
 - The "Restart required" wording matches how the planner documented the setting in `workflow/plans/features/mouse-support/PLAN.md` — keep that consistent.
 - A future `docs/MOUSE.md` (planned for Phase 6 of the parent feature) will provide the full interaction map. This task only documents the on/off setting.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/CONFIGURATION.md` | Added `enable_mouse = true` to `[ui]` example block (line 316), added `enable_mouse` row to property table (line 328), added "When to disable mouse capture" callout paragraph (line 334) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Inline comment alignment**: Aligned the `stack_trace_max_frames` comment spacing to match the other lines (it had one fewer space), while adding `enable_mouse`. This is a cosmetic fix that was already inconsistent in the original — no behavior change.
+2. **Paragraph placement**: Placed the "When to disable mouse capture" callout after the existing two callouts (`> Environment variable override` and `> No Nerd Font?`) so it follows the existing callout block style without breaking the visual grouping.
+
+### Testing Performed
+
+- Visual review of lines 307-334 confirmed example block, table row, and callout paragraph are all present and correctly formatted.
+- Grep confirmed `enable_mouse` appears in all three expected locations and nowhere else.
+- No other property rows or sections were altered; `### DevTools Settings` section starts cleanly at line 336.
+
+### Risks/Limitations
+
+1. **Visual only**: Task specifies visual review only; no automated markdown linter was run. Table pipe alignment is correct.

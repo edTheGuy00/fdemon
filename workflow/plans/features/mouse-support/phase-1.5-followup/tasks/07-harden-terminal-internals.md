@@ -113,3 +113,38 @@ For the idempotency test, follow the pattern of the existing `test_disable_witho
 - These three sub-tasks are bundled because they all touch one file and each is individually too small to merit a separate task. The orchestrator's worktree-merge cost would dominate the implementation cost otherwise.
 - Do not refactor unrelated code in `terminal.rs` while you are here — keep the diff focused on these three concerns so the review is easy.
 - The relaxed ordering change is unlikely to surface a behavior difference on x86 (which has strong native ordering), but matters on aarch64. Run the test suite on whichever target you have available; CI on the macOS + Linux + Windows matrix will exercise both x86 and ARM as appropriate.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a42ea1c70f833cfb0
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/terminal.rs` | Sub-task A: replaced all `Ordering::SeqCst` on `MOUSE_CAPTURE_ON` with `Release`/`AcqRel`/`Acquire`/`Relaxed` as appropriate. Sub-task B: added `HOOK_INSTALLED: AtomicBool` guard to make `install_panic_hook()` idempotent, plus new `test_install_panic_hook_is_idempotent` test. Sub-task C: added inline comments documenting DECSET 1003 mode-set trade-off and panic-hook cleanup ordering invariant. |
+
+### Notable Decisions/Tradeoffs
+
+1. **`AcqRel` on `disable_mouse_capture` swap**: The task offered a choice between `Acquire` and `AcqRel` on the swap. Used `AcqRel` since the swap both reads the flag (needs Acquire to observe the Release store from enable) and writes false (needs Release so any subsequent thread observing the flag sees it cleared). Clearer semantics, no performance difference.
+
+2. **`AcqRel` on `HOOK_INSTALLED.swap`**: Mirrors the same reasoning — swap reads and writes atomically, so `AcqRel` is the minimal correct ordering.
+
+3. **Test cleanup approach**: The idempotency test calls `take_hook()` after `install_panic_hook()` to capture the installed hook, then restores it before the second `install_panic_hook()` call, and finally sets a no-op hook at the end. This avoids leaking wrapped hooks that would interfere with other tests' panics.
+
+4. **Pre-existing clippy failures**: `cargo clippy --workspace` reports 3 errors in `crates/fdemon-app/src/input_mouse.rs` (`assert!(true)` on constant fields). These are pre-existing before this task and are the subject of task 02-fix-clippy-assertions. Confirmed via `git stash` check. `fdemon-tui` clippy is clean.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui terminal` - Passed (40 tests, including new `test_install_panic_hook_is_idempotent`)
+- `cargo test --workspace` - Passed (all test result lines show 0 failed)
+- `cargo clippy -p fdemon-tui --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Pre-existing workspace clippy failure**: The full `cargo clippy --workspace` gate fails due to pre-existing `assert!(true)` warnings in `fdemon-app/src/input_mouse.rs` (task 02 scope). This task's changes do not introduce new clippy warnings; `fdemon-tui` is clean.

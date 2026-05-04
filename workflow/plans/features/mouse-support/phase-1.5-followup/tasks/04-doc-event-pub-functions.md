@@ -91,3 +91,33 @@ cargo clippy --workspace --all-targets -- -D warnings
 ### Notes
 
 - The two `pub(crate)` helpers (`key_modifiers_to_set`, `mouse_event_to_input`) are intentionally not in scope — the standard applies to `pub` items, and these are crate-internal. You may add brief `///` comments to them if you wish, but it is not required.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1b31d9948fdb7597
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/event.rs` | Replaced single-line `//!` module header with multi-line block describing all three responsibilities (key conversion, mouse conversion, polling); added full `///` doc comments to `pub fn key_event_to_input` and `pub fn poll`. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Tick on timeout documented accurately**: The `poll` doc for `Ok(Some(Message))` accurately notes that `Message::Tick` is returned on timeout expiry rather than `Ok(None)` (which the task template showed as a stub). The actual code emits `Message::Tick` on the else branch, so the doc reflects reality.
+2. **Pre-existing clippy failures noted**: `cargo clippy --workspace --all-targets -- -D warnings` fails with 3 pre-existing `assertions_on_constants` errors in `crates/fdemon-app/src/input_mouse.rs`. These exist on the branch before this task and are tracked in task 02-fix-clippy-assertions. My `event.rs` changes introduce zero new clippy issues.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-tui --lib` - Passed (898 tests)
+- `cargo doc -p fdemon-tui --no-deps` - Passed (no doc-link errors)
+- `cargo clippy --workspace --all-targets -- -D warnings` - 3 pre-existing failures in `input_mouse.rs` (not caused by this task)
+
+### Risks/Limitations
+
+1. **Pre-existing clippy gate failure**: The full clippy gate does not pass on this branch yet; that is addressed by task 02-fix-clippy-assertions, not by this task.

@@ -34,13 +34,13 @@ The default `enable_mouse: true` is intentionally preserved per product decision
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-rename-click-to-press](tasks/01-rename-click-to-press.md) | Not Started | — | 0.5h | `fdemon-app` + `fdemon-tui` |
-| 2 | [02-fix-clippy-assertions](tasks/02-fix-clippy-assertions.md) | Not Started | 1 | 0.25h | `fdemon-app` |
-| 3 | [03-add-update-mouse-integration-test](tasks/03-add-update-mouse-integration-test.md) | Not Started | 1 | 0.5h | `fdemon-app` |
-| 4 | [04-doc-event-pub-functions](tasks/04-doc-event-pub-functions.md) | Not Started | 1 | 0.5h | `fdemon-tui` |
-| 5 | [05-document-enable-mouse-config](tasks/05-document-enable-mouse-config.md) | Not Started | — | 0.5h | docs |
-| 6 | [06-correct-no-behavior-change-claim](tasks/06-correct-no-behavior-change-claim.md) | Not Started | — | 0.25h | workflow plan |
-| 7 | [07-harden-terminal-internals](tasks/07-harden-terminal-internals.md) | Not Started | — | 1.5h | `fdemon-tui` |
+| 1 | [01-rename-click-to-press](tasks/01-rename-click-to-press.md) | Done | — | 0.5h | `fdemon-app` + `fdemon-tui` |
+| 2 | [02-fix-clippy-assertions](tasks/02-fix-clippy-assertions.md) | Done | 1 | 0.25h | `fdemon-app` |
+| 3 | [03-add-update-mouse-integration-test](tasks/03-add-update-mouse-integration-test.md) | Done | 1 | 0.5h | `fdemon-app` |
+| 4 | [04-doc-event-pub-functions](tasks/04-doc-event-pub-functions.md) | Done | 1 | 0.5h | `fdemon-tui` |
+| 5 | [05-document-enable-mouse-config](tasks/05-document-enable-mouse-config.md) | Done | — | 0.5h | docs |
+| 6 | [06-correct-no-behavior-change-claim](tasks/06-correct-no-behavior-change-claim.md) | Done | — | 0.25h | workflow plan |
+| 7 | [07-harden-terminal-internals](tasks/07-harden-terminal-internals.md) | Done | — | 1.5h | `fdemon-tui` |
 
 ## File Overlap Analysis
 
