@@ -54,10 +54,6 @@ fn test_view_shortcut_regions_registered_at_120_cols() {
 /// The title row is at `y = 1` (inside the glass-block border at y=0).
 /// Shortcut regions are registered only when the full shortcut line fits within
 /// the available width — 120 cols is wide enough for all six.
-///
-/// TODO(phase-5): tag-filter overlay precedence — Phase 5 modal regions may
-/// push additional entries into the registry; this test's `len() == 6` check
-/// will need to be relaxed to `>= 6` if overlays register regions globally.
 #[test]
 fn view_populates_header_shortcut_regions_at_120x24() {
     use fdemon_app::MouseAction;
@@ -88,6 +84,9 @@ fn view_populates_header_shortcut_regions_at_120x24() {
     // Expected order: HotReload, HotRestart, CloseCurrentSession,
     // EnterDevToolsMode, ToggleDap, RequestQuit — matching SHORTCUTS_DEF
     // in widgets/header.rs.
+    // Phase 5: modal overlay regions (tag-filter, Settings panel internals) may push
+    // additional entries into the registry. Update this exact-count assertion to
+    // `>= 6` (or split into per-source counts) when those regions land.
     assert_eq!(shortcut_msgs.len(), 6, "exactly six shortcut regions");
     assert!(shortcut_msgs[0].contains("HotReload"));
     assert!(shortcut_msgs[1].contains("HotRestart"));
@@ -100,9 +99,6 @@ fn view_populates_header_shortcut_regions_at_120x24() {
 /// Snapshot: with three sessions at 120×24 the render produces exactly three
 /// tab regions, each with both left-click (SelectSessionByIndex) and
 /// middle-click (CloseSessionAt) bindings.
-///
-/// TODO(phase-5): tag-filter overlay precedence — Phase 5 modal regions may
-/// register additional entries; update the `len() == 3` check if needed.
 #[test]
 fn view_populates_tab_regions_with_three_sessions() {
     use fdemon_app::{Message, MouseAction};
@@ -131,6 +127,9 @@ fn view_populates_tab_regions_with_three_sessions() {
             )
         })
         .collect();
+    // Phase 5: modal overlay regions may register additional entries alongside tab
+    // regions. Update this exact-count assertion to `>= 3` (or split into per-source
+    // counts) when Phase 5 overlay regions land.
     assert_eq!(tab_regions.len(), 3, "three tabs → three regions");
     for entry in &tab_regions {
         assert!(
@@ -152,10 +151,6 @@ fn view_populates_tab_regions_with_three_sessions() {
 ///
 /// This test locks in the observed behavior: the registry is non-empty in
 /// Settings mode because the header is always rendered.
-///
-/// TODO(phase-5): tag-filter overlay precedence — when Phase 5 wires the
-/// Settings panel's internal regions, this test should be updated to also
-/// verify that panel regions exist alongside header regions.
 #[test]
 fn view_header_regions_present_in_settings_mode_because_header_always_renders() {
     use fdemon_app::state::UiMode;
@@ -174,7 +169,9 @@ fn view_header_regions_present_in_settings_mode_because_header_always_renders() 
 
     // The header IS rendered in Settings mode (before the modal overlay).
     // Shortcut regions are therefore present at 120 cols.
-    // Phase 5 will add Settings-panel-internal regions on top of these.
+    // Phase 5: when the Settings panel wires its internal regions, update this
+    // assertion to also verify that panel regions exist alongside header regions
+    // (e.g. split into per-source counts or check specific panel-region entries).
     assert!(
         !regions.is_empty(),
         "header is rendered in Settings mode — registry must be non-empty at 120 cols"
