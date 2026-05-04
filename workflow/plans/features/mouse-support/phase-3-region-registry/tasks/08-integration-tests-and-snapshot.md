@@ -310,3 +310,41 @@ The third test is intentionally exploratory — when implementing, the implement
 - `UpdateResult::message` is the canonical way `update()` chains a follow-up message. The engine re-enters `update()` with the follow-up; tests must do the same one-step recursion to observe the final state.
 - The Settings-mode test is a **probe** — it documents whatever behavior the implementation produces. Phase 5 will wire panel-internal regions; Phase 3 only needs to confirm the registry behaves sanely outside of Normal mode (does not panic, does not record obviously-wrong regions).
 - Add a brief `// TODO(phase-5): tag-filter overlay precedence` note next to any test that will need updating when Phase 5's modal layer arrives. This documents the deferred work without blocking Phase 3.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `mouse_phase3_tests` module with 5 end-to-end click tests |
+| `crates/fdemon-tui/src/render/tests.rs` | Added 3 render-level snapshot/probe tests for registry contents |
+
+### Notable Decisions/Tradeoffs
+
+1. **Settings-mode probe assertion**: The task specified this test as exploratory. After inspecting `render/mod.rs`, the header IS always rendered before the modal overlay match — so the Settings mode assertion is `!regions.is_empty()` (non-empty) rather than `is_empty()`. This is documented in the test with a `TODO(phase-5)` note.
+
+2. **`Message` import in first render test**: The `view_populates_header_shortcut_regions_at_120x24` test uses `format!("{:?}", m)` to check message names without needing the `Message` type identifier directly — only `MouseAction` is imported. The second test imports `{Message, MouseAction}` (alphabetical order per rustfmt) for pattern matching.
+
+3. **Busy-gate test session setup**: Used `mark_started` + `start_reload` to put the session into `AppPhase::Reloading`, which is what `any_session_busy()` checks. This matches the pattern used by the existing `scroll_during_reload_does_not_block` test in the same file.
+
+4. **No removal of Task 04 placeholder**: The name `test_view_leaves_mouse_regions_empty_when_no_widget_records` did not exist in the actual file — Task 04 was already superseded by `test_view_shortcut_regions_registered_at_120_cols`. No removal was needed.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app mouse_phase3_tests` - Passed (5 tests)
+- `cargo test -p fdemon-tui view_populates` - Passed (2 tests)
+- `cargo test -p fdemon-tui view_records_no_header` - Passed (1 test)
+- `cargo test --workspace` - Passed (all tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Settings-mode probe**: The assertion `!regions.is_empty()` depends on the header always being rendered before the modal match. If a future refactor changes render order so Settings mode skips header rendering, this test will break (which is the intended behavior — it's a correctness sentinel).
+2. **`view_populates_tab_regions_with_three_sessions` count check**: Asserts exactly 3 tab regions. Phase 5 modal regions may add entries; the TODO comment documents the expected update needed.

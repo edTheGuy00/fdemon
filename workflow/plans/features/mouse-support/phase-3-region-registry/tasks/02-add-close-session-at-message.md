@@ -223,3 +223,39 @@ fn test_close_session_at_zero_when_selected_is_zero_picks_next() {
 - The existing `handle_close_current_session` returns `UpdateResult::action(UpdateAction::DiscoverDevices { flutter })` when no sessions remain after removal AND a Flutter SDK is available. Preserve this path in `close_session_internal`. Only the "len <= 1 → request_quit" early-return is caller-specific.
 - The async `cmd_sender.send(Stop { ... })` task is spawned via `tokio::spawn` inside the helper. Both callers must hit this path identically.
 - If you discover that `SessionManager` needs more than just `session_id_at`, keep additions minimal — the goal is index → SessionId resolution, nothing else.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/message.rs` | Added `CloseSessionAt(usize)` variant with doc comment next to `CloseCurrentSession` |
+| `crates/fdemon-app/src/session_manager.rs` | Added `session_id_at(index)` accessor; fixed `remove_session` to preserve selected session identity when removing a session before the selection |
+| `crates/fdemon-app/src/handler/session_lifecycle.rs` | Extracted `close_session_internal` private helper; refactored `handle_close_current_session` to delegate via it; added new `handle_close_session_at` pub function |
+| `crates/fdemon-app/src/handler/update.rs` | Added `Message::CloseSessionAt(idx)` dispatch arm next to `CloseCurrentSession` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added 4 tests for `CloseSessionAt` covering specific index removal, out-of-range noop, last-session quit, and post-removal selection |
+
+### Notable Decisions/Tradeoffs
+
+1. **`remove_session` selection identity fix**: The acceptance criterion requires that closing a non-selected session preserves the currently selected session's identity. The existing `remove_session` only clamped the index on overflow but did not decrement when removing before the selection. This caused the test to fail (selected index stayed at 1, now pointing to `id3` instead of `id2`). The fix adds a `pos < selected_index` decrement branch, which is correct and backward-compatible — existing tests still pass because all pre-existing test scenarios for `remove_session` either remove the selected session or remove one after it.
+
+2. **`handle_close_current_session` simplification**: The original used a nested `if let Some(...) { ... }` pattern. The refactor converts it to an early return with `let Some(...) else { return ... }`, which is cleaner and makes the delegation to `close_session_internal` explicit.
+
+3. **`close_session_internal` always runs discovery check**: The helper checks `session_manager.is_empty()` after removal and triggers `DiscoverDevices` if a Flutter SDK is available. Both callers (`handle_close_current_session` and `handle_close_session_at`) hit this path identically, as required by the task notes.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (2002 tests in fdemon-app; 0 failures)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (0 warnings)
+
+### Risks/Limitations
+
+1. **`remove_session` behavior change**: The decrement-before-selection fix is a behavior change to an existing public method. All 2002 existing tests pass, and the new logic is semantically correct (preserving session identity), but any external consumer relying on index-preserving behavior (rather than identity-preserving) would see a difference. In practice, all callers in this codebase care about which session is selected, not its index.

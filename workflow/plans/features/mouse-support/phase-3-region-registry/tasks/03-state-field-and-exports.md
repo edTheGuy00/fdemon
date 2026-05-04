@@ -121,3 +121,37 @@ Also touch the existing `Debug` smoke test if any — `AppState` derives `Debug`
 - This task is the bridge between Task 01 (pure types) and the TUI/handler tasks (which need `state.mouse_regions` to exist). It is intentionally tiny — a single field, two re-exports.
 - Do NOT add hit-test helpers on `AppState` here. Task 05 owns the take/hit-test/put-back dance in `handler/mouse/normal.rs`.
 - If `AppState`'s `Debug` derive starts emitting noisy `MouseRegions` content in test failures, consider adding a manual `Debug` impl that elides the field. Defer unless someone complains — for now, an empty registry's debug output is just `MouseRegions { entries: [] }`, which is harmless.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | Removed `#![allow(dead_code)]`; added `MouseRegionsCell` newtype (wraps `Cell<MouseRegions>`, provides manual `Debug` impl); added `use std::cell::Cell;` import |
+| `crates/fdemon-app/src/state.rs` | Added `use crate::mouse_regions::{MouseRegions, MouseRegionsCell};`; added `pub mouse_regions: MouseRegionsCell` field with full doc block; initialized in `with_settings`; added two tests |
+| `crates/fdemon-app/src/lib.rs` | Promoted `pub(crate) mod mouse_regions` to `pub mod`; added `pub use mouse_regions::{MouseAction, MouseRect, MouseRegionEntry, MouseRegions, MouseRegionsBuilder, MouseRegionsCell}` re-export |
+
+### Notable Decisions/Tradeoffs
+
+1. **`MouseRegionsCell` newtype instead of bare `Cell<MouseRegions>`**: `Cell<T>` only derives `Debug` when `T: Copy`. `MouseRegions` holds a `Vec` so cannot be `Copy`. Rather than removing `#[derive(Debug)]` from `AppState` (which would require a large manual impl), a thin `MouseRegionsCell` newtype was added to `mouse_regions.rs`. It delegates `take()`/`set()` to the inner `Cell` and provides a minimal `Debug` impl showing only the type name. The public API and lifecycle semantics are identical to `Cell<MouseRegions>`. `MouseRegionsCell` is also exported from `lib.rs` since downstream TUI code may need to name the field type.
+
+2. **`#![allow(dead_code)]` removed**: The module is now `pub` and `AppState` uses `MouseRegionsCell`, so all previously dead items are reachable. No suppression needed.
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2015 tests)
+- `cargo test -p fdemon-app mouse_regions` - Passed (13 tests including 2 new state tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo fmt --all -- --check` - Passed
+
+### Risks/Limitations
+
+1. **Acceptance criteria specifies `Cell<MouseRegions>` exactly**: The field is `MouseRegionsCell` (a newtype over `Cell<MouseRegions>`) rather than the literal type. This is a necessary deviation to satisfy `#[derive(Debug)]` on `AppState`. The semantics are identical and the newtype is fully transparent.

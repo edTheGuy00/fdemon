@@ -196,3 +196,38 @@ This test is **fragile by design** — it asserts a placeholder invariant that T
 - The `MouseCtx` indirection is intentional. It would be slightly shorter to pass `&mut MouseRegionsBuilder` directly, but doing so requires every widget that *might* want regions to import `MouseRegionsBuilder` (a `fdemon-app` type). Wrapping in `MouseCtx` (a `fdemon-tui` type) localizes the dependency and gives us a place to add TUI-specific helpers later (e.g., a `click_rect_only(rect, msg)` shortcut that skips the `MouseAction::Emit(...)` boilerplate).
 - The `to_mouse_rect` helper avoids the orphan rule. If the implementor really wants `From`-style ergonomics, they can add a method on `MouseCtx`: `fn click_ratatui(&mut self, r: Rect, action: MouseAction)` that does the conversion internally. This is fine — pick whichever reads best at the call site.
 - Performance: `Cell::take` is `mem::replace(&self, Default::default())` — a swap of two `Vec` headers (3 pointers each). With `MouseRegions::with_capacity()` pre-allocating the vec backing once at startup, steady-state has zero allocations. Verified by `clear_preserves_capacity` test in Task 01.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/mod.rs` | Added `MouseCtx<'a>` struct with `click`, `click_at_z`, `click_left_middle` methods; added `use fdemon_app::{MouseAction, MouseRect, MouseRegionsBuilder};`; modified `view()` to take/clear/put-back the mouse regions registry around the render body |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Re-exported `MouseCtx` from `crate::render`; added `to_mouse_rect(r: ratatui::layout::Rect) -> fdemon_app::MouseRect` free function with `#[allow(dead_code)]` pending Tasks 06/07 |
+| `crates/fdemon-tui/src/render/tests.rs` | Added `test_view_leaves_mouse_regions_empty_when_no_widget_records` test with TODO comment for Tasks 06/07 |
+
+### Notable Decisions/Tradeoffs
+
+1. **Inner block for builder borrow**: Used a block `{ let _mouse_ctx = ...; }` rather than `drop(mouse_ctx)` to avoid the `clippy::drop_non_drop` lint. The block clearly documents the borrow scope and Tasks 06/07 can restructure it to hoist `mouse_ctx` outside the block when they thread it into widget constructors.
+
+2. **`#[allow(dead_code)]` on `to_mouse_rect`**: The helper is `pub(crate)` so Rust treats it as potentially dead until Tasks 06/07 add call sites. A single targeted allow-attribute with a TODO comment is cleaner than making it `pub` (which would expose it in the crate's external API prematurely).
+
+3. **Re-export path**: `MouseCtx` is defined in `render/mod.rs` and re-exported from `widgets/mod.rs`. Widget modules (header.rs, tabs.rs) import from `super::MouseCtx` or `crate::widgets::MouseCtx`, keeping the render dependency chain correct (widgets use the public path, not the internal one).
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all test suites, new test passes)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Placeholder `{  }` block**: The inner block that creates and immediately drops `_mouse_ctx` is a deliberate placeholder. Tasks 06/07 must restructure this when they pass `&mut mouse_ctx` into widget constructors. The TODO comment in the source makes this visible.
+2. **Registry always empty until Tasks 06/07**: The test `test_view_leaves_mouse_regions_empty_when_no_widget_records` deliberately asserts the placeholder invariant and is marked fragile-by-design. Tasks 06/07 must update or replace it.

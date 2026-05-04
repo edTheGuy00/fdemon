@@ -401,3 +401,39 @@ mod tests {
 - Some test cases reference `Message::CloseSessionAt(0)` which is added in Task 02. If this task lands first, substitute any existing `Message` variant in the affected test (`click_left_middle_binds_both_buttons`) and add a TODO to switch when Task 02 lands. The orchestrator should ideally land Task 02 alongside Task 01 so the test can use the real variant from the start (both are Wave 1 and parallelizable).
 - `MouseRegionEntry` is `Clone` but we never clone it on the hot path — only by-reference access via `hit_test`. Cloning is a convenience for testing.
 - The capacity hint of 32 in `with_capacity()` covers the worst-case Phase 5 scenarios (header + 9 tabs + 9 device rows + 6 settings rows = 25); 32 leaves slack for future widgets.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | New file: `MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, 11 unit tests |
+| `crates/fdemon-app/src/lib.rs` | Added `pub(crate) mod mouse_regions;` declaration |
+
+### Notable Decisions/Tradeoffs
+
+1. **`MouseAction::Emit(Box<Message>)` instead of `Emit(Message)`**: The `Message` enum is ~352 bytes (largest variant). Boxing keeps `MouseAction` pointer-sized and avoids the clippy `large_enum_variant` warning. Added a `MouseAction::emit(msg)` convenience constructor to keep call sites ergonomic.
+
+2. **`hit_test` uses `enumerate() + max_by_key((z_index, push_index))`**: The original task spec's note described `rev().max_by_key(z_index)` but that implementation would return the *first-pushed* entry at same-z, contradicting both the test expectation and painter's algorithm semantics (last-drawn covers earlier). The correct fix uses a composite key `(z_index, push_index)` — higher push index wins ties — which matches the test's expectation of last-pushed winning at same z.
+
+3. **`#![allow(dead_code)]` at module level**: All public items are unused until Task 03 wires `MouseRegions` into `AppState` and Task 04+ adds widget call sites. Module-level allow avoids 9 individual `#[allow(dead_code)]` attributes and is documented with a comment explaining the intent.
+
+4. **`Message::CloseCurrentSession` substituted for `Message::CloseSessionAt(0)`**: Task 02 (which adds `CloseSessionAt`) had not landed. Used `CloseCurrentSession` with a TODO comment in `click_left_middle_binds_both_buttons` test.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app mouse_regions` - Passed (11 tests)
+- `cargo test --workspace` - Passed (all tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **`Box<Message>` API divergence from task spec**: The task spec shows `Emit(Message)` but the implementation uses `Emit(Box<Message>)` to pass clippy. Task 03 (re-exports) and widget call sites (Tasks 05-07) will need to use `MouseAction::emit(msg)` constructor. This is a minor API shape difference that is clearly documented.

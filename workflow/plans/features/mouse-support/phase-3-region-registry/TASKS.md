@@ -72,14 +72,14 @@ Wave 5:└────────┬─────────┘
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-mouse-regions-module](tasks/01-mouse-regions-module.md) | Not Started | — | 2h | `fdemon-app` |
-| 2 | [02-add-close-session-at-message](tasks/02-add-close-session-at-message.md) | Not Started | — | 1h | `fdemon-app` |
-| 3 | [03-state-field-and-exports](tasks/03-state-field-and-exports.md) | Not Started | 1 | 0.5h | `fdemon-app` |
-| 4 | [04-tui-mouse-ctx-plumbing](tasks/04-tui-mouse-ctx-plumbing.md) | Not Started | 3 | 1.5h | `fdemon-tui` |
-| 5 | [05-handle-press-normal-mode](tasks/05-handle-press-normal-mode.md) | Not Started | 3 | 1h | `fdemon-app` |
-| 6 | [06-header-bracket-regions](tasks/06-header-bracket-regions.md) | Not Started | 4 | 1.5h | `fdemon-tui` |
-| 7 | [07-tabs-and-device-pill-regions](tasks/07-tabs-and-device-pill-regions.md) | Not Started | 2, 4 | 1.5h | `fdemon-tui` |
-| 8 | [08-integration-tests-and-snapshot](tasks/08-integration-tests-and-snapshot.md) | Not Started | 5, 6, 7 | 1h | `fdemon-app`, `fdemon-tui` |
+| 1 | [01-mouse-regions-module](tasks/01-mouse-regions-module.md) | Done | — | 2h | `fdemon-app` |
+| 2 | [02-add-close-session-at-message](tasks/02-add-close-session-at-message.md) | Done | — | 1h | `fdemon-app` |
+| 3 | [03-state-field-and-exports](tasks/03-state-field-and-exports.md) | Done | 1 | 0.5h | `fdemon-app` |
+| 4 | [04-tui-mouse-ctx-plumbing](tasks/04-tui-mouse-ctx-plumbing.md) | Done | 3 | 1.5h | `fdemon-tui` |
+| 5 | [05-handle-press-normal-mode](tasks/05-handle-press-normal-mode.md) | Done | 3 | 1h | `fdemon-app` |
+| 6 | [06-header-bracket-regions](tasks/06-header-bracket-regions.md) | Done | 4 | 1.5h | `fdemon-tui` |
+| 7 | [07-tabs-and-device-pill-regions](tasks/07-tabs-and-device-pill-regions.md) | Done (manual reconciliation) | 2, 4 | 1.5h | `fdemon-tui` |
+| 8 | [08-integration-tests-and-snapshot](tasks/08-integration-tests-and-snapshot.md) | Done (CONCERN: Settings-mode header regions are active — phase-plan gap to revisit) | 5, 6, 7 | 1h | `fdemon-app`, `fdemon-tui` |
 
 ## File Overlap Analysis
 

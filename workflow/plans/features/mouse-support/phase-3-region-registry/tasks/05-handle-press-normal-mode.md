@@ -357,3 +357,33 @@ Update the existing `test_press_no_op_in_every_mode` test in `mod.rs::tests`: it
 - Why not gate `ClearLogs` clicks like the keyboard handler does? `ClearLogs` is keyboard-only by design (PLAN.md "Edge Cases & Risks" — `clear_logs` collision). No widget will ever register a region whose action is `Message::ClearLogs`. The busy gate here only matches what the registry can produce.
 - The `_mods: KeyModSet` parameter is intentionally unused. Future phases may wire Shift+click → "open in new session" etc. Keep the parameter so the signature is forward-compatible.
 - `use crate::test_utils::*` in tests: confirm the actual path. If the test helpers are in a different location (e.g., `crate::handler::tests`), copy the construct-busy-session pattern from `handler/tests.rs` rather than dragging in test_utils.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | Added `handle_press` function with tag-filter guard, right-click guard, hit-test, and busy gate; added 8 new tests in `mod tests`; moved `MouseAction`/`MouseRect`/`MouseRegions` imports into `#[cfg(test)]` scope |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `MouseButton` to top-level `use`; split `Press` arm out of the `None` catch-all into a `handle_press` dispatcher function; replaced `test_press_no_op_in_every_mode` with `test_press_no_op_in_every_mode_without_regions`; added 3 new dispatcher tests |
+
+### Notable Decisions/Tradeoffs
+
+1. **Import placement**: `MouseAction`/`MouseRect`/`MouseRegions` are only referenced by name in the test module, so they were placed inside `#[cfg(test)]` to avoid clippy unused-import warnings in production builds.
+2. **take/put-back pattern**: The registry is taken, hit-tested, then restored before the busy gate — this ensures the registry is always restored even if the busy gate returns `None`.
+3. **Local `test_device` helper**: No project-level `test_utils` module exists; the pattern from `handler/tests.rs` was copied locally into `normal.rs::tests`.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib handler::mouse` — 68 passed, 0 failed
+- `cargo test --workspace --lib` — 4,880 passed (2027 + 372 + 740 + 842 + 899), 0 failed
+- `cargo clippy -p fdemon-app` — 0 warnings, 0 errors
+
+### Risks/Limitations
+
+1. **Phase 3 scope**: DevTools/Settings/dialog modes return `None` for press events by design; they will be wired in Phase 4/5.

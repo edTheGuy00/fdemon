@@ -248,3 +248,42 @@ fn header_shortcut_rect_is_two_cells_wide() {
 - Do NOT register regions in multi-session mode's tabs row (`render_title_row(..., false)` branch where `show_device == false`). The tabs row is owned by `SessionTabs::render` (Task 07).
 - `MainHeader::with_mouse(...)` is mentioned for ergonomic completeness in Acceptance Criteria 1, but the recommended Option B (free function with explicit ctx) makes it unnecessary. Either approach is acceptable as long as the existing `Widget::render` continues to work for tests.
 - The `frame.buffer_mut()` access pattern is well-supported in ratatui 0.30. If unfamiliar, look at how other tests in `render/tests.rs` use the buffer directly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-af3d25f9bb66e740b
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `render_main_header` free function (Option B), updated `Widget::render` to delegate with `ctx=None`, added `SHORTCUTS_DEF` constant, `register_shortcut_clicks` helper, updated `render_title_row` signature to accept `Option<&mut MouseCtx<'_>>`, added three new tests |
+| `crates/fdemon-tui/src/widgets/mod.rs` | Made `header` module public (`pub mod header`), restored `#[allow(dead_code)]` on `to_mouse_rect` (Task 07 will use it), updated doc comment |
+| `crates/fdemon-tui/src/render/mod.rs` | Hoisted `mouse_ctx` out of inner block, replaced `frame.render_widget(header, ...)` with `widgets::header::render_main_header(...)`, removed TODO placeholder comment |
+| `crates/fdemon-tui/src/render/tests.rs` | Replaced empty-region assertion with `test_view_shortcut_regions_registered_at_120_cols` |
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | Removed pre-existing unused `MouseRegions` import (clippy `-D warnings` would have failed workspace otherwise) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option B (free function) over Option A (builder)**: Following the task recommendation — `render_main_header(area, buf, &header, ctx)` keeps lifetimes simple and keeps the existing `Widget::render` path unchanged for tests.
+
+2. **`SHORTCUTS_DEF` uses `fn() -> Message`**: Function pointers rather than `Message` directly avoids storing a `Vec<Message>` or requiring `Clone` on the constant. `#[allow(clippy::type_complexity)]` suppresses the clippy lint since a type alias would not improve readability here.
+
+3. **`register_shortcut_clicks` scoped to the `shortcuts_x + shortcuts_width <= area.x + area.width` guard**: Regions are only registered when the shortcut line is actually painted to the buffer, matching acceptance criteria 5.
+
+4. **NLL borrow release**: `mouse_ctx`'s borrow on `regions` ends at its last use (the `render_main_header` call), so `state.mouse_regions.set(regions)` at the end of `view` is allowed without an explicit `drop()`.
+
+### Testing Performed
+
+- `cargo test --workspace` — All tests pass (0 failures across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+- `header_records_six_bracketed_shortcut_regions_at_120x24` — PASS (6 regions found)
+- `header_skips_region_recording_when_shortcuts_clipped` — PASS (0 regions at 40 cols)
+- `header_shortcut_rect_is_two_cells_wide` — PASS (HotReload region width=2, height=1)
+
+### Risks/Limitations
+
+1. **Span-width arithmetic**: The `segment_width = (4 + label.len()) as u16` formula in `register_shortcut_clicks` must stay in sync with the actual rendered spans. If the header label text changes (e.g., `"Run  "` → `"Reload  "`), the click region x-coordinates will drift. Tests catch this as long as `test_header_with_keybindings` checks the actual rendered text.
