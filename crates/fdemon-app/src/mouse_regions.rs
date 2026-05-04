@@ -70,6 +70,24 @@ pub enum MouseAction {
     Emit(Box<Message>),
     /// Emit a [`Message`] computed from the click coordinates.
     /// Used in Phase 4+ for log-row clicks, frame-bar clicks, etc.
+    ///
+    /// # Invariants for implementors
+    ///
+    /// - **Offset arithmetic must be saturating.** Any subtraction of a widget
+    ///   origin from `(x, y)` must use `saturating_sub` or `checked_sub`. Bare
+    ///   `u16` subtraction can underflow (wrap to large values or panic in debug
+    ///   builds) if the cursor sits at the left/top edge of a region.
+    ///
+    /// - **Use `fn` pointers, not closures.** This variant stores a bare
+    ///   `fn(u16, u16) -> Message` (a function pointer) deliberately — it is
+    ///   zero-cost to copy and requires no heap allocation per region. The
+    ///   [`MouseAction`] enum therefore stays trivially `Clone` and `Copy`-able
+    ///   for the function-pointer arm.
+    ///
+    /// - **Do not widen to `Box<dyn Fn>`** if a future use-case needs to capture
+    ///   state. Instead, add a *new* variant (e.g.,
+    ///   `EmitWithCoordCaptured(Box<dyn Fn(u16, u16) -> Message + Send>)`) so
+    ///   that the zero-allocation path is preserved for the common case.
     EmitWithCoord(fn(u16, u16) -> Message),
 }
 
@@ -84,7 +102,7 @@ impl MouseAction {
     /// stored function.
     pub fn resolve(&self, x: u16, y: u16) -> Message {
         match self {
-            MouseAction::Emit(msg) => *msg.clone(),
+            MouseAction::Emit(msg) => (**msg).clone(),
             MouseAction::EmitWithCoord(f) => f(x, y),
         }
     }
@@ -179,8 +197,9 @@ impl MouseRegions {
 /// (it holds a `Vec`), so this newtype provides the same take/set API as
 /// `Cell<MouseRegions>` while allowing `AppState` to keep `#[derive(Debug)]`.
 ///
-/// The `Debug` output shows only the entry count — sufficient for test failures
-/// and log output without spamming large entry lists.
+/// Shows only the type name (the inner `Cell<MouseRegions>` cannot be inspected
+/// through `&self` without a `take`/`set` round-trip; debug-printing during a
+/// frame would corrupt the registry).
 pub struct MouseRegionsCell(Cell<MouseRegions>);
 
 impl MouseRegionsCell {
@@ -321,8 +340,7 @@ mod tests {
         regions.builder().click_left_middle(
             MouseRect::new(0, 0, 10, 1),
             MouseAction::emit(Message::SelectSessionByIndex(0)),
-            // TODO: switch to Message::CloseSessionAt(0) when Task 02 lands.
-            MouseAction::emit(Message::CloseCurrentSession),
+            MouseAction::emit(Message::CloseSessionAt(0)),
         );
         let left = regions.hit_test(0, 0, MouseButton::Left).unwrap();
         let middle = regions.hit_test(0, 0, MouseButton::Middle).unwrap();
