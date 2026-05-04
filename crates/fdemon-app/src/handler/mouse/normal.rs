@@ -60,7 +60,12 @@ pub(super) fn handle_press(
     // keyboard handler. Mirror that here so a click during a reload is a
     // silent no-op rather than queuing a second reload.
     let busy = state.session_manager.any_session_busy();
-    if busy && matches!(msg, Message::HotReload | Message::HotRestart | Message::StopApp) {
+    if busy
+        && matches!(
+            msg,
+            Message::HotReload | Message::HotRestart | Message::StopApp
+        )
+    {
         return None;
     }
 
@@ -140,9 +145,10 @@ mod tests {
     fn press_right_button_is_no_op_even_with_matching_region() {
         let state = AppState::new();
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(0, 0, 10, 1), MouseAction::emit(Message::HotReload));
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
         state.mouse_regions.set(regions);
 
         let result = handle_press(&state, 0, 0, MouseButton::Right, KeyModSet::NONE);
@@ -153,9 +159,10 @@ mod tests {
     fn press_left_on_recorded_region_returns_emit_message() {
         let state = AppState::new();
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(5, 0, 3, 1), MouseAction::emit(Message::HotReload));
+        regions.builder().click(
+            MouseRect::new(5, 0, 3, 1),
+            MouseAction::emit(Message::HotReload),
+        );
         state.mouse_regions.set(regions);
 
         let result = handle_press(&state, 6, 0, MouseButton::Left, KeyModSet::NONE);
@@ -166,9 +173,10 @@ mod tests {
     fn press_middle_on_left_only_region_is_none() {
         let state = AppState::new();
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(0, 0, 10, 1), MouseAction::emit(Message::HotReload));
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
         state.mouse_regions.set(regions);
 
         let result = handle_press(&state, 0, 0, MouseButton::Middle, KeyModSet::NONE);
@@ -223,27 +231,33 @@ mod tests {
         assert!(state.session_manager.any_session_busy(), "precondition");
 
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(0, 0, 3, 1), MouseAction::emit(Message::HotReload));
-        regions
-            .builder()
-            .click(MouseRect::new(5, 0, 3, 1), MouseAction::emit(Message::RequestQuit));
+        regions.builder().click(
+            MouseRect::new(0, 0, 3, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        regions.builder().click(
+            MouseRect::new(5, 0, 3, 1),
+            MouseAction::emit(Message::RequestQuit),
+        );
         state.mouse_regions.set(regions);
 
         let reload = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
         let quit = handle_press(&state, 5, 0, MouseButton::Left, KeyModSet::NONE);
         assert!(reload.is_none(), "HotReload gated by busy");
-        assert!(matches!(quit, Some(Message::RequestQuit)), "RequestQuit not gated");
+        assert!(
+            matches!(quit, Some(Message::RequestQuit)),
+            "RequestQuit not gated"
+        );
     }
 
     #[test]
     fn press_take_putback_preserves_registry() {
         let state = AppState::new();
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(0, 0, 10, 1), MouseAction::emit(Message::HotReload));
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
         state.mouse_regions.set(regions);
 
         let _ = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
@@ -259,9 +273,10 @@ mod tests {
         let mut state = AppState::new();
         state.tag_filter_visible = true;
         let mut regions = state.mouse_regions.take();
-        regions
-            .builder()
-            .click(MouseRect::new(0, 0, 10, 1), MouseAction::emit(Message::HotReload));
+        regions.builder().click(
+            MouseRect::new(0, 0, 10, 1),
+            MouseAction::emit(Message::HotReload),
+        );
         state.mouse_regions.set(regions);
 
         let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);

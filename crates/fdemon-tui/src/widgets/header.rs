@@ -16,7 +16,7 @@ use fdemon_app::{Message, MouseAction, MouseRect};
 use crate::theme::{icons::IconSet, palette, styles};
 use crate::widgets::MouseCtx;
 
-use super::SessionTabs;
+use super::tabs::render_session_tabs;
 
 /// App version from Cargo.toml, surfaced in the title bar
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -112,8 +112,7 @@ pub fn render_main_header(
                 height: inner.height.saturating_sub(1),
             };
             if let Some(session_manager) = header.session_manager {
-                let tabs = SessionTabs::new(session_manager, header.icons);
-                tabs.render(tabs_area, buf);
+                render_session_tabs(tabs_area, buf, session_manager, header.icons, ctx);
             }
         } else {
             // Not enough space for both rows, just render title
@@ -614,7 +613,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
 
-        terminal.draw(|f| crate::render::view(f, &mut state)).unwrap();
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
 
         let regions = state.mouse_regions.take();
         let actions: Vec<_> = regions
@@ -675,7 +676,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
 
-        terminal.draw(|f| crate::render::view(f, &mut state)).unwrap();
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
 
         let regions = state.mouse_regions.take();
         // No bracketed-shortcut regions at this width.
@@ -698,7 +701,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         let mut state = AppState::new();
 
-        terminal.draw(|f| crate::render::view(f, &mut state)).unwrap();
+        terminal
+            .draw(|f| crate::render::view(f, &mut state))
+            .unwrap();
 
         let regions = state.mouse_regions.take();
         // Find the HotReload region; it should be exactly 2 cells wide.

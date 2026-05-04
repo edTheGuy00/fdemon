@@ -128,7 +128,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Pass `&mut mouse_ctx` so header shortcut regions are registered (Task 06).
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager);
-    widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, Some(&mut mouse_ctx));
+    widgets::header::render_main_header(
+        areas.header,
+        frame.buffer_mut(),
+        &header,
+        Some(&mut mouse_ctx),
+    );
 
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
