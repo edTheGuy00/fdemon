@@ -539,7 +539,7 @@ Both variants invoke the resolved absolute path directly via `Command::new`. The
 | `handler/` | `update()` function and handler helpers (TEA) |
 | `handler/mouse/` | Per-mode mouse event handlers; `mod.rs` dispatches by `UiMode`, sub-modules handle scroll and click hit-testing per mode |
 | `input_mouse.rs` | `MouseInput`, `MouseButton`, `ScrollDir`, `KeyModSet` — raw mouse event types |
-| `mouse_regions.rs` | Per-frame click-region registry (`MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, `MouseRegionsCell`). `fdemon-app` does **not** depend on `ratatui`; `MouseRect` mirrors `ratatui::layout::Rect` locally, with conversion handled at the `fdemon-tui` boundary. |
+| `mouse_regions.rs` | Per-frame click-region registry (`MouseRect`, `MouseAction`, `MouseRegionEntry`, `MouseRegions`, `MouseRegionsBuilder`, `MouseRegionsCell`, `MouseRegionGuard`). `fdemon-app` does **not** depend on `ratatui`; `MouseRect` mirrors `ratatui::layout::Rect` locally, with conversion handled at the `fdemon-tui` boundary. |
 | `session/` | `Session`, `SessionHandle`, per-session state: `PerformanceState`, `NetworkState`, `NativeTagState` |
 | `session_manager.rs` | `SessionManager` — manages up to 9 concurrent sessions |
 | `watcher.rs` | `FileWatcher` — watches `lib/` for `.dart` changes, debounces, emits `WatcherEvent` |
@@ -795,29 +795,32 @@ The mouse region registry (`fdemon-app/mouse_regions.rs`) is a per-frame, z-inde
 - `MouseRegionEntry` — A single entry: `rect`, optional `on_left`, optional `on_middle`, and `z_index`.
 - `MouseRegions` — Backing `Vec<MouseRegionEntry>`. `hit_test(x, y, button)` returns the highest-z entry whose rect contains the point and has a binding for the given button; ties at the same `z_index` are broken by last-pushed-wins (later render order wins).
 - `MouseRegionsBuilder` — Borrowed builder with `click(rect, action)`, `click_at_z(rect, action, z)`, and `click_left_middle(rect, left, middle)` helpers. Empty rects are silently skipped.
-- `MouseRegionsCell` — Thin newtype wrapping `Cell<MouseRegions>` with `take()` / `set()` and a custom `Debug` impl.
+- `MouseRegionsCell` — Thin newtype wrapping `Cell<MouseRegions>` with `take_guard()` (canonical accessor), `take()`, `set()`, and a custom `Debug` impl. Production code should use `take_guard()` (see below); `take()` and `set()` remain as low-level primitives available for tests.
+- `MouseRegionGuard<'a>` — RAII guard returned by `MouseRegionsCell::take_guard()`. Holds the `MouseRegions` taken from the cell; on `Drop`, puts it back automatically. Exposes `MouseRegions` via `Deref`/`DerefMut`.
 
 **Per-frame lifecycle (render path):**
 
-1. `render::view()` calls `state.mouse_regions.take()` at frame start, leaving `Default::default()` (an empty, capacity-zero `MouseRegions`) in the cell.
+1. `render::view()` calls `state.mouse_regions.take_guard()` at frame start. The guard takes ownership of the inner `MouseRegions` (leaving `Default::default()` in the cell for the duration of the frame) and exposes it via `Deref`/`DerefMut`.
 2. `regions.clear()` resets the entry list while preserving the `Vec`'s allocated capacity (allocation-free at steady state).
-3. `MouseCtx::new(regions.builder())` wraps the builder for the render body. Widgets that have clickable surfaces accept `Option<&mut MouseCtx<'_>>` and call `ctx.click(...)`, `ctx.click_at_z(...)`, or `ctx.click_left_middle(...)` as they paint. Passing `None` keeps widgets usable in unit tests that render without a registry.
-4. At frame end, `state.mouse_regions.set(regions)` puts the populated registry back in the cell.
+3. `MouseCtx::new(regions.builder())` constructs the per-frame thread-through. Widgets that have clickable surfaces accept `Option<&mut MouseCtx<'_>>` and call `ctx.click(...)`, `ctx.click_at_z(...)`, or `ctx.click_left_middle(...)` as they paint. Passing `None` keeps widgets usable in unit tests that render without a registry.
+4. When the guard goes out of scope at the end of `view()`, its `Drop` impl puts the populated registry back into the cell — no explicit `set()` call is required.
 
 **Per-click lifecycle (handler path):**
 
-On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, `handler/mouse/mod.rs::handle_press` routes to the per-mode handler. For `UiMode::Normal`, `handler/mouse/normal.rs::handle_press` performs the same `take` / `hit_test` / `set` cycle: the registry is drained, consulted, then put back unchanged before the synchronous TEA loop yields. Other `UiMode` variants return `None` until later phases wire their click handlers.
+On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, `handler/mouse/mod.rs::handle_press` routes to the per-mode handler. For `UiMode::Normal`, `handler/mouse/normal.rs::handle_press` uses the same `take_guard()` pattern: a guard wraps the hit-test, ensuring the registry is restored even if the hit-test path panics. Other `UiMode` variants return `None` until later phases wire their click handlers.
 
 Two gate checks sit above the hit-test:
 
 - **Tag-filter overlay gate** (`handler/mouse/normal.rs`): when `state.tag_filter_visible`, clicks in Normal mode are silently dropped — the overlay does not register regions until a later phase, so forwarding clicks would surprise the user.
 - **Busy gate** (`handler/mouse/normal.rs`): `HotReload`, `HotRestart`, and `StopApp` messages resolved from click regions are suppressed when `any_session_busy()` returns `true`, mirroring the equivalent check in `handler/keys.rs`.
 
+**Panic safety:**
+
+Prior to `MouseRegionGuard`, a widget panic between `Cell::take()` and `Cell::set()` would silently leave the registry permanently empty (replaced with `Default::default()`), disabling mouse interaction for the rest of the session with no diagnostic. The guard's `Drop` impl restores the registry on stack unwind, eliminating this failure mode. The lower-level `MouseRegionsCell::{take, set}` methods remain available for tests but should not appear in production code.
+
 **TEA exception note:**
 
 `AppState::mouse_regions` uses `Cell` interior mutability, which is a deliberate exception to the TEA principle that the Model is immutable between update cycles. This is the same exception class as the existing `Cell<usize>` render-hint write-back on `TagFilterUiState`. The registry is purely a render-hint: it carries no business logic, participates in no state equality checks, and is not part of any `EngineEvent`. See `docs/CODE_STANDARDS.md` Principle 3 and `docs/REVIEW_FOCUS.md` "Approved TEA Exception → Current usage" for the canonical list of approved exceptions.
-
-**Forward pointer:** Wave 4 (phase-3.5 Task 09 / Task 11) will introduce `MouseRegionGuard<'_>`, an RAII type that wraps the manual `take` / `set` pairs to restore the registry on drop — including on panic. The lifecycle description above documents the current (manual) mechanism; it will be amended in Task 11 once `MouseRegionGuard` lands.
 
 ---
 
@@ -1543,7 +1546,7 @@ The complete application state, owned by the Engine. Contains:
 - **Device selector state** — Device/emulator selection UI state
 - **Configuration** — Settings, project path, project name
 - **Active session state** — Phase, logs, log view state, app ID, device info, reload count
-- **Mouse region registry** (`mouse_regions: MouseRegionsCell`) — Per-frame click-region table; a TEA-approved render-hint exception (see "Mouse Region Registry" in Key Patterns above)
+- **Mouse region registry** (`mouse_regions: MouseRegionsCell`) — Per-frame click-region table; a TEA-approved render-hint exception (see "Mouse Region Registry" in Key Patterns above). Access via `take_guard()` → `MouseRegionGuard<'a>` (RAII, panic-safe); `take()`/`set()` are low-level primitives for tests only.
 
 ### Message (Events)
 
