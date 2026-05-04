@@ -8,12 +8,61 @@ use std::collections::VecDeque;
 use super::{layout, widgets};
 use crate::widgets::LogViewState;
 use fdemon_app::state::{AppState, LoadingState, UiMode};
+use fdemon_app::{MouseAction, MouseRect, MouseRegionsBuilder};
 use fdemon_core::LogEntry;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
+
+/// Borrowed bridge between [`view`] and widgets that record clickable regions
+/// during render.
+///
+/// `MouseCtx` exists so widgets do not need to thread `&mut MouseRegionsBuilder`
+/// directly (which collides ergonomically with the `Widget::render` trait that
+/// only sees `area` and `buf`). Widgets that need region recording accept an
+/// `Option<&mut MouseCtx<'_>>` constructor argument; passing `None` keeps the
+/// widget usable in tests that render without a registry.
+///
+/// # Temporary placeholder note
+///
+/// Phase 3 Tasks 06 (header bracket regions) and 07 (tab/device-pill regions)
+/// will pass `&mut mouse_ctx` into `MainHeader` and `SessionTabs` respectively.
+/// Until those tasks land the ctx is constructed but not forwarded to any widget.
+#[derive(Debug)]
+pub struct MouseCtx<'a> {
+    builder: MouseRegionsBuilder<'a>,
+}
+
+impl<'a> MouseCtx<'a> {
+    /// Wrap a [`MouseRegionsBuilder`] in a [`MouseCtx`].
+    pub fn new(builder: MouseRegionsBuilder<'a>) -> Self {
+        Self { builder }
+    }
+
+    /// Register a left-click region at `z_index = 0`.
+    pub fn click(&mut self, rect: MouseRect, action: MouseAction) {
+        self.builder.click(rect, action);
+    }
+
+    /// Register a left-click region at a specific `z_index`. Phase 5
+    /// dialogs/overlays use `z_index = 1`; Phase 3 widgets stay at `0`.
+    pub fn click_at_z(&mut self, rect: MouseRect, action: MouseAction, z: u8) {
+        self.builder.click_at_z(rect, action, z);
+    }
+
+    /// Register a region with separate left and middle bindings (used by
+    /// session tabs: left = select, middle = close).
+    pub fn click_left_middle(
+        &mut self,
+        rect: MouseRect,
+        on_left: MouseAction,
+        on_middle: MouseAction,
+    ) {
+        self.builder.click_left_middle(rect, on_left, on_middle);
+    }
+}
 
 use crate::theme::{icons::IconSet, palette};
 
@@ -53,6 +102,24 @@ fn render_search_overlay(
 /// except for widget state that tracks rendering info (scroll position).
 pub fn view(frame: &mut Frame, state: &mut AppState) {
     let area = frame.area();
+
+    // ── Mouse region registry: take, clear, render, put back ─────────────
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    let mut regions = state.mouse_regions.take();
+    regions.clear();
+
+    // Construct the borrowed builder and immediately release the borrow so
+    // Tasks 06/07 can thread `&mut mouse_ctx` into MainHeader and SessionTabs.
+    //
+    // TODO(phase-3): Tasks 06 (header bracket regions) and 07 (tab/device-pill
+    // regions) move `mouse_ctx` construction here (outside the inner block),
+    // remove the inner-block wrapper, and pass `&mut mouse_ctx` into widget
+    // constructors. The inner block here is only a placeholder that releases
+    // the builder borrow so `regions` is free for `set()` at end of scope.
+    {
+        let _mouse_ctx = MouseCtx::new(regions.builder());
+        // borrow of `regions` via `_mouse_ctx.builder` ends here
+    }
 
     // Fill entire terminal with deepest background color
     let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
@@ -262,6 +329,10 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
             frame.render_widget(devtools, areas.logs);
         }
     }
+
+    // ── Put the populated registry back ──────────────────────────────────
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    state.mouse_regions.set(regions);
 }
 
 /// Render loading screen during startup initialization (Task 08d)

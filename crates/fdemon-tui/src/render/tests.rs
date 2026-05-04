@@ -23,6 +23,31 @@ fn render_screen(state: &mut AppState) -> String {
 }
 
 // ===========================================================================
+// Mouse Region Registry Tests
+// ===========================================================================
+
+// TODO(phase-3): Tasks 06 (header regions) and 07 (tab regions) will
+// change this assertion. Replace with snapshot tests on the populated
+// registry contents.
+#[test]
+fn test_view_leaves_mouse_regions_empty_when_no_widget_records() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    let mut state = AppState::new();
+
+    terminal.draw(|f| view(f, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    assert!(
+        regions.is_empty(),
+        "no widget records regions yet (Phase 3 Tasks 06/07 will change this)"
+    );
+}
+
+// ===========================================================================
 // Normal Mode Snapshots
 // ===========================================================================
 
