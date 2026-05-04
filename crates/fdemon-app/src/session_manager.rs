@@ -912,6 +912,92 @@ mod tests {
         assert!(manager.get(ids[5]).is_some());
     }
 
+    // ── remove_session selected-index branch tests ───────────────────────────
+
+    #[test]
+    fn test_remove_session_pre_selected_preserves_identity() {
+        // Removing a session whose index is *before* the selected one should
+        // decrement selected_index so that the same session remains selected.
+        let mut manager = SessionManager::new();
+        let id1 = manager.create_session(&test_device("d1", "D1")).unwrap();
+        let id2 = manager.create_session(&test_device("d2", "D2")).unwrap();
+        let id3 = manager.create_session(&test_device("d3", "D3")).unwrap();
+
+        // Select id2 (index 1)
+        assert!(manager.select_by_index(1));
+        assert_eq!(manager.selected_id(), Some(id2));
+
+        // Remove id1 (index 0) — before the selection
+        manager.remove_session(id1);
+
+        // selected_index should have decremented from 1 → 0, but the *identity*
+        // (id2) of the selected session must be preserved.
+        assert_eq!(manager.len(), 2);
+        assert!(manager.get(id1).is_none());
+        assert!(manager.get(id3).is_some());
+        assert_eq!(manager.selected_index(), 0);
+        assert_eq!(
+            manager.selected_id(),
+            Some(id2),
+            "removing a session before the selection must preserve the selected session's identity"
+        );
+    }
+
+    #[test]
+    fn test_remove_session_post_selected_leaves_selection_unchanged() {
+        // Removing a session whose index is *after* the selected one must leave
+        // selected_index untouched (the same session stays selected).
+        let mut manager = SessionManager::new();
+        let id1 = manager.create_session(&test_device("d1", "D1")).unwrap();
+        let id2 = manager.create_session(&test_device("d2", "D2")).unwrap();
+        let id3 = manager.create_session(&test_device("d3", "D3")).unwrap();
+
+        // Select id2 (index 1)
+        assert!(manager.select_by_index(1));
+        assert_eq!(manager.selected_id(), Some(id2));
+
+        // Remove id3 (index 2) — after the selection
+        manager.remove_session(id3);
+
+        assert_eq!(manager.len(), 2);
+        assert!(manager.get(id1).is_some());
+        assert!(manager.get(id3).is_none());
+        assert_eq!(manager.selected_index(), 1);
+        assert_eq!(
+            manager.selected_id(),
+            Some(id2),
+            "removing a session after the selection must leave selected_index untouched"
+        );
+    }
+
+    #[test]
+    fn test_remove_selected_session_at_end_clamps_to_last() {
+        // Removing the selected session when it is the last in the list should
+        // clamp selected_index to the new last index (len - 1).
+        let mut manager = SessionManager::new();
+        let id1 = manager.create_session(&test_device("d1", "D1")).unwrap();
+        let id2 = manager.create_session(&test_device("d2", "D2")).unwrap();
+        let id3 = manager.create_session(&test_device("d3", "D3")).unwrap();
+
+        // Select id3 (last, index 2)
+        assert!(manager.select_by_index(2));
+        assert_eq!(manager.selected_id(), Some(id3));
+
+        // Remove id3 (the selected session at the last index)
+        manager.remove_session(id3);
+
+        // selected_index should clamp to len - 1 = 1, pointing to id2 by identity.
+        assert_eq!(manager.len(), 2);
+        assert!(manager.get(id1).is_some());
+        assert!(manager.get(id3).is_none());
+        assert_eq!(manager.selected_index(), 1);
+        assert_eq!(
+            manager.selected_id(),
+            Some(id2),
+            "removing the selected session at the end must clamp selected_index to the new last"
+        );
+    }
+
     #[test]
     fn test_selected_index_remains_valid_after_eviction() {
         let mut manager = SessionManager::new();
