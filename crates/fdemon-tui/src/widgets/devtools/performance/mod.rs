@@ -284,14 +284,107 @@ impl PerformancePanel<'_> {
 /// directly and does not record regions. Passing `None` for `ctx` makes this
 /// function behave identically to `Widget::render`.
 ///
-/// Phase 4 Task 08 fills in the region recording body.
+/// `ctx` is forwarded only into the frame-chart bar-chart section. The memory
+/// chart and detail panel do not record click regions in Phase 4.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     widget: PerformancePanel<'_>,
-    _ctx: Option<&mut MouseCtx<'_>>,
+    ctx: Option<&mut MouseCtx<'_>>,
 ) {
-    <PerformancePanel as Widget>::render(widget, area, buf);
+    // Clear background (mirrors Widget::render)
+    let bg_style = Style::default().bg(palette::DEEPEST_BG);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(bg_style).set_char(' ');
+            }
+        }
+    }
+
+    // Show disconnected/no-data state if VM is not connected — no regions registered.
+    if !widget.vm_connected || !widget.performance.monitoring_active {
+        widget.render_disconnected(area, buf);
+        return;
+    }
+
+    let total_h = area.height;
+
+    if total_h < COMPACT_THRESHOLD {
+        // Very small terminal — compact summary, no regions.
+        widget.render_compact_summary(area, buf);
+        return;
+    }
+
+    if total_h < DUAL_SECTION_MIN_HEIGHT {
+        // Small terminal — frame chart only (no memory section).
+        let frame_block = Block::default()
+            .title(format!(" {} Frame Timing ", widget.icons.activity()))
+            .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().fg(palette::BORDER_DIM))
+            .title_style(Style::default().fg(palette::ACCENT_DIM));
+        let frame_inner = frame_block.inner(area);
+        frame_block.render(area, buf);
+
+        FrameChart::new(
+            &widget.performance.frame_history,
+            widget.performance.selected_frame,
+            &widget.performance.stats,
+            false,
+        )
+        .render_with_regions(frame_inner, buf, ctx);
+        return;
+    }
+
+    // Two-section split (mirrors render_content exactly).
+    let usable_area = Rect {
+        height: area.height.saturating_sub(1),
+        ..area
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(45), Constraint::Percentage(55)])
+        .split(usable_area);
+
+    // Frame timing section (with block border) — ctx forwarded here.
+    let frame_block = Block::default()
+        .title(format!(" {} Frame Timing ", widget.icons.activity()))
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette::BORDER_DIM))
+        .title_style(Style::default().fg(palette::ACCENT_DIM));
+    let frame_inner = frame_block.inner(chunks[0]);
+    frame_block.render(chunks[0], buf);
+
+    FrameChart::new(
+        &widget.performance.frame_history,
+        widget.performance.selected_frame,
+        &widget.performance.stats,
+        false,
+    )
+    .render_with_regions(frame_inner, buf, ctx);
+
+    // Memory section — no clicks in Phase 4.
+    let memory_block = Block::default()
+        .title(format!(" {} Memory ", widget.icons.cpu()))
+        .borders(Borders::TOP)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(palette::BORDER_DIM))
+        .title_style(Style::default().fg(palette::ACCENT_DIM));
+    let memory_inner = memory_block.inner(chunks[1]);
+    memory_block.render(chunks[1], buf);
+
+    MemoryChart::new(
+        &widget.performance.memory_samples,
+        &widget.performance.memory_history,
+        &widget.performance.gc_history,
+        widget.performance.allocation_profile.as_ref(),
+        widget.performance.allocation_sort,
+        false,
+    )
+    .render(memory_inner, buf);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
