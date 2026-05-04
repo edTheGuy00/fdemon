@@ -122,6 +122,10 @@ pub fn render_session_tabs(
         height: area.height,
     };
 
+    if padded_area.height == 0 || padded_area.width == 0 {
+        return;
+    }
+
     tabs.render(padded_area, buf);
 
     // Register per-tab click regions.
@@ -135,7 +139,7 @@ pub fn render_session_tabs(
             if cursor_x.saturating_add(w) > padded_area.x + padded_area.width {
                 break;
             }
-            let rect = MouseRect::new(cursor_x, padded_area.y, w, padded_area.height.max(1));
+            let rect = MouseRect::new(cursor_x, padded_area.y, w, padded_area.height);
             ctx.click_left_middle(
                 rect,
                 MouseAction::emit(Message::SelectSessionByIndex(idx)),
