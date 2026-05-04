@@ -157,7 +157,7 @@ fn view_populates_tab_regions_with_three_sessions() {
 /// Settings panel's internal regions, this test should be updated to also
 /// verify that panel regions exist alongside header regions.
 #[test]
-fn view_records_no_header_shortcuts_in_settings_mode() {
+fn view_header_regions_present_in_settings_mode_because_header_always_renders() {
     use fdemon_app::state::UiMode;
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
