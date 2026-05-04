@@ -192,14 +192,27 @@ impl SessionManager {
     }
 
     /// Remove a session
+    ///
+    /// The selected session identity is preserved where possible:
+    /// - If the removed session is before the selected one, `selected_index` is
+    ///   decremented by 1 so the same session remains selected.
+    /// - If the removed session is the selected one (or the index would go
+    ///   out of range), `selected_index` is clamped to the last valid index.
     pub fn remove_session(&mut self, session_id: SessionId) -> Option<SessionHandle> {
         if let Some(pos) = self.session_order.iter().position(|&id| id == session_id) {
             self.session_order.remove(pos);
 
-            // Adjust selected index if needed
-            if !self.session_order.is_empty() && self.selected_index >= self.session_order.len() {
+            // Adjust selected index to preserve selected session identity.
+            if self.session_order.is_empty() {
+                self.selected_index = 0;
+            } else if pos < self.selected_index {
+                // Removed before the selection — shift left to keep same session.
+                self.selected_index -= 1;
+            } else if self.selected_index >= self.session_order.len() {
+                // Selected session was removed or index is now out of range — clamp.
                 self.selected_index = self.session_order.len() - 1;
             }
+            // If pos > selected_index, the selection is unaffected.
         }
 
         self.sessions.remove(&session_id)
@@ -231,6 +244,11 @@ impl SessionManager {
     /// Get the selected session's ID
     pub fn selected_id(&self) -> Option<SessionId> {
         self.session_order.get(self.selected_index).copied()
+    }
+
+    /// Return the [`SessionId`] at `index` in tab order, or `None` if out of range.
+    pub fn session_id_at(&self, index: usize) -> Option<SessionId> {
+        self.session_order.get(index).copied()
     }
 
     /// Get the selected index

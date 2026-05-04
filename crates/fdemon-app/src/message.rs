@@ -231,6 +231,13 @@ pub enum Message {
     /// Close the current session (x / Ctrl+W)
     CloseCurrentSession,
 
+    /// Close the session at a specific index (middle-click on a tab).
+    ///
+    /// Differs from [`Message::CloseCurrentSession`] in that it operates on an
+    /// arbitrary index rather than `state.session_manager.selected_id()`.
+    /// Out-of-range indices are silently ignored.
+    CloseSessionAt(usize),
+
     // ─────────────────────────────────────────────────────────
     // Log Control (Task 10)
     // ─────────────────────────────────────────────────────────

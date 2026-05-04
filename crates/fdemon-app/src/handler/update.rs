@@ -542,6 +542,7 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         Message::PreviousSession => session_lifecycle::handle_previous_session(state),
 
         Message::CloseCurrentSession => session_lifecycle::handle_close_current_session(state),
+        Message::CloseSessionAt(idx) => session_lifecycle::handle_close_session_at(state, idx),
 
         // ─────────────────────────────────────────────────────────
         // Log Control (Task 10)

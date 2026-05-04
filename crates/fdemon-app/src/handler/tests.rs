@@ -578,6 +578,84 @@ fn test_close_session_shows_device_selector_when_multiple() {
 }
 
 // ─────────────────────────────────────────────────────────
+// CloseSessionAt tests
+// ─────────────────────────────────────────────────────────
+
+#[test]
+fn test_close_session_at_specific_index_removes_only_that_session() {
+    let mut state = AppState::new();
+    let manager = &mut state.session_manager;
+    let id1 = manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let id2 = manager.create_session(&test_device("d2", "Pixel")).unwrap();
+    let id3 = manager.create_session(&test_device("d3", "Web")).unwrap();
+    manager.select_by_id(id2); // select the middle one
+
+    update(&mut state, Message::CloseSessionAt(0)); // close iPhone
+
+    assert_eq!(state.session_manager.len(), 2);
+    assert!(
+        state.session_manager.get(id1).is_none(),
+        "session 0 was closed"
+    );
+    assert!(state.session_manager.get(id2).is_some(), "Pixel preserved");
+    assert!(state.session_manager.get(id3).is_some(), "Web preserved");
+    assert_eq!(
+        state.session_manager.selected_id(),
+        Some(id2),
+        "selection follows the live session, not the index"
+    );
+}
+
+#[test]
+fn test_close_session_at_out_of_range_is_noop() {
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let count_before = state.session_manager.len();
+
+    update(&mut state, Message::CloseSessionAt(99));
+
+    assert_eq!(state.session_manager.len(), count_before);
+}
+
+#[test]
+fn test_close_session_at_last_session_triggers_quit() {
+    let mut state = AppState::new();
+    state
+        .session_manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    state.settings.behavior.confirm_quit = false; // bypass dialog
+
+    update(&mut state, Message::CloseSessionAt(0));
+
+    assert!(state.should_quit(), "closing the only session should quit");
+}
+
+#[test]
+fn test_close_session_at_zero_when_selected_is_zero_picks_next() {
+    // Sanity check that closing the selected session at index 0 leaves
+    // selection on a sensible session (delegates to existing
+    // SessionManager::remove_session post-removal selection logic).
+    let mut state = AppState::new();
+    let manager = &mut state.session_manager;
+    let _id1 = manager
+        .create_session(&test_device("d1", "iPhone"))
+        .unwrap();
+    let id2 = manager.create_session(&test_device("d2", "Pixel")).unwrap();
+    manager.select_by_index(0); // select id1
+
+    update(&mut state, Message::CloseSessionAt(0));
+
+    assert_eq!(state.session_manager.len(), 1);
+    assert_eq!(state.session_manager.selected_id(), Some(id2));
+}
+
+// ─────────────────────────────────────────────────────────
 // Clear logs tests
 // ─────────────────────────────────────────────────────────
 

@@ -185,6 +185,96 @@ fn maybe_start_monitoring_for_selected_session(state: &mut AppState) -> UpdateRe
     })
 }
 
+/// Shared logic for closing a session by id. Used by both
+/// [`handle_close_current_session`] (current-session shortcut) and
+/// [`handle_close_session_at`] (middle-click on an arbitrary tab).
+///
+/// The caller is responsible for deciding whether a "close last session"
+/// action should be converted into a quit request. This function always
+/// performs the full cleanup and removal.
+fn close_session_internal(state: &mut AppState, session_id: SessionId) -> UpdateResult {
+    // Check if session has a running app and cmd_sender
+    let session_info = state.session_manager.get(session_id).and_then(|h| {
+        h.session
+            .app_id
+            .clone()
+            .map(|app_id| (app_id, h.cmd_sender.clone()))
+    });
+
+    // Signal VM Service and performance monitoring shutdown BEFORE removing
+    // the session, mirroring the pattern in VmServiceDisconnected handler.
+    if let Some(handle) = state.session_manager.get_mut(session_id) {
+        if let Some(shutdown_tx) = handle.vm_shutdown_tx.take() {
+            let _ = shutdown_tx.send(true);
+            tracing::info!(
+                "Sent VM Service shutdown signal on session close for session {}",
+                session_id
+            );
+        }
+        // Abort and signal the performance polling task to stop.
+        if let Some(h) = handle.perf_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.perf_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent perf shutdown signal on session close for session {}",
+                session_id
+            );
+        }
+        handle.session.performance.monitoring_active = false;
+        // Abort and signal the network monitoring polling task to stop.
+        if let Some(h) = handle.network_task_handle.take() {
+            h.abort();
+        }
+        if let Some(tx) = handle.network_shutdown_tx.take() {
+            let _ = tx.send(true);
+            tracing::info!(
+                "Sent network shutdown signal on session close for session {}",
+                session_id
+            );
+        }
+
+        // Shut down the native log capture task (if running).
+        handle.shutdown_native_logs();
+    }
+
+    if let Some((app_id, cmd_sender_opt)) = session_info {
+        tracing::info!("Closing session {} (app: {})...", session_id, app_id);
+
+        // Send stop command if we have a cmd_sender
+        if let Some(cmd_sender) = cmd_sender_opt {
+            // Spawn async task to stop the app
+            let app_id_clone = app_id.clone();
+            tokio::spawn(async move {
+                let _ = cmd_sender
+                    .send(fdemon_daemon::DaemonCommand::Stop {
+                        app_id: app_id_clone,
+                    })
+                    .await;
+            });
+        }
+
+        // Remove the session from the manager
+        state.session_manager.remove_session(session_id);
+    } else {
+        // No running app, just remove the session
+        state.session_manager.remove_session(session_id);
+    }
+
+    // If no sessions left after removal, show new session dialog
+    if state.session_manager.is_empty() {
+        let configs = crate::config::load_all_configs(&state.project_path);
+        state.show_new_session_dialog(configs);
+        // Trigger device discovery (only if SDK is available)
+        if let Some(flutter) = state.flutter_executable() {
+            return UpdateResult::action(UpdateAction::DiscoverDevices { flutter });
+        }
+    }
+
+    UpdateResult::none()
+}
+
 /// Handle close current session message
 pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
     // If there's only one session (or none), treat 'x' as quit request
@@ -193,89 +283,28 @@ pub fn handle_close_current_session(state: &mut AppState) -> UpdateResult {
         return UpdateResult::none();
     }
 
-    if let Some(current_session_id) = state.session_manager.selected_id() {
-        // Check if session has a running app and cmd_sender
-        let session_info = state.session_manager.get(current_session_id).and_then(|h| {
-            h.session
-                .app_id
-                .clone()
-                .map(|app_id| (app_id, h.cmd_sender.clone()))
-        });
+    let Some(current_session_id) = state.session_manager.selected_id() else {
+        return UpdateResult::none();
+    };
 
-        // Signal VM Service and performance monitoring shutdown BEFORE removing
-        // the session, mirroring the pattern in VmServiceDisconnected handler.
-        if let Some(handle) = state.session_manager.get_mut(current_session_id) {
-            if let Some(shutdown_tx) = handle.vm_shutdown_tx.take() {
-                let _ = shutdown_tx.send(true);
-                tracing::info!(
-                    "Sent VM Service shutdown signal on session close for session {}",
-                    current_session_id
-                );
-            }
-            // Abort and signal the performance polling task to stop.
-            if let Some(h) = handle.perf_task_handle.take() {
-                h.abort();
-            }
-            if let Some(tx) = handle.perf_shutdown_tx.take() {
-                let _ = tx.send(true);
-                tracing::info!(
-                    "Sent perf shutdown signal on session close for session {}",
-                    current_session_id
-                );
-            }
-            handle.session.performance.monitoring_active = false;
-            // Abort and signal the network monitoring polling task to stop.
-            if let Some(h) = handle.network_task_handle.take() {
-                h.abort();
-            }
-            if let Some(tx) = handle.network_shutdown_tx.take() {
-                let _ = tx.send(true);
-                tracing::info!(
-                    "Sent network shutdown signal on session close for session {}",
-                    current_session_id
-                );
-            }
+    close_session_internal(state, current_session_id)
+}
 
-            // Shut down the native log capture task (if running).
-            handle.shutdown_native_logs();
-        }
+/// Close the session at `index` (0-based, in tab order). Out-of-range
+/// indices are silently ignored. If `index` happens to be the currently
+/// selected session AND it is the last remaining session, converts the
+/// action into a quit request (mirroring `handle_close_current_session`).
+pub fn handle_close_session_at(state: &mut AppState, index: usize) -> UpdateResult {
+    // Resolve index -> session_id. Silently ignore out-of-range indices.
+    let Some(session_id) = state.session_manager.session_id_at(index) else {
+        return UpdateResult::none();
+    };
 
-        if let Some((app_id, cmd_sender_opt)) = session_info {
-            tracing::info!(
-                "Closing session {} (app: {})...",
-                current_session_id,
-                app_id
-            );
-
-            // Send stop command if we have a cmd_sender
-            if let Some(cmd_sender) = cmd_sender_opt {
-                // Spawn async task to stop the app
-                let app_id_clone = app_id.clone();
-                tokio::spawn(async move {
-                    let _ = cmd_sender
-                        .send(fdemon_daemon::DaemonCommand::Stop {
-                            app_id: app_id_clone,
-                        })
-                        .await;
-                });
-            }
-
-            // Remove the session from the manager
-            state.session_manager.remove_session(current_session_id);
-        } else {
-            // No running app, just remove the session
-            state.session_manager.remove_session(current_session_id);
-        }
-
-        // If no sessions left after removal, show new session dialog
-        if state.session_manager.is_empty() {
-            let configs = crate::config::load_all_configs(&state.project_path);
-            state.show_new_session_dialog(configs);
-            // Trigger device discovery (only if SDK is available)
-            if let Some(flutter) = state.flutter_executable() {
-                return UpdateResult::action(UpdateAction::DiscoverDevices { flutter });
-            }
-        }
+    // Mirror the "last session = quit" semantics of the keyboard shortcut.
+    if state.session_manager.len() <= 1 {
+        state.request_quit();
+        return UpdateResult::none();
     }
-    UpdateResult::none()
+
+    close_session_internal(state, session_id)
 }
