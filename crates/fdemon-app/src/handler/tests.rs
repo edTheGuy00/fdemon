@@ -10672,3 +10672,233 @@ mod mouse_scroll {
         }
     }
 }
+
+// ── Phase 3 end-to-end click tests ───────────────────────────────────────────
+//
+// These tests drive `Message::Mouse(Press { ... })` through the full TEA loop
+// to confirm that header/tab clicks produce the expected effects: HotReload,
+// session selection, session close, and dialog open.
+//
+// The registry is populated manually (mirroring what `render::view` produces)
+// because `fdemon-app` does not depend on `fdemon-tui`.
+//
+// TODO(phase-5): tag-filter overlay precedence — when Phase 5 adds a modal
+// layer, these tests may need to verify that modal z_index wins over header
+// regions when the overlay is open.
+mod mouse_phase3_tests {
+    use super::*;
+    use crate::input_mouse::{KeyModSet, MouseButton, MouseInput};
+    use crate::mouse_regions::{MouseAction, MouseRect};
+
+    /// Mirror what `widgets/header.rs` registers: six bracketed shortcuts at
+    /// known coordinates.  The exact positions are arbitrary for handler-level
+    /// tests; what matters is that the registry contains the expected actions
+    /// at the coords the test clicks on.
+    fn populate_header_shortcuts(state: &mut AppState) {
+        let mut regions = state.mouse_regions.take();
+        let mut b = regions.builder();
+        b.click(
+            MouseRect::new(10, 0, 2, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        b.click(
+            MouseRect::new(15, 0, 2, 1),
+            MouseAction::emit(Message::HotRestart),
+        );
+        b.click(
+            MouseRect::new(20, 0, 2, 1),
+            MouseAction::emit(Message::CloseCurrentSession),
+        );
+        b.click(
+            MouseRect::new(25, 0, 2, 1),
+            MouseAction::emit(Message::EnterDevToolsMode),
+        );
+        b.click(
+            MouseRect::new(30, 0, 2, 1),
+            MouseAction::emit(Message::ToggleDap),
+        );
+        b.click(
+            MouseRect::new(35, 0, 2, 1),
+            MouseAction::emit(Message::RequestQuit),
+        );
+        state.mouse_regions.set(regions);
+    }
+
+    fn make_left_press(x: u16, y: u16) -> Message {
+        Message::Mouse(MouseInput::Press {
+            x,
+            y,
+            button: MouseButton::Left,
+            modifiers: KeyModSet::NONE,
+        })
+    }
+
+    fn make_middle_press(x: u16, y: u16) -> Message {
+        Message::Mouse(MouseInput::Press {
+            x,
+            y,
+            button: MouseButton::Middle,
+            modifiers: KeyModSet::NONE,
+        })
+    }
+
+    /// Click on `[q]` → `RequestQuit` → quits when no running sessions.
+    ///
+    /// The mouse handler resolves the registry hit to `Message::RequestQuit` and
+    /// returns it as a follow-up via `UpdateResult::message`.  The engine would
+    /// loop the follow-up back into `update()`; the test simulates that one step.
+    #[test]
+    fn click_on_q_emits_request_quit_and_quits_when_no_running_sessions() {
+        let mut state = AppState::new();
+        // Disable confirm dialog so RequestQuit quits immediately.
+        state.settings.behavior.confirm_quit = false;
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(35, 0));
+
+        // The mouse handler returned RequestQuit; update() returns it as a
+        // follow-up message for the engine to loop back.  Simulate that here.
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert!(state.should_quit(), "click on [q] should quit");
+    }
+
+    /// Click on `[r]` while any session is busy → no-op (busy gate).
+    ///
+    /// The busy gate in `handler/mouse/normal.rs::handle_press` mirrors the
+    /// keyboard handler's busy guard and returns `None` for `HotReload` when
+    /// `any_session_busy()` is true.
+    #[test]
+    fn click_on_r_when_busy_is_no_op() {
+        let mut state = AppState::new();
+        let id = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .mark_started("app".into());
+        state
+            .session_manager
+            .get_mut(id)
+            .unwrap()
+            .session
+            .start_reload();
+        assert!(state.session_manager.any_session_busy(), "precondition");
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(10, 0));
+
+        // Busy gate blocks HotReload; update() returns UpdateResult::none().
+        assert!(result.message.is_none(), "busy gate blocks reload click");
+        assert!(result.action.is_none());
+    }
+
+    /// Click outside every registered region → no-op.
+    #[test]
+    fn click_outside_any_region_is_no_op() {
+        let mut state = AppState::new();
+        populate_header_shortcuts(&mut state);
+
+        let result = update(&mut state, make_left_press(200, 200));
+
+        assert!(result.message.is_none());
+        assert!(result.action.is_none());
+    }
+
+    /// Middle-click on a tab → `CloseSessionAt(idx)` → that session is removed.
+    ///
+    /// Three sessions are created and the registry is manually populated with
+    /// three tab entries.  Middle-clicking tab 0 (iPhone) should remove it while
+    /// preserving Pixel (id2) and Web (id3).
+    #[test]
+    fn middle_click_on_tab_closes_that_session() {
+        let mut state = AppState::new();
+        let id1 = state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        let id2 = state
+            .session_manager
+            .create_session(&test_device("d2", "Pixel"))
+            .unwrap();
+        let id3 = state
+            .session_manager
+            .create_session(&test_device("d3", "Web"))
+            .unwrap();
+        state.session_manager.select_by_id(id2);
+
+        // Manually populate the tab registry: three tabs at known coordinates.
+        let mut regions = state.mouse_regions.take();
+        let mut b = regions.builder();
+        b.click_left_middle(
+            MouseRect::new(0, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(0)),
+            MouseAction::emit(Message::CloseSessionAt(0)),
+        );
+        b.click_left_middle(
+            MouseRect::new(17, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(1)),
+            MouseAction::emit(Message::CloseSessionAt(1)),
+        );
+        b.click_left_middle(
+            MouseRect::new(34, 0, 14, 1),
+            MouseAction::emit(Message::SelectSessionByIndex(2)),
+            MouseAction::emit(Message::CloseSessionAt(2)),
+        );
+        state.mouse_regions.set(regions);
+
+        // Middle-click tab 0 (iPhone). Expect Pixel/Web to remain.
+        let result = update(&mut state, make_middle_press(0, 0));
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert_eq!(state.session_manager.len(), 2);
+        assert!(state.session_manager.get(id1).is_none(), "iPhone closed");
+        assert!(state.session_manager.get(id2).is_some(), "Pixel preserved");
+        assert!(state.session_manager.get(id3).is_some(), "Web preserved");
+        assert_eq!(
+            state.session_manager.selected_id(),
+            Some(id2),
+            "selection follows id"
+        );
+    }
+
+    /// Click on the single-session device pill → opens the New Session dialog.
+    ///
+    /// The device pill click region is registered during render with
+    /// `Message::OpenNewSessionDialog`.  Clicking it should transition the UI
+    /// to `NewSessionDialog` mode.
+    #[test]
+    fn left_click_on_device_pill_opens_new_session_dialog() {
+        let mut state = AppState::new();
+        state
+            .session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+
+        // Register the device pill region manually.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(60, 0, 20, 1),
+            MouseAction::emit(Message::OpenNewSessionDialog),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = update(&mut state, make_left_press(65, 0));
+        if let Some(follow_up) = result.message {
+            update(&mut state, follow_up);
+        }
+
+        assert!(
+            state.is_new_session_dialog_visible(),
+            "device pill click should open new session dialog"
+        );
+    }
+}
