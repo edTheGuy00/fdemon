@@ -24,6 +24,7 @@ use ratatui::{
 use crate::theme::icons::IconSet;
 use crate::theme::palette;
 use crate::theme::styles as theme_styles;
+use crate::widgets::MouseCtx;
 
 /// Stack trace styling constants
 pub mod styles;
@@ -1376,6 +1377,26 @@ impl Widget for LogView<'_> {
         let mut state = LogViewState::new();
         StatefulWidget::render(self, area, buf, &mut state);
     }
+}
+
+/// Render the log view, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `render::view`. The
+/// `StatefulWidget::render` impl does not record regions; this function is the
+/// canonical path for region-aware rendering.
+///
+/// Passing `None` for `_ctx` makes this function behave identically to calling
+/// `frame.render_stateful_widget(view, area, state)` directly.
+///
+/// Phase 4 Task 06 fills in the region recording body.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    state: &mut LogViewState,
+    view: LogView<'_>,
+    _ctx: Option<&mut MouseCtx<'_>>,
+) {
+    <LogView as StatefulWidget>::render(view, area, buf, state);
 }
 
 #[cfg(test)]

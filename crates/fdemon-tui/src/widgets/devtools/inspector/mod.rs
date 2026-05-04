@@ -20,6 +20,7 @@ use ratatui::{
 // submodules can access it via `super::truncate_str`.
 pub(super) use super::truncate_str;
 use crate::theme::palette;
+use crate::widgets::MouseCtx;
 
 // ── Layout constants ──────────────────────────────────────────────────────────
 
@@ -393,6 +394,23 @@ pub(super) fn short_path(file: &str) -> &str {
 
     // If fewer than two slashes, return the full scheme-stripped path.
     &without_scheme[split_pos..]
+}
+
+/// Render the widget inspector panel, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `devtools::render_with_regions`.
+/// The `Widget::render` impl delegates to `<WidgetInspector as Widget>::render`
+/// directly and does not record regions. Passing `None` for `ctx` makes this
+/// function behave identically to `Widget::render`.
+///
+/// Phase 4 Task 07 fills in the region recording body.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    widget: WidgetInspector<'_>,
+    _ctx: Option<&mut MouseCtx<'_>>,
+) {
+    <WidgetInspector as Widget>::render(widget, area, buf);
 }
 
 #[cfg(test)]

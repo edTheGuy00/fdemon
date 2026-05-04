@@ -4,7 +4,7 @@ mod confirm_dialog;
 pub mod devtools;
 pub mod flutter_version_panel;
 pub mod header;
-mod log_view;
+pub mod log_view;
 pub mod modal_overlay;
 pub mod new_session_dialog;
 mod search_input;

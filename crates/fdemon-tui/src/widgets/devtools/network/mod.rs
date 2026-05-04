@@ -26,6 +26,8 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use crate::widgets::MouseCtx;
+
 use unicode_width::UnicodeWidthStr;
 
 use crate::theme::palette;
@@ -344,4 +346,21 @@ impl NetworkMonitor<'_> {
             buf.set_string(x, y, line, style);
         }
     }
+}
+
+/// Render the network monitor panel, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `devtools::render_with_regions`.
+/// The `Widget::render` impl delegates to `<NetworkMonitor as Widget>::render`
+/// directly and does not record regions. Passing `None` for `ctx` makes this
+/// function behave identically to `Widget::render`.
+///
+/// Phase 4 Task 09 fills in the region recording body.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    widget: NetworkMonitor<'_>,
+    _ctx: Option<&mut MouseCtx<'_>>,
+) {
+    <NetworkMonitor as Widget>::render(widget, area, buf);
 }

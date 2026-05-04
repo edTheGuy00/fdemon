@@ -178,13 +178,25 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         };
         log_view = log_view.with_status(status_info);
 
-        frame.render_stateful_widget(log_view, areas.logs, &mut handle.session.log_view_state);
+        widgets::log_view::render_with_regions(
+            areas.logs,
+            frame.buffer_mut(),
+            &mut handle.session.log_view_state,
+            log_view,
+            Some(&mut mouse_ctx),
+        );
     } else {
         // No session selected - show empty log view
         let empty_logs: VecDeque<LogEntry> = VecDeque::new();
         let log_view = widgets::LogView::new(&empty_logs, icons);
         let mut empty_state = LogViewState::new();
-        frame.render_stateful_widget(log_view, areas.logs, &mut empty_state);
+        widgets::log_view::render_with_regions(
+            areas.logs,
+            frame.buffer_mut(),
+            &mut empty_state,
+            log_view,
+            Some(&mut mouse_ctx),
+        );
     }
 
     // Status bar removed - status info is now integrated into the log view's bottom metadata bar
@@ -326,7 +338,12 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
                 state.session_manager.selected(),
                 icons,
             );
-            frame.render_widget(devtools, areas.logs);
+            widgets::devtools::render_with_regions(
+                areas.logs,
+                frame.buffer_mut(),
+                devtools,
+                Some(&mut mouse_ctx),
+            );
         }
     }
 

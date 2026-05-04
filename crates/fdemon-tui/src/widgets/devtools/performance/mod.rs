@@ -33,6 +33,8 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph, Widget, Wrap};
 
+use crate::widgets::MouseCtx;
+
 use crate::theme::{icons::IconSet, palette};
 
 use frame_chart::FrameChart;
@@ -273,6 +275,23 @@ impl PerformancePanel<'_> {
         ]);
         buf.set_line(area.x, area.y, &line, area.width);
     }
+}
+
+/// Render the performance panel, optionally recording clickable regions.
+///
+/// This is the click-aware entry point used by `devtools::render_with_regions`.
+/// The `Widget::render` impl delegates to `<PerformancePanel as Widget>::render`
+/// directly and does not record regions. Passing `None` for `ctx` makes this
+/// function behave identically to `Widget::render`.
+///
+/// Phase 4 Task 08 fills in the region recording body.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    widget: PerformancePanel<'_>,
+    _ctx: Option<&mut MouseCtx<'_>>,
+) {
+    <PerformancePanel as Widget>::render(widget, area, buf);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

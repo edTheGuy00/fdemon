@@ -12,8 +12,10 @@ pub use inspector::WidgetInspector;
 pub use network::NetworkMonitor;
 pub use performance::PerformancePanel;
 
+use fdemon_app::message::Message;
 use fdemon_app::session::{PerformanceState, SessionHandle};
 use fdemon_app::state::{DevToolsPanel, DevToolsViewState, VmConnectionStatus};
+use fdemon_app::{MouseAction, MouseRect};
 use ratatui::{
     buffer::Buffer,
     layout::{Constraint, Layout, Rect},
@@ -23,6 +25,7 @@ use ratatui::{
 };
 
 use crate::theme::{icons::IconSet, palette};
+use crate::widgets::MouseCtx;
 
 // ── Minimum size thresholds ───────────────────────────────────────────────────
 
@@ -94,8 +97,8 @@ impl Widget for DevToolsView<'_> {
         ])
         .split(area);
 
-        // Render sub-tab bar
-        self.render_tab_bar(chunks[0], buf);
+        // Render sub-tab bar (no region recording — Widget::render passes None)
+        self.render_tab_bar_inner(chunks[0], buf, None);
 
         // Render active panel
         match self.state.active_panel {
@@ -156,8 +159,18 @@ impl Widget for DevToolsView<'_> {
 impl DevToolsView<'_> {
     // ── Sub-tab bar ───────────────────────────────────────────────────────────
 
-    /// Render the DevTools sub-tab bar with panel tabs and overlay status indicators.
-    fn render_tab_bar(&self, area: Rect, buf: &mut Buffer) {
+    /// Render the DevTools sub-tab bar with panel tabs, overlay status
+    /// indicators, and optionally click regions for each tab.
+    ///
+    /// When `ctx` is `Some`, one [`MouseAction::Emit`]`(`[`Message::SwitchDevToolsPanel`]`)` region
+    /// is registered per tab. When `ctx` is `None` (the `Widget::render` path), no
+    /// regions are recorded and behaviour is identical to the previous implementation.
+    fn render_tab_bar_inner(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        mut ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         // Outer block with border
         let block = ratatui::widgets::Block::bordered()
             .title(" DevTools ")
@@ -196,6 +209,18 @@ impl DevToolsView<'_> {
             };
 
             buf.set_string(x, inner.y, &padded, style);
+
+            // Register a click region covering the padded label cells.
+            if let Some(ref mut c) = ctx {
+                let rect = MouseRect::new(x, inner.y, needed_width, 1);
+                if rect.width > 0 && rect.height > 0 {
+                    c.click(
+                        rect,
+                        MouseAction::emit(Message::SwitchDevToolsPanel(*panel)),
+                    );
+                }
+            }
+
             x += needed_width + 1;
         }
 
@@ -334,6 +359,112 @@ impl DevToolsView<'_> {
     }
 }
 
+// ── render_with_regions (click-aware entry point) ────────────────────────────
+
+/// Render the full DevTools view, optionally recording clickable regions.
+///
+/// This is the canonical render entry point used by `render::view` when
+/// `UiMode::DevTools` is active. The `Widget::render` impl (used by tests
+/// that call `widget.render(area, buf)` directly) delegates to the underlying
+/// panel widgets without any region machinery; this function is the click-aware
+/// variant.
+///
+/// The sub-tab bar ([`DevToolsView::render_tab_bar_inner`]) registers one
+/// [`MouseAction::Emit`]`(`[`Message::SwitchDevToolsPanel`]`)` region per visible
+/// tab when `ctx` is `Some`. The panel-level `render_with_regions` stubs
+/// (Tasks 07–09) are called unconditionally so that future waves can fill them
+/// in without touching this function.
+///
+/// Passing `None` for `ctx` makes this function behave identically to
+/// `Widget::render`.
+pub fn render_with_regions(
+    area: Rect,
+    buf: &mut Buffer,
+    view: DevToolsView<'_>,
+    ctx: Option<&mut MouseCtx<'_>>,
+) {
+    // Background fill — same as existing Widget::render.
+    let bg_style = Style::default().bg(palette::DEEPEST_BG);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(bg_style).set_char(' ');
+            }
+        }
+    }
+
+    // Global minimum size guard — same as existing Widget::render.
+    if area.height < DEVTOOLS_MIN_HEIGHT || area.width < DEVTOOLS_MIN_WIDTH {
+        let msg = ratatui::text::Line::from(ratatui::text::Span::styled(
+            "Resize terminal for DevTools",
+            Style::default().fg(Color::DarkGray),
+        ));
+        let msg_width = msg.width() as u16;
+        let x = area.x + area.width.saturating_sub(msg_width) / 2;
+        let y = area.y;
+        buf.set_line(x, y, &msg, area.width);
+        return;
+    }
+
+    // Vertical layout: [sub-tab bar (3 lines)] + [panel content (remaining)]
+    let chunks = Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).split(area);
+
+    // Sub-tab bar with click registration.
+    let mut ctx = ctx;
+    view.render_tab_bar_inner(chunks[0], buf, ctx.as_deref_mut());
+
+    // Panel dispatch — sister functions delegate to existing Widget::render
+    // until Tasks 07–09 fill them in.
+    match view.state.active_panel {
+        DevToolsPanel::Inspector => {
+            let vm_connected = view
+                .session
+                .map(|s| s.session.vm_connected)
+                .unwrap_or(false);
+            let widget = WidgetInspector::new(
+                &view.state.inspector,
+                vm_connected,
+                &view.state.connection_status,
+            );
+            inspector::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
+        }
+        DevToolsPanel::Performance => {
+            static DEFAULT_PERF: std::sync::LazyLock<PerformanceState> =
+                std::sync::LazyLock::new(PerformanceState::default);
+
+            let (perf, vm_connected) = view
+                .session
+                .map(|s| (&s.session.performance, s.session.vm_connected))
+                .unwrap_or_else(|| (&*DEFAULT_PERF, false));
+
+            let widget = PerformancePanel::new(
+                perf,
+                vm_connected,
+                view.icons,
+                &view.state.connection_status,
+            )
+            .with_connection_error(view.state.vm_connection_error.as_deref());
+            performance::render_with_regions(chunks[1], buf, widget, ctx.as_deref_mut());
+        }
+        DevToolsPanel::Network => {
+            static DEFAULT_NETWORK: std::sync::LazyLock<fdemon_app::session::NetworkState> =
+                std::sync::LazyLock::new(fdemon_app::session::NetworkState::default);
+
+            let (network_state, vm_connected) = view
+                .session
+                .map(|s| (&s.session.network, s.session.vm_connected))
+                .unwrap_or_else(|| (&*DEFAULT_NETWORK, false));
+
+            let widget =
+                NetworkMonitor::new(network_state, vm_connected, &view.state.connection_status);
+            network::render_with_regions(chunks[1], buf, widget, ctx);
+        }
+    }
+
+    // Footer — no clicks.
+    view.render_footer(chunks[1], buf);
+}
+
 // ── Shared helpers ────────────────────────────────────────────────────────────
 
 /// Truncate a string to at most `max_chars` Unicode characters.
@@ -404,7 +535,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         // Check that "Performance" text appears in the buffer
         let text = collect_buf_text(&buf, 80, 3);
@@ -419,7 +550,7 @@ mod tests {
         let state = DevToolsViewState::default();
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(text.contains("Inspector"), "Expected Inspector tab");
@@ -440,7 +571,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(
@@ -462,7 +593,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(
@@ -506,7 +637,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         // Find the Inspector label cell and check its bg style
         // The active tab should have Cyan background
@@ -598,7 +729,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(
@@ -619,7 +750,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(
@@ -637,7 +768,7 @@ mod tests {
 
         let widget = DevToolsView::new(&state, None, IconSet::default());
         let mut buf = Buffer::empty(Rect::new(0, 0, 80, 3));
-        widget.render_tab_bar(Rect::new(0, 0, 80, 3), &mut buf);
+        widget.render_tab_bar_inner(Rect::new(0, 0, 80, 3), &mut buf, None);
 
         let text = collect_buf_text(&buf, 80, 3);
         assert!(
@@ -773,5 +904,116 @@ mod tests {
         let mut buf = Buffer::empty(Rect::new(0, 0, 40, 4));
         widget.render(Rect::new(0, 0, 40, 4), &mut buf);
         // Should not panic
+    }
+
+    // ── Phase 4 Task 02: render_with_regions tests ────────────────────────────
+
+    #[test]
+    fn devtools_tab_bar_registers_three_click_regions() {
+        use crate::render::MouseCtx;
+        use fdemon_app::message::Message;
+        use fdemon_app::{MouseAction, MouseRegions};
+
+        let state = DevToolsViewState::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+
+        let mut regions = MouseRegions::with_capacity();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            super::render_with_regions(
+                Rect::new(0, 0, 80, 24),
+                &mut buf,
+                DevToolsView::new(&state, None, IconSet::default()),
+                Some(&mut ctx),
+            );
+            // ctx + builder borrow ends here; regions is accessible again
+        }
+
+        // Count entries whose left action is SwitchDevToolsPanel(_).
+        let switch_panel_count = regions
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.on_left,
+                    Some(MouseAction::Emit(msg)) if matches!(**msg, Message::SwitchDevToolsPanel(_))
+                )
+            })
+            .count();
+
+        assert_eq!(
+            switch_panel_count, 3,
+            "expected 3 sub-tab SwitchDevToolsPanel regions, got {switch_panel_count}"
+        );
+    }
+
+    #[test]
+    fn devtools_tab_bar_regions_cover_correct_widths() {
+        use crate::render::MouseCtx;
+        use fdemon_app::message::Message;
+        use fdemon_app::{MouseAction, MouseRegions};
+
+        let state = DevToolsViewState::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+
+        let mut regions = MouseRegions::with_capacity();
+        {
+            let builder = regions.builder();
+            let mut ctx = MouseCtx::new(builder);
+            super::render_with_regions(
+                Rect::new(0, 0, 80, 24),
+                &mut buf,
+                DevToolsView::new(&state, None, IconSet::default()),
+                Some(&mut ctx),
+            );
+        }
+
+        // Each tab region must be exactly 1 row tall and have width = len(" {label} ").
+        let expected_widths: Vec<u16> = [" [i] Inspector ", " [p] Performance ", " [n] Network "]
+            .iter()
+            .map(|s| s.len() as u16)
+            .collect();
+
+        let actual_widths: Vec<u16> = regions
+            .iter()
+            .filter(|e| {
+                matches!(
+                    &e.on_left,
+                    Some(MouseAction::Emit(msg)) if matches!(**msg, Message::SwitchDevToolsPanel(_))
+                )
+            })
+            .map(|e| e.rect.width)
+            .collect();
+
+        assert_eq!(
+            actual_widths, expected_widths,
+            "tab bar region widths should match padded label widths"
+        );
+
+        // All regions must be exactly 1 row tall.
+        for entry in regions.iter().filter(|e| {
+            matches!(
+                &e.on_left,
+                Some(MouseAction::Emit(msg)) if matches!(**msg, Message::SwitchDevToolsPanel(_))
+            )
+        }) {
+            assert_eq!(entry.rect.height, 1, "tab region height must be 1");
+        }
+    }
+
+    #[test]
+    fn devtools_render_with_regions_none_ctx_no_regions() {
+        let state = DevToolsViewState::default();
+        let mut buf = Buffer::empty(Rect::new(0, 0, 80, 24));
+
+        // With ctx = None, no regions should be registered. Calling with None
+        // must not panic — it is the test-safe path identical to Widget::render.
+        super::render_with_regions(
+            Rect::new(0, 0, 80, 24),
+            &mut buf,
+            DevToolsView::new(&state, None, IconSet::default()),
+            None,
+        );
+        // No assert needed — the absence of panic is the pass condition.
     }
 }
