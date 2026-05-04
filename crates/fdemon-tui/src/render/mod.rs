@@ -108,18 +108,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     let mut regions = state.mouse_regions.take();
     regions.clear();
 
-    // Construct the borrowed builder and immediately release the borrow so
-    // Tasks 06/07 can thread `&mut mouse_ctx` into MainHeader and SessionTabs.
-    //
-    // TODO(phase-3): Tasks 06 (header bracket regions) and 07 (tab/device-pill
-    // regions) move `mouse_ctx` construction here (outside the inner block),
-    // remove the inner-block wrapper, and pass `&mut mouse_ctx` into widget
-    // constructors. The inner block here is only a placeholder that releases
-    // the builder borrow so `regions` is free for `set()` at end of scope.
-    {
-        let _mouse_ctx = MouseCtx::new(regions.builder());
-        // borrow of `regions` via `_mouse_ctx.builder` ends here
-    }
+    // Build the borrowed mouse context.  `mouse_ctx` lives for the entire
+    // render body so widgets can register regions throughout the frame.
+    // The borrow of `regions` is released when `mouse_ctx` is dropped (end of
+    // `view`), after which `state.mouse_regions.set(regions)` reclaims it.
+    let mut mouse_ctx = MouseCtx::new(regions.builder());
 
     // Fill entire terminal with deepest background color
     let bg_block = Block::default().style(Style::default().bg(palette::DEEPEST_BG));
@@ -131,10 +124,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
     // Construct IconSet from settings
     let icons = IconSet::new(state.settings.ui.icons);
 
-    // Main header with project name and session tabs inside
+    // Main header with project name and session tabs inside.
+    // Pass `&mut mouse_ctx` so header shortcut regions are registered (Task 06).
     let header = widgets::MainHeader::new(state.project_name.as_deref(), icons)
         .with_sessions(&state.session_manager);
-    frame.render_widget(header, areas.header);
+    widgets::header::render_main_header(areas.header, frame.buffer_mut(), &header, Some(&mut mouse_ctx));
 
     // Log view - use selected session's logs or show empty state
     if let Some(handle) = state.session_manager.selected_mut() {
@@ -332,6 +326,8 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
     // ── Put the populated registry back ──────────────────────────────────
     // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    // `mouse_ctx`'s borrow of `regions` ends at its last use above; NLL allows
+    // moving `regions` here.
     state.mouse_regions.set(regions);
 }
 

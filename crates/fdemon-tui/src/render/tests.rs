@@ -26,15 +26,16 @@ fn render_screen(state: &mut AppState) -> String {
 // Mouse Region Registry Tests
 // ===========================================================================
 
-// TODO(phase-3): Tasks 06 (header regions) and 07 (tab regions) will
-// change this assertion. Replace with snapshot tests on the populated
-// registry contents.
+// Task 06: header shortcut regions are populated after a full-screen render
+// at 80 cols. At 80 cols the shortcuts do NOT fit (left_width + shortcuts_width
+// + device_width + HEADER_SECTION_PADDING > 80), so no shortcut regions are
+// registered. Verify the registry is non-empty only at wide-enough terminals.
 #[test]
-fn test_view_leaves_mouse_regions_empty_when_no_widget_records() {
+fn test_view_shortcut_regions_registered_at_120_cols() {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
-    let backend = TestBackend::new(80, 24);
+    let backend = TestBackend::new(120, 24);
     let mut terminal = Terminal::new(backend).unwrap();
     let mut state = AppState::new();
 
@@ -42,8 +43,8 @@ fn test_view_leaves_mouse_regions_empty_when_no_widget_records() {
 
     let regions = state.mouse_regions.take();
     assert!(
-        regions.is_empty(),
-        "no widget records regions yet (Phase 3 Tasks 06/07 will change this)"
+        !regions.is_empty(),
+        "header shortcut regions should be registered at 120 cols (Task 06)"
     );
 }
 

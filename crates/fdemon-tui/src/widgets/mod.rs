@@ -3,7 +3,7 @@
 mod confirm_dialog;
 pub mod devtools;
 pub mod flutter_version_panel;
-mod header;
+pub mod header;
 mod log_view;
 pub mod modal_overlay;
 pub mod new_session_dialog;
@@ -38,11 +38,9 @@ pub use crate::render::MouseCtx;
 /// a foreign trait for a foreign type from `fdemon-tui` (a third crate) would
 /// violate Rust's orphan rule.
 ///
-/// Call sites: `to_mouse_rect(area)`. Used by header.rs and tabs.rs in Phase 3
-/// Tasks 06/07 to record clickable regions.
-///
-/// TODO(phase-3): Remove this allow when Tasks 06/07 (header/tab region
-/// recording) add the first call site.
+/// Call sites: `to_mouse_rect(area)`. Used by `tabs.rs` (Task 07) to record
+/// clickable regions.
+// Task 07 (tab/device-pill regions) will add the call site from tabs.rs.
 #[allow(dead_code)]
 pub(crate) fn to_mouse_rect(r: ratatui::layout::Rect) -> fdemon_app::MouseRect {
     fdemon_app::MouseRect::new(r.x, r.y, r.width, r.height)

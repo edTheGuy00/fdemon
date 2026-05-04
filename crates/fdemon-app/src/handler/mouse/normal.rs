@@ -104,7 +104,7 @@ pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -
 mod tests {
     use super::*;
     use crate::input_mouse::KeyModSet;
-    use crate::mouse_regions::{MouseAction, MouseRect, MouseRegions};
+    use crate::mouse_regions::{MouseAction, MouseRect};
     use crate::state::AppState;
 
     fn state_with_tag_filter(visible: bool) -> AppState {
