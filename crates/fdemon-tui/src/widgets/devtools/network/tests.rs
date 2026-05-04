@@ -865,8 +865,10 @@ mod region_tests {
 
     #[test]
     fn network_extensions_unavailable_records_no_regions() {
-        let mut network_state = NetworkState::default();
-        network_state.extensions_available = Some(false);
+        let network_state = NetworkState {
+            extensions_available: Some(false),
+            ..Default::default()
+        };
         let conn_status = VmConnectionStatus::Connected;
         let widget = NetworkMonitor::new(&network_state, true, &conn_status);
 
