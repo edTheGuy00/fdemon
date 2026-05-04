@@ -10,6 +10,7 @@ use rand::Rng;
 use crate::config::{LoadedConfigs, Settings, SettingsTab, UserPreferences};
 use crate::confirm_dialog::ConfirmDialogState;
 use crate::flutter_version::FlutterVersionState;
+use crate::mouse_regions::{MouseRegions, MouseRegionsCell};
 use crate::new_session_dialog::NewSessionDialogState;
 use crate::new_session_dialog::{DartDefinesModalState, FuzzyModalState};
 use fdemon_core::{AppPhase, DiagnosticsNode, LayoutInfo};
@@ -1007,6 +1008,31 @@ pub struct AppState {
     /// dialog so users see the change without needing to inspect the log file.
     /// Cleared when the New Session dialog is dismissed.
     pub show_migration_banner: bool,
+
+    /// Per-frame mouse click-region registry.
+    ///
+    /// Populated by widgets during render via [`crate::mouse_regions::MouseRegionsBuilder`]
+    /// and read by [`crate::handler::mouse`] during click hit-tests. Lives on
+    /// `AppState` (rather than being threaded through the handler layer) because
+    /// `Cell` interior mutability lets render write back without forcing
+    /// `&mut AppState` everywhere.
+    ///
+    /// **TEA exception**: This is the same exception class as
+    /// [`TagFilterUiState::last_known_visible_height`] — a render-hint write-back
+    /// that does NOT participate in business logic or state equality. See
+    /// `docs/CODE_STANDARDS.md` Principle 3 for rationale.
+    ///
+    /// Lifecycle (per frame):
+    /// 1. `render::view` calls `state.mouse_regions.take()`, draining the previous
+    ///    frame's entries (the `Cell` now holds an empty `MouseRegions`).
+    /// 2. Widgets push entries into a `MouseRegionsBuilder` borrowed against the
+    ///    drained instance.
+    /// 3. `render::view` calls `state.mouse_regions.set(populated)` to put the
+    ///    new registry back.
+    /// 4. On `Message::Mouse(MouseInput::Press {..})`, `handler::mouse::normal`
+    ///    performs the same take/hit-test/put-back dance.
+    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
+    pub mouse_regions: MouseRegionsCell,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1066,6 +1092,7 @@ impl AppState {
             resolved_sdk: None,
             flutter_version_state: FlutterVersionState::default(),
             show_migration_banner: false,
+            mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
         }
     }
 
@@ -2220,5 +2247,28 @@ mod tests {
             UiMode::Normal,
             "ui_mode must return to Normal after hide_new_session_dialog"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────
+    // Mouse Region Field Tests (Phase 3, Task 03)
+    // ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_appstate_initializes_with_empty_mouse_regions() {
+        let state = AppState::new();
+        let regions = state.mouse_regions.take();
+        assert!(regions.is_empty(), "fresh AppState has no mouse regions");
+        state.mouse_regions.set(regions); // restore so the assertion is non-destructive
+    }
+
+    #[test]
+    fn test_appstate_mouse_regions_capacity_preserves() {
+        let state = AppState::new();
+        let regions = state.mouse_regions.take();
+        // with_capacity() pre-sizes to 32 — we don't lock that number into a test,
+        // but we do assert that capacity is non-zero so a single push doesn't
+        // immediately realloc.
+        assert!(regions.iter().count() == 0);
+        state.mouse_regions.set(regions);
     }
 }

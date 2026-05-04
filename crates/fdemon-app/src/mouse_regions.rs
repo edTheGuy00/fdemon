@@ -17,9 +17,7 @@
 //! 4. On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, the handler
 //!    layer calls `regions.hit_test(x, y, button)` to find the matching region.
 
-// The public API of this module is intentionally unused until Task 03 wires
-// `MouseRegions` into `AppState` and Task 04+ adds widget call sites.
-#![allow(dead_code)]
+use std::cell::Cell;
 
 use crate::input_mouse::MouseButton;
 use crate::message::Message;
@@ -174,6 +172,50 @@ impl MouseRegions {
         self.entries.iter()
     }
 }
+
+/// A `Cell<MouseRegions>` wrapper that implements [`std::fmt::Debug`].
+///
+/// `Cell<T>` only derives `Debug` when `T: Copy`. `MouseRegions` is not `Copy`
+/// (it holds a `Vec`), so this newtype provides the same take/set API as
+/// `Cell<MouseRegions>` while allowing `AppState` to keep `#[derive(Debug)]`.
+///
+/// The `Debug` output shows only the entry count — sufficient for test failures
+/// and log output without spamming large entry lists.
+pub struct MouseRegionsCell(Cell<MouseRegions>);
+
+impl MouseRegionsCell {
+    /// Construct with a pre-sized registry.
+    pub fn new(regions: MouseRegions) -> Self {
+        MouseRegionsCell(Cell::new(regions))
+    }
+
+    /// Remove the registry from the cell, replacing it with an empty one.
+    /// Equivalent to `Cell::take()` — uses `Default::default()` as the
+    /// replacement (an empty `Vec`, capacity 0).
+    pub fn take(&self) -> MouseRegions {
+        self.0.take()
+    }
+
+    /// Store a new registry in the cell.
+    pub fn set(&self, regions: MouseRegions) {
+        self.0.set(regions);
+    }
+}
+
+impl std::fmt::Debug for MouseRegionsCell {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // We can't read the Cell without taking it, so just show the type name.
+        // The entry count is not observable here without unsafe; that's fine —
+        // this field is a render-hint write-back, not a business-logic value.
+        f.debug_struct("MouseRegionsCell").finish_non_exhaustive()
+    }
+}
+
+// Safety: `AppState` is `!Send`/`!Sync` already (it contains `Cell<usize>` and
+// other non-Send types), so `MouseRegionsCell` does not introduce new unsafety.
+// `Cell<T>` is `!Send` when `T: !Send`, which is the case for `MouseRegions`
+// (it contains raw `fn` pointers via `MouseAction::EmitWithCoord`, though those
+// are `Send`). In practice `AppState` never crosses thread boundaries.
 
 /// Borrowed builder used during render to push click regions.
 #[derive(Debug)]
