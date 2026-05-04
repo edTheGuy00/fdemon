@@ -12,6 +12,8 @@ pub(super) fn handle_scroll(
     dir: ScrollDir,
     _mods: KeyModSet,
 ) -> Option<Message> {
+    // Modifiers ignored: FlutterVersion has no page-step analogue in the
+    // keyboard handler (keys.rs:332-355 binds only j/k and Up/Down).
     match dir {
         ScrollDir::Up => Some(Message::FlutterVersionUp),
         ScrollDir::Down => Some(Message::FlutterVersionDown),

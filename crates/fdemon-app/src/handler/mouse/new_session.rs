@@ -11,6 +11,9 @@ use crate::state::AppState;
 
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, _mods: KeyModSet) -> Option<Message> {
     let dialog = &state.new_session_dialog_state;
+    // Modifiers ignored: NewSessionDialog's keyboard handlers (keys.rs:793-896)
+    // bind no Shift+anything for navigation, so the mouse mirrors that — every
+    // wheel direction is single-step regardless of held modifier.
 
     // Modal precedence — matches keys.rs:799-804.
     if dialog.is_fuzzy_modal_open() {
