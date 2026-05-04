@@ -63,3 +63,17 @@ pub fn handle_select_link(state: &mut AppState, shortcut: char) -> UpdateResult 
 
     UpdateResult::none()
 }
+
+/// Stub. Body added in Phase 4 Task 03.
+pub fn handle_click_log_row(
+    _state: &mut AppState,
+    _entry_id: u64,
+    _frame_index: Option<usize>,
+) -> UpdateResult {
+    UpdateResult::none()
+}
+
+/// Stub. Body added in Phase 4 Task 03.
+pub fn handle_toggle_stack_trace_for_entry(_state: &mut AppState, _entry_id: u64) -> UpdateResult {
+    UpdateResult::none()
+}

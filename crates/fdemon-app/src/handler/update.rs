@@ -691,6 +691,24 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
             UpdateResult::none()
         }
 
+        // ── Mouse Click Messages (Phase 4) ───────────────────────────────────
+        Message::ClickLogRow {
+            entry_id,
+            frame_index,
+        } => crate::handler::log_view::handle_click_log_row(state, entry_id, frame_index),
+
+        Message::ToggleStackTraceForEntry { entry_id } => {
+            crate::handler::log_view::handle_toggle_stack_trace_for_entry(state, entry_id)
+        }
+
+        Message::DevToolsInspectorSelectRow { index } => {
+            crate::handler::devtools::inspector::handle_inspector_select_row(state, index)
+        }
+
+        Message::DevToolsInspectorToggleNode { index } => {
+            crate::handler::devtools::inspector::handle_inspector_toggle_node(state, index)
+        }
+
         // ─────────────────────────────────────────────────────────
         // Wrap Mode (v1-refinements Phase 1)
         // ─────────────────────────────────────────────────────────

@@ -1436,6 +1436,49 @@ pub enum Message {
     /// Update the selected version (u key) — stub for Phase 3
     FlutterVersionUpdate,
 
+    // ── Mouse Click Messages (Phase 4) ──────────────────────────────────────
+    /// Click on a single log-view row.
+    ///
+    /// Emitted by the per-frame mouse region registry when the user left-clicks
+    /// inside the log content area. `entry_id` is the [`LogEntry::id`] of the
+    /// clicked entry; `frame_index` is `Some(i)` when the click landed on the
+    /// i-th visible stack-frame line under that entry, or `None` for the
+    /// message-line click.
+    ///
+    /// Handler at [`crate::handler::log_view::handle_click_log_row`] updates
+    /// `AppState::last_log_click` for double-click detection. When the same
+    /// entry is clicked twice within 400 ms, a follow-up
+    /// [`Message::ToggleStackTraceForEntry`] is emitted via
+    /// [`UpdateResult::message`].
+    ClickLogRow {
+        entry_id: u64,
+        frame_index: Option<usize>,
+    },
+
+    /// Toggle stack trace expand / collapse for a *specific* log entry.
+    ///
+    /// Emitted as a follow-up to [`Message::ClickLogRow`] when a double click is
+    /// detected. Distinct from [`Message::ToggleStackTrace`], which operates on
+    /// the scroll-focused entry — the click target is rarely the focused entry,
+    /// so the click flow needs an absolute-id variant.
+    ToggleStackTraceForEntry { entry_id: u64 },
+
+    /// Click on a row in the widget inspector tree.
+    ///
+    /// `index` is the absolute position into `InspectorState::visible_nodes()`
+    /// at render time — the registry stored this index when recording the row's
+    /// rect. The handler sets `inspector.selected_index = index` and dispatches
+    /// a layout fetch under the same debounce / cache rules as
+    /// [`InspectorNav::Up`] / [`InspectorNav::Down`].
+    DevToolsInspectorSelectRow { index: usize },
+
+    /// Click on the leading expansion glyph (▶ / ▼ / ●) of a tree row.
+    ///
+    /// Selects the row first (same as [`Message::DevToolsInspectorSelectRow`])
+    /// then toggles the node's `expanded` set if the node has children. No-op
+    /// for leaf nodes.
+    DevToolsInspectorToggleNode { index: usize },
+
     /// Internal trigger: start the version probe.
     ///
     /// Sent as a follow-up message from `handle_show` so that both

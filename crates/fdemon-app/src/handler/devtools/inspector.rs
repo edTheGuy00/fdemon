@@ -335,6 +335,18 @@ pub fn handle_layout_data_fetch_timeout(
     UpdateResult::none()
 }
 
+// ── Mouse Click Stubs (Phase 4) ──────────────────────────────────────────────
+
+/// Stub. Body added in Phase 4 Task 04.
+pub fn handle_inspector_select_row(_state: &mut AppState, _index: usize) -> UpdateResult {
+    UpdateResult::none()
+}
+
+/// Stub. Body added in Phase 4 Task 04.
+pub fn handle_inspector_toggle_node(_state: &mut AppState, _index: usize) -> UpdateResult {
+    UpdateResult::none()
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests
 // ─────────────────────────────────────────────────────────────────────────────

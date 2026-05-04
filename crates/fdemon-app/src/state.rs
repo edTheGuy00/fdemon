@@ -874,6 +874,24 @@ impl TagFilterUiState {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Log Click State (Phase 4 Mouse)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Click stamp recorded by [`crate::handler::log_view::handle_click_log_row`]
+/// to detect double-clicks within the 400 ms window.
+///
+/// Both fields are `Copy` so the read-then-clear pattern in the handler
+/// (`let last = state.last_log_click; state.last_log_click = None;`) does
+/// not require `Option::take`.
+#[derive(Debug, Clone, Copy)]
+pub struct LogClickStamp {
+    /// [`LogEntry::id`] of the clicked entry.
+    pub entry_id: u64,
+    /// Wall-clock time of the click, used for 400 ms double-click detection.
+    pub at: std::time::Instant,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 /// Complete application state (the Model in TEA)
 #[derive(Debug)]
 pub struct AppState {
@@ -1033,6 +1051,12 @@ pub struct AppState {
     ///    performs the same take/hit-test/put-back dance.
     // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
     pub mouse_regions: MouseRegionsCell,
+
+    /// Most recent log-row click, used for double-click detection.
+    ///
+    /// Set by [`crate::handler::log_view::handle_click_log_row`] and cleared
+    /// when a double-click is consumed or the selected session changes.
+    pub last_log_click: Option<LogClickStamp>,
 }
 
 /// Maximum number of watcher errors buffered before a session exists.
@@ -1093,6 +1117,7 @@ impl AppState {
             flutter_version_state: FlutterVersionState::default(),
             show_migration_banner: false,
             mouse_regions: MouseRegionsCell::new(MouseRegions::with_capacity()),
+            last_log_click: None,
         }
     }
 
