@@ -32,6 +32,18 @@ pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
     }
 }
 
+/// Route a wheel scroll to the appropriate per-mode handler based on
+/// `state.ui_mode`.
+///
+/// Modes with a real scroll surface (`Normal`, `DevTools`, `Settings`,
+/// `Startup`/`NewSessionDialog`, `LinkHighlight`, `FlutterVersion`) delegate
+/// to their submodule. Modes with no scrollable surface (`SearchInput`,
+/// `ConfirmDialog`, `EmulatorSelector`, `Loading`) return `None`.
+///
+/// Per-mode handlers differ in modifier handling: `Normal`, `LinkHighlight`,
+/// and `DevTools/Network` honor `Shift+wheel` for page-step (via
+/// `KeyModSet::is_shift_only`); other modes ignore modifiers entirely.
+/// See `docs/MOUSE.md` for the full per-mode reference.
 fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     match state.ui_mode {
         UiMode::Normal => normal::handle_scroll(state, dir, mods),
@@ -166,6 +178,33 @@ mod tests {
         assert!(
             handle_mouse(&state, scroll_up).is_some(),
             "FlutterVersion scroll-up should produce a message"
+        );
+    }
+
+    #[test]
+    fn test_scroll_settings_routes_to_settings_prev_item() {
+        // Settings mode (no modal, not editing) routes scroll-up to SettingsPrevItem
+        // via the dispatcher. This catches a typo in the dispatcher's match arm
+        // that would otherwise route Settings to a different submodule.
+        let state = state_in_mode(UiMode::Settings);
+        let msg = handle_mouse(&state, make_scroll_up());
+        assert!(
+            matches!(msg, Some(Message::SettingsPrevItem)),
+            "expected SettingsPrevItem for Settings + scroll-up, got {:?}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_scroll_new_session_dialog_routes_to_device_up() {
+        // NewSessionDialog mode with default focused_pane (TargetSelector) routes
+        // scroll-up to NewSessionDialogDeviceUp via the dispatcher.
+        let state = state_in_mode(UiMode::NewSessionDialog);
+        let msg = handle_mouse(&state, make_scroll_up());
+        assert!(
+            matches!(msg, Some(Message::NewSessionDialogDeviceUp)),
+            "expected NewSessionDialogDeviceUp for NewSessionDialog + scroll-up, got {:?}",
+            msg
         );
     }
 }
