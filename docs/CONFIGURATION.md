@@ -325,13 +325,13 @@ enable_mouse = true             # Capture mouse events for clickable UI; restart
 | `theme` | `string` | `"default"` | Color theme name. Currently only `"default"` is supported. |
 | `stack_trace_collapsed` | `boolean` | `true` | If `true`, stack traces start collapsed showing only the first few frames. |
 | `stack_trace_max_frames` | `integer` | `3` | Number of stack trace frames to show when collapsed. Press `Enter` to expand. |
-| `enable_mouse` | `boolean` | `true` | Enables terminal mouse capture for clickable UI elements (header shortcuts, tabs, log view, DevTools panels). When `false`, fdemon does not emit mouse-capture escape sequences, leaving native terminal behavior (text selection, wheel scrollback) intact. **Restart required after changing.** |
+| `enable_mouse` | `boolean` | `true` | Enables terminal mouse capture for clickable UI elements (header shortcuts, tabs, log view, DevTools panels). When `false`, fdemon does not emit mouse-capture escape sequences, leaving native terminal behavior (text selection, wheel scrollback) intact. **Restart required after changing.** See [MOUSE.md](MOUSE.md) for per-mode wheel behavior, modifier reference, and platform caveats. |
 
 > **Environment variable override:** Set `FDEMON_ICONS=unicode` or `FDEMON_ICONS=nerd_fonts` to override the config file setting for the current session.
 
 > **No Nerd Font?** If icons appear as missing characters or boxes, your terminal font does not include Nerd Font glyphs. Add `icons = "unicode"` to your `[ui]` section in `.fdemon/config.toml`, or run with `FDEMON_ICONS=unicode` to switch to safe Unicode characters that work in all terminals. See [nerdfonts.com](https://www.nerdfonts.com/) to install a patched font.
 
-> **When to disable mouse capture:** Most modern terminals (Windows Terminal, iTerm2, WezTerm, gnome-terminal) pass `Shift+drag` through to native text selection even when capture is on, so the default `true` works for most users. Disable (`enable_mouse = false`) if your terminal does not support `Shift+drag` for native selection, if you find the wheel-intercept-vs-host-scrollback behavior disorienting, or if you are running on legacy Windows conhost (which silently ignores mouse capture entirely). The setting is read at startup; restart fdemon after changing it.
+> **When to disable mouse capture:** Most modern terminals (Windows Terminal, iTerm2, WezTerm, gnome-terminal) pass `Shift+drag` through to native text selection even when capture is on, so the default `true` works for most users. Disable (`enable_mouse = false`) if your terminal does not support `Shift+drag` for native selection, if you find the wheel-intercept-vs-host-scrollback behavior disorienting, or if you are running on legacy Windows conhost (which silently ignores mouse capture entirely). The setting is read at startup; restart fdemon after changing it. See [MOUSE.md](MOUSE.md) for the full per-mode wheel reference, modifier key rules, and the Windows 11 Shift-drop caveat.
 
 ### DevTools Settings
 
