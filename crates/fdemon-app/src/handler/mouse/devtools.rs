@@ -1,7 +1,8 @@
 //! Scroll routing for `UiMode::DevTools`.
 //!
 //! Dispatches by `state.devtools_view_state.active_panel`:
-//! - Inspector → tree row navigation (Up/Down only; no page step)
+//! - Inspector → tree row navigation (Up/Down with no modifiers; any modifier
+//!   returns None because there is no page-step analogue for the inspector tree)
 //! - Performance → no-op (frame timeline is keyboard Left/Right only)
 //! - Network → request-list navigation (Up/Down; Shift → PageUp/PageDown);
 //!   no-op when filter input is active
@@ -19,10 +20,10 @@ pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -
 }
 
 fn handle_inspector_scroll(dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
-    // Inspector has no page-step navigation — Shift+wheel falls back to a
-    // single-step move rather than no-op (small UX win for shift-held scrolls).
-    // Ctrl/Alt with no Shift returns None as in normal mode.
-    if !mods.shift && (mods.ctrl || mods.alt) {
+    // Inspector has no page-step navigation — there is no `InspectorNav::PageUp`
+    // analogue. Any modifier combination (including Shift, Ctrl, Alt) returns
+    // None for parity with normal.rs / link_highlight.rs / handle_network_scroll.
+    if mods.shift || mods.ctrl || mods.alt {
         return None;
     }
     match dir {
@@ -195,6 +196,30 @@ mod tests {
             assert!(
                 handle_scroll(s, ScrollDir::Down, KeyModSet::new(false, false, true)).is_none()
             );
+        }
+    }
+
+    #[test]
+    fn inspector_any_modifier_combination_returns_none() {
+        let s = state_with_panel(DevToolsPanel::Inspector);
+        let combos = [
+            KeyModSet::new(true, false, false), // Shift
+            KeyModSet::new(false, true, false), // Ctrl
+            KeyModSet::new(false, false, true), // Alt
+            KeyModSet::new(true, true, false),  // Shift+Ctrl
+            KeyModSet::new(true, false, true),  // Shift+Alt
+            KeyModSet::new(false, true, true),  // Ctrl+Alt
+            KeyModSet::new(true, true, true),   // Shift+Ctrl+Alt
+        ];
+        for mods in combos {
+            for dir in [ScrollDir::Up, ScrollDir::Down] {
+                assert!(
+                    handle_scroll(&s, dir, mods).is_none(),
+                    "expected None for Inspector + {:?} + {:?}",
+                    dir,
+                    mods
+                );
+            }
         }
     }
 
