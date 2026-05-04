@@ -10217,6 +10217,16 @@ mod mouse_scroll {
         }
     }
 
+    /// Assert that `update()` on a `Message::Mouse(Scroll{..})` produces a follow-up
+    /// message whose **discriminant** matches `expected`.
+    ///
+    /// IMPORTANT: This helper compares `std::mem::discriminant` only — it does NOT
+    /// check inner variant data. For `Message` variants that carry a payload (e.g.
+    /// `NetworkNavigate(NetworkNav::Up)` vs `NetworkNavigate(NetworkNav::PageDown)`)
+    /// or `DevToolsInspectorNavigate(InspectorNav::Up)` vs `(InspectorNav::Collapse)`,
+    /// use `matches!(result.message, Some(Message::X(Y)))` directly in the test
+    /// body. This helper is appropriate only for unit-style variants like
+    /// `ScrollUp`, `ScrollDown`, `PageUp`, `PageDown`, `SettingsPrevItem`, etc.
     fn assert_scroll_routes_to(
         state: &mut AppState,
         dir: ScrollDir,
@@ -10474,6 +10484,49 @@ mod mouse_scroll {
             ScrollDir::Down,
             KeyModSet::NONE,
             Message::NewSessionDialogFuzzyDown,
+        );
+    }
+
+    // ── Busy-session invariant ────────────────────────────────────────────────
+
+    /// Verifies the documented invariant from `keys.rs:263` and PLAN.md:
+    /// scroll is never blocked by reload/restart state. If a future change adds
+    /// an `is_busy` gate to the scroll path (or to `Message::ScrollUp` handling),
+    /// this test will fail and force re-verification of the safety claim.
+    #[test]
+    fn scroll_during_reload_does_not_block() {
+        let mut state = AppState::new();
+        state.ui_mode = UiMode::Normal;
+
+        // Create a session and put it into the busy (Reloading) state.
+        // This exercises the path where `session_manager.any_session_busy()`
+        // returns true — the same condition that blocks HotReload/HotRestart
+        // (keys.rs:129+167) but must NOT block scroll.
+        let device = test_device("busy-device", "Busy Device");
+        let session_id = state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .get_mut(session_id)
+            .unwrap()
+            .session
+            .phase = fdemon_core::AppPhase::Reloading;
+
+        // Sanity-check: the session is indeed busy.
+        assert!(state.session_manager.any_session_busy());
+
+        let result = update(
+            &mut state,
+            Message::Mouse(scroll_input(ScrollDir::Up, KeyModSet::NONE)),
+        );
+
+        assert!(
+            matches!(result.message, Some(Message::ScrollUp)),
+            "scroll must fire even with a busy session — got {:?}",
+            result.message
+        );
+        assert!(
+            result.action.is_none(),
+            "scroll must not produce an action even when busy"
         );
     }
 
