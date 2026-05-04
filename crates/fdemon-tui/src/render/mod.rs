@@ -105,13 +105,14 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
 
     // ── Mouse region registry: take, clear, render, put back ─────────────
     // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
-    let mut regions = state.mouse_regions.take();
+    // RAII guard puts the registry back on Drop, even if rendering panics.
+    let mut regions = state.mouse_regions.take_guard();
     regions.clear();
 
-    // Build the borrowed mouse context.  `mouse_ctx` lives for the entire
+    // Build the borrowed mouse context. `mouse_ctx` lives for the entire
     // render body so widgets can register regions throughout the frame.
-    // The borrow of `regions` is released when `mouse_ctx` is dropped (end of
-    // `view`), after which `state.mouse_regions.set(regions)` reclaims it.
+    // The borrow of `*regions` (via DerefMut) is released when `mouse_ctx`
+    // is dropped, after which the guard's Drop puts the registry back.
     let mut mouse_ctx = MouseCtx::new(regions.builder());
 
     // Fill entire terminal with deepest background color
@@ -329,11 +330,11 @@ pub fn view(frame: &mut Frame, state: &mut AppState) {
         }
     }
 
-    // ── Put the populated registry back ──────────────────────────────────
-    // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
-    // `mouse_ctx`'s borrow of `regions` ends at its last use above; NLL allows
-    // moving `regions` here.
-    state.mouse_regions.set(regions);
+    // ── Registry put-back handled by guard's Drop ─────────────────────────
+    // The `regions` guard (MouseRegionGuard) calls `state.mouse_regions.set`
+    // automatically when it drops here. No explicit set() needed.
+    // `mouse_ctx`'s borrow of `*regions` ends at its last use above (NLL);
+    // the guard can then drop and put the registry back.
 }
 
 /// Render loading screen during startup initialization (Task 08d)

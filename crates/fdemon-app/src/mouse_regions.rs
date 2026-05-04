@@ -18,6 +18,7 @@
 //!    layer calls `regions.hit_test(x, y, button)` to find the matching region.
 
 use std::cell::Cell;
+use std::ops::{Deref, DerefMut};
 
 use crate::input_mouse::MouseButton;
 use crate::message::Message;
@@ -219,6 +220,28 @@ impl MouseRegionsCell {
     pub fn set(&self, regions: MouseRegions) {
         self.0.set(regions);
     }
+
+    /// Take the inner [`MouseRegions`] and return a panic-safe RAII guard that
+    /// puts it back on `Drop`. Prefer this over the raw [`take`](Self::take) /
+    /// [`set`](Self::set) pair.
+    ///
+    /// On construction, calls `Cell::take()` (leaving `Default::default()` in
+    /// the cell). On `Drop`, calls `Cell::set(regions)` to put the value back,
+    /// **even if a panic unwinds the stack**. This guarantees that a widget
+    /// panic between take and put-back cannot silently disable the mouse-region
+    /// registry for the remainder of the session.
+    ///
+    /// Use `Deref`/`DerefMut` to access the inner [`MouseRegions`]:
+    ///
+    /// ```rust,ignore
+    /// let mut guard = state.mouse_regions.take_guard();
+    /// guard.clear();
+    /// let builder = guard.builder();
+    /// // guard dropped here — registry put back automatically
+    /// ```
+    pub fn take_guard(&self) -> MouseRegionGuard<'_> {
+        MouseRegionGuard::new(self)
+    }
 }
 
 impl std::fmt::Debug for MouseRegionsCell {
@@ -235,6 +258,69 @@ impl std::fmt::Debug for MouseRegionsCell {
 // `Cell<T>` is `!Send` when `T: !Send`, which is the case for `MouseRegions`
 // (it contains raw `fn` pointers via `MouseAction::EmitWithCoord`, though those
 // are `Send`). In practice `AppState` never crosses thread boundaries.
+
+/// RAII guard that holds a [`MouseRegions`] taken from a [`MouseRegionsCell`].
+///
+/// On construction, calls [`MouseRegionsCell::take`] (leaving
+/// `Default::default()` in the cell). On `Drop`, calls
+/// [`MouseRegionsCell::set`] to put the value back, **even if a panic unwinds
+/// the stack**. This guarantees that a widget panic between take and put-back
+/// cannot silently disable the mouse-region registry for the remainder of the
+/// session.
+///
+/// Constructed via [`MouseRegionsCell::take_guard`]. Access the inner
+/// [`MouseRegions`] via `Deref` and `DerefMut`:
+///
+/// ```rust,ignore
+/// let mut guard = state.mouse_regions.take_guard();
+/// guard.clear();                   // DerefMut → MouseRegions::clear
+/// let mut ctx = MouseCtx::new(guard.builder()); // DerefMut → builder()
+/// // guard dropped at end of scope — registry put back automatically
+/// ```
+pub struct MouseRegionGuard<'a> {
+    cell: &'a MouseRegionsCell,
+    /// Always `Some` between construction and `Drop`. The `Option` wrapper is
+    /// required so that `Drop::drop` (which takes `&mut self`) can move the
+    /// value out via `Option::take` for `Cell::set` without unsafe.
+    regions: Option<MouseRegions>,
+}
+
+impl<'a> MouseRegionGuard<'a> {
+    fn new(cell: &'a MouseRegionsCell) -> Self {
+        Self {
+            cell,
+            regions: Some(cell.take()),
+        }
+    }
+}
+
+impl Deref for MouseRegionGuard<'_> {
+    type Target = MouseRegions;
+
+    fn deref(&self) -> &MouseRegions {
+        // SAFETY: `regions` is `Some` from construction until `drop()` takes it.
+        self.regions
+            .as_ref()
+            .expect("MouseRegionGuard is live until Drop")
+    }
+}
+
+impl DerefMut for MouseRegionGuard<'_> {
+    fn deref_mut(&mut self) -> &mut MouseRegions {
+        // SAFETY: `regions` is `Some` from construction until `drop()` takes it.
+        self.regions
+            .as_mut()
+            .expect("MouseRegionGuard is live until Drop")
+    }
+}
+
+impl Drop for MouseRegionGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(regions) = self.regions.take() {
+            self.cell.set(regions);
+        }
+    }
+}
 
 /// Borrowed builder used during render to push click regions.
 #[derive(Debug)]
@@ -433,5 +519,81 @@ mod tests {
             MouseAction::emit(Message::HotReload),
         );
         assert!(regions.hit_test(0, 0, MouseButton::Right).is_none());
+    }
+
+    // ── MouseRegionGuard tests ───────────────────────────────────────────
+
+    #[test]
+    fn guard_puts_regions_back_on_drop() {
+        let cell = MouseRegionsCell::new(MouseRegions::with_capacity());
+
+        {
+            let mut guard = cell.take_guard();
+            guard.builder().click(
+                MouseRect::new(0, 0, 10, 1),
+                MouseAction::emit(Message::HotReload),
+            );
+            // guard drops here — regions go back into the cell
+        }
+
+        let regions = cell.take();
+        assert_eq!(regions.len(), 1, "guard put the mutated registry back");
+        cell.set(regions);
+    }
+
+    #[test]
+    fn guard_deref_exposes_builder() {
+        let cell = MouseRegionsCell::new(MouseRegions::with_capacity());
+        let mut guard = cell.take_guard();
+
+        // DerefMut should reach MouseRegions::builder().
+        guard.builder().click(
+            MouseRect::new(0, 0, 5, 1),
+            MouseAction::emit(Message::HotReload),
+        );
+        assert_eq!(guard.len(), 1, "builder registered via DerefMut");
+    }
+
+    #[test]
+    fn guard_puts_regions_back_on_panic() {
+        let cell = MouseRegionsCell::new(MouseRegions::with_capacity());
+
+        // Pre-populate the cell with one entry so we can distinguish "something"
+        // from the default-empty registry.
+        {
+            let mut regions = cell.take();
+            regions.builder().click(
+                MouseRect::new(0, 0, 10, 1),
+                MouseAction::emit(Message::HotReload),
+            );
+            cell.set(regions);
+        }
+
+        // A closure that takes a guard and panics — the guard's Drop must still
+        // run via unwind, returning whatever was in it at the time of the panic.
+        //
+        // `MouseRegionsCell` contains `Cell<T>` which is `!RefUnwindSafe`.
+        // We assert unwind-safety manually: `cell` is owned by this test thread,
+        // the closure runs on the same thread, and no other thread can alias it.
+        //
+        // Note: this test is only meaningful with `panic = unwind` (the project
+        // default). With `panic = abort` the process terminates before Drop runs,
+        // but the test still compiles correctly.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = cell.take_guard();
+            // Guard holds the 1-entry registry. Panic now — Drop should put it back.
+            panic!("deliberate test panic");
+        }));
+
+        assert!(result.is_err(), "catch_unwind should have caught the panic");
+
+        // The guard's Drop must have restored the registry, not left Default::default().
+        let regions = cell.take();
+        assert_eq!(
+            regions.len(),
+            1,
+            "registry restored after panic — not silently emptied"
+        );
+        cell.set(regions);
     }
 }

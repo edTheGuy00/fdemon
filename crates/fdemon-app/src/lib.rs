@@ -107,7 +107,8 @@ pub use input_mouse::{KeyModSet, MouseButton, MouseInput, ScrollDir};
 
 // Re-export mouse region types used by TUI for region recording (Phase 3)
 pub use mouse_regions::{
-    MouseAction, MouseRect, MouseRegionEntry, MouseRegions, MouseRegionsBuilder, MouseRegionsCell,
+    MouseAction, MouseRect, MouseRegionEntry, MouseRegionGuard, MouseRegions, MouseRegionsBuilder,
+    MouseRegionsCell,
 };
 
 /// Re-exported from `fdemon-daemon` for crates that depend on `fdemon-app`

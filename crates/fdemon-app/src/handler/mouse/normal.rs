@@ -35,7 +35,8 @@ pub(super) fn handle_press(
 
     // ── Hit-test against the registry ────────────────────────────────────
     // EXCEPTION: TEA render-hint write-back via Cell — see docs/CODE_STANDARDS.md Principle 3
-    let regions = state.mouse_regions.take();
+    // Guard puts the registry back on Drop, including on early-return paths below.
+    let regions = state.mouse_regions.take_guard();
     let action_opt = regions.hit_test(x, y, button).and_then(|entry| {
         let action = match button {
             MouseButton::Left => entry.on_left.as_ref(),
@@ -44,8 +45,8 @@ pub(super) fn handle_press(
         };
         action.map(|a| a.resolve(x, y))
     });
-    // Put the registry back unchanged. Re-rendering will repopulate it.
-    state.mouse_regions.set(regions);
+    // Explicit drop before subsequent state inspection — put-back happens here.
+    drop(regions);
 
     let msg = action_opt?;
 
