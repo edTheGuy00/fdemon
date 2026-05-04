@@ -175,3 +175,42 @@ The pre-existing no-op tests must keep passing without modification beyond renam
 - **Why `pub(super) fn handle_scroll`?** Submodule helpers are crate-private and called only from the parent `mod.rs`. `pub(super)` is the tightest scope that compiles.
 - **`MouseInput::Press` vs `Click`.** Phase 1.5 Task 01 renames `Click` → `Press`. This task assumes the rename has landed. If it has not, substitute `Click` everywhere `Press` appears and add a TODO comment to switch on Phase 1.5 merge.
 - **`is_shift_only` alternatives considered.** Inlining the bool expression three times (once per consuming mode) was rejected for drift risk; making it a free function in `input_mouse.rs` was rejected because methods on the type read more naturally at the call site. `const` was chosen so the helper can be evaluated in match guards if needed in future phases.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse.rs` | Deleted — content moved to directory module |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | New — top-level dispatcher matching on MouseInput variant; scroll delegates to handle_scroll which dispatches by UiMode; existing no-op tests moved here |
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | New — stub returning None |
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | New — stub returning None |
+| `crates/fdemon-app/src/handler/mouse/settings.rs` | New — stub returning None |
+| `crates/fdemon-app/src/handler/mouse/new_session.rs` | New — stub returning None (serves Startup + NewSessionDialog) |
+| `crates/fdemon-app/src/handler/mouse/link_highlight.rs` | New — stub returning None |
+| `crates/fdemon-app/src/handler/mouse/flutter_version.rs` | New — stub returning None |
+| `crates/fdemon-app/src/input_mouse.rs` | Added `KeyModSet::is_shift_only() -> bool` const method and unit test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Rustfmt single-line match arm**: The `Startup | NewSessionDialog` multi-pattern arm was formatted as a single line by rustfmt (without a block), matching the style of the surrounding arms.
+2. **handler/mod.rs unchanged**: The `pub(crate) mod mouse;` declaration is identical for both `mouse.rs` and `mouse/mod.rs` — Rust resolves both paths from the same declaration, so no change was needed.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app is_shift_only` - Passed (1 test)
+- `cargo test -p fdemon-app handler::mouse` - Passed (2 tests)
+- `cargo test --workspace` - Passed (all tests across all crates)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **No behavior change**: All stubs return None; this is a pure structural refactor + helper addition. Phase 2 follow-up tasks will populate each submodule.

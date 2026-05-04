@@ -172,3 +172,34 @@ The dart-defines and extra-args modal tests are sketched as TODOs because constr
 - **Unused `_mods` parameter.** Intentional and documented — the parameter is kept in the signature for parity with the dispatcher's other handlers and to leave room for future Shift behavior without an API change.
 - **Edit-pane swallows scroll.** When the user is typing into the dart-defines key/value editor or an inline setting value, scrolling the underlying list would be disorienting. Returning `None` is the conservative behavior; a future phase could revisit if user feedback demands it.
 - **Auto-save not affected.** Settings auto-save (`UpdateAction::AutoSaveConfig`) is triggered by setting commits, not by scroll. Phase 2 does not change save semantics.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/settings.rs` | Replaced stub `handle_scroll` with full modal-routing implementation + 11 unit tests |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Updated `test_scroll_no_op_in_every_mode` → `test_scroll_no_op_in_non_scrollable_modes`; removed `UiMode::Settings` from no-op assertion since Settings now dispatches scroll |
+
+### Notable Decisions/Tradeoffs
+
+1. **FuzzyModalState unused in top-level imports**: `FuzzyModalState` is test-only; kept in `#[cfg(test)]` module's `use` block to satisfy the compiler without a dead-code warning in production code.
+2. **Extra tests beyond task spec**: Added 4 additional tests (`dart_defines_modal_takes_precedence_over_editing`, `extra_args_modal_takes_precedence_over_editing`, `horizontal_wheel_no_op_in_dart_defines_list_pane`, `horizontal_wheel_no_op_in_extra_args_modal`) to cover precedence and horizontal-wheel behavior across all modal states.
+3. **`test_scroll_no_op_in_every_mode` renamed and trimmed**: The original test covered modes that are now or will be handled by phase-2 tasks (Normal, DevTools, NewSessionDialog, LinkHighlight, FlutterVersion). Since those are still stubs, only the explicitly no-op modes (EmulatorSelector, ConfirmDialog, Loading, SearchInput) remain; the comment documents the omission.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (all 11 new tests pass; full workspace 4,019+ tests pass)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Stale no-op test**: The `test_scroll_no_op_in_every_mode` test in `mod.rs` still covers Normal, DevTools, etc. as no-ops since those handler stubs haven't been implemented. When phase-2 tasks 02, 03, 05, and 06 are completed, those modes must also be removed from that test (or the test updated accordingly by those tasks).

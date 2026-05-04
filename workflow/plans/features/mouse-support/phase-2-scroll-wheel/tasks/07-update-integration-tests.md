@@ -94,3 +94,35 @@ The workspace-wide test run is the load-bearing check — Phase 2 success criter
 - **No new `Message` variants verified.** Confirm `cargo check --workspace` shows zero new variants in `message.rs` between Phase 1.5 HEAD and Phase 2 HEAD. The integration tests reference only existing variants.
 - **Why this task depends on every Wave-2 task.** The integration tests assert routing for every mode; if any submodule is still a stub returning `None`, the corresponding test case fails. Run last.
 - **`tests.rs` line growth.** This file already contains ~hundreds of tests. Append a clearly-marked section at the end rather than weaving cases into existing test groups, to keep the diff easy to review.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/tests.rs` | Added `mod mouse_scroll` section with 15 integration tests (350 lines) at end of file |
+
+### Notable Decisions/Tradeoffs
+
+1. **`UiMode::Startup` explicit set**: `AppState::new()` defaults to `UiMode::Normal`, not `UiMode::Startup` as the task comment implied. Test 11 explicitly sets `state.ui_mode = UiMode::Startup` — caught by the first test run and fixed.
+2. **`std::mem::discriminant` vs `matches!`**: Used `matches!` for inner-enum variants (`InspectorNav::Down`, `NetworkNav::Up`, `NetworkNav::PageDown`) and `discriminant`-via-helper for simple no-payload messages (`ScrollUp`, `PageDown`, etc.). The 4 direct-result cases (Inspect, Network) explicitly inline the assertion for maximum clarity.
+3. **15 tests vs 12 minimum**: Added 2 modal-precedence smoke tests (Settings dart-defines modal, NewSessionDialog fuzzy modal) and 1 Press/Release/Drag no-op integration sweep, totalling 15 distinct test cases.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::tests::mouse_scroll` — PASS (15/15)
+- `cargo test -p fdemon-app handler::tests` — PASS (334 tests)
+- `cargo test --workspace` — PASS (all crates)
+- `cargo fmt --all -- --check` — PASS
+- `cargo check --workspace --all-targets` — PASS
+- `cargo clippy --workspace --all-targets -- -D warnings` — PASS
+
+### Risks/Limitations
+
+1. **No action-path coverage**: Integration tests assert `result.action.is_none()` for all scroll inputs. This is correct — scroll never spawns side-effect actions — and matches the task spec.

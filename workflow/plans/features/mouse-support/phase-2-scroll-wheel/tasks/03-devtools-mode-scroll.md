@@ -240,3 +240,37 @@ The Network filter-active test is sketched as a TODO because constructing a `Ses
 - **Filter-input gate must check `selected_session`.** `keys.rs:411-415` reads `selected().map(|h| h.session.network.filter_input_active).unwrap_or(false)`. The mouse handler must follow the same path; if no session is selected, `filter_active` is false and scroll proceeds normally.
 - **Drop precedence within filter-input gate.** Even Shift+wheel returns `None` when filter is active — the user is editing text, the wheel must not move the table underneath the cursor.
 - **Touchpad horizontal.** Per PLAN.md "Out of scope": `ScrollLeft`/`ScrollRight` are no-ops. Network has no horizontal scroll concept; Inspector tree could in theory scroll horizontally for deeply-nested trees, but no consumer exists today.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-abe4e2efd62a73421
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | Replaced stub with full `handle_scroll` implementation; added `handle_inspector_scroll` and `handle_network_scroll` helpers; added `#[cfg(test)] mod tests` with 8 test cases including the filter-active gate test |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Updated `test_scroll_no_op_in_every_mode` (renamed and removed DevTools from the all-no-op list) and added `test_devtools_scroll_routes_to_inspector_nav` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Filter-active test fully implemented**: The task sketched the network filter-active test as a TODO, referencing the pattern in `keys.rs`. The test was fully implemented using `session_manager.create_session(&device)` + `selected_mut().unwrap().session.network.filter_input_active = true`, matching the exact pattern in `handler/keys.rs:1727-1744`.
+
+2. **mod.rs test updated**: Implementing devtools scroll breaks the pre-existing `test_scroll_no_op_in_every_mode` test in `mod.rs` (which expected DevTools to be no-op). Updated that test to remove DevTools from the no-op list and added a `test_devtools_scroll_routes_to_inspector_nav` test in its place. This is correct since the stub-era test was checking interim behavior.
+
+3. **Inspector Ctrl/Alt gate**: The `handle_inspector_scroll` function gates on `!mods.shift && (mods.ctrl || mods.alt)` — this means Ctrl-only or Alt-only returns None, but Shift+Ctrl or Shift+Alt falls through to single-step move (since `InspectorNav` has no PageUp/PageDown). This matches the task's acceptance criterion 9 ("Ctrl-only or Alt-only is no-op").
+
+### Testing Performed
+
+- `cargo check -p fdemon-app` - Passed (clean compile)
+- `cargo test -p fdemon-app --lib handler::mouse` - Passed (11 tests, 0 failures)
+- `cargo test -p fdemon-app --lib` - Passed (1937 tests, 0 failures)
+- `cargo clippy -p fdemon-app` - Passed (no warnings)
+
+### Risks/Limitations
+
+1. **No horizontal scroll on Inspector**: `ScrollDir::Left`/`Right` are no-ops per PLAN.md. If a future phase adds horizontal tree scrolling, `handle_inspector_scroll` will need updating.
+2. **No session = no-op for Network**: When `session_manager.selected()` returns `None`, `filter_active` defaults to `false` and scroll proceeds to normal nav. This is consistent with `keys.rs:411-415` and is the expected behavior (no session = nothing to navigate).

@@ -189,3 +189,34 @@ The fuzzy-modal and dart-defines-modal tests are sketched as TODOs because const
 - **No PageUp/PageDown.** The keyboard handlers in `keys.rs:828-836` (fuzzy) and `851-855` (dart-defines) bind only `Up` and `Down`. Inventing Shift+wheel page-step here would diverge from the keyboard.
 - **Refresh devices (`r` key) is not a scroll target.** PLAN.md Phase 5 covers click handling for the device row → confirm flow; Phase 2 stays scroll-only.
 - **Settings access from NewSessionDialog (`,` key)** is not a scroll target either.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/new_session.rs` | Replaced stub with full `handle_scroll` implementation; added 9 unit tests covering all acceptance criteria |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Removed `UiMode::Startup` and `UiMode::NewSessionDialog` from `test_scroll_no_op_in_every_mode` — these modes now produce real messages |
+
+### Notable Decisions/Tradeoffs
+
+1. **Modal state directly accessed via public fields**: `FuzzyModalState` and `DartDefinesModalState` are set directly on `new_session_dialog_state` in tests (same pattern used in `keys.rs` tests), rather than going through message dispatch. This keeps tests simple and focused on the scroll logic itself.
+2. **No test helpers needed**: The task sketch suggested using existing test helpers from `handler/new_session.rs`, but direct field assignment (`s.new_session_dialog_state.fuzzy_modal = Some(...)`) is cleaner and doesn't create unnecessary coupling.
+3. **`test_scroll_no_op_in_every_mode` update**: The stub-era test in `mod.rs` expected all modes to be no-ops. Removing `Startup` and `NewSessionDialog` from the no-op list (with a comment explaining the intent) is the correct approach as each task gets implemented.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test --workspace` - Passed (1937 fdemon-app tests, 9 new tests in this module)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Other scroll handlers still stubbed**: Tasks 02 (Normal), 03 (DevTools), 04 (Settings), 06 (simple modes) are still stubs. The `test_scroll_no_op_in_every_mode` test in `mod.rs` will need further updates as each is implemented.

@@ -214,3 +214,34 @@ mod tests {
 - **LinkHighlight reuses log-view messages.** `Message::ScrollUp`/`PageUp` are the same messages Normal mode emits — the underlying `scroll::handle_scroll_up` dispatcher decides what to do based on `state.ui_mode`. No code duplication; the mouse handler simply emits the existing message.
 - **FlutterVersion ignores modifiers fully.** Even Shift+wheel single-steps. The keyboard handler binds nothing to Shift+anything in this mode (`keys.rs:332-355`); the mouse mirrors.
 - **The "simple no-op modes"** (`SearchInput`, `ConfirmDialog`, `EmulatorSelector`, `Loading`) are already inlined as `None` in `handler/mouse/mod.rs` by Task 01. This task does not touch them.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6815006cec4cbc1b
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/link_highlight.rs` | Replaced stub with full `handle_scroll` implementation + 5 unit tests |
+| `crates/fdemon-app/src/handler/mouse/flutter_version.rs` | Replaced stub with full `handle_scroll` implementation + 4 unit tests |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Updated `test_scroll_no_op_in_every_mode` → `test_scroll_no_op_in_stub_modes` (excludes LinkHighlight and FlutterVersion); added 2 new integration-level tests confirming those modes produce messages |
+
+### Notable Decisions/Tradeoffs
+
+1. **Updated `mod.rs` test**: The existing `test_scroll_no_op_in_every_mode` test asserted all modes return `None` for scrolls — a valid placeholder when handlers were stubs. Now that `LinkHighlight` and `FlutterVersion` return real messages, the test was narrowed to only cover the stub/no-op modes and two new tests were added to confirm the implemented modes produce messages.
+
+2. **Rustfmt collapsed function signature**: `cargo fmt` reformatted `link_highlight::handle_scroll`'s multi-line signature into a single line. No semantic change.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- handler::mouse` — 13 passed, 0 failed
+- `cargo clippy -p fdemon-app` — Clean, no warnings
+- `cargo fmt -p fdemon-app -- --check` — Clean
+
+### Risks/Limitations
+
+1. **Stub modes still return None**: `Normal`, `Settings`, `DevTools`, `NewSessionDialog`/`Startup` handlers remain stubs. They are covered by `test_scroll_no_op_in_stub_modes` which will need further updates as later tasks implement those handlers.

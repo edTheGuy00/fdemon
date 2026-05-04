@@ -53,13 +53,13 @@ If Phase 1.5 cannot land first, both items above must be folded into Phase 2 Tas
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-mouse-handler-restructure](tasks/01-mouse-handler-restructure.md) | Not Started | — | 1.5h | `fdemon-app` |
-| 2 | [02-normal-mode-scroll](tasks/02-normal-mode-scroll.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 3 | [03-devtools-mode-scroll](tasks/03-devtools-mode-scroll.md) | Not Started | 1 | 1.5h | `fdemon-app` |
-| 4 | [04-settings-mode-scroll](tasks/04-settings-mode-scroll.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 5 | [05-new-session-dialog-scroll](tasks/05-new-session-dialog-scroll.md) | Not Started | 1 | 1h | `fdemon-app` |
-| 6 | [06-simple-modes-scroll](tasks/06-simple-modes-scroll.md) | Not Started | 1 | 0.5h | `fdemon-app` |
-| 7 | [07-update-integration-tests](tasks/07-update-integration-tests.md) | Not Started | 2, 3, 4, 5, 6 | 1h | `fdemon-app` |
+| 1 | [01-mouse-handler-restructure](tasks/01-mouse-handler-restructure.md) | Done | — | 1.5h | `fdemon-app` |
+| 2 | [02-normal-mode-scroll](tasks/02-normal-mode-scroll.md) | Done | 1 | 1h | `fdemon-app` |
+| 3 | [03-devtools-mode-scroll](tasks/03-devtools-mode-scroll.md) | Done | 1 | 1.5h | `fdemon-app` |
+| 4 | [04-settings-mode-scroll](tasks/04-settings-mode-scroll.md) | Done | 1 | 1h | `fdemon-app` |
+| 5 | [05-new-session-dialog-scroll](tasks/05-new-session-dialog-scroll.md) | Done | 1 | 1h | `fdemon-app` |
+| 6 | [06-simple-modes-scroll](tasks/06-simple-modes-scroll.md) | Done | 1 | 0.5h | `fdemon-app` |
+| 7 | [07-update-integration-tests](tasks/07-update-integration-tests.md) | Done | 2, 3, 4, 5, 6 | 1h | `fdemon-app` |
 
 ## File Overlap Analysis
 

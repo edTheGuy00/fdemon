@@ -184,3 +184,33 @@ mod tests {
 - **Tag-filter overlay precedence.** Mirrors keyboard handler exactly: the overlay intercepts up/down even though the user is technically in `UiMode::Normal`. The wheel matches by reading `state.tag_filter_visible` rather than introducing a new sub-mode.
 - **Why no page-scroll for tag filter.** The keyboard handler at `keys.rs:107-126` does not bind PageUp/PageDown to any tag-filter action, so Shift+wheel falls back to single-step move (rather than `None`). Choosing single-step is a small UX improvement: a user who happens to hold Shift while scrolling still navigates the tag list.
 - **`ScrollLeft`/`ScrollRight`.** PLAN.md "Out of scope" defers horizontal-scroll consumers to a future phase. Returning `None` here is the documented v1 behavior.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | Replaced stub `handle_scroll` with full routing logic; added 10-test `#[cfg(test)] mod tests` block covering all acceptance criteria |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Updated `test_scroll_no_op_in_every_mode` to remove `UiMode::Normal` (now produces real messages); added `test_scroll_normal_mode_returns_scroll_up` positive assertion |
+
+### Notable Decisions/Tradeoffs
+
+1. **Ctrl+wheel guard**: The task spec says Ctrl/Alt wheel return `None` rather than falling through to plain scroll. The implementation adds an explicit `if mods.ctrl || mods.alt { return None; }` guard after the shift-only check. This matches the spec's "Modifier handling beyond Shift" note exactly.
+2. **mod.rs placeholder test update**: The `test_scroll_no_op_in_every_mode` test in `mod.rs` was written as a Phase 2 placeholder (all stubs returned `None`). Updating it was necessary to keep the suite green; the new comment documents that the list shrinks as each mode is wired.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::mouse::normal` — Passed (10/10 new tests)
+- `cargo test -p fdemon-app --lib` — Passed (1939 tests, 0 failed)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **Other modes still stub**: `DevTools`, `Settings`, `NewSessionDialog`, `LinkHighlight`, `FlutterVersion` scroll handlers remain stubs returning `None`. Their Phase 2 tasks (03-06) will populate them and update `mod.rs` similarly.
