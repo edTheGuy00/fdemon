@@ -10902,3 +10902,416 @@ mod mouse_phase3_tests {
         );
     }
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 4 cross-cutting integration tests
+//
+// These tests drive the full Message → state mutation → follow-up message chain
+// for every Phase-4 click message type, without using the TUI layer (fdemon-app
+// does not depend on fdemon-tui).  The registry is populated manually where
+// needed; the update() function drives the handler dispatch.
+// ─────────────────────────────────────────────────────────────────────────────
+mod phase4_integration_tests {
+    use super::*;
+    use crate::state::{DevToolsPanel, LogClickStamp};
+    use fdemon_core::{
+        network::HttpProfileEntry,
+        performance::FrameTiming,
+        stack_trace::{ParsedStackTrace, StackFrame},
+        LogEntry, LogSource,
+    };
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+
+    /// Build a minimal AppState that has one session with one log entry that
+    /// carries a two-frame stack trace.  Returns `(state, entry_id)`.
+    fn make_state_with_stack_entry() -> (AppState, u64) {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+
+        // Build a log entry with a parsed stack trace.
+        let mut trace = ParsedStackTrace::new("flutter: exception");
+        trace.add_frame(StackFrame::new(
+            0,
+            "myFunc",
+            "package:myapp/main.dart",
+            10,
+            3,
+        ));
+        trace.add_frame(StackFrame::new(
+            1,
+            "bootstrap",
+            "package:myapp/bootstrap.dart",
+            5,
+            1,
+        ));
+
+        let entry = LogEntry::with_stack_trace(
+            fdemon_core::LogLevel::Error,
+            LogSource::Flutter,
+            "Unhandled exception",
+            trace,
+        );
+        let entry_id = entry.id;
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        handle.session.add_log(entry);
+
+        (state, entry_id)
+    }
+
+    /// Build a state in DevTools mode with the given active panel.
+    fn make_devtools_state(panel: DevToolsPanel) -> AppState {
+        let mut state = AppState::new();
+        let device = test_device("d1", "iPhone");
+        state.session_manager.create_session(&device).unwrap();
+        state.ui_mode = crate::state::UiMode::DevTools;
+        state.devtools_view_state.active_panel = panel;
+        state
+    }
+
+    /// Build a state with inspector tree containing `count` visible nodes
+    /// (root + count-1 children, all expanded so all are visible).
+    fn make_inspector_state_with_nodes(count: usize) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+
+        // Build root with (count-1) children, each with a unique value_id.
+        let mut children = Vec::new();
+        for i in 1..count {
+            children.push(serde_json::json!({
+                "description": format!("Child{}", i),
+                "valueId": format!("child-{}", i),
+                "children": []
+            }));
+        }
+
+        let root: fdemon_core::DiagnosticsNode = serde_json::from_value(serde_json::json!({
+            "description": "Root",
+            "valueId": "root-id",
+            "children": children
+        }))
+        .expect("valid DiagnosticsNode");
+
+        // Expand root so all children are visible.
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.root = Some(root);
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        state
+    }
+
+    /// Build a state in Performance panel with `count` frames pushed into the
+    /// selected session's frame_history ring buffer.
+    fn make_performance_state_with_frames(count: u64) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Performance);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        for n in 0..count {
+            let frame = FrameTiming {
+                number: n,
+                build_micros: 8_000,
+                raster_micros: 8_000,
+                elapsed_micros: 16_000,
+                timestamp: chrono::Local::now(),
+                phases: None,
+                shader_compilation: false,
+            };
+            handle.session.performance.frame_history.push(frame);
+        }
+
+        state
+    }
+
+    /// Build a state in Network panel with `count` HTTP entries in the selected
+    /// session's network state.
+    fn make_network_state_with_requests(count: usize) -> AppState {
+        let mut state = make_devtools_state(DevToolsPanel::Network);
+
+        let handle = state.session_manager.selected_mut().unwrap();
+        for i in 0..count {
+            let entry = HttpProfileEntry {
+                id: format!("req-{}", i),
+                method: "GET".to_string(),
+                uri: format!("https://example.com/api/{}", i),
+                status_code: Some(200),
+                content_type: None,
+                start_time_us: (i as i64) * 1_000_000,
+                end_time_us: Some((i as i64) * 1_000_000 + 100_000),
+                request_content_length: None,
+                response_content_length: Some(512),
+                error: None,
+            };
+            handle.session.network.entries.push_back(entry);
+        }
+
+        state
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
+    /// Single click records a stamp; second click on same entry within the
+    /// 400 ms window emits `ToggleStackTraceForEntry` and the stack trace
+    /// actually toggles in state.
+    ///
+    /// Note: two consecutive calls in fast test execution are well within the
+    /// 400 ms window; no explicit Instant planting is needed.
+    #[test]
+    fn click_log_row_then_double_click_emits_toggle_stack_trace_for_entry() {
+        let (mut state, entry_id) = make_state_with_stack_entry();
+
+        // First click — records stamp, no follow-up.
+        let r1 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        assert!(r1.message.is_none(), "single click: no follow-up");
+        assert!(
+            state.last_log_click.is_some(),
+            "stamp recorded after first click"
+        );
+
+        // Second click within window — produces a follow-up.
+        let r2 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        let follow_up = r2
+            .message
+            .expect("expected ToggleStackTraceForEntry follow-up");
+        assert!(
+            matches!(follow_up, Message::ToggleStackTraceForEntry { entry_id: e } if e == entry_id),
+            "follow-up must be ToggleStackTraceForEntry for the same entry"
+        );
+
+        // Stamp must be cleared so a third click does not immediately retoggle.
+        assert!(
+            state.last_log_click.is_none(),
+            "stamp consumed by double-click"
+        );
+
+        // Dispatch the follow-up and verify the stack trace toggled.
+        let default_collapsed = state.settings.ui.stack_trace_collapsed;
+        let was_expanded_before = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .is_stack_trace_expanded(entry_id, default_collapsed);
+
+        update(&mut state, follow_up);
+
+        let is_expanded_after = state
+            .session_manager
+            .selected()
+            .unwrap()
+            .session
+            .is_stack_trace_expanded(entry_id, default_collapsed);
+
+        assert_ne!(
+            was_expanded_before, is_expanded_after,
+            "stack trace state must toggle after ToggleStackTraceForEntry"
+        );
+    }
+
+    /// A click older than 400 ms is NOT counted as the second half of a
+    /// double-click — the handler treats it as a fresh single click.
+    #[test]
+    fn click_log_row_after_window_expires_is_single_click() {
+        let (mut state, entry_id) = make_state_with_stack_entry();
+
+        // Plant a stamp older than the 400 ms window.
+        state.last_log_click = Some(LogClickStamp {
+            entry_id,
+            at: std::time::Instant::now() - std::time::Duration::from_millis(500),
+        });
+
+        let result = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id,
+                frame_index: None,
+            },
+        );
+        assert!(
+            result.message.is_none(),
+            "outside window: treated as single click"
+        );
+        assert!(
+            state.last_log_click.is_some(),
+            "fresh stamp must be recorded after timeout"
+        );
+    }
+
+    /// `SwitchDevToolsPanel` switches the active panel in state.
+    #[test]
+    fn click_devtools_inspector_tab_switches_panel() {
+        let mut state = make_devtools_state(DevToolsPanel::Inspector);
+
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Network),
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Network,
+            "SwitchDevToolsPanel must update active_panel"
+        );
+
+        // Round-trip back to Inspector.
+        update(
+            &mut state,
+            Message::SwitchDevToolsPanel(DevToolsPanel::Inspector),
+        );
+        assert_eq!(
+            state.devtools_view_state.active_panel,
+            DevToolsPanel::Inspector
+        );
+    }
+
+    /// Clicking row index 2 in a 5-node inspector tree sets `selected_index`
+    /// to 2 and dispatches `FetchLayoutData` (because the clicked node has a
+    /// `value_id` and the selection changed).
+    #[test]
+    fn click_inspector_select_row_sets_index_and_dispatches_layout_fetch() {
+        let mut state = make_inspector_state_with_nodes(5);
+        // Ensure the debounce window is not active (layout_last_fetch_time = None).
+
+        let result = update(&mut state, Message::DevToolsInspectorSelectRow { index: 2 });
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 2,
+            "selected_index must be updated to the clicked row"
+        );
+        assert!(
+            matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+            "clicking a different row must dispatch FetchLayoutData; got: {:?}",
+            result.action
+        );
+    }
+
+    /// Clicking the same row twice should not dispatch a second layout fetch
+    /// (the second click is treated as a no-op because selection did not change).
+    #[test]
+    fn click_inspector_select_same_row_twice_does_not_redispatch_fetch() {
+        let mut state = make_inspector_state_with_nodes(5);
+        // First click: select row 1.
+        update(&mut state, Message::DevToolsInspectorSelectRow { index: 1 });
+        // Second click on the same row: should be a no-op.
+        let r2 = update(&mut state, Message::DevToolsInspectorSelectRow { index: 1 });
+        assert!(
+            r2.action.is_none(),
+            "re-clicking the same row must not dispatch FetchLayoutData"
+        );
+    }
+
+    /// `SelectPerformanceFrame` sets `selected_frame` on the active session's
+    /// performance state.
+    #[test]
+    fn click_performance_frame_sets_selected_frame() {
+        let mut state = make_performance_state_with_frames(8);
+
+        update(
+            &mut state,
+            Message::SelectPerformanceFrame { index: Some(3) },
+        );
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .selected_frame,
+            Some(3),
+            "SelectPerformanceFrame must update selected_frame"
+        );
+    }
+
+    /// Deselecting a frame (index = None) clears `selected_frame`.
+    #[test]
+    fn click_performance_frame_none_clears_selection() {
+        let mut state = make_performance_state_with_frames(8);
+        // Pre-select frame 5.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .performance
+            .selected_frame = Some(5);
+
+        update(&mut state, Message::SelectPerformanceFrame { index: None });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .performance
+                .selected_frame,
+            None,
+            "SelectPerformanceFrame(None) must clear selected_frame"
+        );
+    }
+
+    /// `NetworkSelectRequest` sets `selected_index` on the active session's
+    /// network state.
+    #[test]
+    fn click_network_select_request_sets_selected_index() {
+        let mut state = make_network_state_with_requests(5);
+
+        update(&mut state, Message::NetworkSelectRequest { index: Some(2) });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .network
+                .selected_index,
+            Some(2),
+            "NetworkSelectRequest must update selected_index"
+        );
+    }
+
+    /// Deselecting (index = None) clears `selected_index`.
+    #[test]
+    fn click_network_deselect_clears_selected_index() {
+        let mut state = make_network_state_with_requests(5);
+        // Pre-select entry 3.
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .selected_index = Some(3);
+
+        update(&mut state, Message::NetworkSelectRequest { index: None });
+
+        assert_eq!(
+            state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .network
+                .selected_index,
+            None,
+            "NetworkSelectRequest(None) must clear selected_index"
+        );
+    }
+}
