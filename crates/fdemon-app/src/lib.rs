@@ -71,6 +71,7 @@ pub(crate) mod input_key;
 pub(crate) mod input_mouse;
 pub mod log_view_state;
 pub mod message;
+pub(crate) mod mouse_regions;
 pub mod new_session_dialog;
 pub mod plugin;
 pub(crate) mod process;
