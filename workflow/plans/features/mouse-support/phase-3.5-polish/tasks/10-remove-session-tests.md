@@ -116,3 +116,32 @@ fn test_remove_selected_session_at_end_clamps_to_last() {
 - **The test names use `_pre_selected_` / `_post_selected_` / `_at_end_clamps_` to make the branch they exercise grep-friendly.** Pick names that survive a future maintainer's grep for "selected_index" or "remove_session".
 - If the existing test infrastructure for creating sessions requires async / tokio runtime setup, mirror what `test_remove_session` already does — don't introduce a new pattern.
 - Do not modify the production `remove_session` implementation. The semantics are correct as of Phase 3 Task 02; this task only adds coverage.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/session_manager.rs` | Added three new tests: `test_remove_session_pre_selected_preserves_identity`, `test_remove_session_post_selected_leaves_selection_unchanged`, `test_remove_selected_session_at_end_clamps_to_last` |
+
+### Notable Decisions/Tradeoffs
+
+1. **No `session_order()` accessor needed**: The task pseudocode referenced `manager.session_order()` which does not exist as a public method. The three tests instead use the existing observable API (`len()`, `selected_index()`, `selected_id()`, `get()`) — matching the exact pattern of `test_remove_session`. No production code was changed.
+
+2. **Dead variable warning avoided**: The task pseudocode captured `id3` even in the "post_selected" test where it isn't verified via identity (only via `get()` returning `None`). All three IDs are used in assertions to keep the tests comprehensive without triggering `unused variable` warnings.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app session_manager` - Passed (31 tests, 3 new)
+- `cargo fmt --all -- --check` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **None**: All three tests are purely additive; no production code was touched.

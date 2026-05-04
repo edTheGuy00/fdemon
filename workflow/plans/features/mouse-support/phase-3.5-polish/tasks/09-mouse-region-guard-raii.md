@@ -188,3 +188,41 @@ The guard is the user-confirmed approach (chat decision: borrowing guard with `D
 - **`drop(regions)` in `normal::handle_press`** is optional but recommended. The orchestrator may inline the guard's lifetime to function scope without it; the explicit `drop` documents intent.
 - **Do not introduce a panic-safety test that uses `std::process::abort` or similar** — `catch_unwind` is the right tool. Make sure the test compiles with `panic = unwind` (the project default) and gracefully skips with `panic = abort` if the project ever switches.
 - **Keep the existing `MouseRegionsCell::{take, set}` public methods** for now — Task 11 / future phases can deprecate them once all production call sites have migrated to `take_guard`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a0480b5d5e556ad73
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | Added `MouseRegionGuard<'a>` type with `Deref`, `DerefMut`, `Drop` impls; added `MouseRegionsCell::take_guard()` accessor; added `use std::ops::{Deref, DerefMut}`; added 3 new tests |
+| `crates/fdemon-app/src/lib.rs` | Added `MouseRegionGuard` to the `mouse_regions` re-export list |
+| `crates/fdemon-tui/src/render/mod.rs` | Replaced `state.mouse_regions.take()` / `state.mouse_regions.set(regions)` pair with `state.mouse_regions.take_guard()`; removed explicit `set()` call |
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | Replaced manual `take()`/`set()` pair with `take_guard()`; added explicit `drop(regions)` before busy-gate check |
+
+### Notable Decisions/Tradeoffs
+
+1. **`AssertUnwindSafe` in panic test**: `MouseRegionsCell` wraps `Cell<T>` which is `!RefUnwindSafe`. Used `std::panic::AssertUnwindSafe` on the closure (not an unsafe raw-pointer workaround) — this is correct because the cell is owned by the test thread and no aliasing occurs. The safety comment in the test explains the invariant.
+
+2. **`Option<MouseRegions>` inside guard**: Required so `Drop::drop(&mut self)` can move the value out via `Option::take` without unsafe. As specified in the task notes.
+
+3. **Existing `take`/`set` methods preserved**: Left as public for test-level use. Production call sites (render + handle_press) now use `take_guard`. Task 11 will handle deprecation.
+
+4. **`expect` in `Deref`/`DerefMut`**: The `Option` is always `Some` until `Drop` — the `expect` is a programmer-error panic (not a production invariant violation), which is appropriate here. `rustfmt` reformatted the method chains to multi-line form.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed
+- `cargo test --workspace --lib` — Passed (4,899 tests: 2035 + 372 + 740 + 842 + 910)
+- Guard-specific tests confirmed running: `guard_puts_regions_back_on_drop`, `guard_puts_regions_back_on_panic`, `guard_deref_exposes_builder`
+
+### Risks/Limitations
+
+1. **`panic = abort` builds**: The panic-safety guarantee (`Drop` restores registry on unwind) does not apply when `panic = abort` is set in the profile (process aborts before unwinding). The test `guard_puts_regions_back_on_panic` still compiles under abort mode but would not be meaningful. This is noted in the test comment. The project default is `unwind`.

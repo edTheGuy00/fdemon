@@ -61,3 +61,30 @@ The fix is to either pass `padded_area.height` directly (letting the builder ski
 - This is a one-token deletion (`.max(1)`). The builder already skips empty rects.
 - The optional early-return adds about three lines of code but makes the zero-height case explicit. Apply if you find it improves readability; skip otherwise.
 - Do not change the single-session device-pill rect (`render_single_session_with_ctx`) — it already has its own `padded_area.width > 0 && padded_area.height > 0` guard and uses `padded_area.width` / `padded_area.height` directly.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/tabs.rs` | Removed `.max(1)` from `padded_area.height.max(1)` on line 138; added early-return guard `if padded_area.height == 0 || padded_area.width == 0 { return; }` after `padded_area` construction |
+
+### Notable Decisions/Tradeoffs
+
+1. **Early-return guard included**: The optional early-return guard was added for explicitness. It documents intent clearly even though `click_left_middle`'s built-in `is_empty` check would silently drop zero-height rects anyway. This matches the task's recommendation.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib widgets::tabs` - Passed (13 tests, including the 4 acceptance-criteria tests)
+- `cargo fmt --all -- --check` - Passed (no formatting issues)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+
+### Risks/Limitations
+
+None. This is a minimal cleanup: one token removed (`max(1)`), and three lines added (early-return guard). The builder's `is_empty` check was already correct; this change just removes the redundant workaround.

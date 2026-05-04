@@ -345,3 +345,32 @@ New tests added to `tabs.rs`:
 2. **`DIVIDER_WIDTH` fragility**: If ratatui's `Tabs` widget divider spacing changes, the constant and the divider test must both be updated. The test pins the value at 3 cells.
 
 3. **`to_mouse_rect` unused**: The helper in `widgets/mod.rs` remains unused with `#[allow(dead_code)]`. Phase 4 widgets (log row clicks, frame bar) are expected to use it.
+
+### Reconciliation Note (Phase 3.5)
+
+The first implementor's worktree (`worktree-agent-a99ad3bd2a8c920bd`) exceeded scope by re-implementing
+`render_main_header`, `TitleRowHints`, `register_shortcut_clicks`, and the shortcut constants —
+all of which were Task 06's deliverables. When merged after Task 06 had already landed, this caused
+4-file conflicts (`header.rs`, `render/mod.rs`, `widgets/mod.rs`, `handler/mouse/normal.rs`).
+
+The orchestrator aborted the squash-merge and resolved by cherry-picking only the *new* contributions
+of the worktree:
+
+**Kept (cherry-picked from worktree):**
+- `crates/fdemon-tui/src/widgets/tabs.rs` — `render_session_tabs(...)` free function with multi-session
+  tab regions and single-session device-pill region.
+
+**Added during reconciliation (manual delta in `feat/mouse-support`):**
+- `crates/fdemon-tui/src/widgets/header.rs` — replaced `let tabs = SessionTabs::new(...); tabs.render(...);`
+  with `render_session_tabs(tabs_area, buf, session_manager, header.icons, ctx);` so `MouseCtx` threads
+  into the multi-session tabs row.
+- `cargo fmt` re-flow on `handler/mouse/normal.rs` and `render/mod.rs`.
+
+**Discarded (from worktree, not merged):**
+- The worktree's `header.rs` rewrite (used Task 06's version instead).
+- The worktree's `render/mod.rs` rewrite (used Task 06's version instead).
+- The worktree's `widgets/mod.rs` rewrite (used Task 06's version instead).
+- The worktree's `handler/mouse/normal.rs` whitespace edits (already applied by Task 06's clippy fix).
+
+The cherry-picked `tabs.rs` had been independently validated by `task_validator` before reconciliation,
+so the discarded files do not represent unreviewed code.

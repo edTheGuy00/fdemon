@@ -1,6 +1,6 @@
 # Task 04: ARCHITECTURE.md baseline update for Phase 3 region registry
 
-**Status:** Not Started
+**Status:** Done
 **Estimated Hours:** 0.5h
 **Depends On:** —
 **Crate / Area:** docs
@@ -70,3 +70,27 @@ After this task, `ARCHITECTURE.md` should describe:
 - Stay descriptive, not prescriptive. Document what the code currently does, not what it should do.
 - Do **not** describe `MouseRegionGuard` in this task — that lands in Task 11 after Wave 4 implements it. A single forward pointer ("Wave 4 will introduce `MouseRegionGuard`") is fine but no API description.
 - Keep the new content tight — match the surrounding section's voice and density. Three to six paragraphs total is appropriate for the registry pattern; one short module-reference bullet for `mouse_regions`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/ARCHITECTURE.md` | Added `mouse_regions.rs`, `handler/mouse/`, and `input_mouse.rs` rows to the `fdemon-app` Module Reference table; updated `render/mod.rs` row in `fdemon-tui` to mention `MouseCtx`; added "Mouse Region Registry" subsection to Key Patterns covering types, per-frame lifecycle, per-click lifecycle, gate checks, TEA exception note, and Wave 4 forward pointer; added `mouse_regions: MouseRegionsCell` to AppState description in Key Types |
+
+### Content Boundary Compliance
+
+- All updates within correct document boundaries: YES
+- Cross-contamination detected and fixed: YES/NO/N/A: N/A
+
+### Notable Decisions/Tradeoffs
+
+1. **Handler/mouse rows added to Module Reference**: `handler/mouse/` and `input_mouse.rs` were not previously listed in the fdemon-app table even though they are significant modules. Added them alongside `mouse_regions.rs` since the task context made clear they are part of the same feature boundary.
+2. **Forward pointer phrasing**: Described `MouseRegionGuard` only as a named future mechanism with no API details, per the task's explicit instruction. The sentence references "Wave 4 (phase-3.5 Task 09 / Task 11)" so future readers can locate the follow-up task.
+3. **REVIEW_FOCUS.md cross-reference**: Cross-referenced via the TEA exception note (`docs/REVIEW_FOCUS.md` "Approved TEA Exception → Current usage") as required by acceptance criteria, without linking to prohibited docs directly in managed doc content.

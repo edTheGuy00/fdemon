@@ -92,3 +92,32 @@ so the discarded files do not represent unreviewed code.
 - This is a documentation-only task. None of the three target files are managed docs (`docs/REVIEW_FOCUS.md` is explicitly listed as implementor-editable per the planner skill's "Other Docs" classification; the two `workflow/plans/...` files are planning artifacts).
 - Cite line numbers and test names verbatim from the actual source files at the time of writing — these are stable references and should remain accurate.
 - Keep the reconciliation note factual; do not editorialize about the worktree implementor's process.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `docs/REVIEW_FOCUS.md` | Expanded "Current usage" from a single-line entry to a bulleted list; added `AppState::mouse_regions: MouseRegionsCell` bullet alongside the existing `TargetSelectorState::last_known_visible_height` entry |
+| `workflow/plans/features/mouse-support/phase-3-region-registry/TASKS.md` | Replaced the incorrect "Settings mode does not render the header" sentence at line 172 with accurate wording citing the dispatcher gate (`handle_press` `_ => None` arm) and the integration test name |
+| `workflow/plans/features/mouse-support/phase-3-region-registry/tasks/07-tabs-and-device-pill-regions.md` | Appended "Reconciliation Note (Phase 3.5)" subsection after "Risks/Limitations", enumerating kept / added / discarded changes from the manual cherry-pick |
+
+### Notable Decisions/Tradeoffs
+
+1. **Verbatim test name**: Used `view_header_regions_present_in_settings_mode_because_header_always_renders` exactly as it appears in `crates/fdemon-tui/src/render/tests.rs` line 160. The test name itself describes the corrected understanding.
+2. **Dispatcher line reference**: The `_ => None` arm in `handle_press` is at line 57 of `crates/fdemon-app/src/handler/mouse/mod.rs` at time of writing. The TASKS.md update cites the function name rather than a line number to be more stable against minor reformats.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed (no source changes)
+- No source code was modified; no test suite run required
+
+### Risks/Limitations
+
+1. **Line number stability**: The TASKS.md update deliberately uses function-name citation (`handle_press` returns `None` for `_ =>`) rather than a bare line number, so it remains accurate if surrounding code is reformatted.

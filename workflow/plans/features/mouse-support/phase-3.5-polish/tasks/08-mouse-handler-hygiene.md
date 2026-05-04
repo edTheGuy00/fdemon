@@ -108,3 +108,31 @@ Bundling these into one task because both touch `handler/mouse/normal.rs` — sp
 - Future per-mode handlers (Phase 4/5) will benefit because they no longer need to remember to repeat the tag-filter check.
 - Do not lift the *busy gate* (`HotReload`/`HotRestart`/`StopApp` short-circuit) into the dispatcher — that gate is per-message, not per-mode, and lives correctly inside `normal::handle_press` after the registry hit-test.
 - Be careful when re-targeting the existing test: the dispatcher takes `&AppState` while `normal::handle_press` may take a slightly different signature. Match the public dispatcher signature.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Added `tag_filter_visible` early-return to `handle_press` dispatcher before the `ui_mode` match; added dispatcher-level test `dispatcher_press_tag_filter_visible_is_no_op` covering all 11 UiMode variants |
+| `crates/fdemon-app/src/handler/mouse/normal.rs` | Removed redundant `tag_filter_visible` early-return from `handle_press`; replaced with a comment pointing to the dispatcher; added 24-line `///` doc block to `handle_scroll`; replaced `press_when_tag_filter_visible_is_no_op` test with a relocation note |
+
+### Notable Decisions/Tradeoffs
+
+1. **Test relocation strategy**: Chose option (a) from the task spec — re-targeted the existing test to the dispatcher level (`mod.rs`) rather than keeping a redundant normal-level test. The normal.rs test body was replaced with a comment noting the relocation to keep the test count accurate and avoid testing a gate that no longer exists at that level.
+
+2. **Dispatcher test covers all modes**: The new `dispatcher_press_tag_filter_visible_is_no_op` test iterates all 11 `UiMode` variants (not just `Normal`) to confirm the dispatcher gate is truly mode-agnostic.
+
+3. **`handle_scroll` doc**: Documented three routing branches (tag-filter nav, page scroll, line scroll), cross-linked to `handler/keys.rs:265-270` for the keyboard parallels, and noted the horizontal-wheel no-op behavior and the Ctrl/Alt intent.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app handler::mouse` — Passed (68 tests, 0 failed)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo fmt --all -- --check` — Passed

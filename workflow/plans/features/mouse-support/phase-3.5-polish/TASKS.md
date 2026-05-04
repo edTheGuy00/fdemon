@@ -74,17 +74,17 @@ Wave 5 (single — doc_maintainer follow-up after Wave 4):
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-polish-mouse-regions](tasks/01-polish-mouse-regions.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 2 | [02-delete-to-mouse-rect-helper](tasks/02-delete-to-mouse-rect-helper.md) | Not Started | — | 0.1h | `fdemon-tui` |
-| 3 | [03-docs-and-plan-reconciliation](tasks/03-docs-and-plan-reconciliation.md) | Not Started | — | 0.25h | docs / plan |
-| 4 | [04-architecture-doc-baseline](tasks/04-architecture-doc-baseline.md) | Not Started | — | 0.5h | docs (`doc_maintainer`) |
-| 5 | [05-header-constants-and-overflow](tasks/05-header-constants-and-overflow.md) | Not Started | — | 0.25h | `fdemon-tui` |
-| 6 | [06-tabs-empty-rect-cleanup](tasks/06-tabs-empty-rect-cleanup.md) | Not Started | — | 0.1h | `fdemon-tui` |
-| 7 | [07-render-tests-todo-ergonomics](tasks/07-render-tests-todo-ergonomics.md) | Not Started | — | 0.1h | `fdemon-tui` |
-| 8 | [08-mouse-handler-hygiene](tasks/08-mouse-handler-hygiene.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 9 | [09-mouse-region-guard-raii](tasks/09-mouse-region-guard-raii.md) | Not Started | 1, 8 | 1.5h | `fdemon-app`, `fdemon-tui` |
-| 10 | [10-remove-session-tests](tasks/10-remove-session-tests.md) | Not Started | — | 0.5h | `fdemon-app` |
-| 11 | [11-architecture-doc-raii-update](tasks/11-architecture-doc-raii-update.md) | Not Started | 9 | 0.25h | docs (`doc_maintainer`) |
+| 1 | [01-polish-mouse-regions](tasks/01-polish-mouse-regions.md) | Done ✅ | — | 0.5h | `fdemon-app` |
+| 2 | [02-delete-to-mouse-rect-helper](tasks/02-delete-to-mouse-rect-helper.md) | Done ✅ | — | 0.1h | `fdemon-tui` |
+| 3 | [03-docs-and-plan-reconciliation](tasks/03-docs-and-plan-reconciliation.md) | Done ✅ | — | 0.25h | docs / plan |
+| 4 | [04-architecture-doc-baseline](tasks/04-architecture-doc-baseline.md) | Done ✅ | — | 0.5h | docs (`doc_maintainer`) |
+| 5 | [05-header-constants-and-overflow](tasks/05-header-constants-and-overflow.md) | Done ✅ | — | 0.25h | `fdemon-tui` |
+| 6 | [06-tabs-empty-rect-cleanup](tasks/06-tabs-empty-rect-cleanup.md) | Done ✅ | — | 0.1h | `fdemon-tui` |
+| 7 | [07-render-tests-todo-ergonomics](tasks/07-render-tests-todo-ergonomics.md) | Done ✅ | — | 0.1h | `fdemon-tui` |
+| 8 | [08-mouse-handler-hygiene](tasks/08-mouse-handler-hygiene.md) | Done ✅ | — | 0.5h | `fdemon-app` |
+| 9 | [09-mouse-region-guard-raii](tasks/09-mouse-region-guard-raii.md) | Done ✅ | 1, 8 | 1.5h | `fdemon-app`, `fdemon-tui` |
+| 10 | [10-remove-session-tests](tasks/10-remove-session-tests.md) | Done ✅ | — | 0.5h | `fdemon-app` |
+| 11 | [11-architecture-doc-raii-update](tasks/11-architecture-doc-raii-update.md) | Done ✅ | 9 | 0.25h | docs (`doc_maintainer`) |
 
 ## File Overlap Analysis
 

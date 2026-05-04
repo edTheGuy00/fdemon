@@ -51,3 +51,31 @@ If a future phase needs the helper, it can be re-added in five lines.
 
 - This is a 5-line deletion. No callers exist; verified by grep `to_mouse_rect` across `crates/fdemon-tui/src/`.
 - If Phase 4 later wants this helper for log row / frame bar / network row click registration, the implementor for that task can re-add it. The conversion body is one line.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/mod.rs` | Deleted `to_mouse_rect` function (doc comment, stale task comment, `#[allow(dead_code)]` attribute, and function body — 14 lines removed) |
+
+### Notable Decisions/Tradeoffs
+
+1. **Full block deletion**: Removed the entire function including its multi-line doc comment and the stale `// Task 07 ...` comment, leaving the file clean with no dead-code annotations or forward-references.
+
+### Testing Performed
+
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no dead-code warning)
+- `cargo fmt --all -- --check` - Passed
+- `cargo test --workspace` - Passed (4,133 tests passed, 0 failed)
+
+### Risks/Limitations
+
+1. **None**: Pure deletion with no callers. The conversion logic remains trivially re-creatable as a one-liner if needed in a future phase.

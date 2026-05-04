@@ -77,3 +77,31 @@ Discharge three small Phase-3 review findings on `crates/fdemon-tui/src/widgets/
 - This task is local to `register_shortcut_clicks` — do not touch other functions in `header.rs`.
 - The `expect` message is reachable only if a future contributor adds a label longer than `u16::MAX − 4` chars, which is exceedingly unlikely. The `expect` exists to give a clear panic message rather than silent truncation.
 - Do not change the public signature of `register_shortcut_clicks`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/header.rs` | Added `SHORTCUT_SEGMENT_PREFIX: u16 = 4` constant with doc comment; replaced `(4 + label.len()) as u16` with `u16::try_from(SHORTCUT_SEGMENT_PREFIX as usize + label.len()).expect(...)`; replaced bare `+` in overflow guard with `saturating_add` on both sides |
+
+### Notable Decisions/Tradeoffs
+
+1. **Placement of new constant**: `SHORTCUT_SEGMENT_PREFIX` was placed directly above the existing `SHORTCUT_CLICK_WIDTH` constant, grouping the two related shortcut-layout constants together as specified in the task.
+2. **`try_from` expect message**: Used the exact message from the task spec — "shortcut label fits in u16 segment width" — for consistency with the task's intent.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib widgets::header` — Passed (19/19 tests)
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+
+### Risks/Limitations
+
+1. **None**: All three changes are purely mechanical (no logic change), scoped to `register_shortcut_clicks`, and all tests pass.

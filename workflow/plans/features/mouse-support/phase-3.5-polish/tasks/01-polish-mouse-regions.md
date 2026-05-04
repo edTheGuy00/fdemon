@@ -51,3 +51,36 @@ Discharge four small Phase-3 review findings that all touch `crates/fdemon-app/s
 - This is a four-edit polish task in a single file. All changes are mechanical; no public API changes.
 - Do not change the `MouseRegionsCell::Debug` impl itself — only the doc comment. The impl is correct as-is (a `&self` Debug genuinely cannot expose the count without taking the registry, and taking during render would be a bug).
 - The `Message::CloseSessionAt(0)` substitution in the test is correct because the original test only checks that *both* the left and middle bindings were captured by `click_left_middle`; the specific message variant is incidental but should match production usage in `widgets/tabs.rs::render_session_tabs`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | 4 mechanical edits: fix stale-TODO test assertion, fix `*msg.clone()` to `(**msg).clone()`, fix `MouseRegionsCell::Debug` doc comment, add `EmitWithCoord` invariant doc |
+
+### Notable Decisions/Tradeoffs
+
+1. **Stale TODO test fix**: Replaced `Message::CloseCurrentSession` with `Message::CloseSessionAt(0)` and removed the `// TODO: switch to Message::CloseSessionAt(0) when Task 02 lands.` comment. The test still correctly verifies that both left and middle bindings are captured; the specific message variant now matches production usage.
+
+2. **`(**msg).clone()` idiom**: Changed from `*msg.clone()` (clone the Box, then deref) to `(**msg).clone()` (deref twice to reach the inner `Message`, then clone). Observable behavior is identical but the intent is clearer.
+
+3. **`MouseRegionsCell::Debug` doc**: Updated to accurately reflect the `finish_non_exhaustive()` implementation. The original doc claimed "shows only the entry count" but the impl uses `finish_non_exhaustive` with no `field("len", ...)` call — the count is genuinely not exposed (by design, since reading the Cell would require a `take`/`set` round-trip that would corrupt the registry during debug printing).
+
+4. **`EmitWithCoord` invariant doc**: Added a `///` block covering all three required points: saturating arithmetic requirement, rationale for `fn` over `Box<dyn Fn>`, and the rule for adding new variants instead of widening.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app mouse_regions` - PASS (13 tests)
+- `cargo clippy --workspace --all-targets -- -D warnings` - PASS
+- `cargo fmt --all -- --check` - PASS
+
+### Risks/Limitations
+
+1. **None**: All changes are mechanical doc/comment/idiom fixes with no public API changes or behavior changes.

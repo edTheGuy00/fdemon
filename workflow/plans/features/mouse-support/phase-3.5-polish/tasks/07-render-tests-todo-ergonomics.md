@@ -54,3 +54,29 @@ Move the Phase-5 update notes from the outer `///` comments to *inline* `//` com
 - This is a comment-only refactor. No assertion logic changes.
 - The point of the move is *colocation*: future Phase 5 implementors editing the assertion will see the TODO right next to the change site, instead of buried in the outer doc block.
 - Do not delete the TODO content — only relocate it.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-abab981d77a861c01
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/render/tests.rs` | Removed `TODO(phase-5)` lines from three outer `///` doc comments; added inline `//` comments colocated with the count-asserting assertions in each test |
+
+### Notable Decisions/Tradeoffs
+
+1. **Third test inline comment**: The third test (`view_header_regions_present_in_settings_mode_because_header_always_renders`) uses `assert!(!regions.is_empty(), ...)` rather than an exact count. The existing inline comment already mentioned Phase 5 additions; the updated comment is more explicit about what the Phase 5 update path looks like (split into per-source counts or check specific panel-region entries), matching the spirit of the removed TODO.
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui --lib render::tests` - Passed (8/8 tests)
+- `cargo fmt --all -- --check` - Passed (no output = clean)
+
+### Risks/Limitations
+
+1. **None**: This is a comment-only refactor with no assertion logic changes. All tests pass unchanged.
