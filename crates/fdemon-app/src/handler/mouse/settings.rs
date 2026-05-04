@@ -18,6 +18,16 @@ pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, _mods: KeyModSet) 
                 ScrollDir::Left | ScrollDir::Right => None,
             },
             // Edit pane is text input — wheel must not move the list underneath.
+            //
+            // Asymmetry note: NewSessionDialog's dart-defines modal routes Up/Down in
+            // BOTH panes (see `new_session.rs::handle_scroll`). The two surfaces look
+            // identical to a user but behave differently. The asymmetry mirrors the
+            // underlying keyboard handlers:
+            //   - Settings dart-defines (keys.rs:733-770) only binds Up/Down in List pane.
+            //   - NewSessionDialog dart-defines (keys.rs:839-866) binds Up/Down in both.
+            // Reconciling the two surfaces requires changing the keyboard handler at
+            // keys.rs:851-855 — a real product decision, not a polish fix. If pursued,
+            // see `workflow/plans/bugs/dart-defines-edit-scroll-asymmetry/` (TBD).
             DartDefinesPane::Edit => None,
         };
     }
