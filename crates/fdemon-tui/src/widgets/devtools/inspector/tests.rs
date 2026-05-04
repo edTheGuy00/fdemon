@@ -543,3 +543,142 @@ fn test_inspector_selected_index_preserved_after_small_render() {
         "selected_index should be preserved after rendering at small terminal size"
     );
 }
+
+// ── Phase 4 Task 07: inspector region recording tests ─────────────────────────
+
+/// Build a 5-node tree: root + 4 children (all expanded so all 5 are visible).
+fn make_5_node_tree() -> InspectorState {
+    let root = DiagnosticsNode {
+        description: "Root".to_string(),
+        value_id: Some("root".to_string()),
+        children: vec![
+            DiagnosticsNode {
+                description: "Child1".to_string(),
+                value_id: Some("c1".to_string()),
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "Child2".to_string(),
+                value_id: Some("c2".to_string()),
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "Child3".to_string(),
+                value_id: Some("c3".to_string()),
+                ..Default::default()
+            },
+            DiagnosticsNode {
+                description: "Child4".to_string(),
+                value_id: Some("c4".to_string()),
+                ..Default::default()
+            },
+        ],
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state.expanded.insert("root".to_string());
+    state
+}
+
+/// Build a state with a single root node (leaf — no children).
+fn make_single_root_state() -> InspectorState {
+    let root = DiagnosticsNode {
+        description: "SingleRoot".to_string(),
+        value_id: Some("sr-root".to_string()),
+        ..Default::default()
+    };
+    let mut state = InspectorState::new();
+    state.root = Some(root);
+    state
+}
+
+#[test]
+fn inspector_records_row_and_glyph_regions_per_visible_row() {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseRegions;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    // 5-node tree fully expanded → 5 visible rows in viewport.
+    let inspector_state = make_5_node_tree();
+    let widget = WidgetInspector::new(&inspector_state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    let select_count = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.on_left.as_ref().and_then(|a| a.as_emit()),
+                Some(Message::DevToolsInspectorSelectRow { .. })
+            )
+        })
+        .count();
+    let toggle_count = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.on_left.as_ref().and_then(|a| a.as_emit()),
+                Some(Message::DevToolsInspectorToggleNode { .. })
+            )
+        })
+        .count();
+
+    // 5 visible rows → 5 row regions + 5 glyph regions.
+    assert_eq!(
+        select_count, 5,
+        "expected 5 SelectRow regions (one per visible row), got {select_count}"
+    );
+    assert_eq!(
+        toggle_count, 5,
+        "expected 5 ToggleNode regions (one per visible row), got {toggle_count}"
+    );
+}
+
+#[test]
+fn glyph_region_wins_over_row_region_at_glyph_cell() {
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseButton, MouseRegions};
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    // Single root at depth 0: glyph is at (tree_inner.x + 0*2, tree_inner.y).
+    // With area = Rect::new(0, 0, 120, 24) the horizontal split kicks in
+    // (width >= WIDE_TERMINAL_THRESHOLD = 100).
+    // Tree area is left 60 columns.  Block border → tree_inner.x = 1, tree_inner.y = 1.
+    // Glyph for depth-0 root is at (1, 1).
+    let inspector_state = make_single_root_state();
+    let widget = WidgetInspector::new(&inspector_state, true, &VmConnectionStatus::Connected);
+
+    let mut regions = MouseRegions::default();
+    let area = Rect::new(0, 0, 120, 24);
+    let mut buf = Buffer::empty(area);
+    {
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(area, &mut buf, widget, Some(&mut ctx));
+    }
+
+    // Hit-test the glyph cell (tree_inner.x=1, tree_inner.y=1).
+    // Last-pushed-wins: the glyph region was pushed after the row region,
+    // so the result must be ToggleNode, not SelectRow.
+    let hit = regions.hit_test(1, 1, MouseButton::Left);
+    let action = hit
+        .and_then(|e| e.on_left.as_ref())
+        .map(|a| a.resolve(1, 1));
+    assert!(
+        matches!(
+            action,
+            Some(Message::DevToolsInspectorToggleNode { index: 0 })
+        ),
+        "expected ToggleNode at glyph cell (1,1), got: {action:?}"
+    );
+}

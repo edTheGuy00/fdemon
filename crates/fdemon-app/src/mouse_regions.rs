@@ -107,6 +107,16 @@ impl MouseAction {
             MouseAction::EmitWithCoord(f) => f(x, y),
         }
     }
+
+    /// If this is an `Emit` variant, return a reference to the boxed message;
+    /// otherwise return `None`. Useful in tests that want to inspect the
+    /// emitted message without resolving it through a coordinate.
+    pub fn as_emit(&self) -> Option<&Message> {
+        match self {
+            MouseAction::Emit(msg) => Some(msg),
+            MouseAction::EmitWithCoord(_) => None,
+        }
+    }
 }
 
 /// Single click-region entry.

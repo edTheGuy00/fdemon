@@ -151,7 +151,23 @@ impl WidgetInspector<'_> {
     fn render_tree(&self, area: Rect, buf: &mut Buffer) {
         let visible = self.inspector_state.visible_nodes();
         let selected = self.inspector_state.selected_index;
+        self.render_tree_core(area, buf, &visible, selected, None);
+    }
 
+    /// Shared layout + dispatch logic for tree rendering.
+    ///
+    /// Called from both `render_tree` (no region recording) and
+    /// `render_tree_with_regions` (with region recording). Extracting it here
+    /// ensures the two paths stay in sync — a single place to change layout
+    /// decisions.
+    fn render_tree_core(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        visible: &[(&DiagnosticsNode, usize)],
+        selected: usize,
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         // Guard: if the area is too small for a two-panel layout, show a compact
         // single-line summary instead of potentially garbled split output.
         if area.height < MIN_TREE_RENDER_HEIGHT {
@@ -195,11 +211,27 @@ impl WidgetInspector<'_> {
             }
         };
 
-        self.render_tree_panel(tree_area, buf, &visible, selected);
+        self.render_tree_panel_inner(tree_area, buf, visible, selected, ctx);
 
         if let Some(lay_area) = layout_area {
-            self.render_layout_panel(lay_area, buf, &visible, selected);
+            // Layout panel is not clickable in v1; pass no ctx.
+            self.render_layout_panel(lay_area, buf, visible, selected);
         }
+    }
+
+    /// Render the tree column and record click regions into `ctx`.
+    ///
+    /// Called from [`render_with_regions`] when a [`MouseCtx`] is available.
+    /// Uses the same layout split logic as `render_tree` via `render_tree_core`.
+    pub(super) fn render_tree_with_regions(
+        &self,
+        area: Rect,
+        buf: &mut Buffer,
+        visible: &[(&DiagnosticsNode, usize)],
+        ctx: Option<&mut MouseCtx<'_>>,
+    ) {
+        let selected = self.inspector_state.selected_index;
+        self.render_tree_core(area, buf, visible, selected, ctx);
     }
 
     // ── Loading / Error / Empty / Disconnected states ─────────────────────────
@@ -403,14 +435,60 @@ pub(super) fn short_path(file: &str) -> &str {
 /// directly and does not record regions. Passing `None` for `ctx` makes this
 /// function behave identically to `Widget::render`.
 ///
-/// Phase 4 Task 07 fills in the region recording body.
+/// ## Dispatch logic
+///
+/// The function replicates the state-branch dispatch from `Widget::render` so
+/// each branch can be tested independently:
+///
+/// - **Not connected** → `render_disconnected` (no clickable content)
+/// - **Loading** → `render_loading` (no clickable content)
+/// - **Error** → `render_error_box` (no clickable content)
+/// - **Empty tree** → `render_empty` (no clickable content)
+/// - **Tree ready** → `render_tree_with_regions` (records row + glyph regions)
+///
+/// The background-clearing pass from `Widget::render` is reproduced here so
+/// the buffer state is identical regardless of which entry point is used.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     widget: WidgetInspector<'_>,
-    _ctx: Option<&mut MouseCtx<'_>>,
+    ctx: Option<&mut MouseCtx<'_>>,
 ) {
-    <WidgetInspector as Widget>::render(widget, area, buf);
+    use crate::theme::palette;
+    use ratatui::style::Style;
+
+    // Clear background — identical to Widget::render.
+    let bg_style = Style::default().bg(palette::DEEPEST_BG);
+    for y in area.y..area.bottom() {
+        for x in area.x..area.right() {
+            if let Some(cell) = buf.cell_mut((x, y)) {
+                cell.set_style(bg_style).set_char(' ');
+            }
+        }
+    }
+
+    if !widget.vm_connected {
+        widget.render_disconnected(area, buf);
+        return;
+    }
+    if widget.inspector_state.loading {
+        widget.render_loading(area, buf);
+        return;
+    }
+    if let Some(ref error) = widget.inspector_state.error {
+        widget.render_error_box(area, buf, error);
+        return;
+    }
+    if widget.inspector_state.root.is_some() {
+        let visible = widget.inspector_state.visible_nodes();
+        if visible.is_empty() {
+            widget.render_empty(area, buf);
+        } else {
+            widget.render_tree_with_regions(area, buf, &visible, ctx);
+        }
+    } else {
+        widget.render_empty(area, buf);
+    }
 }
 
 #[cfg(test)]
