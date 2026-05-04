@@ -26,13 +26,7 @@ pub(super) fn handle_press(
     button: MouseButton,
     _mods: KeyModSet,
 ) -> Option<Message> {
-    // Tag-filter overlay: clicks fall through to the underlying log view's
-    // registry, which is empty in Phase 3 (the overlay does not register
-    // regions until Phase 5). For now, treat clicks while tag-filter is
-    // visible as no-ops to avoid surprising the user.
-    if state.tag_filter_visible {
-        return None;
-    }
+    // tag_filter_visible is gated at the dispatcher (handler/mouse/mod.rs::handle_press).
 
     // Right-click is reserved for future right-click context menus.
     if matches!(button, MouseButton::Right) {
@@ -72,6 +66,31 @@ pub(super) fn handle_press(
     Some(msg)
 }
 
+/// Handle a mouse scroll event in `UiMode::Normal`.
+///
+/// Routes vertical wheel deltas to one of three outcomes:
+///
+/// 1. **Tag-filter navigation** — when `state.tag_filter_visible` is set, up/down
+///    scrolls are redirected to [`Message::TagFilterMoveUp`] / [`Message::TagFilterMoveDown`]
+///    so the overlay keyboard-style list can be navigated by wheel. Horizontal
+///    scroll (`Left`/`Right`) returns `None` even with the overlay open.
+///
+/// 2. **Page scroll** — when only `Shift` is held (`mods.is_shift_only()`), up/down
+///    produces [`Message::PageUp`] / [`Message::PageDown`]. Mirrors the keyboard
+///    handler at `handler/keys.rs:269-270` (`PageUp`/`PageDown` keys) to keep
+///    `Shift+Wheel` consistent with the keyboard page-scroll experience.
+///
+/// 3. **Line scroll** — plain wheel (no modifiers, or no modifiers other than
+///    Shift) produces [`Message::ScrollUp`] / [`Message::ScrollDown`]. Mirrors
+///    the keyboard handler at `handler/keys.rs:265-266` (`j`/`k` / arrow keys).
+///    `Ctrl+wheel` and `Alt+wheel` are deliberately no-ops so the terminal
+///    emulator can intercept them for font-size / zoom.
+///
+/// Horizontal scroll (`ScrollDir::Left` / `ScrollDir::Right`) always returns
+/// `None` — there is no horizontal-wheel binding in Normal mode.
+///
+/// Called exclusively by `mouse::handle_scroll` (the dispatcher in
+/// `handler/mouse/mod.rs`) after it has already matched `UiMode::Normal`.
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
     // Tag-filter overlay intercepts wheel up/down (mirrors keys.rs:112-114).
     if state.tag_filter_visible {
@@ -268,20 +287,10 @@ mod tests {
         state.mouse_regions.set(regions);
     }
 
-    #[test]
-    fn press_when_tag_filter_visible_is_no_op() {
-        let mut state = AppState::new();
-        state.tag_filter_visible = true;
-        let mut regions = state.mouse_regions.take();
-        regions.builder().click(
-            MouseRect::new(0, 0, 10, 1),
-            MouseAction::emit(Message::HotReload),
-        );
-        state.mouse_regions.set(regions);
-
-        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
-        assert!(result.is_none());
-    }
+    // NOTE: press_when_tag_filter_visible_is_no_op was relocated to
+    // handler/mouse/mod.rs as `dispatcher_press_tag_filter_visible_is_no_op`
+    // after the tag_filter_visible gate was lifted to the dispatcher
+    // (handler/mouse/mod.rs::handle_press). See task 08-mouse-handler-hygiene.
 
     // ── handle_scroll tests ───────────────────────────────────────────────
 
