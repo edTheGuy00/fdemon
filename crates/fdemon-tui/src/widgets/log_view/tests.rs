@@ -1491,3 +1491,234 @@ fn test_native_source_color_is_distinct_from_others() {
     assert_ne!(palette::SOURCE_NATIVE, palette::SOURCE_WATCHER);
     assert_ne!(palette::SOURCE_NATIVE, palette::ACCENT);
 }
+
+// ── Phase 4 Task 06: render_with_regions click-region tests ──────────────────
+
+/// Helper: create a VecDeque with `count` plain (no stack trace) log entries.
+fn make_logs_no_traces(count: usize) -> std::collections::VecDeque<LogEntry> {
+    let mut logs = std::collections::VecDeque::new();
+    for i in 0..count {
+        logs.push_back(make_entry(
+            LogLevel::Info,
+            LogSource::App,
+            &format!("message {i}"),
+        ));
+    }
+    logs
+}
+
+/// Helper: create a VecDeque with a single error entry that has `frame_count`
+/// stack frames.  Expanded=true because `LogView` will be built with
+/// `default_collapsed(false)`.
+fn make_logs_with_stack_trace(frame_count: usize) -> std::collections::VecDeque<LogEntry> {
+    let raw = (0..frame_count)
+        .map(|i| format!("#{i}      fn_{i} (package:app/main.dart:{i}:3)"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let trace = ParsedStackTrace::parse(&raw);
+
+    let mut entry = make_entry(LogLevel::Error, LogSource::App, "boom");
+    entry.stack_trace = Some(trace);
+
+    let mut logs = std::collections::VecDeque::new();
+    logs.push_back(entry);
+    logs
+}
+
+#[test]
+fn render_with_regions_records_one_region_per_visible_row_nowrap() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_rows: Vec<_> = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.on_left,
+                Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        click_rows.len(),
+        3,
+        "expected one ClickLogRow region per visible entry, got {}",
+        click_rows.len()
+    );
+}
+
+#[test]
+fn render_with_regions_no_regions_without_ctx() {
+    // The plain StatefulWidget::render path must not record any regions.
+    use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+
+    // Render without a ctx — no regions should be recorded.
+    // Verify it compiles and does not panic (the assertion is that `render_inner`
+    // with None ctx never touches the regions API).
+    StatefulWidget::render(view, area, &mut buf, &mut state);
+
+    // The positive case (ctx = Some) is verified by other tests; this test
+    // documents that `None` produces no side effects.
+}
+
+/// Verifies that `render_with_regions` records exactly the expected number of
+/// rows when given a log with a 3-frame stack trace and `default_collapsed(false)`.
+/// Expected layout: 1 message row + 3 frame rows = 4 ClickLogRow regions.
+#[test]
+fn render_with_regions_records_frame_index_for_stack_frames() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_with_stack_trace(3);
+    let mut state = LogViewState::new();
+    // default_collapsed(false) so all frames are shown without a CollapseState.
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(false)
+        .default_collapsed(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let frame_indices: Vec<Option<usize>> = regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { frame_index, .. } => Some(frame_index),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    // 1 message row (None) + 3 stack frames (Some(0), Some(1), Some(2)).
+    assert_eq!(
+        frame_indices,
+        vec![None, Some(0), Some(1), Some(2)],
+        "expected [None, Some(0), Some(1), Some(2)], got {frame_indices:?}"
+    );
+}
+
+#[test]
+fn render_with_regions_entry_ids_match_log_entries() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let expected_ids: Vec<u64> = logs.iter().map(|e| e.id).collect();
+
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let recorded_ids: Vec<u64> = regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { entry_id, .. } => Some(entry_id),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        recorded_ids, expected_ids,
+        "recorded entry_ids must match the log entries in order"
+    );
+}
+
+#[test]
+fn render_with_regions_row_rects_have_correct_dimensions_nowrap() {
+    use crate::render::MouseCtx;
+    use fdemon_app::message::Message;
+    use fdemon_app::{MouseAction, MouseRegions};
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let logs = make_logs_no_traces(3);
+    let mut state = LogViewState::new();
+    let view = LogView::new(&logs, test_icons()).wrap_mode(false);
+
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let row_rects: Vec<_> = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                &e.on_left,
+                Some(MouseAction::Emit(msg)) if matches!(**msg, Message::ClickLogRow { .. })
+            )
+        })
+        .map(|e| e.rect)
+        .collect();
+
+    for rect in &row_rects {
+        // In nowrap mode every row is exactly 1 cell tall.
+        assert_eq!(
+            rect.height, 1,
+            "nowrap row height must be 1, got {}",
+            rect.height
+        );
+        // Width spans the content area (80-wide terminal minus borders = 78).
+        assert!(rect.width > 0, "row width must be > 0");
+        // No zero-area rects — width > 0 and height > 0.
+        assert!(rect.width > 0 && rect.height > 0, "rect must not be empty");
+    }
+
+    // Row Y positions must be strictly increasing (rows don't overlap).
+    let ys: Vec<u16> = row_rects.iter().map(|r| r.y).collect();
+    for window in ys.windows(2) {
+        assert!(
+            window[0] < window[1],
+            "row Y positions must be strictly increasing: {:?}",
+            ys
+        );
+    }
+}

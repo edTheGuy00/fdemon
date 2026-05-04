@@ -1041,10 +1041,37 @@ impl<'a> LogView<'a> {
     }
 }
 
-impl<'a> StatefulWidget for LogView<'a> {
-    type State = LogViewState;
+/// Per-row metadata accumulated during the render loop for mouse-region recording.
+///
+/// Collected in `render_inner` when a `MouseCtx` is present, then converted to
+/// click regions after all lines have been placed.
+struct RowAction {
+    /// Y position relative to `content_area.y` (0 = first content row).
+    rel_y: u16,
+    /// Height in terminal rows (1 in nowrap mode; `wrapped_row_count` in wrap mode).
+    height: u16,
+    /// `LogEntry::id` of the entry this row belongs to.
+    entry_id: u64,
+    /// `None` for the message line; `Some(i)` for stack frame `i`.
+    frame_index: Option<usize>,
+}
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+impl<'a> LogView<'a> {
+    /// Core rendering implementation shared by [`StatefulWidget::render`] and
+    /// [`render_with_regions`].
+    ///
+    /// When `mouse_ctx` is `Some`, the function additionally records one
+    /// [`MouseAction::Emit(Message::ClickLogRow { .. })`] region per visible
+    /// row in the content area. When `mouse_ctx` is `None` the behaviour is
+    /// identical to the original `render` body — no allocations are made for
+    /// region tracking.
+    fn render_inner(
+        self,
+        area: Rect,
+        buf: &mut Buffer,
+        state: &mut LogViewState,
+        mouse_ctx: Option<&mut MouseCtx<'_>>,
+    ) {
         // Handle empty state specially
         if self.logs.is_empty() {
             self.render_empty(area, buf);
@@ -1139,6 +1166,11 @@ impl<'a> StatefulWidget for LogView<'a> {
         // We need to skip `offset` units and take `visible_lines` units.
         // In wrap mode, units are terminal rows; in nowrap, logical lines.
         let mut all_lines: Vec<Line> = Vec::new();
+        // Parallel list tracking entry identity and position for click-region recording.
+        // Only populated when `mouse_ctx` is `Some` (no allocation otherwise).
+        let mut row_actions: Vec<RowAction> = Vec::new();
+        // Running Y cursor for row_actions (relative to content_area.y).
+        let mut rel_y_cursor: u16 = 0;
         let mut units_added = 0;
         let mut units_skipped = 0;
         // In wrap mode, tracks how many terminal rows to scroll past at the top
@@ -1197,10 +1229,23 @@ impl<'a> StatefulWidget for LogView<'a> {
                 }
 
                 let line = self.format_entry(entry, idx);
-                if self.wrap_mode {
-                    units_added += Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                let row_h: u16 = if self.wrap_mode {
+                    let wrc =
+                        Self::wrapped_row_count(Self::line_width(&line), visible_width) as u16;
+                    units_added += wrc as usize;
+                    wrc
                 } else {
                     units_added += 1;
+                    1u16
+                };
+                if mouse_ctx.is_some() {
+                    row_actions.push(RowAction {
+                        rel_y: rel_y_cursor,
+                        height: row_h,
+                        entry_id: entry.id,
+                        frame_index: None,
+                    });
+                    rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                 }
                 all_lines.push(line);
             }
@@ -1238,11 +1283,24 @@ impl<'a> StatefulWidget for LogView<'a> {
 
                         // Use link-aware formatting (Phase 3.1)
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
-                        if self.wrap_mode {
-                            units_added +=
-                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        let row_h: u16 = if self.wrap_mode {
+                            let wrc =
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width)
+                                    as u16;
+                            units_added += wrc as usize;
+                            wrc
                         } else {
                             units_added += 1;
+                            1u16
+                        };
+                        if mouse_ctx.is_some() {
+                            row_actions.push(RowAction {
+                                rel_y: rel_y_cursor,
+                                height: row_h,
+                                entry_id: entry.id,
+                                frame_index: Some(frame_idx),
+                            });
+                            rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
                         all_lines.push(line);
                     }
@@ -1277,16 +1335,30 @@ impl<'a> StatefulWidget for LogView<'a> {
 
                         // Use link-aware formatting (Phase 3.1)
                         let line = self.format_stack_frame_line_with_links(frame, idx, frame_idx);
-                        if self.wrap_mode {
-                            units_added +=
-                                Self::wrapped_row_count(Self::line_width(&line), visible_width);
+                        let row_h: u16 = if self.wrap_mode {
+                            let wrc =
+                                Self::wrapped_row_count(Self::line_width(&line), visible_width)
+                                    as u16;
+                            units_added += wrc as usize;
+                            wrc
                         } else {
                             units_added += 1;
+                            1u16
+                        };
+                        if mouse_ctx.is_some() {
+                            row_actions.push(RowAction {
+                                rel_y: rel_y_cursor,
+                                height: row_h,
+                                entry_id: entry.id,
+                                frame_index: Some(frame_idx),
+                            });
+                            rel_y_cursor = rel_y_cursor.saturating_add(row_h);
                         }
                         all_lines.push(line);
                     }
 
-                    // Add collapsed indicator if there are hidden frames
+                    // Add collapsed indicator if there are hidden frames.
+                    // The indicator row is not a clickable entry — skip region recording for it.
                     let target = if self.wrap_mode {
                         visible_lines + wrap_intra_offset
                     } else {
@@ -1297,6 +1369,10 @@ impl<'a> StatefulWidget for LogView<'a> {
                         if indicator_position > skip_in_entry {
                             all_lines.push(Self::format_collapsed_indicator(hidden_count));
                             units_added += 1; // collapsed indicator is always short
+                                              // Advance rel_y_cursor so subsequent rows are placed correctly.
+                            if mouse_ctx.is_some() {
+                                rel_y_cursor = rel_y_cursor.saturating_add(1);
+                            }
                         }
                     }
                 }
@@ -1332,7 +1408,8 @@ impl<'a> StatefulWidget for LogView<'a> {
                 .collect()
         };
 
-        // Add blinking cursor at end if auto-scroll is active
+        // Add blinking cursor at end if auto-scroll is active.
+        // The cursor is not a log entry — do not register a click region for it.
         let mut final_lines = final_lines_base;
         if state.auto_scroll && !final_lines.is_empty() {
             // Add cursor to a new line after the last entry
@@ -1368,6 +1445,52 @@ impl<'a> StatefulWidget for LogView<'a> {
 
             scrollbar.render(area, buf, &mut scrollbar_state);
         }
+
+        // Register click regions for all visible rows (Phase 4 Task 06).
+        // Only executed when a MouseCtx was provided; no-op for the plain render path.
+        if let Some(ctx) = mouse_ctx {
+            use fdemon_app::message::Message;
+            use fdemon_app::{MouseAction, MouseRect};
+
+            for r in &row_actions {
+                // Skip rows that fell outside the viewport (e.g. in wrap mode the
+                // first partial row may have accumulated before rel_y reached 0).
+                if r.rel_y >= content_area.height {
+                    continue;
+                }
+                // Clip height to avoid registering rects that extend past the bottom.
+                let h = r.height.min(content_area.height.saturating_sub(r.rel_y));
+                if h == 0 {
+                    continue;
+                }
+                let rect = MouseRect::new(
+                    content_area.x,
+                    content_area.y.saturating_add(r.rel_y),
+                    content_area.width,
+                    h,
+                );
+                // `MouseRegionsBuilder::click` already skips zero-sized rects, but
+                // guard here for clarity (content_area.width may be 0 at narrow widths).
+                if rect.width == 0 || rect.height == 0 {
+                    continue;
+                }
+                ctx.click(
+                    rect,
+                    MouseAction::emit(Message::ClickLogRow {
+                        entry_id: r.entry_id,
+                        frame_index: r.frame_index,
+                    }),
+                );
+            }
+        }
+    }
+}
+
+impl<'a> StatefulWidget for LogView<'a> {
+    type State = LogViewState;
+
+    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
+        self.render_inner(area, buf, state, None);
     }
 }
 
@@ -1385,18 +1508,20 @@ impl Widget for LogView<'_> {
 /// `StatefulWidget::render` impl does not record regions; this function is the
 /// canonical path for region-aware rendering.
 ///
-/// Passing `None` for `_ctx` makes this function behave identically to calling
-/// `frame.render_stateful_widget(view, area, state)` directly.
+/// Passing `None` for `ctx` makes this function behave identically to calling
+/// `frame.render_stateful_widget(view, area, state)` directly — no regions are
+/// recorded and no additional allocations are made.
 ///
-/// Phase 4 Task 06 fills in the region recording body.
+/// When `ctx` is `Some`, one [`fdemon_app::message::Message::ClickLogRow`]
+/// region is registered per visible row in the content area (Phase 4 Task 06).
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     state: &mut LogViewState,
     view: LogView<'_>,
-    _ctx: Option<&mut MouseCtx<'_>>,
+    ctx: Option<&mut MouseCtx<'_>>,
 ) {
-    <LogView as StatefulWidget>::render(view, area, buf, state);
+    view.render_inner(area, buf, state, ctx);
 }
 
 #[cfg(test)]
