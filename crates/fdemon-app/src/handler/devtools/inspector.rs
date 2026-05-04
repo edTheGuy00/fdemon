@@ -335,16 +335,129 @@ pub fn handle_layout_data_fetch_timeout(
     UpdateResult::none()
 }
 
-// ── Mouse Click Stubs (Phase 4) ──────────────────────────────────────────────
+// ── Mouse Click Handlers (Phase 4) ───────────────────────────────────────────
 
-/// Stub. Body added in Phase 4 Task 04.
-pub fn handle_inspector_select_row(_state: &mut AppState, _index: usize) -> UpdateResult {
+/// Select a visible inspector node by absolute row index.
+///
+/// Mirrors the `InspectorNav::Up`/`Down` semantics: sets `selected_index`,
+/// clears stale layout data, and dispatches a `FetchLayoutData` action for the
+/// newly selected node (gated by the same debounce / cache-hit rules as
+/// keyboard navigation).
+///
+/// Out-of-range clicks (e.g. the tree shrank between render and click) are
+/// silently ignored — no action is emitted.
+pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> UpdateResult {
+    // Phase 1: bounds-check and update selection.
+    // Scope the mutable borrow of `inspector` so it ends before we access
+    // `state.session_manager` below.
+    let (old_index, new_index, selection_changed) = {
+        let inspector = &mut state.devtools_view_state.inspector;
+        let visible = inspector.visible_nodes();
+        let count = visible.len();
+
+        if count == 0 || index >= count {
+            // Click on a row that no longer exists (tree shrunk between
+            // render and click). Silent no-op.
+            return UpdateResult::none();
+        }
+
+        let old_index = inspector.selected_index;
+        inspector.selected_index = index;
+        let new_index = inspector.selected_index;
+        let selection_changed = new_index != old_index;
+
+        if selection_changed {
+            // Clear stale layout immediately so the layout panel shows
+            // a loading state — same as InspectorNav::Up/Down.
+            inspector.layout = None;
+            inspector.layout_error = None;
+        }
+
+        (old_index, new_index, selection_changed)
+    };
+    // `inspector` borrow has ended here.
+
+    if !selection_changed {
+        // Click on already-selected row → no fetch (cache hit / no-op).
+        return UpdateResult::none();
+    }
+
+    let _ = (old_index, new_index); // suppress unused warning
+
+    // Phase 2: dispatch layout fetch (same logic as handle_inspector_navigate).
+    // Collect node_id while holding the borrow; borrow ends before session_manager access.
+    let fetch_node_id: Option<String> = {
+        let inspector = &mut state.devtools_view_state.inspector;
+
+        if inspector.is_layout_fetch_debounced() {
+            None
+        } else if let Some(node_id) = get_selected_value_id(inspector) {
+            if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
+                None
+            } else {
+                inspector.layout_loading = true;
+                inspector.pending_node_id = Some(node_id.clone());
+                inspector.layout_last_fetch_time = Some(std::time::Instant::now());
+                Some(node_id)
+            }
+        } else {
+            None
+        }
+    };
+    // `inspector` borrow has ended — we can now access session_manager.
+
+    if let Some(node_id) = fetch_node_id {
+        if let Some(session_id) = state.session_manager.selected().map(|h| h.session.id) {
+            return UpdateResult::action(UpdateAction::FetchLayoutData {
+                session_id,
+                node_id,
+                vm_handle: None,
+            });
+        }
+    }
+
     UpdateResult::none()
 }
 
-/// Stub. Body added in Phase 4 Task 04.
-pub fn handle_inspector_toggle_node(_state: &mut AppState, _index: usize) -> UpdateResult {
-    UpdateResult::none()
+/// Toggle the expanded/collapsed state of an inspector node by row index.
+///
+/// First selects the row (same semantics as [`handle_inspector_select_row`],
+/// including the layout fetch dispatch). Then, if the node has children and a
+/// `value_id`, toggles its entry in `inspector.expanded`.
+///
+/// Clicking on a leaf node (no children) or a node without a `value_id` is a
+/// no-op for the expanded set; selection still changes normally.
+pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> UpdateResult {
+    // Step 1: select the row (mirrors InspectorNav::Up/Down semantics —
+    // clears stale layout, dispatches fetch under debounce rules).
+    let select_result = handle_inspector_select_row(state, index);
+
+    // Step 2: toggle the node's expanded state.
+    let inspector = &mut state.devtools_view_state.inspector;
+    let visible = inspector.visible_nodes();
+    let count = visible.len();
+    if count == 0 || index >= count {
+        return select_result;
+    }
+
+    let (value_id, has_children) = visible
+        .get(index)
+        .and_then(|(node, _depth)| {
+            node.value_id
+                .as_ref()
+                .map(|id| (id.clone(), !node.children.is_empty()))
+        })
+        .unzip();
+
+    if let (Some(value_id), Some(true)) = (value_id, has_children) {
+        if inspector.is_expanded(&value_id) {
+            inspector.expanded.remove(&value_id);
+        } else {
+            inspector.expanded.insert(value_id);
+        }
+    }
+
+    select_result
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1222,6 +1335,207 @@ mod tests {
         assert!(
             !state.devtools_view_state.inspector.layout_loading,
             "layout_loading should remain false when no fetch is dispatched"
+        );
+    }
+
+    // ── Mouse click handlers: select_row ─────────────────────────────────────
+
+    #[test]
+    fn test_select_row_out_of_range_is_noop() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_select_row(&mut state, 99);
+        assert!(result.action.is_none());
+        assert_eq!(state.devtools_view_state.inspector.selected_index, 0);
+    }
+
+    #[test]
+    fn test_select_row_same_index_skips_fetch() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_select_row(&mut state, 0);
+        assert!(result.action.is_none(), "no fetch on same-index click");
+    }
+
+    #[test]
+    fn test_select_row_different_index_dispatches_fetch() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let result = handle_inspector_select_row(&mut state, 1);
+        assert!(
+            matches!(result.action, Some(UpdateAction::FetchLayoutData { .. })),
+            "Should dispatch FetchLayoutData when clicking a different row"
+        );
+        assert_eq!(state.devtools_view_state.inspector.selected_index, 1);
+    }
+
+    #[test]
+    fn test_select_row_clears_stale_layout_on_change() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.selected_index = 0;
+        state.devtools_view_state.inspector.layout = Some(fdemon_core::LayoutInfo::default());
+        state.devtools_view_state.inspector.layout_error =
+            Some(DevToolsError::new("old error", "hint"));
+
+        handle_inspector_select_row(&mut state, 1);
+
+        assert!(
+            state.devtools_view_state.inspector.layout.is_none(),
+            "Stale layout should be cleared on row change"
+        );
+        assert!(
+            state.devtools_view_state.inspector.layout_error.is_none(),
+            "Stale layout_error should be cleared on row change"
+        );
+    }
+
+    #[test]
+    fn test_select_row_debounced_skips_fetch() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.selected_index = 0;
+        // Simulate a very recent layout fetch — debounce should suppress a new one.
+        state.devtools_view_state.inspector.layout_last_fetch_time =
+            Some(std::time::Instant::now());
+
+        let result = handle_inspector_select_row(&mut state, 1);
+
+        assert!(
+            result.action.is_none(),
+            "Should not dispatch FetchLayoutData when debounced"
+        );
+    }
+
+    // ── Mouse click handlers: toggle_node ────────────────────────────────────
+
+    #[test]
+    fn test_toggle_node_collapsed_to_expanded() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        // Root is NOT in expanded set initially.
+        assert!(!state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .contains("root-id"));
+
+        handle_inspector_toggle_node(&mut state, 0);
+
+        assert!(
+            state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("root-id"),
+            "Collapsed node should be expanded after toggle"
+        );
+    }
+
+    #[test]
+    fn test_toggle_node_expanded_to_collapsed() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+
+        handle_inspector_toggle_node(&mut state, 0);
+
+        assert!(
+            !state
+                .devtools_view_state
+                .inspector
+                .expanded
+                .contains("root-id"),
+            "Expanded node should be collapsed after toggle"
+        );
+    }
+
+    #[test]
+    fn test_toggle_node_on_leaf_does_not_modify_expanded_set() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+
+        let before = state.devtools_view_state.inspector.expanded.len();
+        // Index 1 is "child-id" — a leaf in make_tree_with_children().
+        handle_inspector_toggle_node(&mut state, 1);
+        let after = state.devtools_view_state.inspector.expanded.len();
+
+        assert_eq!(before, after, "leaf toggle should not change expanded set");
+    }
+
+    #[test]
+    fn test_toggle_node_out_of_range_is_noop() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        let before_selected = state.devtools_view_state.inspector.selected_index;
+        let result = handle_inspector_toggle_node(&mut state, 99);
+        assert!(result.action.is_none());
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, before_selected,
+            "Out-of-range toggle should not change selection"
+        );
+    }
+
+    #[test]
+    fn test_toggle_node_still_selects_on_leaf() {
+        let mut state = make_state_with_session();
+        state.devtools_view_state.inspector.root = Some(make_tree_with_children());
+        state
+            .devtools_view_state
+            .inspector
+            .expanded
+            .insert("root-id".to_string());
+        // Start at root (index 0).
+        state.devtools_view_state.inspector.selected_index = 0;
+
+        // Toggle on the leaf child (index 1) — selection should change.
+        handle_inspector_toggle_node(&mut state, 1);
+
+        assert_eq!(
+            state.devtools_view_state.inspector.selected_index, 1,
+            "Toggling a leaf should still select that row"
         );
     }
 }
