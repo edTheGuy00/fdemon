@@ -593,6 +593,42 @@ fn make_single_root_state() -> InspectorState {
     state
 }
 
+// ── Phase 4.5 Task 03: render_with_regions parity test ───────────────────────
+
+#[test]
+fn render_with_regions_matches_widget_render_buffer() {
+    use fdemon_app::MouseRegions;
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+
+    // Tree loaded with at least one node — non-trivial state branch.
+    let inspector_state = make_5_node_tree();
+
+    let area = Rect::new(0, 0, 120, 24);
+
+    let mut buf_a = Buffer::empty(area);
+    WidgetInspector::new(&inspector_state, true, &VmConnectionStatus::Connected)
+        .render(area, &mut buf_a);
+
+    let mut buf_b = Buffer::empty(area);
+    {
+        let mut regions = MouseRegions::default();
+        let builder = regions.builder();
+        let mut ctx = crate::render::MouseCtx::new(builder);
+        render_with_regions(
+            area,
+            &mut buf_b,
+            WidgetInspector::new(&inspector_state, true, &VmConnectionStatus::Connected),
+            Some(&mut ctx),
+        );
+    }
+
+    assert_eq!(
+        buf_a, buf_b,
+        "Widget::render and render_with_regions must produce identical buffers"
+    );
+}
+
 #[test]
 fn inspector_records_row_and_glyph_regions_per_visible_row() {
     use fdemon_app::message::Message;

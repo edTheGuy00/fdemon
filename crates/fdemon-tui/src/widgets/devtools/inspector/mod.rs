@@ -120,6 +120,20 @@ impl<'a> WidgetInspector<'a> {
 
 impl Widget for WidgetInspector<'_> {
     fn render(self, area: Rect, buf: &mut Buffer) {
+        self.render_impl(area, buf, None);
+    }
+}
+
+impl WidgetInspector<'_> {
+    // ── Shared render entry point ─────────────────────────────────────────────
+
+    /// Shared implementation called by both `Widget::render` and
+    /// `render_with_regions`.
+    ///
+    /// When `ctx` is `None` the behaviour is identical to the old
+    /// `Widget::render` implementation. When `ctx` is `Some`, click regions
+    /// are recorded for the tree panel rows.
+    fn render_impl(self, area: Rect, buf: &mut Buffer, ctx: Option<&mut MouseCtx<'_>>) {
         // Clear background — set every cell to ' ' with the background style
         // so the log view underneath is fully occluded.
         let bg_style = Style::default().bg(palette::DEEPEST_BG);
@@ -138,27 +152,24 @@ impl Widget for WidgetInspector<'_> {
         } else if let Some(ref error) = self.inspector_state.error {
             self.render_error_box(area, buf, error);
         } else if self.inspector_state.root.is_some() {
-            self.render_tree(area, buf);
+            let visible = self.inspector_state.visible_nodes();
+            if visible.is_empty() {
+                self.render_empty(area, buf);
+            } else {
+                self.render_tree_with_regions(area, buf, &visible, ctx);
+            }
         } else {
             self.render_empty(area, buf);
         }
     }
-}
 
-impl WidgetInspector<'_> {
     // ── Tree rendering ────────────────────────────────────────────────────────
-
-    fn render_tree(&self, area: Rect, buf: &mut Buffer) {
-        let visible = self.inspector_state.visible_nodes();
-        let selected = self.inspector_state.selected_index;
-        self.render_tree_core(area, buf, &visible, selected, None);
-    }
 
     /// Shared layout + dispatch logic for tree rendering.
     ///
-    /// Called from both `render_tree` (no region recording) and
-    /// `render_tree_with_regions` (with region recording). Extracting it here
-    /// ensures the two paths stay in sync — a single place to change layout
+    /// Called from `render_tree_with_regions` (which is in turn called from
+    /// `render_impl`). Extracting it here ensures that region-recording and
+    /// non-region paths stay in sync — a single place to change layout
     /// decisions.
     fn render_tree_core(
         &self,
@@ -221,8 +232,9 @@ impl WidgetInspector<'_> {
 
     /// Render the tree column and record click regions into `ctx`.
     ///
-    /// Called from [`render_with_regions`] when a [`MouseCtx`] is available.
-    /// Uses the same layout split logic as `render_tree` via `render_tree_core`.
+    /// Called from `render_impl` (and therefore from both `Widget::render` and
+    /// [`render_with_regions`]). Uses the shared layout-split logic via
+    /// `render_tree_core`.
     pub(super) fn render_tree_with_regions(
         &self,
         area: Rect,
@@ -437,58 +449,22 @@ pub(super) fn short_path(file: &str) -> &str {
 ///
 /// ## Dispatch logic
 ///
-/// The function replicates the state-branch dispatch from `Widget::render` so
-/// each branch can be tested independently:
+/// Delegates to `WidgetInspector::render_impl` which contains the single
+/// authoritative implementation shared with `Widget::render`.  Passing
+/// `ctx = None` produces output byte-identical to `Widget::render`.
 ///
 /// - **Not connected** → `render_disconnected` (no clickable content)
 /// - **Loading** → `render_loading` (no clickable content)
 /// - **Error** → `render_error_box` (no clickable content)
 /// - **Empty tree** → `render_empty` (no clickable content)
 /// - **Tree ready** → `render_tree_with_regions` (records row + glyph regions)
-///
-/// The background-clearing pass from `Widget::render` is reproduced here so
-/// the buffer state is identical regardless of which entry point is used.
 pub fn render_with_regions(
     area: Rect,
     buf: &mut Buffer,
     widget: WidgetInspector<'_>,
     ctx: Option<&mut MouseCtx<'_>>,
 ) {
-    use crate::theme::palette;
-    use ratatui::style::Style;
-
-    // Clear background — identical to Widget::render.
-    let bg_style = Style::default().bg(palette::DEEPEST_BG);
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_style(bg_style).set_char(' ');
-            }
-        }
-    }
-
-    if !widget.vm_connected {
-        widget.render_disconnected(area, buf);
-        return;
-    }
-    if widget.inspector_state.loading {
-        widget.render_loading(area, buf);
-        return;
-    }
-    if let Some(ref error) = widget.inspector_state.error {
-        widget.render_error_box(area, buf, error);
-        return;
-    }
-    if widget.inspector_state.root.is_some() {
-        let visible = widget.inspector_state.visible_nodes();
-        if visible.is_empty() {
-            widget.render_empty(area, buf);
-        } else {
-            widget.render_tree_with_regions(area, buf, &visible, ctx);
-        }
-    } else {
-        widget.render_empty(area, buf);
-    }
+    widget.render_impl(area, buf, ctx);
 }
 
 #[cfg(test)]
