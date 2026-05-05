@@ -104,3 +104,38 @@ Three focused fixes in the log-view click flow:
 - **Do not touch** any other file. The other Phase 4.5 tasks each have their own scope. In particular, `handler/devtools/inspector.rs` is owned by Task 02 and `handler/mouse/devtools.rs` is owned by Task 08.
 - If you discover during implementation that Option B (struct field) is in fact simpler (e.g., the session-switch arms are scattered across many messages), it's acceptable to switch — but record the decision in the Completion Summary.
 - The `let _ = frame_index;` is intentionally explicit. An alternative is `#[allow(unused_variables)]` on the parameter, but `let _ = ...` is more visible at the body level.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-af756a3d2a6351fac
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/log_view.rs` | Updated `DOUBLE_CLICK_WINDOW` docstring to be inclusive-consistent with `<=` operator; replaced `_frame_index` with `frame_index` + `TODO(phase-5):` comment + explicit `let _ = frame_index;` discard line; removed stale doc comment about deferred use |
+| `crates/fdemon-app/src/handler/update.rs` | Added `state.last_log_click = None;` before delegate call in all five session-switch arms: `SelectSessionByIndex`, `NextSession`, `PreviousSession`, `CloseCurrentSession`, `CloseSessionAt` |
+| `crates/fdemon-app/src/handler/tests.rs` | Added `click_after_session_switch_does_not_double_click` test in `phase4_integration_tests` module; verifies that stamp is cleared after `SelectSessionByIndex` and that the same-id click on the new session is treated as a fresh single click |
+
+### Notable Decisions/Tradeoffs
+
+1. **Option A chosen (clear in update arms)**: All five session-switch message arms are in the same contiguous block in `update.rs` (lines 536-545), making Option A trivially simple. No struct changes needed.
+
+2. **Inclusive boundary kept (`<=`)**: The `DOUBLE_CLICK_WINDOW` comparison stays inclusive (`<=`), matching GNOME/KDE/macOS behavior. Only the docstring was updated to make the "inclusive" contract explicit (was "within 400ms" which reads as exclusive).
+
+3. **Test placed in `tests.rs` `phase4_integration_tests`**: This module already has `update()` via `super::*` and the `test_device` helper, making it the natural home for a test that exercises both session switching and click handling end-to-end.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (no warnings)
+- `cargo test -p fdemon-app --lib -- click` - Passed (29 tests including new test)
+- `cargo test -p fdemon-app --lib` - Passed (2069 tests, 0 failed)
+
+### Risks/Limitations
+
+1. **`CloseCurrentSession` and `CloseSessionAt` clearing**: These arms close a session, which implicitly changes the selected session. Clearing `last_log_click` here prevents a spurious double-click on whatever session becomes active after the close. This is the correct and conservative behavior.

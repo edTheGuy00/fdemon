@@ -40,16 +40,21 @@ The critical defect is a wrap-mode misalignment: when `state.offset` lands insid
 
 | # | Task | Status | Depends On | Est. Hours | Crate / Area |
 |---|------|--------|------------|------------|--------------|
-| 1 | [01-wrap-mode-click-region-fix](tasks/01-wrap-mode-click-region-fix.md) | Not Started | — | 2.0h | `fdemon-tui` |
-| 2 | [02-inspector-handler-refactor](tasks/02-inspector-handler-refactor.md) | Not Started | — | 1.5h | `fdemon-app` |
-| 3 | [03-sister-function-render-impl-refactor](tasks/03-sister-function-render-impl-refactor.md) | Not Started | — | 2.0h | `fdemon-tui` |
-| 4 | [04-render-tests-baselines-and-tightening](tasks/04-render-tests-baselines-and-tightening.md) | Not Started | — | 1.0h | `fdemon-tui` |
-| 5 | [05-manual-smoke-test](tasks/05-manual-smoke-test.md) | Not Started | — | 1.0h | docs |
-| 6 | [06-mouse-regions-doc-polish](tasks/06-mouse-regions-doc-polish.md) | Not Started | — | 1.0h | `fdemon-app` |
-| 7 | [07-log-view-handler-and-state-polish](tasks/07-log-view-handler-and-state-polish.md) | Not Started | — | 1.0h | `fdemon-app` |
-| 8 | [08-devtools-mouse-handler-polish](tasks/08-devtools-mouse-handler-polish.md) | Not Started | — | 0.75h | `fdemon-app` |
-| 9 | [09-tree-glyph-and-network-details-polish](tasks/09-tree-glyph-and-network-details-polish.md) | Not Started | — | 0.75h | `fdemon-tui` |
-| 10 | [10-plan-drift-and-mouse-doc-updates](tasks/10-plan-drift-and-mouse-doc-updates.md) | Not Started | — | 0.75h | docs |
+| 1 | [01-wrap-mode-click-region-fix](tasks/01-wrap-mode-click-region-fix.md) | Done | — | 2.0h | `fdemon-tui` |
+| 2 | [02-inspector-handler-refactor](tasks/02-inspector-handler-refactor.md) | Done | — | 1.5h | `fdemon-app` |
+| 3 | [03-sister-function-render-impl-refactor](tasks/03-sister-function-render-impl-refactor.md) | Done | — | 2.0h | `fdemon-tui` |
+| 4 | [04-render-tests-baselines-and-tightening](tasks/04-render-tests-baselines-and-tightening.md) | Done | — | 1.0h | `fdemon-tui` |
+| 5 | [05-manual-smoke-test](tasks/05-manual-smoke-test.md) | Blocked (manual) | — | 1.0h | docs |
+| 6 | [06-mouse-regions-doc-polish](tasks/06-mouse-regions-doc-polish.md) | Done | — | 1.0h | `fdemon-app` |
+| 7 | [07-log-view-handler-and-state-polish](tasks/07-log-view-handler-and-state-polish.md) | Done | — | 1.0h | `fdemon-app` |
+| 8 | [08-devtools-mouse-handler-polish](tasks/08-devtools-mouse-handler-polish.md) | Done (concern) | — | 0.75h | `fdemon-app` |
+| 9 | [09-tree-glyph-and-network-details-polish](tasks/09-tree-glyph-and-network-details-polish.md) | Done | — | 0.75h | `fdemon-tui` |
+| 10 | [10-plan-drift-and-mouse-doc-updates](tasks/10-plan-drift-and-mouse-doc-updates.md) | Done | — | 0.75h | docs |
+
+### Orchestration Notes
+
+- **T05 (manual smoke test)** is **Blocked**: it requires interactive macOS terminal access with a live Flutter device. The implementor confirmed `cargo build` succeeds, pre-filled the 15-step results table with `NOT RUN` markers, and committed the Blocked status. A human must execute the smoke test manually and update the task file with results before phase merge to `main`.
+- **T08 validator returned CONCERN (proceed-recommended)**: `crates/fdemon-app/src/handler/mouse/mod.rs` was widened from `&AppState` to `&mut AppState` to enable in-dispatcher mutation of `network.filter_input_active` without modifying `update.rs`. This file was not in T08's declared write scope, but the cascade was structurally necessary and the task's plan text incorrectly assumed `handle_press` already took `&mut`. Documented in T08's Completion Summary.
 
 ## File Overlap Analysis
 

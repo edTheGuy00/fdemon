@@ -91,3 +91,38 @@ Clicking visible row of B at screen y=1 or y=2 resolves to A's region — wrong 
 - The bottom-clip logic in the existing code is correct on its own; the bug is only in the top-clip / `wrap_intra_offset` direction. Be careful not to regress the bottom-clip behavior.
 - If you discover that the existing `RowAction.rel_y` calculation in the render accumulator (around lines 1212–1219, 1427–1434) is itself wrong (rather than the registration loop), prefer fixing it at the source — the registration loop becomes simpler. Either approach is acceptable as long as visible regions align with rendered rows.
 - The regression tests must use `wrap_mode = true`; the existing tests cover only `wrap_mode = false`.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/log_view/mod.rs` | Fixed region rect math in registration loop to account for `wrap_intra_offset`; introduced `has_mouse_ctx` bool to replace repeated `mouse_ctx.is_some()` calls |
+| `crates/fdemon-tui/src/widgets/log_view/tests.rs` | Added three new regression tests: `wrap_mode_zero_offset_regions_align_with_rows`, `wrap_mode_intra_offset_skips_top_clipped_row`, `wrap_mode_intra_offset_top_skipped_row_dropped` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Closure vs. `has_mouse_ctx` bool for row-action gate**: The task requested a closure `push_row_action(...)`, but Rust's borrow rules prevent a mutable-capturing closure from being used alongside reads of `rel_y_cursor` at call sites and the direct cursor-advance for the collapsed-indicator row. Used `let has_mouse_ctx = mouse_ctx.is_some()` instead — this achieves the same de-duplication goal (one place to check the gate) without fighting the borrow checker. The comment in the code explains why a closure was not used.
+
+2. **Fix location is the registration loop, not the accumulator**: The `rel_y_cursor` accumulation in the render loop is correct relative to "all_lines space". The fix is applied in the final region-registration loop by subtracting `wio = wrap_intra_offset as u16` from each `r.rel_y` to convert to screen space, with proper top-clip and bottom-clip handling.
+
+3. **Test message sizing**: Tests use `show_timestamps(false)` and `show_source(false)` so message width equals character count. Messages of exactly 54 chars give 3 wrapped rows, 36 chars give 2 wrapped rows, at `content_area.width = 18` (area 20 wide minus 2 borders).
+
+### Testing Performed
+
+- `cargo test -p fdemon-tui -- wrap_mode_` — 7 passed (3 new + 4 existing)
+- `cargo test -p fdemon-tui` — 941 passed, 0 failed
+- `cargo fmt --all -- --check` — Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed
+- `cargo check --workspace --all-targets` — Passed
+
+### Risks/Limitations
+
+1. **wrap_intra_offset overflow**: `wrap_intra_offset` is cast to `u16` before the loop. If it exceeds `u16::MAX` (65535 rows), the cast would wrap. In practice this cannot happen in a TUI with a maximum screen height measured in tens of rows.
+2. **Test assumes content_area.y = 3**: The test assertions are tied to the fixed layout math (border + metadata + top_gap = 3). If the LogView layout changes, these tests will need updating.

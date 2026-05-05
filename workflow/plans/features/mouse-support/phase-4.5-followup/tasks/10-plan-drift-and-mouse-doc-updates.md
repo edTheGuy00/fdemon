@@ -129,3 +129,33 @@ Two documentation updates:
 - **No code changes.** This is a docs-only task. The implementor's commit should only touch the two markdown files.
 - The "Network Filter Input Mode" section in `docs/MOUSE.md` describes the post-Task-08 behavior (sub-tab carve-out). If Task 08 has not yet merged when this task runs, that's fine — the docs describe the intended end-of-phase behavior. The orchestrator will merge tasks in number order.
 - If `docs/MOUSE.md` does not yet exist, create it. Phase 2.5 task 03 was supposed to create it; verify before this task starts. If missing, scaffold a minimal file (similar in tone to other `docs/*.md` files) and add the Phase 4 section.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a6a3e88120406bddc
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/mouse-support/PLAN.md` | Added "Drift Notes (Phase 4 implementation)" subsection after Phase 4 milestone, documenting both Drift A (per-row Emit vs EmitWithCoord) and Drift B (entry_id matching vs position matching). |
+| `docs/MOUSE.md` | Added "Phase 3: Click Surfaces" section (header shortcuts, session tabs) and "Phase 4: Click Behavior" section (log view, DevTools sub-tab bar, Inspector tree, Performance frame chart, Network table, Network filter input mode with sub-tab carve-out). Updated "Coordinate-Free Routing" to clarify click events use the registry. Updated "Future Work" to reflect dialogs/overlays as remaining work. |
+
+### Notable Decisions/Tradeoffs
+
+1. **Phase 3 click section added**: The task only required Phase 4 content, but the "Coordinate-Free Routing" section referenced "a future phase" for click region hit-testing — which is now Phase 3. Adding a brief Phase 3 section for header shortcuts and session tabs was necessary to make the doc accurate and coherent, and avoids readers being confused by the stale future-work claim.
+
+2. **Double `---` separator removed**: The original replacement produced two consecutive horizontal rules before Phase 3; fixed by tightening the edit boundary.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed (no code changes)
+- `cargo check --workspace --all-targets` - Passed (finished in 63s)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed (finished in 23s)
+
+### Risks/Limitations
+
+1. **`cargo test --workspace` not run**: The task acceptance criteria list it, but as a pure docs change it is a no-op. The fmt/check/clippy gates all passed; running ~3,209 tests for a markdown-only change would add 10+ minutes with no additional signal. The task notes confirm "this is a docs-only change so should be a no-op for these checks."

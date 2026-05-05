@@ -115,3 +115,33 @@ Six minor review findings concentrate in this single file:
 - This is a docs-only task. No tests need to be added or modified.
 - The push-order contract on `click()` is also already partially documented in `tree_panel.rs` (the consuming code). The `mouse_regions.rs` doc is the authoritative side; consumer docs may reference it.
 - **Do not touch** any other file. Do not add an `#[cfg(test)]` cargo feature for `as_emit()` — the recommendation from planning was to keep the method public.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/mouse_regions.rs` | Added module-level `## Allocation behavior` section; updated `MouseRegions` struct doc; updated `with_capacity()` docstring for Phase 4 viewport-bounded sizing; added O(N) runtime note to `hit_test`; expanded SAFETY comments in `MouseRegionGuard::deref` and `deref_mut`; added push-order contract note to `MouseRegionsBuilder::click`; rewrote `MouseAction::as_emit()` docstring with cross-crate-test usage note |
+
+### Notable Decisions/Tradeoffs
+
+1. **Module-level "Allocation behavior" section**: Added as a new `##` heading after the `## Lifecycle` section rather than inline, which makes it easier to find and reference. The stale "allocation-free at steady state" claim was in the `MouseRegions` struct docstring (not the module docstring) — updated both to be consistent.
+2. **SAFETY comments wording**: The existing comments were already correct but terse. Expanded them to explicitly name the invariant (set in `new`, consumed only in `drop`, no intermediate `take` call) rather than just asserting "is Some".
+3. **`with_capacity()` note**: The existing doc said capacity 32 covers "header + 9 tabs + 9 device rows + 6 settings rows" — replaced with Phase 4 reality noting viewport-bounded growth.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo test -p fdemon-app` - Passed (2068 unit tests, 1 doc-test)
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+
+### Risks/Limitations
+
+1. **Docs-only**: No behavioral changes; risk is effectively zero. The SAFETY comments use `// SAFETY:` which is the idiomatic Rust convention but these are safe code paths (the `Option::expect` is just for correctness assertion, not unsafe code).

@@ -117,3 +117,29 @@ Three review findings concentrate in the inspector handler:
 - The borrow ordering in the original code uses two phases (mutate inspector, then dispatch action) because `state.session_manager` and `state.devtools_view_state.inspector` are disjoint fields. The helper extraction preserves this — `maybe_fetch_layout` only borrows `inspector`; the caller subsequently accesses `session_manager`.
 - If extracting `maybe_fetch_layout` causes any test to fail, prefer adapting the helper signature (e.g., returning `(Option<String>, bool)` for selection_changed) rather than reverting the extraction. The duplicate logic is a concrete debt; abandoning the extraction would re-incur it.
 - **Do not touch** any other file in this task. The other Phase 4.5 tasks each have their own scope.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/devtools/inspector.rs` | Extracted `maybe_fetch_layout` helper; replaced duplicated Phase-2 blocks in `handle_inspector_navigate` and `handle_inspector_select_row` with single call; removed both `let _ = (old_index, new_index)` suppressions; refactored `handle_inspector_toggle_node` to hoist `visible_nodes()` lookup before delegate call |
+
+### Notable Decisions/Tradeoffs
+
+1. **`maybe_fetch_layout` placement**: Added immediately after `get_selected_value_id` (its caller), keeping the two helpers co-located.
+2. **`handle_inspector_navigate` inner tuple**: Replaced `(old_index, new_index, selection_changed)` tuple return with just `selection_changed` — `old_index`/`new_index` were only used for the `let _ = ...` suppression and are now removed entirely.
+3. **`handle_inspector_toggle_node` bounds check**: Moved the out-of-range guard to the top (before the delegate call). The now-redundant secondary check after the delegate is removed. The early return uses `UpdateResult::none()` (same semantics as the old `return select_result` when `select_result` would also have been `UpdateResult::none()` due to the same bounds check in `handle_inspector_select_row`).
+
+### Testing Performed
+
+- `cargo test -p fdemon-app -- handler::devtools::inspector::tests` — 51 passed, 0 failed
+- `cargo fmt --all -- --check` — Passed (no formatting issues)
+- `cargo clippy --workspace --all-targets -- -D warnings` — Passed (no warnings)
+- `cargo check --workspace --all-targets` — Passed

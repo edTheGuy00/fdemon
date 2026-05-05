@@ -87,3 +87,57 @@ Phase 4's success criteria explicitly required a manual end-to-end mouse-only wa
 - **Step 14** depends on whether Task 08 has merged. If running this task in parallel with T08 (in worktrees), expect the pre-T08 behavior (suppressed). Note this in the result.
 - **Edge cases the test does not cover** — these are deferred to the reviewer's discretion: middle-click on regions (no production feature uses it), right-click (Phase 4 explicitly returns None), terminal resize during click sequence, very large log buffers (>10k entries) with click registration overhead.
 - **Headless environment** — if no live Flutter project is available, mark this task as Blocked in the completion summary and note the reason. The orchestrator will not auto-skip this task; the user decides whether to defer or proceed.
+
+---
+
+## Completion Summary
+
+**Status:** Blocked
+**Branch:** feat/mouse-support
+
+### Reason for Block
+
+This task requires running the `fdemon` binary interactively against a live Flutter project on macOS — clicking in a TUI, observing rendering behaviour, timing double-clicks, and watching Inspector/Performance/Network panels respond. An automated agent subagent has no interactive terminal access, no live Flutter device, and cannot simulate real mouse events in a running TUI.
+
+**Binary build verified:** `cargo build` completed successfully at the current `feat/mouse-support` HEAD (all 5 crates compiled, `Finished dev profile` with no errors or warnings).
+
+### What Must Happen Next
+
+A human (or an agent with interactive macOS terminal access and a live Flutter project) must:
+
+1. Run `cargo build --release` (or use the existing dev binary at `target/debug/flutter-demon`).
+2. Launch fdemon against a Flutter project: `./target/debug/flutter-demon /path/to/flutter/project`
+3. Execute all 15 smoke test steps listed in the Plan section above.
+4. Record results in the table below and replace this "Blocked" status with "Done" or "Failed".
+
+### Smoke Test Results
+
+_(Not executed — requires interactive macOS terminal session with a live Flutter device.)_
+
+| # | Step | Result | Notes |
+|---|------|--------|-------|
+| 1 | Click in log area | NOT RUN | Requires interactive terminal |
+| 2 | Double-click expands stack trace | NOT RUN | Requires interactive terminal |
+| 3 | Third click collapses stack trace | NOT RUN | Requires interactive terminal |
+| 4 | Click different row within 400ms | NOT RUN | Requires interactive terminal |
+| 5 | Press `d` to open DevTools | NOT RUN | Requires interactive terminal |
+| 6 | Click `[p] Performance` sub-tab | NOT RUN | Requires interactive terminal |
+| 7 | Click `[i] Inspector` sub-tab | NOT RUN | Requires interactive terminal |
+| 8 | Click a child row in Inspector tree | NOT RUN | Requires interactive terminal |
+| 9 | Click `▶` glyph to expand/collapse node | NOT RUN | Requires interactive terminal |
+| 10 | Click a bar in Performance frame chart | NOT RUN | Requires interactive terminal |
+| 11 | Click a row in Network table | NOT RUN | Requires interactive terminal |
+| 12 | Click `[h] Headers` in detail tab bar | NOT RUN | Requires interactive terminal |
+| 13 | Enter filter mode, click table area | NOT RUN | Requires interactive terminal |
+| 14 | In filter mode, click Inspector sub-tab | NOT RUN | Requires interactive terminal |
+| 15 | Quit fdemon | NOT RUN | Requires interactive terminal |
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `workflow/plans/features/mouse-support/phase-4.5-followup/tasks/05-manual-smoke-test.md` | Added Completion Summary with Blocked status and empty results table |
+
+### Testing Performed
+
+- `cargo build` - PASS (all crates compiled cleanly, no errors)

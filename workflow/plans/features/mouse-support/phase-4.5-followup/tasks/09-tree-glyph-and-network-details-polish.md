@@ -86,3 +86,35 @@ Two unrelated minor cleanups in two files:
 - **Do not touch** `widgets/devtools/network/mod.rs` or `widgets/devtools/network/request_table.rs` — same reasoning.
 - The two files in this task are unrelated, but bundling them avoids a 1-line fix in its own task. Both are pure mechanical changes.
 - The glyph overflow change is a hardening change, not a bug fix — no real-world inspector tree reaches `u16::MAX / 2` depth. The security reviewer flagged it as defense-in-depth. Treat the work effort accordingly: a few lines of refactoring, no new test.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** worktree-agent-a1f80bf6636eb2580
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-tui/src/widgets/devtools/inspector/tree_panel.rs` | Replaced `saturating_mul`/`saturating_add` + `if glyph_x < right` guard with `checked_mul`/`checked_add` + `continue` on overflow, plus `>=` edge check with `continue` |
+| `crates/fdemon-tui/src/widgets/devtools/network/request_details.rs` | Moved `LABEL_COL_WIDTH` const from between two `use` blocks to after all `use` statements, per Rust convention |
+
+### Notable Decisions/Tradeoffs
+
+1. **`continue` vs labeled-break for glyph skip**: The `if let Some(c) = ctx.as_deref_mut()` block is inside the outer `for` loop, so `continue` naturally skips to the next loop iteration. No labeled break or restructuring needed — the code shape matched the plan's suggested approach exactly.
+2. **`cargo fmt` normalization**: After applying the `checked_mul`/`checked_add` change, `cargo fmt` inlined `Message::DevToolsInspectorToggleNode { index: vis_index }` onto one line. Applied `cargo fmt --all` and the diff is clean.
+
+### Testing Performed
+
+- `cargo fmt --all -- --check` - Passed
+- `cargo check --workspace --all-targets` - Passed
+- `cargo clippy --workspace --all-targets -- -D warnings` - Passed
+- `cargo test -p fdemon-tui --lib -- devtools::inspector` - Passed (64 tests)
+- `cargo test -p fdemon-tui --lib -- devtools::network::request_details` - Passed (41 tests)
+- `cargo test --workspace --lib` - Passed (938 tests)
+
+### Risks/Limitations
+
+1. **Behavior at depths 32 768–65 535**: Previously `saturating_mul` would compute `u16::MAX` (65535), which `saturating_add` would keep at `u16::MAX`, and the `< right()` guard would still skip. Now `checked_mul` returns `None` and `continue` skips registration. Both outcomes are equivalent in practice (no region registered), so there is no observable behavior change at any realistic depth.

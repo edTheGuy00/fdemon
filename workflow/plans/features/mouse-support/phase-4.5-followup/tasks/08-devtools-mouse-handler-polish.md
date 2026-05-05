@@ -179,3 +179,40 @@ Three focused changes in `crates/fdemon-app/src/handler/mouse/devtools.rs`:
 - **Do not touch** `handler/update.rs` or `widgets/devtools/mod.rs` in this task. If you find that the cleanest factoring requires modifying the `SwitchDevToolsPanel` handler in `update.rs`, prefer the in-dispatcher mutation approach instead (mutating `network.filter_input_active` directly in `handle_press`). Recording this decision in the Completion Summary is fine.
 - The middle-click test exists primarily to lock in the contract that `MouseButton::Middle` resolves to the `on_middle` field of a `click_left_middle` registration. The Phase 4 production code already has this behavior; the test makes it discoverable and regression-proof.
 - If the dispatcher's signature uses `&AppState` rather than `&mut AppState`, the in-dispatcher mutation approach won't work. In that case, fall back to chaining a `Message::ExitNetworkFilterInput` (or similar) — but verify the dispatcher's mutability first by reading the current `mod.rs::handle_press` signature.
+
+---
+
+## Completion Summary
+
+**Status:** Done
+**Branch:** feat/mouse-support
+
+### Files Modified
+
+| File | Changes |
+|------|---------|
+| `crates/fdemon-app/src/handler/mouse/devtools.rs` | Changed `handle_press` to `&mut AppState`; replaced `matches!()` with `==`; restructured filter gate to check hit-test first, then gate; added sub-tab carve-out; added two new tests |
+| `crates/fdemon-app/src/handler/mouse/mod.rs` | Changed `handle_press` and `handle_mouse` to `&mut AppState`; updated all test call sites from `&state` to `&mut state` |
+
+### Notable Decisions/Tradeoffs
+
+1. **Signature widened to `&mut AppState`**: The original `handle_press` signatures used `&AppState`. The in-dispatcher mutation approach (preferred by the task) required `&mut AppState` to clear `filter_input_active`. The change propagated to `mod.rs::handle_press` and `handle_mouse`. The `update.rs` call site was already passing `&mut AppState` so no change was needed there. All test call sites in `mod.rs` were updated from `&state` to `&mut state`.
+
+2. **Hit-test before filter gate**: The implementation restructures the original order (gate first, then hit-test) to hit-test first, then apply the filter gate. This is necessary to know whether the resolved message is a `SwitchDevToolsPanel` before deciding whether to suppress it. The behavior for suppressed clicks is identical — only `SwitchDevToolsPanel` clicks pass through the gate.
+
+3. **`click_left_middle` has no `z_index` argument**: The task's example code showed a 4-argument `click_left_middle(rect, on_left, on_middle, z_index)` but the actual API has 3 arguments (no z_index). The new middle-click test was adapted to use the correct 3-argument form.
+
+4. **`filter_input_active` path**: The task examples used `state.devtools_view_state.network.filter_input_active` but the actual path is `state.session_manager.selected_mut().unwrap().session.network.filter_input_active`. The implementation and tests use the correct path.
+
+### Testing Performed
+
+- `cargo test -p fdemon-app --lib handler::mouse::devtools::press_tests` — 7 tests pass (5 original + 2 new)
+- `cargo test -p fdemon-app --lib` — 2070 tests pass
+- `cargo test --workspace` — All test suites pass (4,072+ tests total)
+- `cargo clippy --workspace --all-targets -- -D warnings` — No warnings
+- `cargo fmt --all -- --check` — No formatting issues
+- `cargo check --workspace --all-targets` — Compiles cleanly
+
+### Risks/Limitations
+
+1. **Signature change scope**: Widening `handle_mouse` to `&mut AppState` is a public API change for the `fdemon-app` crate. Currently only `update.rs` calls `handle_mouse`; the TUI runner passes mouse events through `Message::Mouse(...)` to `update()`, so no external callers are affected. If future code calls `handle_mouse` with `&AppState`, it will need updating.

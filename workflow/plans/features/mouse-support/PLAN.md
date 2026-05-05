@@ -296,6 +296,32 @@ These coordinate-dependent messages are new pure handlers; they do not require n
 
 **Milestone**: Click any panel surface and it does the natural thing — select a frame, expand a widget, focus a log entry.
 
+### Drift Notes (Phase 4 implementation)
+
+The Phase 4 implementation deviated from this PLAN's original sketch in two
+places. Both deviations were made during implementation for sound technical
+reasons; they are recorded here so future readers don't get confused.
+
+**Drift A — log-view click registration uses per-row `Emit` instead of
+`EmitWithCoord`:** the original sketch called for one coordinate-aware
+`MouseAction::EmitWithCoord(|x, y| Message::FocusLogEntryAtRow { ... })`
+covering the whole log area. The implementation registers one
+`MouseAction::Emit(Message::ClickLogRow { entry_id, frame_index })` per
+visible row. This is cleaner across wrap modes (where pixel-row → entry
+mapping is non-trivial) and avoids the need for a `LogViewState`-maintained
+row→entry auxiliary map. The cost is one `Box<Message>` allocation per
+visible row per frame (~200 entries × 20 fps = 4k allocs/sec at peak,
+acceptable). See Phase 4 task 06 notes for the full rationale.
+
+**Drift B — double-click detection uses entry_id matching, not position
+matching:** the original sketch called for "two consecutive clicks within
+400ms AND within 1 cell of previous click." The implementation drops the
+position constraint and matches on `entry_id`. This is more robust to
+scrolling between clicks (clicking row 5, scrolling so the row moves to
+row 3, clicking again still counts as a double-click on the same entry).
+The cost is that two clicks on different rows within 400ms are correctly
+treated as separate single clicks (handled by the entry_id mismatch).
+
 ---
 
 ### Phase 5: Dialogs & overlays
