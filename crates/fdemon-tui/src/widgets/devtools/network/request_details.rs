@@ -9,9 +9,6 @@ use fdemon_app::{MouseAction, MouseRect};
 use fdemon_core::network::{
     format_bytes, format_duration_ms, HttpProfileEntry, HttpProfileEntryDetail,
 };
-
-/// Width of the label column in the General tab layout (characters).
-const LABEL_COL_WIDTH: u16 = 18;
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
@@ -21,6 +18,9 @@ use ratatui::{
 
 use super::super::truncate_str;
 use crate::widgets::MouseCtx;
+
+/// Width of the label column in the General tab layout (characters).
+const LABEL_COL_WIDTH: u16 = 18;
 
 // ── RequestDetails ────────────────────────────────────────────────────────────
 

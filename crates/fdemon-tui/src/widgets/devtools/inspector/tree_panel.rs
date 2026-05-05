@@ -135,18 +135,24 @@ impl WidgetInspector<'_> {
                 // Glyph click region (left-click on ▶/▼/● → toggle).
                 // Pushed AFTER the row region so the registry's last-pushed-wins-at-same-z
                 // invariant makes the glyph rect win on overlap.
-                let glyph_x = tree_inner
-                    .x
-                    .saturating_add((*depth as u16).saturating_mul(2));
-                if glyph_x < tree_inner.right() {
-                    let glyph_rect = MouseRect::new(glyph_x, y, 1, 1);
-                    c.click(
-                        glyph_rect,
-                        MouseAction::emit(Message::DevToolsInspectorToggleNode {
-                            index: vis_index,
-                        }),
-                    );
+                //
+                // depth-to-x conversion: checked_mul + checked_add guarantee we don't
+                // silently saturate and place the glyph far off-screen. At depths above
+                // ~32 767 (u16::MAX / 2) the tree is pathological; skip glyph registration.
+                let Some(indent) = (*depth as u16).checked_mul(2) else {
+                    continue; // depth overflows u16 — skip glyph for impossibly deep node
+                };
+                let Some(glyph_x) = tree_inner.x.checked_add(indent) else {
+                    continue; // indent pushes glyph past u16 bounds — skip
+                };
+                if glyph_x >= tree_inner.right() {
+                    continue; // glyph clipped past the right edge (normal viewport case)
                 }
+                let glyph_rect = MouseRect::new(glyph_x, y, 1, 1);
+                c.click(
+                    glyph_rect,
+                    MouseAction::emit(Message::DevToolsInspectorToggleNode { index: vis_index }),
+                );
             }
         }
 
