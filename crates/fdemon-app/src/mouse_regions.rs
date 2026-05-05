@@ -16,6 +16,16 @@
 //!    [`MouseRegions`] back via `state.mouse_regions.set(regions)`.
 //! 4. On `Message::Mouse(MouseInput::Press { x, y, button, .. })`, the handler
 //!    layer calls `regions.hit_test(x, y, button)` to find the matching region.
+//!
+//! ## Allocation behavior
+//!
+//! The registry's `Vec` is reused across frames via `clear()`, which preserves
+//! capacity. Steady-state allocation is dominated by `MouseAction::Emit(Box<Message>)`
+//! pushes — each click region registered allocates one `Box<Message>` per frame.
+//! At peak (e.g., ~200 visible log rows × 20 fps) this is roughly 4,000 small
+//! allocations/sec; not a hot-path bottleneck on glibc/jemalloc but no longer
+//! "allocation-free." The `EmitWithCoord` variant (a bare `fn` pointer) remains
+//! zero-allocation.
 
 use std::cell::Cell;
 use std::ops::{Deref, DerefMut};
@@ -108,9 +118,14 @@ impl MouseAction {
         }
     }
 
-    /// If this is an `Emit` variant, return a reference to the boxed message;
-    /// otherwise return `None`. Useful in tests that want to inspect the
-    /// emitted message without resolving it through a coordinate.
+    /// Returns the inner [`Message`] if this action is `Emit(_)`, otherwise
+    /// `None`.
+    ///
+    /// Used by cross-crate tests (e.g.,
+    /// `fdemon-tui::widgets::devtools::inspector::tests`) to introspect emitted
+    /// messages without resolving coordinates. Kept `pub` for that reason; not
+    /// intended for production use — the registry's `hit_test` + `resolve`
+    /// flow is the primary action consumer.
     pub fn as_emit(&self) -> Option<&Message> {
         match self {
             MouseAction::Emit(msg) => Some(msg),
@@ -135,16 +150,22 @@ pub struct MouseRegionEntry {
 /// Per-frame click-region registry.
 ///
 /// Backing storage: `Vec<MouseRegionEntry>`. The vec is reused frame-over-frame
-/// via `Cell::take` + `Vec::clear` (no realloc) to keep the renderer hot path
-/// allocation-free at steady state.
+/// via `Cell::take` + `Vec::clear` (no realloc) to keep capacity overhead low.
+/// See module-level docs for allocation behavior notes.
 #[derive(Debug, Default)]
 pub struct MouseRegions {
     entries: Vec<MouseRegionEntry>,
 }
 
 impl MouseRegions {
-    /// Pre-sized constructor (allocates capacity for 32 entries — covers the
-    /// worst case of header + 9 tabs + 9 device rows + 6 settings rows).
+    /// Pre-sized constructor (allocates capacity for 32 entries).
+    ///
+    /// The default `MouseRegions::default()` starts at 32, but Phase 4
+    /// click-region surfaces (log view, inspector tree, performance frame
+    /// chart, network table) can push one region per visible row, so the
+    /// working set typically grows to viewport-bounded sizes
+    /// (~visible-row-count) on first render and stays there via `Vec`
+    /// capacity reuse.
     pub fn with_capacity() -> Self {
         Self {
             entries: Vec::with_capacity(32),
@@ -159,6 +180,10 @@ impl MouseRegions {
     /// Implementation: enumerate entries in registration order and use a
     /// composite key `(z_index, push_index)` so that higher z wins, and
     /// among ties in z the higher push index (last-pushed) wins.
+    ///
+    /// **Runtime:** O(N) in registry size. Phase-4-era N is bounded by
+    /// viewport row count (~24–60 typical). If Phase 5+ pushes this past
+    /// ~1k entries, consider a y-sorted index.
     pub fn hit_test(&self, x: u16, y: u16, button: MouseButton) -> Option<&MouseRegionEntry> {
         self.entries
             .iter()
@@ -308,7 +333,10 @@ impl Deref for MouseRegionGuard<'_> {
     type Target = MouseRegions;
 
     fn deref(&self) -> &MouseRegions {
-        // SAFETY: `regions` is `Some` from construction until `drop()` takes it.
+        // SAFETY: `regions` is initialized to `Some` in `MouseRegionGuard::new`
+        // and is only consumed by `drop()`. Any access between construction and
+        // drop must observe `Some`; no other code path calls `Option::take` on
+        // this field.
         self.regions
             .as_ref()
             .expect("MouseRegionGuard is live until Drop")
@@ -317,7 +345,9 @@ impl Deref for MouseRegionGuard<'_> {
 
 impl DerefMut for MouseRegionGuard<'_> {
     fn deref_mut(&mut self) -> &mut MouseRegions {
-        // SAFETY: `regions` is `Some` from construction until `drop()` takes it.
+        // SAFETY: same invariant as `Deref` — `regions` is `Some` from
+        // construction until `drop()` takes it. No intermediate code path
+        // consumes the `Option`.
         self.regions
             .as_mut()
             .expect("MouseRegionGuard is live until Drop")
@@ -340,6 +370,14 @@ pub struct MouseRegionsBuilder<'a> {
 
 impl<'a> MouseRegionsBuilder<'a> {
     /// Register a left-click-only region at `z_index = 0`.
+    ///
+    /// **Push-order contract:** when two regions share the same `z_index` and
+    /// overlap on a cell, hit-testing returns the *last-pushed* region for that
+    /// cell. Inspector tree rows rely on this: row regions are pushed first
+    /// (wide), then glyph regions (narrow, 1×1) — so a click on the glyph
+    /// cell resolves to the glyph (`ToggleNode`) rather than the row
+    /// (`SelectRow`). A future refactor that reorders pushes will silently
+    /// break this contract.
     pub fn click(&mut self, rect: MouseRect, action: MouseAction) {
         if rect.is_empty() {
             return;
