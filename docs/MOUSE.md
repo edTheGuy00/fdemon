@@ -81,12 +81,13 @@ which surface receives the scroll. This means scrolling while hovering over the 
 status bar, or session tabs still scrolls the focused surface (e.g., the log view in
 `Normal` mode).
 
-This is a deliberate v1 simplification. A future phase will introduce region-based
-hit-testing, at which point scroll routing may also become coordinate-aware.
+This is a deliberate simplification. Scroll routing is coordinate-free; only **click**
+events use the per-frame region registry for coordinate-based hit-testing (see Phases 3
+and 4 below).
 
 **Practical implication:** If you hover over a session tab and scroll, the log view
 scrolls — the tab strip does not change. Use the keyboard (`1`–`9` to jump to a session,
-`[` / `]` to cycle) to switch sessions.
+`[` / `]` to cycle) to switch sessions, or left-click a tab to select it.
 
 ---
 
@@ -133,9 +134,78 @@ to disable mouse capture" callout.
 
 ---
 
+## Phase 3: Click Surfaces — Header and Session Tabs
+
+Click support for the header and session tabs was added in Phase 3.
+
+### Header Shortcuts
+
+Bracketed shortcuts in the title bar are clickable. Clicking `[r]`, `[R]`, `[x]`,
+`[d]`, `[D]`, or `[q]` fires the same action as the corresponding key, subject to
+the same `is_busy` gate (e.g., `[r]` is a no-op during a hot-reload in progress).
+
+### Session Tabs
+
+- **Left-click a tab**: switches to that session.
+- **Middle-click a tab**: closes that session.
+- **Click the device pill** (single-session compact header): opens the New Session
+  dialog so you can add or switch devices.
+
+---
+
+## Phase 4: Click Behavior
+
+### Log View
+
+- **Single click on a log row**: no visible action. The row is registered for
+  double-click detection but is not scrolled or highlighted.
+- **Double click on the same row within 400 ms**: toggles the entry's stack trace
+  expansion (if the entry has a stack trace).
+- **Double click on a different row within 400 ms**: treated as two separate single
+  clicks; no toggle.
+- **Double click on the same row after a session switch**: treated as a fresh single
+  click (the previous click stamp is cleared on session change).
+
+### DevTools Sub-tab Bar
+
+- Click `[i] Inspector` / `[p] Performance` / `[n] Network` to switch the active
+  panel. Equivalent to pressing `i` / `p` / `n` keys.
+
+### Inspector Tree
+
+- Click a tree row to select it (equivalent to `↑`/`↓` keyboard navigation).
+- Click the `▶`/`▼` glyph at the row's left edge to expand or collapse the node
+  (equivalent to `→`/`←` keyboard expand/collapse).
+- Both clicks dispatch a layout fetch under the same debounce and cache rules as
+  keyboard navigation.
+
+### Performance Frame Chart
+
+- Click a frame bar in the chart to select it. Equivalent to `Tab`/`Shift+Tab` in
+  the frames view.
+- Clicking outside any frame bar (e.g., on the budget-line area) is a no-op.
+
+### Network Table
+
+- Click a row in the request table to select it; details appear in the side panel
+  (or below in narrow mode).
+- Click `[g]` / `[h]` / `[q]` / `[s]` / `[t]` in the detail-tab bar to switch
+  detail tabs.
+
+### Network Filter Input Mode
+
+- When typing in the network filter input, clicks in the table area are suppressed
+  (the user is typing).
+- **Exception:** clicks on the DevTools sub-tab bar (`[i]`/`[p]`/`[n]`) still work
+  — they switch panels AND exit filter input mode. This prevents a mouse-only user
+  from being trapped in the filter.
+
+---
+
 ## Future Work
 
-- Coordinate-aware click handling (region registry, header shortcuts, log-row clicks)
-- Drag-to-select for log lines
-- Horizontal-scroll consumers (log timeline panning, DevTools secondary axis)
-- First-launch hint for users who did not realize mouse capture is active
+- Dialogs and overlays: NewSessionDialog device rows, ConfirmDialog Yes/No buttons,
+  TagFilter overlay rows, LinkHighlight badges, Settings panel rows.
+- Drag-to-select for log lines.
+- Horizontal-scroll consumers (log timeline panning, DevTools secondary axis).
+- First-launch hint for users who did not realize mouse capture is active.
