@@ -11153,6 +11153,71 @@ mod phase4_integration_tests {
         );
     }
 
+    /// Session switch clears `last_log_click` so a same-id click on the new
+    /// session cannot trigger a spurious double-click / `ToggleStackTraceForEntry`.
+    ///
+    /// Scenario:
+    /// 1. Session A: single-click entry_id=7 → stamp recorded.
+    /// 2. `SelectSessionByIndex` → stamp must be cleared.
+    /// 3. Session B: single-click entry_id=7 (collision) → fresh single click,
+    ///    no `ToggleStackTraceForEntry` follow-up.
+    #[test]
+    fn click_after_session_switch_does_not_double_click() {
+        let mut state = AppState::new();
+
+        // Create two sessions.
+        let device_a = test_device("dev-a", "Phone A");
+        let device_b = test_device("dev-b", "Phone B");
+        state.session_manager.create_session(&device_a).unwrap();
+        state.session_manager.create_session(&device_b).unwrap();
+
+        // Session A is selected (index 0).
+        // Single-click entry_id=7 → stamp recorded.
+        const ENTRY_ID: u64 = 7;
+        let r1 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id: ENTRY_ID,
+                frame_index: None,
+            },
+        );
+        assert!(r1.message.is_none(), "single click: no follow-up");
+        assert!(
+            state.last_log_click.is_some(),
+            "stamp must be recorded after first click"
+        );
+
+        // Switch to session B (index 1) — must clear the stamp.
+        update(&mut state, Message::SelectSessionByIndex(1));
+        assert!(
+            state.last_log_click.is_none(),
+            "last_log_click must be cleared on session switch"
+        );
+
+        // Single-click the same entry_id=7 on session B — must be a fresh single
+        // click, not a double-click.
+        let r3 = update(
+            &mut state,
+            Message::ClickLogRow {
+                entry_id: ENTRY_ID,
+                frame_index: None,
+            },
+        );
+        assert!(
+            r3.message.is_none(),
+            "cross-session same-id click must be treated as a fresh single click, not a double-click"
+        );
+        assert!(
+            state.last_log_click.is_some(),
+            "fresh stamp must be recorded on session B's click"
+        );
+        assert_eq!(
+            state.last_log_click.unwrap().entry_id,
+            ENTRY_ID,
+            "new stamp carries the correct entry_id"
+        );
+    }
+
     /// `SwitchDevToolsPanel` switches the active panel in state.
     #[test]
     fn click_devtools_inspector_tab_switches_panel() {

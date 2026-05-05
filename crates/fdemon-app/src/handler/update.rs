@@ -534,15 +534,30 @@ pub fn update(state: &mut AppState, message: Message) -> UpdateResult {
         } => session_lifecycle::handle_session_process_attached(state, session_id, cmd_sender),
 
         Message::SelectSessionByIndex(index) => {
+            // Clear the double-click stamp so a cross-session entry_id collision
+            // cannot trigger a spurious ToggleStackTraceForEntry on the new session.
+            state.last_log_click = None;
             session_lifecycle::handle_select_session_by_index(state, index)
         }
 
-        Message::NextSession => session_lifecycle::handle_next_session(state),
+        Message::NextSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_next_session(state)
+        }
 
-        Message::PreviousSession => session_lifecycle::handle_previous_session(state),
+        Message::PreviousSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_previous_session(state)
+        }
 
-        Message::CloseCurrentSession => session_lifecycle::handle_close_current_session(state),
-        Message::CloseSessionAt(idx) => session_lifecycle::handle_close_session_at(state, idx),
+        Message::CloseCurrentSession => {
+            state.last_log_click = None;
+            session_lifecycle::handle_close_current_session(state)
+        }
+        Message::CloseSessionAt(idx) => {
+            state.last_log_click = None;
+            session_lifecycle::handle_close_session_at(state, idx)
+        }
 
         // ─────────────────────────────────────────────────────────
         // Log Control (Task 10)

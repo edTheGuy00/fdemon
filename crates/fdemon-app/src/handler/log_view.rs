@@ -9,9 +9,11 @@ use crate::state::{AppState, LogClickStamp, UiMode};
 use super::UpdateResult;
 
 /// Window within which two consecutive clicks on the same row count as a
-/// double click. 400 ms matches GNOME / KDE / macOS default double-click
-/// thresholds and is short enough that an accidental re-click doesn't
-/// trigger an unwanted stack-trace toggle.
+/// double click — *inclusive* of the boundary value (i.e., a click at
+/// exactly 400 ms after the previous click is still treated as a double-click).
+/// 400 ms matches the GNOME / KDE / macOS double-click defaults and is short
+/// enough that an accidental re-click doesn't trigger an unwanted stack-trace
+/// toggle.
 const DOUBLE_CLICK_WINDOW: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// Handle select link message
@@ -77,17 +79,16 @@ pub fn handle_select_link(state: &mut AppState, shortcut: char) -> UpdateResult 
 /// `entry_id` is clicked twice within [`DOUBLE_CLICK_WINDOW`], emits a
 /// follow-up [`Message::ToggleStackTraceForEntry`] and clears the stamp so
 /// a *third* click within the window does not chain another toggle.
-///
-/// `frame_index` is currently informational — Phase 4 v1 does not act on
-/// stack-frame double-click (the natural action would be "open the link"
-/// but that overlaps with the existing `LinkHighlight` mode). The field is
-/// included in the message so future work can act on it without another
-/// `Message` variant.
 pub fn handle_click_log_row(
     state: &mut AppState,
     entry_id: u64,
-    _frame_index: Option<usize>,
+    frame_index: Option<usize>,
 ) -> UpdateResult {
+    // TODO(phase-5): use `frame_index` to dispatch a stack-frame-specific click
+    // (e.g., open the source location for the clicked frame instead of toggling
+    // the parent entry's stack trace). For now, single-row click behavior is
+    // identical regardless of which line within an entry was clicked.
+    let _ = frame_index;
     let now = std::time::Instant::now();
 
     let is_double = state.last_log_click.is_some_and(|prev| {
