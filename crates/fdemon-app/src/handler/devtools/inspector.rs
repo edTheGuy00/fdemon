@@ -103,7 +103,7 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
     // Phase 1: read the visible node count and current selection, then handle navigation.
     // We scope the mutable borrow of `inspector` here so it ends before we access
     // `state.session_manager` below.
-    let (old_index, new_index, should_fetch_layout) = {
+    let should_fetch_layout = {
         let inspector = &mut state.devtools_view_state.inspector;
         let visible = inspector.visible_nodes();
         let count = visible.len();
@@ -160,36 +160,14 @@ pub fn handle_inspector_navigate(state: &mut AppState, nav: InspectorNav) -> Upd
             inspector.layout_error = None;
         }
 
-        (old_index, new_index, selection_changed)
+        selection_changed
     };
     // `inspector` borrow has ended here — we can now access other fields.
 
     // Phase 2: auto-fetch layout for the newly selected node (Up/Down only).
     if should_fetch_layout {
-        let _ = (old_index, new_index); // suppress unused warning
-
-        // Determine whether to fetch — collect node_id while holding the borrow.
-        // The borrow of `inspector` ends at the close of this block, allowing us
-        // to access `state.session_manager` afterwards.
-        let fetch_node_id: Option<String> = {
-            let inspector = &mut state.devtools_view_state.inspector;
-
-            if inspector.is_layout_fetch_debounced() {
-                None
-            } else if let Some(node_id) = get_selected_value_id(inspector) {
-                // Skip if the same node was already fetched (cache hit).
-                if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
-                    None
-                } else {
-                    inspector.layout_loading = true;
-                    inspector.pending_node_id = Some(node_id.clone());
-                    inspector.layout_last_fetch_time = Some(Instant::now());
-                    Some(node_id)
-                }
-            } else {
-                None
-            }
-        };
+        // Collect node_id while holding the borrow; borrow ends before session_manager access.
+        let fetch_node_id = maybe_fetch_layout(&mut state.devtools_view_state.inspector);
         // `inspector` borrow has ended — we can now access session_manager.
 
         if let Some(node_id) = fetch_node_id {
@@ -216,6 +194,26 @@ fn get_selected_value_id(inspector: &InspectorState) -> Option<String> {
     visible
         .get(inspector.selected_index)
         .and_then(|(node, _depth)| node.value_id.clone())
+}
+
+/// If the currently-selected inspector node has a `value_id`, isn't debounced,
+/// and isn't already cached as `last_fetched_node_id`, mark fetch state and
+/// return the node id to fetch. Otherwise return `None`.
+///
+/// Mutates `inspector.layout_loading`, `pending_node_id`, and
+/// `layout_last_fetch_time` only on the success path.
+fn maybe_fetch_layout(inspector: &mut InspectorState) -> Option<String> {
+    if inspector.is_layout_fetch_debounced() {
+        return None;
+    }
+    let node_id = get_selected_value_id(inspector)?;
+    if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
+        return None;
+    }
+    inspector.layout_loading = true;
+    inspector.pending_node_id = Some(node_id.clone());
+    inspector.layout_last_fetch_time = Some(std::time::Instant::now());
+    Some(node_id)
 }
 
 /// Handle widget tree fetch timeout (Phase 5, Task 02).
@@ -350,7 +348,7 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
     // Phase 1: bounds-check and update selection.
     // Scope the mutable borrow of `inspector` so it ends before we access
     // `state.session_manager` below.
-    let (old_index, new_index, selection_changed) = {
+    let selection_changed = {
         let inspector = &mut state.devtools_view_state.inspector;
         let visible = inspector.visible_nodes();
         let count = visible.len();
@@ -363,17 +361,16 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
 
         let old_index = inspector.selected_index;
         inspector.selected_index = index;
-        let new_index = inspector.selected_index;
-        let selection_changed = new_index != old_index;
+        let changed = old_index != index;
 
-        if selection_changed {
+        if changed {
             // Clear stale layout immediately so the layout panel shows
             // a loading state — same as InspectorNav::Up/Down.
             inspector.layout = None;
             inspector.layout_error = None;
         }
 
-        (old_index, new_index, selection_changed)
+        changed
     };
     // `inspector` borrow has ended here.
 
@@ -382,28 +379,9 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
         return UpdateResult::none();
     }
 
-    let _ = (old_index, new_index); // suppress unused warning
-
-    // Phase 2: dispatch layout fetch (same logic as handle_inspector_navigate).
+    // Phase 2: dispatch layout fetch.
     // Collect node_id while holding the borrow; borrow ends before session_manager access.
-    let fetch_node_id: Option<String> = {
-        let inspector = &mut state.devtools_view_state.inspector;
-
-        if inspector.is_layout_fetch_debounced() {
-            None
-        } else if let Some(node_id) = get_selected_value_id(inspector) {
-            if inspector.last_fetched_node_id.as_deref() == Some(node_id.as_str()) {
-                None
-            } else {
-                inspector.layout_loading = true;
-                inspector.pending_node_id = Some(node_id.clone());
-                inspector.layout_last_fetch_time = Some(std::time::Instant::now());
-                Some(node_id)
-            }
-        } else {
-            None
-        }
-    };
+    let fetch_node_id = maybe_fetch_layout(&mut state.devtools_view_state.inspector);
     // `inspector` borrow has ended — we can now access session_manager.
 
     if let Some(node_id) = fetch_node_id {
@@ -428,28 +406,33 @@ pub fn handle_inspector_select_row(state: &mut AppState, index: usize) -> Update
 /// Clicking on a leaf node (no children) or a node without a `value_id` is a
 /// no-op for the expanded set; selection still changes normally.
 pub fn handle_inspector_toggle_node(state: &mut AppState, index: usize) -> UpdateResult {
-    // Step 1: select the row (mirrors InspectorNav::Up/Down semantics —
+    // Step 1: capture value_id and has_children before delegating, so that
+    // visible_nodes() is only traversed once (the delegate also calls it internally).
+    let (value_id, has_children) = {
+        let inspector = &state.devtools_view_state.inspector;
+        let visible = inspector.visible_nodes();
+        if index >= visible.len() {
+            // Out-of-range click — no selection change, no expanded-set mutation.
+            return UpdateResult::none();
+        }
+        visible
+            .get(index)
+            .and_then(|(node, _depth)| {
+                node.value_id
+                    .as_ref()
+                    .map(|id| (id.clone(), !node.children.is_empty()))
+            })
+            .unzip()
+    };
+    // `inspector` immutable borrow has ended.
+
+    // Step 2: select the row (mirrors InspectorNav::Up/Down semantics —
     // clears stale layout, dispatches fetch under debounce rules).
     let select_result = handle_inspector_select_row(state, index);
 
-    // Step 2: toggle the node's expanded state.
-    let inspector = &mut state.devtools_view_state.inspector;
-    let visible = inspector.visible_nodes();
-    let count = visible.len();
-    if count == 0 || index >= count {
-        return select_result;
-    }
-
-    let (value_id, has_children) = visible
-        .get(index)
-        .and_then(|(node, _depth)| {
-            node.value_id
-                .as_ref()
-                .map(|id| (id.clone(), !node.children.is_empty()))
-        })
-        .unzip();
-
+    // Step 3: toggle the node's expanded state.
     if let (Some(value_id), Some(true)) = (value_id, has_children) {
+        let inspector = &mut state.devtools_view_state.inspector;
         if inspector.is_expanded(&value_id) {
             inspector.expanded.remove(&value_id);
         } else {
