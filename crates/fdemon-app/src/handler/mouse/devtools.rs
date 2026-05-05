@@ -19,8 +19,12 @@ use crate::state::{AppState, DevToolsPanel};
 /// region registry. Returns the matched region's resolved [`Message`].
 ///
 /// **Filter-input gate.** When the Network panel's filter input is active
-/// (the user is typing a filter pattern), all clicks are silently
-/// dropped — mirroring [`handle_network_scroll`]'s behaviour.
+/// (the user is typing a filter pattern), non-tab clicks are silently
+/// dropped — mirroring [`handle_network_scroll`]'s behaviour. However,
+/// clicks on the DevTools sub-tab bar (`[i]/[p]/[n]`) that resolve to
+/// [`Message::SwitchDevToolsPanel`] are **not** suppressed; they escape the
+/// filter, switch the panel, and also clear `filter_input_active` so the
+/// user is never trapped in filter mode by mouse-only interaction.
 ///
 /// **Right-click reserved.** As in [`normal::handle_press`], right-click
 /// returns `None` for future context-menu support.
@@ -28,27 +32,15 @@ use crate::state::{AppState, DevToolsPanel};
 /// [`normal::handle_press`]: super::normal::handle_press
 /// [`handle_network_scroll`]: handle_network_scroll
 pub(super) fn handle_press(
-    state: &AppState,
+    state: &mut AppState,
     x: u16,
     y: u16,
     button: MouseButton,
     _mods: KeyModSet,
 ) -> Option<Message> {
     // Right-click reserved.
-    if matches!(button, MouseButton::Right) {
+    if button == MouseButton::Right {
         return None;
-    }
-
-    // Filter-input gate (Network panel only).
-    if state.devtools_view_state.active_panel == DevToolsPanel::Network {
-        let filter_active = state
-            .session_manager
-            .selected()
-            .map(|h| h.session.network.filter_input_active)
-            .unwrap_or(false);
-        if filter_active {
-            return None;
-        }
     }
 
     // ── Hit-test against the registry ────────────────────────────────────
@@ -65,7 +57,35 @@ pub(super) fn handle_press(
     });
     drop(regions);
 
-    action_opt
+    let message = action_opt?;
+
+    // Filter-input gate (Network panel only).
+    //
+    // When the user is typing a filter pattern, suppress all clicks except
+    // those that switch to a different DevTools panel. A sub-tab bar click
+    // (`[i]/[p]/[n]`) while filter input is active escapes the filter: we
+    // clear `filter_input_active` here so the caller's `SwitchDevToolsPanel`
+    // handler does not need to know about the click context.
+    if state.devtools_view_state.active_panel == DevToolsPanel::Network {
+        let filter_active = state
+            .session_manager
+            .selected()
+            .map(|h| h.session.network.filter_input_active)
+            .unwrap_or(false);
+        if filter_active {
+            if matches!(message, Message::SwitchDevToolsPanel(_)) {
+                // Sub-tab click escapes the filter. Clear filter input mode as
+                // part of the click action so the user is not trapped.
+                if let Some(handle) = state.session_manager.selected_mut() {
+                    handle.session.network.filter_input_active = false;
+                }
+            } else {
+                return None; // Suppress non-tab clicks while filter is active.
+            }
+        }
+    }
+
+    Some(message)
 }
 
 pub(super) fn handle_scroll(state: &AppState, dir: ScrollDir, mods: KeyModSet) -> Option<Message> {
@@ -310,7 +330,7 @@ mod press_tests {
 
     #[test]
     fn left_click_on_recorded_region_returns_emit_message() {
-        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let mut state = state_in_devtools_panel(DevToolsPanel::Inspector);
         let mut regions = state.mouse_regions.take();
         regions.builder().click(
             MouseRect::new(0, 0, 10, 1),
@@ -318,7 +338,7 @@ mod press_tests {
         );
         state.mouse_regions.set(regions);
 
-        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        let result = handle_press(&mut state, 0, 0, MouseButton::Left, KeyModSet::NONE);
         assert!(matches!(
             result,
             Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
@@ -327,7 +347,7 @@ mod press_tests {
 
     #[test]
     fn right_click_is_noop() {
-        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let mut state = state_in_devtools_panel(DevToolsPanel::Inspector);
         let mut regions = state.mouse_regions.take();
         regions.builder().click(
             MouseRect::new(0, 0, 10, 1),
@@ -335,7 +355,7 @@ mod press_tests {
         );
         state.mouse_regions.set(regions);
 
-        let result = handle_press(&state, 0, 0, MouseButton::Right, KeyModSet::NONE);
+        let result = handle_press(&mut state, 0, 0, MouseButton::Right, KeyModSet::NONE);
         assert!(result.is_none());
     }
 
@@ -370,7 +390,7 @@ mod press_tests {
         );
         state.mouse_regions.set(regions);
 
-        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        let result = handle_press(&mut state, 0, 0, MouseButton::Left, KeyModSet::NONE);
         assert!(result.is_none(), "filter-active suppresses clicks");
     }
 
@@ -407,7 +427,7 @@ mod press_tests {
         );
         state.mouse_regions.set(regions);
 
-        let result = handle_press(&state, 0, 0, MouseButton::Left, KeyModSet::NONE);
+        let result = handle_press(&mut state, 0, 0, MouseButton::Left, KeyModSet::NONE);
         assert!(matches!(
             result,
             Some(Message::SwitchDevToolsPanel(DevToolsPanel::Performance))
@@ -416,8 +436,88 @@ mod press_tests {
 
     #[test]
     fn click_outside_any_region_is_none() {
-        let state = state_in_devtools_panel(DevToolsPanel::Inspector);
-        let result = handle_press(&state, 100, 100, MouseButton::Left, KeyModSet::NONE);
+        let mut state = state_in_devtools_panel(DevToolsPanel::Inspector);
+        let result = handle_press(&mut state, 100, 100, MouseButton::Left, KeyModSet::NONE);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn middle_click_on_recorded_region_returns_middle_action() {
+        use crate::message::InspectorNav;
+
+        let mut state = state_in_devtools_panel(DevToolsPanel::Inspector);
+
+        // Register a region with distinct left and middle actions.
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click_left_middle(
+            MouseRect::new(10, 5, 5, 1),
+            MouseAction::emit(Message::DevToolsInspectorNavigate(InspectorNav::Down)),
+            MouseAction::emit(Message::DevToolsInspectorNavigate(InspectorNav::Up)),
+        );
+        state.mouse_regions.set(regions);
+
+        // Middle click must return the on_middle action (Up), not the on_left (Down).
+        let result = handle_press(&mut state, 12, 5, MouseButton::Middle, KeyModSet::NONE);
+        assert!(
+            matches!(
+                result,
+                Some(Message::DevToolsInspectorNavigate(InspectorNav::Up))
+            ),
+            "middle click on a click_left_middle region must resolve on_middle, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn network_filter_active_sub_tab_click_switches_panel_and_clears_filter() {
+        use fdemon_daemon::Device;
+
+        let mut state = state_in_devtools_panel(DevToolsPanel::Network);
+        let device = Device {
+            id: "d".into(),
+            name: "Dev".into(),
+            platform: "android".into(),
+            emulator: false,
+            category: None,
+            platform_type: None,
+            ephemeral: false,
+            emulator_id: None,
+        };
+        state.session_manager.create_session(&device).unwrap();
+        state
+            .session_manager
+            .selected_mut()
+            .unwrap()
+            .session
+            .network
+            .filter_input_active = true;
+
+        // Register a SwitchDevToolsPanel region (simulates the sub-tab bar).
+        let mut regions = state.mouse_regions.take();
+        regions.builder().click(
+            MouseRect::new(0, 0, 14, 1),
+            MouseAction::emit(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector)),
+        );
+        state.mouse_regions.set(regions);
+
+        let result = handle_press(&mut state, 7, 0, MouseButton::Left, KeyModSet::NONE);
+        assert!(
+            matches!(
+                result,
+                Some(Message::SwitchDevToolsPanel(DevToolsPanel::Inspector))
+            ),
+            "sub-tab click must NOT be suppressed by filter gate, got {:?}",
+            result
+        );
+        assert!(
+            !state
+                .session_manager
+                .selected()
+                .unwrap()
+                .session
+                .network
+                .filter_input_active,
+            "sub-tab click while filter active must clear filter_input_active"
+        );
     }
 }

@@ -22,7 +22,11 @@ use crate::state::{AppState, UiMode};
 /// per-frame [`crate::mouse_regions::MouseRegions`] registry and returns the
 /// matched region's message. Other modes remain no-op for press events until
 /// Phase 4/5.
-pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
+///
+/// Takes `&mut AppState` rather than `&AppState` because the DevTools press
+/// handler may clear `network.filter_input_active` as a side effect of a
+/// sub-tab bar click while filter input is active (Phase 4.5 task 08).
+pub fn handle_mouse(state: &mut AppState, input: MouseInput) -> Option<Message> {
     match input {
         MouseInput::Scroll {
             direction,
@@ -52,7 +56,7 @@ pub fn handle_mouse(state: &AppState, input: MouseInput) -> Option<Message> {
 /// Phase 3 wires [`UiMode::Normal`]. Phase 4 adds [`UiMode::DevTools`].
 /// Settings/dialog modes are wired in Phase 5 — they return `None` until then.
 fn handle_press(
-    state: &AppState,
+    state: &mut AppState,
     x: u16,
     y: u16,
     button: MouseButton,
@@ -131,9 +135,9 @@ mod tests {
 
     /// Helper to assert handle_mouse returns None for a given (mode, input).
     fn assert_noop(mode: UiMode, input: MouseInput) {
-        let state = state_in_mode(mode);
+        let mut state = state_in_mode(mode);
         assert!(
-            handle_mouse(&state, input).is_none(),
+            handle_mouse(&mut state, input).is_none(),
             "expected no-op for {:?} + {:?}",
             mode,
             input
@@ -175,7 +179,7 @@ mod tests {
             state.mouse_regions.set(regions);
 
             let result = handle_mouse(
-                &state,
+                &mut state,
                 MouseInput::Press {
                     x: 0,
                     y: 0,
@@ -215,11 +219,11 @@ mod tests {
 
     #[test]
     fn test_press_dispatches_to_normal_handler_in_normal_mode() {
-        let state = state_in_mode(UiMode::Normal);
+        let mut state = state_in_mode(UiMode::Normal);
         // No registered regions, so press returns None — but the dispatcher
         // must call into normal::handle_press, not return None unconditionally.
         // We test this transitively via the normal-mode unit tests above.
-        let result = handle_mouse(&state, make_press());
+        let result = handle_mouse(&mut state, make_press());
         assert!(result.is_none(), "no regions registered → no message");
     }
 
@@ -227,13 +231,13 @@ mod tests {
     fn test_press_no_op_in_devtools_mode_without_regions() {
         // Phase 4 wires DevTools mode for clicks. With no regions registered,
         // press returns None (no match in empty registry).
-        let state = state_in_mode(UiMode::DevTools);
-        assert!(handle_mouse(&state, make_press()).is_none());
+        let mut state = state_in_mode(UiMode::DevTools);
+        assert!(handle_mouse(&mut state, make_press()).is_none());
     }
 
     #[test]
     fn test_release_and_drag_remain_no_op() {
-        let state = state_in_mode(UiMode::Normal);
+        let mut state = state_in_mode(UiMode::Normal);
         let release = MouseInput::Release {
             x: 0,
             y: 0,
@@ -246,8 +250,8 @@ mod tests {
             button: MouseButton::Left,
             modifiers: KeyModSet::NONE,
         };
-        assert!(handle_mouse(&state, release).is_none());
-        assert!(handle_mouse(&state, drag).is_none());
+        assert!(handle_mouse(&mut state, release).is_none());
+        assert!(handle_mouse(&mut state, drag).is_none());
     }
 
     #[test]
@@ -270,8 +274,8 @@ mod tests {
     #[test]
     fn test_scroll_normal_mode_returns_scroll_up() {
         // Normal-mode scroll is wired (Phase 2 task 02).
-        let state = state_in_mode(UiMode::Normal);
-        let msg = handle_mouse(&state, make_scroll_up());
+        let mut state = state_in_mode(UiMode::Normal);
+        let msg = handle_mouse(&mut state, make_scroll_up());
         assert!(
             matches!(msg, Some(Message::ScrollUp)),
             "expected ScrollUp for Normal + scroll-up, got {:?}",
@@ -283,8 +287,8 @@ mod tests {
     fn test_devtools_scroll_routes_to_inspector_nav() {
         // DevTools mode with default (Inspector) panel produces a real message,
         // not a no-op. Exact routing is covered by devtools.rs unit tests.
-        let state = state_in_mode(UiMode::DevTools);
-        let result = handle_mouse(&state, make_scroll_up());
+        let mut state = state_in_mode(UiMode::DevTools);
+        let result = handle_mouse(&mut state, make_scroll_up());
         assert!(
             matches!(result, Some(Message::DevToolsInspectorNavigate(_))),
             "DevTools scroll-up in Inspector panel should produce InspectorNavigate, got {:?}",
@@ -294,20 +298,20 @@ mod tests {
 
     #[test]
     fn test_scroll_produces_message_in_link_highlight_mode() {
-        let state = state_in_mode(UiMode::LinkHighlight);
+        let mut state = state_in_mode(UiMode::LinkHighlight);
         let scroll_up = make_scroll_up();
         assert!(
-            handle_mouse(&state, scroll_up).is_some(),
+            handle_mouse(&mut state, scroll_up).is_some(),
             "LinkHighlight plain scroll-up should produce a message"
         );
     }
 
     #[test]
     fn test_scroll_produces_message_in_flutter_version_mode() {
-        let state = state_in_mode(UiMode::FlutterVersion);
+        let mut state = state_in_mode(UiMode::FlutterVersion);
         let scroll_up = make_scroll_up();
         assert!(
-            handle_mouse(&state, scroll_up).is_some(),
+            handle_mouse(&mut state, scroll_up).is_some(),
             "FlutterVersion scroll-up should produce a message"
         );
     }
@@ -317,8 +321,8 @@ mod tests {
         // Settings mode (no modal, not editing) routes scroll-up to SettingsPrevItem
         // via the dispatcher. This catches a typo in the dispatcher's match arm
         // that would otherwise route Settings to a different submodule.
-        let state = state_in_mode(UiMode::Settings);
-        let msg = handle_mouse(&state, make_scroll_up());
+        let mut state = state_in_mode(UiMode::Settings);
+        let msg = handle_mouse(&mut state, make_scroll_up());
         assert!(
             matches!(msg, Some(Message::SettingsPrevItem)),
             "expected SettingsPrevItem for Settings + scroll-up, got {:?}",
@@ -330,8 +334,8 @@ mod tests {
     fn test_scroll_new_session_dialog_routes_to_device_up() {
         // NewSessionDialog mode with default focused_pane (TargetSelector) routes
         // scroll-up to NewSessionDialogDeviceUp via the dispatcher.
-        let state = state_in_mode(UiMode::NewSessionDialog);
-        let msg = handle_mouse(&state, make_scroll_up());
+        let mut state = state_in_mode(UiMode::NewSessionDialog);
+        let msg = handle_mouse(&mut state, make_scroll_up());
         assert!(
             matches!(msg, Some(Message::NewSessionDialogDeviceUp)),
             "expected NewSessionDialogDeviceUp for NewSessionDialog + scroll-up, got {:?}",
