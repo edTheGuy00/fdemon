@@ -373,11 +373,13 @@ fn view_renders_expected_log_view_regions_at_80x24() {
         })
         .count();
 
-    // At 80×24 with 12 entries and the standard header height the log area
-    // fits all 12 rows, so at least 12 ClickLogRow regions must be registered.
-    assert!(
-        click_log_rows >= 12,
-        "expected ≥ 12 ClickLogRow regions for 12 visible entries, got {}",
+    // At 80×24 with 12 entries the log content area is exactly 15 rows tall
+    // (21-row logs area → Borders::ALL removes 2 → inner 19 → top metadata bar 1
+    // + top_gap 1 + bottom metadata bar 1 + bottom_gap 1 = 4 overhead → 15 content
+    // rows). 12 entries each take one row → exactly 12 ClickLogRow regions.
+    assert_eq!(
+        click_log_rows, 12,
+        "expected exactly 12 ClickLogRow regions for 12 visible entries, got {}",
         click_log_rows
     );
 }
@@ -533,6 +535,127 @@ fn view_renders_expected_network_regions_with_selection_at_160x30() {
     assert_eq!(
         detail_tab_regions, 5,
         "expected 5 NetworkSwitchDetailTab regions (one per sub-tab), got {}",
+        detail_tab_regions
+    );
+}
+
+/// Baseline: performance compact-mode path at 80×24 registers no frame regions.
+///
+/// At 80×24 with one session the DevTools panel area has 18 rows after the
+/// 3-row sub-tab bar is removed. `PerformancePanel::render_with_regions` enters
+/// the two-section split path (height 18 ≥ DUAL_SECTION_MIN_HEIGHT 16).  After
+/// subtracting 1 footer row the usable height is 17; the 45% frame-timing chunk
+/// rounds to 7 rows.  With `Borders::ALL` removed that leaves a 5-row inner
+/// area for `FrameChart`, which is below `MIN_CHART_HEIGHT + DETAIL_PANEL_HEIGHT`
+/// (4 + 3 = 7) — so `FrameChart::render_with_regions` takes the compact-mode
+/// branch and records **no** `SelectPerformanceFrame` regions.
+///
+/// This test locks in the "no regions in compact mode" contract so a future
+/// refactor of `FrameChart` cannot silently produce spurious click regions at
+/// 80×24.
+#[test]
+fn performance_compact_mode_at_80x24_records_no_regions() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // 8 frames — enough to populate the chart at wider terminals.
+    let mut state = build_state_devtools_performance_with_frames(8);
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let frame_regions = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.on_left.as_ref().and_then(|a| a.as_emit()),
+                Some(fdemon_app::message::Message::SelectPerformanceFrame { index: Some(_) })
+            )
+        })
+        .count();
+
+    // The frame chart inner area (5 rows) is below the 7-row threshold for
+    // bar-chart rendering, so no SelectPerformanceFrame regions are pushed.
+    assert_eq!(
+        frame_regions, 0,
+        "compact mode at 80×24 must register 0 SelectPerformanceFrame regions, got {}",
+        frame_regions
+    );
+}
+
+/// Baseline: network table-only path at 80×24 registers no detail-tab regions.
+///
+/// When no request is selected the `NetworkMonitor` at 80×24 takes the
+/// `render_table_only_with_regions` path — the detail panel is not rendered
+/// at all and therefore no `NetworkSwitchDetailTab` regions can be pushed.
+///
+/// This test locks in the "no detail-tab regions when table-only" contract at
+/// the spec-mandated 80×24 size.  If the detail panel is accidentally rendered
+/// in the no-selection state a future refactor would cause this assertion to
+/// fail and prompt investigation.
+#[test]
+fn network_compact_mode_at_80x24_records_no_detail_tab_regions() {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    // Build network state with entries but NO selection — exercises the
+    // table_only path where the detail panel is not rendered.
+    let mut state = {
+        use crate::test_utils::test_device;
+        use fdemon_core::network::HttpProfileEntry;
+
+        let mut s = AppState::new();
+        s.project_name = Some("test_app".to_string());
+        s.session_manager
+            .create_session(&test_device("d1", "iPhone"))
+            .unwrap();
+        s.enter_devtools_mode();
+        s.switch_devtools_panel(fdemon_app::state::DevToolsPanel::Network);
+
+        {
+            let handle = s.session_manager.selected_mut().unwrap();
+            handle.session.vm_connected = true;
+            // Populate 5 entries but leave selected_index = None (no selection).
+            for i in 0..5 {
+                let entry = HttpProfileEntry {
+                    id: format!("req-{}", i),
+                    method: "GET".to_string(),
+                    uri: format!("https://example.com/api/{}", i),
+                    status_code: Some(200),
+                    content_type: None,
+                    start_time_us: (i as i64) * 1_000_000,
+                    end_time_us: Some((i as i64) * 1_000_000 + 50_000),
+                    request_content_length: None,
+                    response_content_length: Some(256),
+                    error: None,
+                };
+                handle.session.network.entries.push_back(entry);
+            }
+            // selected_index stays None — table_only path.
+        }
+        s
+    };
+
+    let backend = TestBackend::new(80, 24);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal.draw(|frame| view(frame, &mut state)).unwrap();
+
+    let regions = state.mouse_regions.take();
+    let detail_tab_regions = regions
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.on_left.as_ref().and_then(|a| a.as_emit()),
+                Some(fdemon_app::message::Message::NetworkSwitchDetailTab(_))
+            )
+        })
+        .count();
+
+    // No selection → table_only path → detail panel not rendered → 0 tab regions.
+    assert_eq!(
+        detail_tab_regions, 0,
+        "table-only path at 80×24 must register 0 NetworkSwitchDetailTab regions, got {}",
         detail_tab_regions
     );
 }
