@@ -1180,6 +1180,12 @@ impl<'a> LogView<'a> {
         // Track focus info for the first visible line (Phase 3 Task 03)
         let mut focus_captured = false;
 
+        // Gate flag: avoids repeating `mouse_ctx.is_some()` at each call site.
+        // A Rust closure cannot be used here because it would exclusively borrow
+        // `rel_y_cursor` and `row_actions`, preventing reads of `rel_y_cursor` at
+        // call sites and the direct advance for the collapsed-indicator row.
+        let has_mouse_ctx = mouse_ctx.is_some();
+
         for &idx in &filtered_indices {
             let entry = &self.logs[idx];
             let entry_units = if self.wrap_mode {
@@ -1238,7 +1244,7 @@ impl<'a> LogView<'a> {
                     units_added += 1;
                     1u16
                 };
-                if mouse_ctx.is_some() {
+                if has_mouse_ctx {
                     row_actions.push(RowAction {
                         rel_y: rel_y_cursor,
                         height: row_h,
@@ -1293,7 +1299,7 @@ impl<'a> LogView<'a> {
                             units_added += 1;
                             1u16
                         };
-                        if mouse_ctx.is_some() {
+                        if has_mouse_ctx {
                             row_actions.push(RowAction {
                                 rel_y: rel_y_cursor,
                                 height: row_h,
@@ -1345,7 +1351,7 @@ impl<'a> LogView<'a> {
                             units_added += 1;
                             1u16
                         };
-                        if mouse_ctx.is_some() {
+                        if has_mouse_ctx {
                             row_actions.push(RowAction {
                                 rel_y: rel_y_cursor,
                                 height: row_h,
@@ -1370,7 +1376,7 @@ impl<'a> LogView<'a> {
                             all_lines.push(Self::format_collapsed_indicator(hidden_count));
                             units_added += 1; // collapsed indicator is always short
                                               // Advance rel_y_cursor so subsequent rows are placed correctly.
-                            if mouse_ctx.is_some() {
+                            if has_mouse_ctx {
                                 rel_y_cursor = rel_y_cursor.saturating_add(1);
                             }
                         }
@@ -1452,20 +1458,39 @@ impl<'a> LogView<'a> {
             use fdemon_app::message::Message;
             use fdemon_app::{MouseAction, MouseRect};
 
+            // In wrap mode, `r.rel_y` is in "all_lines space" (accumulated from the
+            // first row pushed, which may be the partially-scrolled entry at the top).
+            // The Paragraph is rendered with `.scroll((wrap_intra_offset, 0))`, so we
+            // must subtract `wrap_intra_offset` to convert to screen space.
+            let wio = wrap_intra_offset as u16;
+
             for r in &row_actions {
-                // Skip rows that fell outside the viewport (e.g. in wrap mode the
-                // first partial row may have accumulated before rel_y reached 0).
-                if r.rel_y >= content_area.height {
+                // Skip rows fully scrolled off the top (entirely above the viewport).
+                if r.rel_y.saturating_add(r.height) <= wio {
                     continue;
                 }
-                // Clip height to avoid registering rects that extend past the bottom.
-                let h = r.height.min(content_area.height.saturating_sub(r.rel_y));
+
+                // Top-clip: rows partially scrolled off the top.
+                // `top_clip` is the number of rows of this entry that are above the viewport.
+                let top_clip = wio.saturating_sub(r.rel_y);
+                // Convert from all_lines space to screen space.
+                let visible_y = r.rel_y.saturating_sub(wio);
+                let visible_h = r.height.saturating_sub(top_clip);
+
+                // Skip rows fully below the content area (bottom overflow).
+                if visible_y >= content_area.height {
+                    continue;
+                }
+
+                // Bottom-clip: rows partially below the content area.
+                let h = visible_h.min(content_area.height.saturating_sub(visible_y));
                 if h == 0 {
                     continue;
                 }
+
                 let rect = MouseRect::new(
                     content_area.x,
-                    content_area.y.saturating_add(r.rel_y),
+                    content_area.y.saturating_add(visible_y),
                     content_area.width,
                     h,
                 );

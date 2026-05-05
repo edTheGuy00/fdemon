@@ -1722,3 +1722,212 @@ fn render_with_regions_row_rects_have_correct_dimensions_nowrap() {
         );
     }
 }
+
+// ── Phase 4.5 Task 01: wrap-mode click-region alignment regression tests ──────
+
+/// Helper: extract ClickLogRow regions from a MouseRegions, returning (rect, entry_id) pairs.
+fn collect_click_regions(regions: &fdemon_app::MouseRegions) -> Vec<(fdemon_app::MouseRect, u64)> {
+    use fdemon_app::message::Message;
+    use fdemon_app::MouseAction;
+
+    regions
+        .iter()
+        .filter_map(|e| match &e.on_left {
+            Some(MouseAction::Emit(msg)) => match **msg {
+                Message::ClickLogRow { entry_id, .. } => Some((e.rect, entry_id)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect()
+}
+
+/// Wrap mode with offset=0: a single entry whose message wraps to exactly 3
+/// terminal rows should register one click region spanning those 3 rows.
+///
+/// Layout (area 20x20, no timestamps/source, width=18):
+///   content_area: x=1, y=3, width=18, height=16
+///   Entry A: message = 54 chars → 3 wrapped rows
+///   wrap_intra_offset = 0
+///   Expected region: y=3, height=3
+#[test]
+fn wrap_mode_zero_offset_regions_align_with_rows() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    // 54-char message → ceil(54/18) = 3 wrapped rows at content_area width=18.
+    let msg_a = "A".repeat(54);
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let id_a = entry_a.id;
+
+    let logs = logs_from(vec![entry_a]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    state.offset = 0;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    assert_eq!(
+        click_regions.len(),
+        1,
+        "expected exactly 1 click region for entry A, got {}: {click_regions:?}",
+        click_regions.len()
+    );
+    let (rect, entry_id) = click_regions[0];
+    assert_eq!(entry_id, id_a, "region entry_id must match entry A");
+    // content_area.y = area.y(0) + border(1) + metadata(1) + top_gap(1) = 3
+    assert_eq!(rect.y, 3, "region must start at content_area top (y=3)");
+    assert_eq!(
+        rect.height, 3,
+        "region height must equal wrapped row count (3)"
+    );
+}
+
+/// Wrap mode with offset=2 (partial top-clip): entry A has 3 wrapped rows,
+/// entry B has 2. With offset=2, wrap_intra_offset=2, so only A's third row
+/// is visible (height=1) and B's two rows follow.
+///
+/// Before the fix, A was registered at y=3 with height=3 and B at y=6 with
+/// height=2 — both off the screen relative to what the Paragraph rendered.
+/// After the fix, A is at y=3 height=1 and B is at y=4 height=2.
+#[test]
+fn wrap_mode_intra_offset_skips_top_clipped_row() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let msg_a = "A".repeat(54); // 3 wrapped rows at width=18
+    let msg_b = "B".repeat(36); // 2 wrapped rows at width=18
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let entry_b = make_entry(LogLevel::Info, LogSource::App, &msg_b);
+    let id_a = entry_a.id;
+    let id_b = entry_b.id;
+
+    let logs = logs_from(vec![entry_a, entry_b]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset=2 → wrap_intra_offset=2 for entry A (which starts at units_skipped=0).
+    // A's visible portion: rows 2..=2 (1 row). B follows at screen y=1..=2.
+    state.offset = 2;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    // Both entries should have a region (A is partially visible).
+    assert_eq!(
+        click_regions.len(),
+        2,
+        "expected 2 click regions (A clipped + B full), got {}: {click_regions:?}",
+        click_regions.len()
+    );
+
+    let [(rect_a, eid_a), (rect_b, eid_b)] = [click_regions[0], click_regions[1]];
+    assert_eq!(eid_a, id_a, "first region must be entry A");
+    assert_eq!(eid_b, id_b, "second region must be entry B");
+
+    // content_area.y = 3; wrap_intra_offset=2 hides the first 2 rows of A.
+    // A: visible_y=0, height=1 → rect.y=3, height=1.
+    assert_eq!(
+        rect_a.y, 3,
+        "A clipped region must start at content_area top"
+    );
+    assert_eq!(
+        rect_a.height, 1,
+        "A must show only its 1 remaining visible row"
+    );
+
+    // B: visible_y = 3 - 2 = 1 → rect.y=4, height=2.
+    assert_eq!(
+        rect_b.y, 4,
+        "B region must start one row below A's clipped region"
+    );
+    assert_eq!(rect_b.height, 2, "B must show all 2 of its wrapped rows");
+}
+
+/// Wrap mode with offset=3 (full top-skip): entry A has exactly 3 wrapped rows
+/// so it is completely scrolled past. Only B is visible, starting at screen y=0.
+///
+/// The fix must not produce any region for A (it is never added to row_actions),
+/// and B's region must be aligned to the top of the content area.
+#[test]
+fn wrap_mode_intra_offset_top_skipped_row_dropped() {
+    use crate::render::MouseCtx;
+    use fdemon_app::MouseRegions;
+    use ratatui::{buffer::Buffer, layout::Rect};
+
+    let msg_a = "A".repeat(54); // 3 wrapped rows at width=18
+    let msg_b = "B".repeat(36); // 2 wrapped rows at width=18
+    let entry_a = make_entry(LogLevel::Info, LogSource::App, &msg_a);
+    let entry_b = make_entry(LogLevel::Info, LogSource::App, &msg_b);
+    let id_a = entry_a.id;
+    let id_b = entry_b.id;
+
+    let logs = logs_from(vec![entry_a, entry_b]);
+    let mut state = LogViewState::new();
+    state.auto_scroll = false;
+    // offset=3 → A (3 rows) is fully past; B starts at screen y=0, wrap_intra_offset=0.
+    state.offset = 3;
+
+    let view = LogView::new(&logs, test_icons())
+        .wrap_mode(true)
+        .show_timestamps(false)
+        .show_source(false);
+
+    let area = Rect::new(0, 0, 20, 20);
+    let mut buf = Buffer::empty(area);
+    let mut regions = MouseRegions::with_capacity();
+    {
+        let builder = regions.builder();
+        let mut ctx = MouseCtx::new(builder);
+        super::render_with_regions(area, &mut buf, &mut state, view, Some(&mut ctx));
+    }
+
+    let click_regions = collect_click_regions(&regions);
+
+    // Only B is visible; A must produce no region.
+    let entry_ids: Vec<u64> = click_regions.iter().map(|(_, id)| *id).collect();
+    assert!(
+        !entry_ids.contains(&id_a),
+        "A must produce no region when fully scrolled off; got {click_regions:?}"
+    );
+    assert_eq!(
+        click_regions.len(),
+        1,
+        "expected exactly 1 click region (B only), got {}: {click_regions:?}",
+        click_regions.len()
+    );
+
+    let (rect_b, eid_b) = click_regions[0];
+    assert_eq!(eid_b, id_b, "the sole region must be entry B");
+    // B starts at top of content_area: rect.y = 3, height = 2.
+    assert_eq!(rect_b.y, 3, "B must align to content_area top (y=3)");
+    assert_eq!(rect_b.height, 2, "B must show its full 2 wrapped rows");
+}
